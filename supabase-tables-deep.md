@@ -1,0 +1,1430 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e4]:
+    - banner [ref=e6]:
+      - generic [ref=e7]:
+        - generic [ref=e8]:
+          - link "Supabase" [ref=e9] [cursor=pointer]:
+            - /url: /dashboard/org/onwwdiseaxmbyaogsoxo
+            - img "Supabase" [ref=e10]
+          - generic [ref=e11]:
+            - img [ref=e375]
+            - generic [ref=e377]:
+              - link "nb-s3 Free" [ref=e378] [cursor=pointer]:
+                - /url: /dashboard/org/onwwdiseaxmbyaogsoxo
+                - img [ref=e379]
+                - generic [ref=e389]: nb-s3
+                - generic [ref=e390]: Free
+              - button [ref=e391] [cursor=pointer]:
+                - img [ref=e393]
+            - generic [ref=e12]:
+              - img [ref=e14]
+              - generic [ref=e396]:
+                - link "rama730's Project" [ref=e397] [cursor=pointer]:
+                  - /url: /dashboard/project/iutauehhgdymtpzrnzcy
+                  - img [ref=e398]
+                  - generic "rama730's Project" [ref=e401]
+                - button [ref=e402] [cursor=pointer]:
+                  - img [ref=e404]
+              - img [ref=e408]
+              - generic [ref=e410]:
+                - link "main Production" [ref=e411] [cursor=pointer]:
+                  - /url: /dashboard/project/iutauehhgdymtpzrnzcy
+                  - generic "main" [ref=e412]
+                  - generic [ref=e413]: Production
+                - button [ref=e414] [cursor=pointer]:
+                  - img [ref=e416]
+          - button "Connect" [ref=e419] [cursor=pointer]:
+            - img [ref=e421]
+            - generic [ref=e423]: Connect
+        - generic [ref=e23]:
+          - generic [ref=e25] [cursor=pointer]: Feedback
+          - generic [ref=e26]:
+            - button "Search..." [ref=e27]:
+              - generic [ref=e28]:
+                - img [ref=e29]
+                - paragraph [ref=e32]: Search...
+              - generic [ref=e34]: ⌘K
+            - button "Help" [ref=e35] [cursor=pointer]:
+              - generic [ref=e36]:
+                - img [ref=e37]
+                - generic [ref=e40]: Help
+            - button "Advisor Center" [ref=e42] [cursor=pointer]:
+              - generic [ref=e43]:
+                - img [ref=e44]
+                - generic [ref=e46]: Advisor Center
+            - button "SQL Editor" [ref=e47] [cursor=pointer]:
+              - generic [ref=e48]:
+                - img [ref=e49]
+                - generic [ref=e51]: SQL Editor
+            - button "AI Assistant" [ref=e52] [cursor=pointer]:
+              - generic [ref=e53]:
+                - img [ref=e56]
+                - generic [ref=e59]: AI Assistant
+          - button "rama730" [ref=e424] [cursor=pointer]:
+            - img "rama730" [ref=e425]
+    - generic [ref=e65]:
+      - generic [ref=e69]:
+        - list [ref=e72]:
+          - generic [ref=e73]:
+            - listitem [ref=e74]:
+              - link "Project Overview" [ref=e75] [cursor=pointer]:
+                - /url: /dashboard/project/iutauehhgdymtpzrnzcy
+                - img [ref=e76]
+                - generic: Project Overview
+            - listitem [ref=e78]:
+              - link "Table Editor" [ref=e426] [cursor=pointer]:
+                - /url: /dashboard/project/iutauehhgdymtpzrnzcy/editor
+                - img [ref=e427]
+                - generic: Table Editor
+            - listitem [ref=e79]:
+              - link "SQL Editor" [ref=e429] [cursor=pointer]:
+                - /url: /dashboard/project/iutauehhgdymtpzrnzcy/sql
+                - img [ref=e430]
+                - generic: SQL Editor
+          - generic [ref=e80]:
+            - listitem [ref=e81]:
+              - link "Database" [ref=e432] [cursor=pointer]:
+                - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/schemas
+                - img [ref=e433]
+                - generic: Database
+            - listitem [ref=e82]:
+              - link "Authentication" [ref=e437] [cursor=pointer]:
+                - /url: /dashboard/project/iutauehhgdymtpzrnzcy/auth/users
+                - img [ref=e438]
+                - generic: Authentication
+            - listitem [ref=e83]:
+              - link "Storage" [ref=e440] [cursor=pointer]:
+                - /url: /dashboard/project/iutauehhgdymtpzrnzcy/storage/files
+                - img [ref=e441]
+                - generic: Storage
+            - listitem [ref=e84]:
+              - link "Edge Functions" [ref=e85] [cursor=pointer]:
+                - /url: /dashboard/project/iutauehhgdymtpzrnzcy/functions
+                - img [ref=e86]
+                - generic: Edge Functions
+            - listitem [ref=e91]:
+              - link "Realtime" [ref=e443] [cursor=pointer]:
+                - /url: /dashboard/project/iutauehhgdymtpzrnzcy/realtime/inspector
+                - img [ref=e444]
+                - generic: Realtime
+          - generic [ref=e92]:
+            - listitem [ref=e94]:
+              - link "Advisors" [ref=e446] [cursor=pointer]:
+                - /url: /dashboard/project/iutauehhgdymtpzrnzcy/advisors/security
+                - img [ref=e447]
+                - generic: Advisors
+            - listitem [ref=e95]:
+              - link "Observability" [ref=e449] [cursor=pointer]:
+                - /url: /dashboard/project/iutauehhgdymtpzrnzcy/observability
+                - img [ref=e450]
+                - generic: Observability
+            - listitem [ref=e96]:
+              - link "Logs" [ref=e97] [cursor=pointer]:
+                - /url: /dashboard/project/iutauehhgdymtpzrnzcy/logs/explorer
+                - img [ref=e98]
+                - generic: Logs
+            - listitem [ref=e99]:
+              - link "Integrations" [ref=e458] [cursor=pointer]:
+                - /url: /dashboard/project/iutauehhgdymtpzrnzcy/integrations
+                - img [ref=e459]
+                - generic: Integrations
+          - listitem [ref=e101]:
+            - link "Project Settings" [ref=e102] [cursor=pointer]:
+              - /url: /dashboard/project/iutauehhgdymtpzrnzcy/settings/general
+              - img [ref=e103]
+              - generic: Project Settings
+        - button "Sidebar control" [ref=e108] [cursor=pointer]:
+          - img [ref=e110]
+      - generic [ref=e117]:
+        - generic [ref=e121]:
+          - heading "Database" [level=4] [ref=e123]
+          - menu "Sidebar" [disabled] [ref=e126]:
+            - list [ref=e127]:
+              - generic [ref=e130]:
+                - generic [ref=e134]: Database Management
+                - generic [ref=e135]:
+                  - link "Schema Visualizer" [disabled] [ref=e136] [cursor=pointer]:
+                    - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/schemas
+                    - menuitem "Schema Visualizer" [disabled] [ref=e137]:
+                      - generic [ref=e141]: Schema Visualizer
+                  - link "Tables" [disabled] [ref=e142] [cursor=pointer]:
+                    - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables
+                    - menuitem "Tables" [disabled] [ref=e143]:
+                      - generic [ref=e147]: Tables
+                  - link "Functions" [disabled] [ref=e148] [cursor=pointer]:
+                    - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/functions
+                    - menuitem "Functions" [disabled] [ref=e149]:
+                      - generic [ref=e153]: Functions
+                  - link "Triggers" [disabled] [ref=e154] [cursor=pointer]:
+                    - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/triggers/data
+                    - menuitem "Triggers" [disabled] [ref=e155]:
+                      - generic [ref=e159]: Triggers
+                  - link "Enumerated Types" [disabled] [ref=e160] [cursor=pointer]:
+                    - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/types
+                    - menuitem "Enumerated Types" [disabled] [ref=e161]:
+                      - generic [ref=e165]: Enumerated Types
+                  - link "Extensions" [disabled] [ref=e166] [cursor=pointer]:
+                    - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/extensions
+                    - menuitem "Extensions" [disabled] [ref=e167]:
+                      - generic [ref=e171]: Extensions
+                  - link "Indexes" [disabled] [ref=e172] [cursor=pointer]:
+                    - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/indexes
+                    - menuitem "Indexes" [disabled] [ref=e173]:
+                      - generic [ref=e177]: Indexes
+                  - link "Publications" [disabled] [ref=e178] [cursor=pointer]:
+                    - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/publications
+                    - menuitem "Publications" [disabled] [ref=e179]:
+                      - generic [ref=e183]: Publications
+              - generic [ref=e187]:
+                - generic [ref=e191]: Configuration
+                - generic [ref=e192]:
+                  - link "Roles" [disabled] [ref=e193] [cursor=pointer]:
+                    - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/roles
+                    - menuitem "Roles" [disabled] [ref=e194]:
+                      - generic [ref=e198]: Roles
+                  - link "Policies" [disabled] [ref=e199] [cursor=pointer]:
+                    - /url: /dashboard/project/iutauehhgdymtpzrnzcy/auth/policies
+                    - menuitem "Policies" [disabled] [ref=e200]:
+                      - generic [ref=e202]:
+                        - generic "Policies" [ref=e203]:
+                          - generic [ref=e204]: Policies
+                        - img [ref=e206]
+                  - link "Settings" [disabled] [ref=e209] [cursor=pointer]:
+                    - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/settings
+                    - menuitem "Settings" [disabled] [ref=e210]:
+                      - generic [ref=e214]: Settings
+              - generic [ref=e218]:
+                - generic [ref=e222]: Platform
+                - generic [ref=e223]:
+                  - link "Replication" [disabled] [ref=e224] [cursor=pointer]:
+                    - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/replication
+                    - menuitem "Replication" [disabled] [ref=e225]:
+                      - generic [ref=e229]: Replication
+                  - link "Backups" [disabled] [ref=e230] [cursor=pointer]:
+                    - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/backups/scheduled
+                    - menuitem "Backups" [disabled] [ref=e231]:
+                      - generic [ref=e235]: Backups
+                  - link "Migrations" [disabled] [ref=e236] [cursor=pointer]:
+                    - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/migrations
+                    - menuitem "Migrations" [disabled] [ref=e237]:
+                      - generic [ref=e241]: Migrations
+                  - link "Wrappers" [disabled] [ref=e242] [cursor=pointer]:
+                    - /url: /dashboard/project/iutauehhgdymtpzrnzcy/integrations?category=wrapper
+                    - menuitem "Wrappers" [disabled] [ref=e243]:
+                      - generic [ref=e245]:
+                        - generic "Wrappers" [ref=e246]:
+                          - generic [ref=e247]: Wrappers
+                        - img [ref=e249]
+                  - link "Database Webhooks" [disabled] [ref=e462] [cursor=pointer]:
+                    - /url: /dashboard/project/iutauehhgdymtpzrnzcy/integrations/webhooks/overview
+                    - menuitem "Database Webhooks" [disabled] [ref=e463]:
+                      - generic [ref=e465]:
+                        - generic "Database Webhooks" [ref=e466]:
+                          - generic [ref=e467]: Database Webhooks
+                        - img [ref=e469]
+              - generic [ref=e255]:
+                - generic [ref=e259]: Tools
+                - generic [ref=e260]:
+                  - link "Security Advisor" [disabled] [ref=e261] [cursor=pointer]:
+                    - /url: /dashboard/project/iutauehhgdymtpzrnzcy/advisors/security
+                    - menuitem "Security Advisor" [disabled] [ref=e262]:
+                      - generic [ref=e264]:
+                        - generic "Security Advisor" [ref=e265]:
+                          - generic [ref=e266]: Security Advisor
+                        - img [ref=e268]
+                  - link "Performance Advisor" [disabled] [ref=e271] [cursor=pointer]:
+                    - /url: /dashboard/project/iutauehhgdymtpzrnzcy/advisors/performance
+                    - menuitem "Performance Advisor" [disabled] [ref=e272]:
+                      - generic [ref=e274]:
+                        - generic "Performance Advisor" [ref=e275]:
+                          - generic [ref=e276]: Performance Advisor
+                        - img [ref=e278]
+                  - link "Query Performance" [disabled] [ref=e281] [cursor=pointer]:
+                    - /url: /dashboard/project/iutauehhgdymtpzrnzcy/observability/query-performance
+                    - menuitem "Query Performance" [disabled] [ref=e282]:
+                      - generic [ref=e284]:
+                        - generic "Query Performance" [ref=e285]:
+                          - generic [ref=e286]: Query Performance
+                        - img [ref=e288]
+        - separator [disabled] [ref=e291]:
+          - img [ref=e293]
+        - main [ref=e302]:
+          - generic [ref=e472]:
+            - heading "Database Tables" [level=1] [ref=e479]
+            - generic [ref=e483]:
+              - generic [ref=e484]:
+                - generic [ref=e485]:
+                  - button "schema public" [ref=e487] [cursor=pointer]:
+                    - generic [ref=e489]:
+                      - paragraph [ref=e490]: schema
+                      - paragraph [ref=e491]: public
+                    - img [ref=e493]
+                  - button [ref=e496] [cursor=pointer]:
+                    - img [ref=e498]
+                - generic [ref=e500]:
+                  - group [ref=e501]:
+                    - textbox "Search for a table" [ref=e502]
+                    - group [ref=e503]:
+                      - img [ref=e504]
+                  - button "New table" [ref=e507] [cursor=pointer]:
+                    - img [ref=e509]
+                    - generic [ref=e510]: New table
+              - table [ref=e515]:
+                - rowgroup [ref=e516]:
+                  - row "Name Columns Rows (Estimated) Size (Estimated) Realtime" [ref=e517]:
+                    - columnheader [ref=e518]
+                    - columnheader "Name" [ref=e519]
+                    - columnheader "Columns" [ref=e520]
+                    - columnheader "Rows (Estimated)" [ref=e521]
+                    - columnheader "Size (Estimated)" [ref=e522]
+                    - columnheader "Realtime" [ref=e523]
+                    - columnheader [ref=e524]
+                - rowgroup [ref=e525]:
+                  - row "attachment_uploads 13 6 96 kB Disabled View columns Table attachment_uploads actions" [ref=e526]:
+                    - cell [ref=e527]:
+                      - img [ref=e529]
+                    - cell "attachment_uploads" [ref=e531]:
+                      - paragraph [ref=e533]: attachment_uploads
+                    - cell "13" [ref=e534]:
+                      - paragraph [ref=e535]: "13"
+                    - cell "6" [ref=e536]:
+                      - paragraph [ref=e537]: "6"
+                    - cell "96 kB" [ref=e538]:
+                      - paragraph [ref=e539]: 96 kB
+                    - cell "Disabled" [ref=e540]:
+                      - generic [ref=e541]:
+                        - img [ref=e542]
+                        - paragraph [ref=e545]: Disabled
+                    - cell "View columns Table attachment_uploads actions" [ref=e546]:
+                      - generic [ref=e547]:
+                        - link "View columns" [ref=e548] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/41278
+                          - generic [ref=e549]: View columns
+                        - button "Table attachment_uploads actions" [ref=e550] [cursor=pointer]:
+                          - img [ref=e552]
+                  - row "collection_projects 3 0 16 kB Disabled View columns Table collection_projects actions" [ref=e556]:
+                    - cell [ref=e557]:
+                      - img [ref=e559]
+                    - cell "collection_projects" [ref=e561]:
+                      - paragraph [ref=e563]: collection_projects
+                    - cell "3" [ref=e564]:
+                      - paragraph [ref=e565]: "3"
+                    - cell "0" [ref=e566]:
+                      - paragraph [ref=e567]: "0"
+                    - cell "16 kB" [ref=e568]:
+                      - paragraph [ref=e569]: 16 kB
+                    - cell "Disabled" [ref=e570]:
+                      - generic [ref=e571]:
+                        - img [ref=e572]
+                        - paragraph [ref=e575]: Disabled
+                    - cell "View columns Table collection_projects actions" [ref=e576]:
+                      - generic [ref=e577]:
+                        - link "View columns" [ref=e578] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/61448
+                          - generic [ref=e579]: View columns
+                        - button "Table collection_projects actions" [ref=e580] [cursor=pointer]:
+                          - img [ref=e582]
+                  - row "collections 4 1 32 kB Disabled View columns Table collections actions" [ref=e586]:
+                    - cell [ref=e587]:
+                      - img [ref=e589]
+                    - cell "collections" [ref=e591]:
+                      - paragraph [ref=e593]: collections
+                    - cell "4" [ref=e594]:
+                      - paragraph [ref=e595]: "4"
+                    - cell "1" [ref=e596]:
+                      - paragraph [ref=e597]: "1"
+                    - cell "32 kB" [ref=e598]:
+                      - paragraph [ref=e599]: 32 kB
+                    - cell "Disabled" [ref=e600]:
+                      - generic [ref=e601]:
+                        - img [ref=e602]
+                        - paragraph [ref=e605]: Disabled
+                    - cell "View columns Table collections actions" [ref=e606]:
+                      - generic [ref=e607]:
+                        - link "View columns" [ref=e608] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/61454
+                          - generic [ref=e609]: View columns
+                        - button "Table collections actions" [ref=e610] [cursor=pointer]:
+                          - img [ref=e612]
+                  - row "connection_suggestion_dismissals 4 0 56 kB Disabled View columns Table connection_suggestion_dismissals actions" [ref=e616]:
+                    - cell [ref=e617]:
+                      - img [ref=e619]
+                    - cell "connection_suggestion_dismissals" [ref=e621]:
+                      - paragraph [ref=e623]: connection_suggestion_dismissals
+                    - cell "4" [ref=e624]:
+                      - paragraph [ref=e625]: "4"
+                    - cell "0" [ref=e626]:
+                      - paragraph [ref=e627]: "0"
+                    - cell "56 kB" [ref=e628]:
+                      - paragraph [ref=e629]: 56 kB
+                    - cell "Disabled" [ref=e630]:
+                      - generic [ref=e631]:
+                        - img [ref=e632]
+                        - paragraph [ref=e635]: Disabled
+                    - cell "View columns Table connection_suggestion_dismissals actions" [ref=e636]:
+                      - generic [ref=e637]:
+                        - link "View columns" [ref=e638] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/44852
+                          - generic [ref=e639]: View columns
+                        - button "Table connection_suggestion_dismissals actions" [ref=e640] [cursor=pointer]:
+                          - img [ref=e642]
+                  - row "connections 11 4 208 kB Enabled View columns Table connections actions" [ref=e646]:
+                    - cell [ref=e647]:
+                      - img [ref=e649]
+                    - cell "connections" [ref=e651]:
+                      - paragraph [ref=e653]: connections
+                    - cell "11" [ref=e654]:
+                      - paragraph [ref=e655]: "11"
+                    - cell "4" [ref=e656]:
+                      - paragraph [ref=e657]: "4"
+                    - cell "208 kB" [ref=e658]:
+                      - paragraph [ref=e659]: 208 kB
+                    - cell "Enabled" [ref=e660]:
+                      - generic [ref=e661]:
+                        - img [ref=e662]
+                        - paragraph [ref=e664]: Enabled
+                    - cell "View columns Table connections actions" [ref=e665]:
+                      - generic [ref=e666]:
+                        - link "View columns" [ref=e667] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/17496
+                          - generic [ref=e668]: View columns
+                        - button "Table connections actions" [ref=e669] [cursor=pointer]:
+                          - img [ref=e671]
+                  - row "conversation_participants 15 23 160 kB Enabled View columns Table conversation_participants actions" [ref=e675]:
+                    - cell [ref=e676]:
+                      - img [ref=e678]
+                    - cell "conversation_participants" [ref=e680]:
+                      - paragraph [ref=e682]: conversation_participants
+                    - cell "15" [ref=e683]:
+                      - paragraph [ref=e684]: "15"
+                    - cell "23" [ref=e685]:
+                      - paragraph [ref=e686]: "23"
+                    - cell "160 kB" [ref=e687]:
+                      - paragraph [ref=e688]: 160 kB
+                    - cell "Enabled" [ref=e689]:
+                      - generic [ref=e690]:
+                        - img [ref=e691]
+                        - paragraph [ref=e693]: Enabled
+                    - cell "View columns Table conversation_participants actions" [ref=e694]:
+                      - generic [ref=e695]:
+                        - link "View columns" [ref=e696] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/22134
+                          - generic [ref=e697]: View columns
+                        - button "Table conversation_participants actions" [ref=e698] [cursor=pointer]:
+                          - img [ref=e700]
+                  - row "conversations 4 14 64 kB Disabled View columns Table conversations actions" [ref=e704]:
+                    - cell [ref=e705]:
+                      - img [ref=e707]
+                    - cell "conversations" [ref=e709]:
+                      - paragraph [ref=e711]: conversations
+                    - cell "4" [ref=e712]:
+                      - paragraph [ref=e713]: "4"
+                    - cell "14" [ref=e714]:
+                      - paragraph [ref=e715]: "14"
+                    - cell "64 kB" [ref=e716]:
+                      - paragraph [ref=e717]: 64 kB
+                    - cell "Disabled" [ref=e718]:
+                      - generic [ref=e719]:
+                        - img [ref=e720]
+                        - paragraph [ref=e723]: Disabled
+                    - cell "View columns Table conversations actions" [ref=e724]:
+                      - generic [ref=e725]:
+                        - link "View columns" [ref=e726] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/22122
+                          - generic [ref=e727]: View columns
+                        - button "Table conversations actions" [ref=e728] [cursor=pointer]:
+                          - img [ref=e730]
+                  - row "dm_pairs 5 5 88 kB Disabled View columns Table dm_pairs actions" [ref=e734]:
+                    - cell [ref=e735]:
+                      - img [ref=e737]
+                    - cell "dm_pairs" [ref=e739]:
+                      - paragraph [ref=e741]: dm_pairs
+                    - cell "5" [ref=e742]:
+                      - paragraph [ref=e743]: "5"
+                    - cell "5" [ref=e744]:
+                      - paragraph [ref=e745]: "5"
+                    - cell "88 kB" [ref=e746]:
+                      - paragraph [ref=e747]: 88 kB
+                    - cell "Disabled" [ref=e748]:
+                      - generic [ref=e749]:
+                        - img [ref=e750]
+                        - paragraph [ref=e753]: Disabled
+                    - cell "View columns Table dm_pairs actions" [ref=e754]:
+                      - generic [ref=e755]:
+                        - link "View columns" [ref=e756] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/36542
+                          - generic [ref=e757]: View columns
+                        - button "Table dm_pairs actions" [ref=e758] [cursor=pointer]:
+                          - img [ref=e760]
+                  - row "interests 4 12 88 kB Disabled View columns Table interests actions" [ref=e764]:
+                    - cell [ref=e765]:
+                      - img [ref=e767]
+                    - cell "interests" [ref=e769]:
+                      - paragraph [ref=e771]: interests
+                    - cell "4" [ref=e772]:
+                      - paragraph [ref=e773]: "4"
+                    - cell "12" [ref=e774]:
+                      - paragraph [ref=e775]: "12"
+                    - cell "88 kB" [ref=e776]:
+                      - paragraph [ref=e777]: 88 kB
+                    - cell "Disabled" [ref=e778]:
+                      - generic [ref=e779]:
+                        - img [ref=e780]
+                        - paragraph [ref=e783]: Disabled
+                    - cell "View columns Table interests actions" [ref=e784]:
+                      - generic [ref=e785]:
+                        - link "View columns" [ref=e786] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/66275
+                          - generic [ref=e787]: View columns
+                        - button "Table interests actions" [ref=e788] [cursor=pointer]:
+                          - img [ref=e790]
+                  - row "message_attachments 13 5 48 kB Enabled View columns Table message_attachments actions" [ref=e794]:
+                    - cell [ref=e795]:
+                      - img [ref=e797]
+                    - cell "message_attachments" [ref=e799]:
+                      - paragraph [ref=e801]: message_attachments
+                    - cell "13" [ref=e802]:
+                      - paragraph [ref=e803]: "13"
+                    - cell "5" [ref=e804]:
+                      - paragraph [ref=e805]: "5"
+                    - cell "48 kB" [ref=e806]:
+                      - paragraph [ref=e807]: 48 kB
+                    - cell "Enabled" [ref=e808]:
+                      - generic [ref=e809]:
+                        - img [ref=e810]
+                        - paragraph [ref=e812]: Enabled
+                    - cell "View columns Table message_attachments actions" [ref=e813]:
+                      - generic [ref=e814]:
+                        - link "View columns" [ref=e815] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/22177
+                          - generic [ref=e816]: View columns
+                        - button "Table message_attachments actions" [ref=e817] [cursor=pointer]:
+                          - img [ref=e819]
+                  - row "message_edit_logs 6 0 32 kB Enabled View columns Table message_edit_logs actions" [ref=e823]:
+                    - cell [ref=e824]:
+                      - img [ref=e826]
+                    - cell "message_edit_logs" [ref=e828]:
+                      - paragraph [ref=e830]: message_edit_logs
+                    - cell "6" [ref=e831]:
+                      - paragraph [ref=e832]: "6"
+                    - cell "0" [ref=e833]:
+                      - paragraph [ref=e834]: "0"
+                    - cell "32 kB" [ref=e835]:
+                      - paragraph [ref=e836]: 32 kB
+                    - cell "Enabled" [ref=e837]:
+                      - generic [ref=e838]:
+                        - img [ref=e839]
+                        - paragraph [ref=e841]: Enabled
+                    - cell "View columns Table message_edit_logs actions" [ref=e842]:
+                      - generic [ref=e843]:
+                        - link "View columns" [ref=e844] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/41310
+                          - generic [ref=e845]: View columns
+                        - button "Table message_edit_logs actions" [ref=e846] [cursor=pointer]:
+                          - img [ref=e848]
+                  - row "message_hidden_for_users 4 0 32 kB Enabled View columns Table message_hidden_for_users actions" [ref=e852]:
+                    - cell [ref=e853]:
+                      - img [ref=e855]
+                    - cell "message_hidden_for_users" [ref=e857]:
+                      - paragraph [ref=e859]: message_hidden_for_users
+                    - cell "4" [ref=e860]:
+                      - paragraph [ref=e861]: "4"
+                    - cell "0" [ref=e862]:
+                      - paragraph [ref=e863]: "0"
+                    - cell "32 kB" [ref=e864]:
+                      - paragraph [ref=e865]: 32 kB
+                    - cell "Enabled" [ref=e866]:
+                      - generic [ref=e867]:
+                        - img [ref=e868]
+                        - paragraph [ref=e870]: Enabled
+                    - cell "View columns Table message_hidden_for_users actions" [ref=e871]:
+                      - generic [ref=e872]:
+                        - link "View columns" [ref=e873] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/41319
+                          - generic [ref=e874]: View columns
+                        - button "Table message_hidden_for_users actions" [ref=e875] [cursor=pointer]:
+                          - img [ref=e877]
+                  - row "messages 11 161 648 kB Enabled View columns Table messages actions" [ref=e881]:
+                    - cell [ref=e882]:
+                      - img [ref=e884]
+                    - cell "messages" [ref=e886]:
+                      - paragraph [ref=e888]: messages
+                    - cell "11" [ref=e889]:
+                      - paragraph [ref=e890]: "11"
+                    - cell "161" [ref=e891]:
+                      - paragraph [ref=e892]: "161"
+                    - cell "648 kB" [ref=e893]:
+                      - paragraph [ref=e894]: 648 kB
+                    - cell "Enabled" [ref=e895]:
+                      - generic [ref=e896]:
+                        - img [ref=e897]
+                        - paragraph [ref=e899]: Enabled
+                    - cell "View columns Table messages actions" [ref=e900]:
+                      - generic [ref=e901]:
+                        - link "View columns" [ref=e902] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/22154
+                          - generic [ref=e903]: View columns
+                        - button "Table messages actions" [ref=e904] [cursor=pointer]:
+                          - img [ref=e906]
+                  - row "onboarding_drafts 5 0 96 kB Disabled View columns Table onboarding_drafts actions" [ref=e910]:
+                    - cell [ref=e911]:
+                      - img [ref=e913]
+                    - cell "onboarding_drafts" [ref=e915]:
+                      - paragraph [ref=e917]: onboarding_drafts
+                    - cell "5" [ref=e918]:
+                      - paragraph [ref=e919]: "5"
+                    - cell "0" [ref=e920]:
+                      - paragraph [ref=e921]: "0"
+                    - cell "96 kB" [ref=e922]:
+                      - paragraph [ref=e923]: 96 kB
+                    - cell "Disabled" [ref=e924]:
+                      - generic [ref=e925]:
+                        - img [ref=e926]
+                        - paragraph [ref=e929]: Disabled
+                    - cell "View columns Table onboarding_drafts actions" [ref=e930]:
+                      - generic [ref=e931]:
+                        - link "View columns" [ref=e932] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/55082
+                          - generic [ref=e933]: View columns
+                        - button "Table onboarding_drafts actions" [ref=e934] [cursor=pointer]:
+                          - img [ref=e936]
+                  - row "onboarding_events 6 89 224 kB Disabled View columns Table onboarding_events actions" [ref=e940]:
+                    - cell [ref=e941]:
+                      - img [ref=e943]
+                    - cell "onboarding_events" [ref=e945]:
+                      - paragraph [ref=e947]: onboarding_events
+                    - cell "6" [ref=e948]:
+                      - paragraph [ref=e949]: "6"
+                    - cell "89" [ref=e950]:
+                      - paragraph [ref=e951]: "89"
+                    - cell "224 kB" [ref=e952]:
+                      - paragraph [ref=e953]: 224 kB
+                    - cell "Disabled" [ref=e954]:
+                      - generic [ref=e955]:
+                        - img [ref=e956]
+                        - paragraph [ref=e959]: Disabled
+                    - cell "View columns Table onboarding_events actions" [ref=e960]:
+                      - generic [ref=e961]:
+                        - link "View columns" [ref=e962] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/55092
+                          - generic [ref=e963]: View columns
+                        - button "Table onboarding_events actions" [ref=e964] [cursor=pointer]:
+                          - img [ref=e966]
+                  - row "onboarding_funnel_dimensions_daily 7 – – Disabled View columns Table onboarding_funnel_dimensions_daily actions" [ref=e970]:
+                    - cell [ref=e971]:
+                      - img [ref=e973]
+                    - cell "onboarding_funnel_dimensions_daily" [ref=e976]:
+                      - paragraph [ref=e978]: onboarding_funnel_dimensions_daily
+                    - cell "7" [ref=e979]:
+                      - paragraph [ref=e980]: "7"
+                    - cell "–" [ref=e981]:
+                      - paragraph [ref=e982]: –
+                    - cell "–" [ref=e983]:
+                      - paragraph [ref=e984]: –
+                    - cell "Disabled" [ref=e985]:
+                      - generic [ref=e986]:
+                        - img [ref=e987]
+                        - paragraph [ref=e990]: Disabled
+                    - cell "View columns Table onboarding_funnel_dimensions_daily actions" [ref=e991]:
+                      - generic [ref=e992]:
+                        - link "View columns" [ref=e993] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/71661
+                          - generic [ref=e994]: View columns
+                        - button "Table onboarding_funnel_dimensions_daily actions" [ref=e995] [cursor=pointer]:
+                          - img [ref=e997]
+                  - row "onboarding_slo_daily 5 – – Disabled View columns Table onboarding_slo_daily actions" [ref=e1001]:
+                    - cell [ref=e1002]:
+                      - img [ref=e1004]
+                    - cell "onboarding_slo_daily" [ref=e1007]:
+                      - paragraph [ref=e1009]: onboarding_slo_daily
+                    - cell "5" [ref=e1010]:
+                      - paragraph [ref=e1011]: "5"
+                    - cell "–" [ref=e1012]:
+                      - paragraph [ref=e1013]: –
+                    - cell "–" [ref=e1014]:
+                      - paragraph [ref=e1015]: –
+                    - cell "Disabled" [ref=e1016]:
+                      - generic [ref=e1017]:
+                        - img [ref=e1018]
+                        - paragraph [ref=e1021]: Disabled
+                    - cell "View columns Table onboarding_slo_daily actions" [ref=e1022]:
+                      - generic [ref=e1023]:
+                        - link "View columns" [ref=e1024] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/71656
+                          - generic [ref=e1025]: View columns
+                        - button "Table onboarding_slo_daily actions" [ref=e1026] [cursor=pointer]:
+                          - img [ref=e1028]
+                  - row "onboarding_submissions 8 2 128 kB Disabled View columns Table onboarding_submissions actions" [ref=e1032]:
+                    - cell [ref=e1033]:
+                      - img [ref=e1035]
+                    - cell "onboarding_submissions" [ref=e1037]:
+                      - paragraph [ref=e1039]: onboarding_submissions
+                    - cell "8" [ref=e1040]:
+                      - paragraph [ref=e1041]: "8"
+                    - cell "2" [ref=e1042]:
+                      - paragraph [ref=e1043]: "2"
+                    - cell "128 kB" [ref=e1044]:
+                      - paragraph [ref=e1045]: 128 kB
+                    - cell "Disabled" [ref=e1046]:
+                      - generic [ref=e1047]:
+                        - img [ref=e1048]
+                        - paragraph [ref=e1051]: Disabled
+                    - cell "View columns Table onboarding_submissions actions" [ref=e1052]:
+                      - generic [ref=e1053]:
+                        - link "View columns" [ref=e1054] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/55167
+                          - generic [ref=e1055]: View columns
+                        - button "Table onboarding_submissions actions" [ref=e1056] [cursor=pointer]:
+                          - img [ref=e1058]
+                  - row "profile_audit_events 7 7,816 3832 kB Disabled View columns Table profile_audit_events actions" [ref=e1062]:
+                    - cell [ref=e1063]:
+                      - img [ref=e1065]
+                    - cell "profile_audit_events" [ref=e1067]:
+                      - paragraph [ref=e1069]: profile_audit_events
+                    - cell "7" [ref=e1070]:
+                      - paragraph [ref=e1071]: "7"
+                    - cell "7,816" [ref=e1072]:
+                      - paragraph [ref=e1073]: 7,816
+                    - cell "3832 kB" [ref=e1074]:
+                      - paragraph [ref=e1075]: 3832 kB
+                    - cell "Disabled" [ref=e1076]:
+                      - generic [ref=e1077]:
+                        - img [ref=e1078]
+                        - paragraph [ref=e1081]: Disabled
+                    - cell "View columns Table profile_audit_events actions" [ref=e1082]:
+                      - generic [ref=e1083]:
+                        - link "View columns" [ref=e1084] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/55248
+                          - generic [ref=e1085]: View columns
+                        - button "Table profile_audit_events actions" [ref=e1086] [cursor=pointer]:
+                          - img [ref=e1088]
+                  - row "profile_interests 4 20 56 kB Disabled View columns Table profile_interests actions" [ref=e1092]:
+                    - cell [ref=e1093]:
+                      - img [ref=e1095]
+                    - cell "profile_interests" [ref=e1097]:
+                      - paragraph [ref=e1099]: profile_interests
+                    - cell "4" [ref=e1100]:
+                      - paragraph [ref=e1101]: "4"
+                    - cell "20" [ref=e1102]:
+                      - paragraph [ref=e1103]: "20"
+                    - cell "56 kB" [ref=e1104]:
+                      - paragraph [ref=e1105]: 56 kB
+                    - cell "Disabled" [ref=e1106]:
+                      - generic [ref=e1107]:
+                        - img [ref=e1108]
+                        - paragraph [ref=e1111]: Disabled
+                    - cell "View columns Table profile_interests actions" [ref=e1112]:
+                      - generic [ref=e1113]:
+                        - link "View columns" [ref=e1114] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/66288
+                          - generic [ref=e1115]: View columns
+                        - button "Table profile_interests actions" [ref=e1116] [cursor=pointer]:
+                          - img [ref=e1118]
+                  - row "profile_skills 4 14 56 kB Disabled View columns Table profile_skills actions" [ref=e1122]:
+                    - cell [ref=e1123]:
+                      - img [ref=e1125]
+                    - cell "profile_skills" [ref=e1127]:
+                      - paragraph [ref=e1129]: profile_skills
+                    - cell "4" [ref=e1130]:
+                      - paragraph [ref=e1131]: "4"
+                    - cell "14" [ref=e1132]:
+                      - paragraph [ref=e1133]: "14"
+                    - cell "56 kB" [ref=e1134]:
+                      - paragraph [ref=e1135]: 56 kB
+                    - cell "Disabled" [ref=e1136]:
+                      - generic [ref=e1137]:
+                        - img [ref=e1138]
+                        - paragraph [ref=e1141]: Disabled
+                    - cell "View columns Table profile_skills actions" [ref=e1142]:
+                      - generic [ref=e1143]:
+                        - link "View columns" [ref=e1144] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/66295
+                          - generic [ref=e1145]: View columns
+                        - button "Table profile_skills actions" [ref=e1146] [cursor=pointer]:
+                          - img [ref=e1148]
+                  - row "profiles 37 14 584 kB Disabled View columns Table profiles actions" [ref=e1152]:
+                    - cell [ref=e1153]:
+                      - img [ref=e1155]
+                    - cell "profiles" [ref=e1157]:
+                      - paragraph [ref=e1159]: profiles
+                    - cell "37" [ref=e1160]:
+                      - paragraph [ref=e1161]: "37"
+                    - cell "14" [ref=e1162]:
+                      - paragraph [ref=e1163]: "14"
+                    - cell "584 kB" [ref=e1164]:
+                      - paragraph [ref=e1165]: 584 kB
+                    - cell "Disabled" [ref=e1166]:
+                      - generic [ref=e1167]:
+                        - img [ref=e1168]
+                        - paragraph [ref=e1171]: Disabled
+                    - cell "View columns Table profiles actions" [ref=e1172]:
+                      - generic [ref=e1173]:
+                        - link "View columns" [ref=e1174] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/17519
+                          - generic [ref=e1175]: View columns
+                        - button "Table profiles actions" [ref=e1176] [cursor=pointer]:
+                          - img [ref=e1178]
+                  - row "project_file_index 4 10 264 kB Disabled View columns Table project_file_index actions" [ref=e1182]:
+                    - cell [ref=e1183]:
+                      - img [ref=e1185]
+                    - cell "project_file_index" [ref=e1187]:
+                      - paragraph [ref=e1189]: project_file_index
+                    - cell "4" [ref=e1190]:
+                      - paragraph [ref=e1191]: "4"
+                    - cell "10" [ref=e1192]:
+                      - paragraph [ref=e1193]: "10"
+                    - cell "264 kB" [ref=e1194]:
+                      - paragraph [ref=e1195]: 264 kB
+                    - cell "Disabled" [ref=e1196]:
+                      - generic [ref=e1197]:
+                        - img [ref=e1198]
+                        - paragraph [ref=e1201]: Disabled
+                    - cell "View columns Table project_file_index actions" [ref=e1202]:
+                      - generic [ref=e1203]:
+                        - link "View columns" [ref=e1204] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/29385
+                          - generic [ref=e1205]: View columns
+                        - button "Table project_file_index actions" [ref=e1206] [cursor=pointer]:
+                          - img [ref=e1208]
+                  - row "project_follows 4 3 136 kB Disabled View columns Table project_follows actions" [ref=e1212]:
+                    - cell [ref=e1213]:
+                      - img [ref=e1215]
+                    - cell "project_follows" [ref=e1217]:
+                      - paragraph [ref=e1219]: project_follows
+                    - cell "4" [ref=e1220]:
+                      - paragraph [ref=e1221]: "4"
+                    - cell "3" [ref=e1222]:
+                      - paragraph [ref=e1223]: "3"
+                    - cell "136 kB" [ref=e1224]:
+                      - paragraph [ref=e1225]: 136 kB
+                    - cell "Disabled" [ref=e1226]:
+                      - generic [ref=e1227]:
+                        - img [ref=e1228]
+                        - paragraph [ref=e1231]: Disabled
+                    - cell "View columns Table project_follows actions" [ref=e1232]:
+                      - generic [ref=e1233]:
+                        - link "View columns" [ref=e1234] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/24595
+                          - generic [ref=e1235]: View columns
+                        - button "Table project_follows actions" [ref=e1236] [cursor=pointer]:
+                          - img [ref=e1238]
+                  - row "project_members 7 21 192 kB Disabled View columns Table project_members actions" [ref=e1242]:
+                    - cell [ref=e1243]:
+                      - img [ref=e1245]
+                    - cell "project_members" [ref=e1247]:
+                      - paragraph [ref=e1249]: project_members
+                    - cell "7" [ref=e1250]:
+                      - paragraph [ref=e1251]: "7"
+                    - cell "21" [ref=e1252]:
+                      - paragraph [ref=e1253]: "21"
+                    - cell "192 kB" [ref=e1254]:
+                      - paragraph [ref=e1255]: 192 kB
+                    - cell "Disabled" [ref=e1256]:
+                      - generic [ref=e1257]:
+                        - img [ref=e1258]
+                        - paragraph [ref=e1261]: Disabled
+                    - cell "View columns Table project_members actions" [ref=e1262]:
+                      - generic [ref=e1263]:
+                        - link "View columns" [ref=e1264] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/17534
+                          - generic [ref=e1265]: View columns
+                        - button "Table project_members actions" [ref=e1266] [cursor=pointer]:
+                          - img [ref=e1268]
+                  - row "project_node_events 7 0 0 bytes Disabled View columns Table project_node_events actions" [ref=e1272]:
+                    - cell [ref=e1273]:
+                      - img [ref=e1275]
+                    - cell "project_node_events" [ref=e1277]:
+                      - paragraph [ref=e1279]: project_node_events
+                    - cell "7" [ref=e1280]:
+                      - paragraph [ref=e1281]: "7"
+                    - cell "0" [ref=e1282]:
+                      - paragraph [ref=e1283]: "0"
+                    - cell "0 bytes" [ref=e1284]:
+                      - paragraph [ref=e1285]: 0 bytes
+                    - cell "Disabled" [ref=e1286]:
+                      - generic [ref=e1287]:
+                        - img [ref=e1288]
+                        - paragraph [ref=e1291]: Disabled
+                    - cell "View columns Table project_node_events actions" [ref=e1292]:
+                      - generic [ref=e1293]:
+                        - link "View columns" [ref=e1294] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/67040
+                          - generic [ref=e1295]: View columns
+                        - button "Table project_node_events actions" [ref=e1296] [cursor=pointer]:
+                          - img [ref=e1298]
+                  - row "project_node_events_2026_01 7 0 56 kB Disabled View columns Table project_node_events_2026_01 actions" [ref=e1302]:
+                    - cell [ref=e1303]:
+                      - img [ref=e1305]
+                    - cell "project_node_events_2026_01" [ref=e1307]:
+                      - paragraph [ref=e1309]: project_node_events_2026_01
+                    - cell "7" [ref=e1310]:
+                      - paragraph [ref=e1311]: "7"
+                    - cell "0" [ref=e1312]:
+                      - paragraph [ref=e1313]: "0"
+                    - cell "56 kB" [ref=e1314]:
+                      - paragraph [ref=e1315]: 56 kB
+                    - cell "Disabled" [ref=e1316]:
+                      - generic [ref=e1317]:
+                        - img [ref=e1318]
+                        - paragraph [ref=e1321]: Disabled
+                    - cell "View columns Table project_node_events_2026_01 actions" [ref=e1322]:
+                      - generic [ref=e1323]:
+                        - link "View columns" [ref=e1324] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/67063
+                          - generic [ref=e1325]: View columns
+                        - button "Table project_node_events_2026_01 actions" [ref=e1326] [cursor=pointer]:
+                          - img [ref=e1328]
+                  - row "project_node_events_2026_02 7 0 56 kB Disabled View columns Table project_node_events_2026_02 actions" [ref=e1332]:
+                    - cell [ref=e1333]:
+                      - img [ref=e1335]
+                    - cell "project_node_events_2026_02" [ref=e1337]:
+                      - paragraph [ref=e1339]: project_node_events_2026_02
+                    - cell "7" [ref=e1340]:
+                      - paragraph [ref=e1341]: "7"
+                    - cell "0" [ref=e1342]:
+                      - paragraph [ref=e1343]: "0"
+                    - cell "56 kB" [ref=e1344]:
+                      - paragraph [ref=e1345]: 56 kB
+                    - cell "Disabled" [ref=e1346]:
+                      - generic [ref=e1347]:
+                        - img [ref=e1348]
+                        - paragraph [ref=e1351]: Disabled
+                    - cell "View columns Table project_node_events_2026_02 actions" [ref=e1352]:
+                      - generic [ref=e1353]:
+                        - link "View columns" [ref=e1354] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/67082
+                          - generic [ref=e1355]: View columns
+                        - button "Table project_node_events_2026_02 actions" [ref=e1356] [cursor=pointer]:
+                          - img [ref=e1358]
+                  - row "project_node_events_2026_03 7 261 240 kB Disabled View columns Table project_node_events_2026_03 actions" [ref=e1362]:
+                    - cell [ref=e1363]:
+                      - img [ref=e1365]
+                    - cell "project_node_events_2026_03" [ref=e1367]:
+                      - paragraph [ref=e1369]: project_node_events_2026_03
+                    - cell "7" [ref=e1370]:
+                      - paragraph [ref=e1371]: "7"
+                    - cell "261" [ref=e1372]:
+                      - paragraph [ref=e1373]: "261"
+                    - cell "240 kB" [ref=e1374]:
+                      - paragraph [ref=e1375]: 240 kB
+                    - cell "Disabled" [ref=e1376]:
+                      - generic [ref=e1377]:
+                        - img [ref=e1378]
+                        - paragraph [ref=e1381]: Disabled
+                    - cell "View columns Table project_node_events_2026_03 actions" [ref=e1382]:
+                      - generic [ref=e1383]:
+                        - link "View columns" [ref=e1384] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/67101
+                          - generic [ref=e1385]: View columns
+                        - button "Table project_node_events_2026_03 actions" [ref=e1386] [cursor=pointer]:
+                          - img [ref=e1388]
+                  - row "project_node_events_2026_04 7 84 144 kB Disabled View columns Table project_node_events_2026_04 actions" [ref=e1392]:
+                    - cell [ref=e1393]:
+                      - img [ref=e1395]
+                    - cell "project_node_events_2026_04" [ref=e1397]:
+                      - paragraph [ref=e1399]: project_node_events_2026_04
+                    - cell "7" [ref=e1400]:
+                      - paragraph [ref=e1401]: "7"
+                    - cell "84" [ref=e1402]:
+                      - paragraph [ref=e1403]: "84"
+                    - cell "144 kB" [ref=e1404]:
+                      - paragraph [ref=e1405]: 144 kB
+                    - cell "Disabled" [ref=e1406]:
+                      - generic [ref=e1407]:
+                        - img [ref=e1408]
+                        - paragraph [ref=e1411]: Disabled
+                    - cell "View columns Table project_node_events_2026_04 actions" [ref=e1412]:
+                      - generic [ref=e1413]:
+                        - link "View columns" [ref=e1414] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/67120
+                          - generic [ref=e1415]: View columns
+                        - button "Table project_node_events_2026_04 actions" [ref=e1416] [cursor=pointer]:
+                          - img [ref=e1418]
+                  - row "project_node_events_2026_05 7 253 232 kB Disabled View columns Table project_node_events_2026_05 actions" [ref=e1422]:
+                    - cell [ref=e1423]:
+                      - img [ref=e1425]
+                    - cell "project_node_events_2026_05" [ref=e1427]:
+                      - paragraph [ref=e1429]: project_node_events_2026_05
+                    - cell "7" [ref=e1430]:
+                      - paragraph [ref=e1431]: "7"
+                    - cell "253" [ref=e1432]:
+                      - paragraph [ref=e1433]: "253"
+                    - cell "232 kB" [ref=e1434]:
+                      - paragraph [ref=e1435]: 232 kB
+                    - cell "Disabled" [ref=e1436]:
+                      - generic [ref=e1437]:
+                        - img [ref=e1438]
+                        - paragraph [ref=e1441]: Disabled
+                    - cell "View columns Table project_node_events_2026_05 actions" [ref=e1442]:
+                      - generic [ref=e1443]:
+                        - link "View columns" [ref=e1444] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/67139
+                          - generic [ref=e1445]: View columns
+                        - button "Table project_node_events_2026_05 actions" [ref=e1446] [cursor=pointer]:
+                          - img [ref=e1448]
+                  - row "project_node_events_2026_06 7 14 112 kB Disabled View columns Table project_node_events_2026_06 actions" [ref=e1452]:
+                    - cell [ref=e1453]:
+                      - img [ref=e1455]
+                    - cell "project_node_events_2026_06" [ref=e1457]:
+                      - paragraph [ref=e1459]: project_node_events_2026_06
+                    - cell "7" [ref=e1460]:
+                      - paragraph [ref=e1461]: "7"
+                    - cell "14" [ref=e1462]:
+                      - paragraph [ref=e1463]: "14"
+                    - cell "112 kB" [ref=e1464]:
+                      - paragraph [ref=e1465]: 112 kB
+                    - cell "Disabled" [ref=e1466]:
+                      - generic [ref=e1467]:
+                        - img [ref=e1468]
+                        - paragraph [ref=e1471]: Disabled
+                    - cell "View columns Table project_node_events_2026_06 actions" [ref=e1472]:
+                      - generic [ref=e1473]:
+                        - link "View columns" [ref=e1474] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/67158
+                          - generic [ref=e1475]: View columns
+                        - button "Table project_node_events_2026_06 actions" [ref=e1476] [cursor=pointer]:
+                          - img [ref=e1478]
+                  - row "project_node_events_2026_07 7 0 56 kB Disabled View columns Table project_node_events_2026_07 actions" [ref=e1482]:
+                    - cell [ref=e1483]:
+                      - img [ref=e1485]
+                    - cell "project_node_events_2026_07" [ref=e1487]:
+                      - paragraph [ref=e1489]: project_node_events_2026_07
+                    - cell "7" [ref=e1490]:
+                      - paragraph [ref=e1491]: "7"
+                    - cell "0" [ref=e1492]:
+                      - paragraph [ref=e1493]: "0"
+                    - cell "56 kB" [ref=e1494]:
+                      - paragraph [ref=e1495]: 56 kB
+                    - cell "Disabled" [ref=e1496]:
+                      - generic [ref=e1497]:
+                        - img [ref=e1498]
+                        - paragraph [ref=e1501]: Disabled
+                    - cell "View columns Table project_node_events_2026_07 actions" [ref=e1502]:
+                      - generic [ref=e1503]:
+                        - link "View columns" [ref=e1504] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/67177
+                          - generic [ref=e1505]: View columns
+                        - button "Table project_node_events_2026_07 actions" [ref=e1506] [cursor=pointer]:
+                          - img [ref=e1508]
+                  - row "project_node_locks 5 13 152 kB Disabled View columns Table project_node_locks actions" [ref=e1512]:
+                    - cell [ref=e1513]:
+                      - img [ref=e1515]
+                    - cell "project_node_locks" [ref=e1517]:
+                      - paragraph [ref=e1519]: project_node_locks
+                    - cell "5" [ref=e1520]:
+                      - paragraph [ref=e1521]: "5"
+                    - cell "13" [ref=e1522]:
+                      - paragraph [ref=e1523]: "13"
+                    - cell "152 kB" [ref=e1524]:
+                      - paragraph [ref=e1525]: 152 kB
+                    - cell "Disabled" [ref=e1526]:
+                      - generic [ref=e1527]:
+                        - img [ref=e1528]
+                        - paragraph [ref=e1531]: Disabled
+                    - cell "View columns Table project_node_locks actions" [ref=e1532]:
+                      - generic [ref=e1533]:
+                        - link "View columns" [ref=e1534] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/29404
+                          - generic [ref=e1535]: View columns
+                        - button "Table project_node_locks actions" [ref=e1536] [cursor=pointer]:
+                          - img [ref=e1538]
+                  - row "project_nodes 17 19,901 25 MB Disabled View columns Table project_nodes actions" [ref=e1542]:
+                    - cell [ref=e1543]:
+                      - img [ref=e1545]
+                    - cell "project_nodes" [ref=e1547]:
+                      - paragraph [ref=e1549]: project_nodes
+                    - cell "17" [ref=e1550]:
+                      - paragraph [ref=e1551]: "17"
+                    - cell "19,901" [ref=e1552]:
+                      - paragraph [ref=e1553]: 19,901
+                    - cell "25 MB" [ref=e1554]:
+                      - paragraph [ref=e1555]: 25 MB
+                    - cell "Disabled" [ref=e1556]:
+                      - generic [ref=e1557]:
+                        - img [ref=e1558]
+                        - paragraph [ref=e1561]: Disabled
+                    - cell "View columns Table project_nodes actions" [ref=e1562]:
+                      - generic [ref=e1563]:
+                        - link "View columns" [ref=e1564] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/29298
+                          - generic [ref=e1565]: View columns
+                        - button "Table project_nodes actions" [ref=e1566] [cursor=pointer]:
+                          - img [ref=e1568]
+                  - row "project_open_roles 10 10 80 kB Disabled View columns Table project_open_roles actions" [ref=e1572]:
+                    - cell [ref=e1573]:
+                      - img [ref=e1575]
+                    - cell "project_open_roles" [ref=e1577]:
+                      - paragraph [ref=e1579]: project_open_roles
+                    - cell "10" [ref=e1580]:
+                      - paragraph [ref=e1581]: "10"
+                    - cell "10" [ref=e1582]:
+                      - paragraph [ref=e1583]: "10"
+                    - cell "80 kB" [ref=e1584]:
+                      - paragraph [ref=e1585]: 80 kB
+                    - cell "Disabled" [ref=e1586]:
+                      - generic [ref=e1587]:
+                        - img [ref=e1588]
+                        - paragraph [ref=e1591]: Disabled
+                    - cell "View columns Table project_open_roles actions" [ref=e1592]:
+                      - generic [ref=e1593]:
+                        - link "View columns" [ref=e1594] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/20981
+                          - generic [ref=e1595]: View columns
+                        - button "Table project_open_roles actions" [ref=e1596] [cursor=pointer]:
+                          - img [ref=e1598]
+                  - row "project_run_profiles 8 17 96 kB Disabled View columns Table project_run_profiles actions" [ref=e1602]:
+                    - cell [ref=e1603]:
+                      - img [ref=e1605]
+                    - cell "project_run_profiles" [ref=e1607]:
+                      - paragraph [ref=e1609]: project_run_profiles
+                    - cell "8" [ref=e1610]:
+                      - paragraph [ref=e1611]: "8"
+                    - cell "17" [ref=e1612]:
+                      - paragraph [ref=e1613]: "17"
+                    - cell "96 kB" [ref=e1614]:
+                      - paragraph [ref=e1615]: 96 kB
+                    - cell "Disabled" [ref=e1616]:
+                      - generic [ref=e1617]:
+                        - img [ref=e1618]
+                        - paragraph [ref=e1621]: Disabled
+                    - cell "View columns Table project_run_profiles actions" [ref=e1622]:
+                      - generic [ref=e1623]:
+                        - link "View columns" [ref=e1624] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/44899
+                          - generic [ref=e1625]: View columns
+                        - button "Table project_run_profiles actions" [ref=e1626] [cursor=pointer]:
+                          - img [ref=e1628]
+                  - row "project_run_sessions 13 7 144 kB Disabled View columns Table project_run_sessions actions" [ref=e1632]:
+                    - cell [ref=e1633]:
+                      - img [ref=e1635]
+                    - cell "project_run_sessions" [ref=e1637]:
+                      - paragraph [ref=e1639]: project_run_sessions
+                    - cell "13" [ref=e1640]:
+                      - paragraph [ref=e1641]: "13"
+                    - cell "7" [ref=e1642]:
+                      - paragraph [ref=e1643]: "7"
+                    - cell "144 kB" [ref=e1644]:
+                      - paragraph [ref=e1645]: 144 kB
+                    - cell "Disabled" [ref=e1646]:
+                      - generic [ref=e1647]:
+                        - img [ref=e1648]
+                        - paragraph [ref=e1651]: Disabled
+                    - cell "View columns Table project_run_sessions actions" [ref=e1652]:
+                      - generic [ref=e1653]:
+                        - link "View columns" [ref=e1654] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/44910
+                          - generic [ref=e1655]: View columns
+                        - button "Table project_run_sessions actions" [ref=e1656] [cursor=pointer]:
+                          - img [ref=e1658]
+                  - row "project_skills 4 30 56 kB Disabled View columns Table project_skills actions" [ref=e1662]:
+                    - cell [ref=e1663]:
+                      - img [ref=e1665]
+                    - cell "project_skills" [ref=e1667]:
+                      - paragraph [ref=e1669]: project_skills
+                    - cell "4" [ref=e1670]:
+                      - paragraph [ref=e1671]: "4"
+                    - cell "30" [ref=e1672]:
+                      - paragraph [ref=e1673]: "30"
+                    - cell "56 kB" [ref=e1674]:
+                      - paragraph [ref=e1675]: 56 kB
+                    - cell "Disabled" [ref=e1676]:
+                      - generic [ref=e1677]:
+                        - img [ref=e1678]
+                        - paragraph [ref=e1681]: Disabled
+                    - cell "View columns Table project_skills actions" [ref=e1682]:
+                      - generic [ref=e1683]:
+                        - link "View columns" [ref=e1684] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/66302
+                          - generic [ref=e1685]: View columns
+                        - button "Table project_skills actions" [ref=e1686] [cursor=pointer]:
+                          - img [ref=e1688]
+                  - row "project_sprints 10 0 48 kB Disabled View columns Table project_sprints actions" [ref=e1692]:
+                    - cell [ref=e1693]:
+                      - img [ref=e1695]
+                    - cell "project_sprints" [ref=e1697]:
+                      - paragraph [ref=e1699]: project_sprints
+                    - cell "10" [ref=e1700]:
+                      - paragraph [ref=e1701]: "10"
+                    - cell "0" [ref=e1702]:
+                      - paragraph [ref=e1703]: "0"
+                    - cell "48 kB" [ref=e1704]:
+                      - paragraph [ref=e1705]: 48 kB
+                    - cell "Disabled" [ref=e1706]:
+                      - generic [ref=e1707]:
+                        - img [ref=e1708]
+                        - paragraph [ref=e1711]: Disabled
+                    - cell "View columns Table project_sprints actions" [ref=e1712]:
+                      - generic [ref=e1713]:
+                        - link "View columns" [ref=e1714] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/26850
+                          - generic [ref=e1715]: View columns
+                        - button "Table project_sprints actions" [ref=e1716] [cursor=pointer]:
+                          - img [ref=e1718]
+                  - row "project_tags 4 26 56 kB Disabled View columns Table project_tags actions" [ref=e1722]:
+                    - cell [ref=e1723]:
+                      - img [ref=e1725]
+                    - cell "project_tags" [ref=e1727]:
+                      - paragraph [ref=e1729]: project_tags
+                    - cell "4" [ref=e1730]:
+                      - paragraph [ref=e1731]: "4"
+                    - cell "26" [ref=e1732]:
+                      - paragraph [ref=e1733]: "26"
+                    - cell "56 kB" [ref=e1734]:
+                      - paragraph [ref=e1735]: 56 kB
+                    - cell "Disabled" [ref=e1736]:
+                      - generic [ref=e1737]:
+                        - img [ref=e1738]
+                        - paragraph [ref=e1741]: Disabled
+                    - cell "View columns Table project_tags actions" [ref=e1742]:
+                      - generic [ref=e1743]:
+                        - link "View columns" [ref=e1744] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/66309
+                          - generic [ref=e1745]: View columns
+                        - button "Table project_tags actions" [ref=e1746] [cursor=pointer]:
+                          - img [ref=e1748]
+                  - row "projects 38 14 648 kB Disabled View columns Table projects actions" [ref=e1752]:
+                    - cell [ref=e1753]:
+                      - img [ref=e1755]
+                    - cell "projects" [ref=e1757]:
+                      - paragraph [ref=e1759]: projects
+                    - cell "38" [ref=e1760]:
+                      - paragraph [ref=e1761]: "38"
+                    - cell "14" [ref=e1762]:
+                      - paragraph [ref=e1763]: "14"
+                    - cell "648 kB" [ref=e1764]:
+                      - paragraph [ref=e1765]: 648 kB
+                    - cell "Disabled" [ref=e1766]:
+                      - generic [ref=e1767]:
+                        - img [ref=e1768]
+                        - paragraph [ref=e1771]: Disabled
+                    - cell "View columns Table projects actions" [ref=e1772]:
+                      - generic [ref=e1773]:
+                        - link "View columns" [ref=e1774] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/17544
+                          - generic [ref=e1775]: View columns
+                        - button "Table projects actions" [ref=e1776] [cursor=pointer]:
+                          - img [ref=e1778]
+                  - row "reserved_usernames 3 13 32 kB Disabled View columns Table reserved_usernames actions" [ref=e1782]:
+                    - cell [ref=e1783]:
+                      - img [ref=e1785]
+                    - cell "reserved_usernames" [ref=e1787]:
+                      - paragraph [ref=e1789]: reserved_usernames
+                    - cell "3" [ref=e1790]:
+                      - paragraph [ref=e1791]: "3"
+                    - cell "13" [ref=e1792]:
+                      - paragraph [ref=e1793]: "13"
+                    - cell "32 kB" [ref=e1794]:
+                      - paragraph [ref=e1795]: 32 kB
+                    - cell "Disabled" [ref=e1796]:
+                      - generic [ref=e1797]:
+                        - img [ref=e1798]
+                        - paragraph [ref=e1801]: Disabled
+                    - cell "View columns Table reserved_usernames actions" [ref=e1802]:
+                      - generic [ref=e1803]:
+                        - link "View columns" [ref=e1804] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/53924
+                          - generic [ref=e1805]: View columns
+                        - button "Table reserved_usernames actions" [ref=e1806] [cursor=pointer]:
+                          - img [ref=e1808]
+                  - row "role_applications 14 4 224 kB Disabled View columns Table role_applications actions" [ref=e1812]:
+                    - cell [ref=e1813]:
+                      - img [ref=e1815]
+                    - cell "role_applications" [ref=e1817]:
+                      - paragraph [ref=e1819]: role_applications
+                    - cell "14" [ref=e1820]:
+                      - paragraph [ref=e1821]: "14"
+                    - cell "4" [ref=e1822]:
+                      - paragraph [ref=e1823]: "4"
+                    - cell "224 kB" [ref=e1824]:
+                      - paragraph [ref=e1825]: 224 kB
+                    - cell "Disabled" [ref=e1826]:
+                      - generic [ref=e1827]:
+                        - img [ref=e1828]
+                        - paragraph [ref=e1831]: Disabled
+                    - cell "View columns Table role_applications actions" [ref=e1832]:
+                      - generic [ref=e1833]:
+                        - link "View columns" [ref=e1834] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/35384
+                          - generic [ref=e1835]: View columns
+                        - button "Table role_applications actions" [ref=e1836] [cursor=pointer]:
+                          - img [ref=e1838]
+                  - row "saved_projects 4 0 72 kB Disabled View columns Table saved_projects actions" [ref=e1842]:
+                    - cell [ref=e1843]:
+                      - img [ref=e1845]
+                    - cell "saved_projects" [ref=e1847]:
+                      - paragraph [ref=e1849]: saved_projects
+                    - cell "4" [ref=e1850]:
+                      - paragraph [ref=e1851]: "4"
+                    - cell "0" [ref=e1852]:
+                      - paragraph [ref=e1853]: "0"
+                    - cell "72 kB" [ref=e1854]:
+                      - paragraph [ref=e1855]: 72 kB
+                    - cell "Disabled" [ref=e1856]:
+                      - generic [ref=e1857]:
+                        - img [ref=e1858]
+                        - paragraph [ref=e1861]: Disabled
+                    - cell "View columns Table saved_projects actions" [ref=e1862]:
+                      - generic [ref=e1863]:
+                        - link "View columns" [ref=e1864] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/24558
+                          - generic [ref=e1865]: View columns
+                        - button "Table saved_projects actions" [ref=e1866] [cursor=pointer]:
+                          - img [ref=e1868]
+                  - row "skills 4 24 88 kB Disabled View columns Table skills actions" [ref=e1872]:
+                    - cell [ref=e1873]:
+                      - img [ref=e1875]
+                    - cell "skills" [ref=e1877]:
+                      - paragraph [ref=e1879]: skills
+                    - cell "4" [ref=e1880]:
+                      - paragraph [ref=e1881]: "4"
+                    - cell "24" [ref=e1882]:
+                      - paragraph [ref=e1883]: "24"
+                    - cell "88 kB" [ref=e1884]:
+                      - paragraph [ref=e1885]: 88 kB
+                    - cell "Disabled" [ref=e1886]:
+                      - generic [ref=e1887]:
+                        - img [ref=e1888]
+                        - paragraph [ref=e1891]: Disabled
+                    - cell "View columns Table skills actions" [ref=e1892]:
+                      - generic [ref=e1893]:
+                        - link "View columns" [ref=e1894] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/66316
+                          - generic [ref=e1895]: View columns
+                        - button "Table skills actions" [ref=e1896] [cursor=pointer]:
+                          - img [ref=e1898]
+                  - row "tags 4 17 88 kB Disabled View columns Table tags actions" [ref=e1902]:
+                    - cell [ref=e1903]:
+                      - img [ref=e1905]
+                    - cell "tags" [ref=e1907]:
+                      - paragraph [ref=e1909]: tags
+                    - cell "4" [ref=e1910]:
+                      - paragraph [ref=e1911]: "4"
+                    - cell "17" [ref=e1912]:
+                      - paragraph [ref=e1913]: "17"
+                    - cell "88 kB" [ref=e1914]:
+                      - paragraph [ref=e1915]: 88 kB
+                    - cell "Disabled" [ref=e1916]:
+                      - generic [ref=e1917]:
+                        - img [ref=e1918]
+                        - paragraph [ref=e1921]: Disabled
+                    - cell "View columns Table tags actions" [ref=e1922]:
+                      - generic [ref=e1923]:
+                        - link "View columns" [ref=e1924] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/66329
+                          - generic [ref=e1925]: View columns
+                        - button "Table tags actions" [ref=e1926] [cursor=pointer]:
+                          - img [ref=e1928]
+                  - row "task_comment_likes 4 0 72 kB Disabled View columns Table task_comment_likes actions" [ref=e1932]:
+                    - cell [ref=e1933]:
+                      - img [ref=e1935]
+                    - cell "task_comment_likes" [ref=e1937]:
+                      - paragraph [ref=e1939]: task_comment_likes
+                    - cell "4" [ref=e1940]:
+                      - paragraph [ref=e1941]: "4"
+                    - cell "0" [ref=e1942]:
+                      - paragraph [ref=e1943]: "0"
+                    - cell "72 kB" [ref=e1944]:
+                      - paragraph [ref=e1945]: 72 kB
+                    - cell "Disabled" [ref=e1946]:
+                      - generic [ref=e1947]:
+                        - img [ref=e1948]
+                        - paragraph [ref=e1951]: Disabled
+                    - cell "View columns Table task_comment_likes actions" [ref=e1952]:
+                      - generic [ref=e1953]:
+                        - link "View columns" [ref=e1954] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/63737
+                          - generic [ref=e1955]: View columns
+                        - button "Table task_comment_likes actions" [ref=e1956] [cursor=pointer]:
+                          - img [ref=e1958]
+                  - row "task_comments 9 0 112 kB Disabled View columns Table task_comments actions" [ref=e1962]:
+                    - cell [ref=e1963]:
+                      - img [ref=e1965]
+                    - cell "task_comments" [ref=e1967]:
+                      - paragraph [ref=e1969]: task_comments
+                    - cell "9" [ref=e1970]:
+                      - paragraph [ref=e1971]: "9"
+                    - cell "0" [ref=e1972]:
+                      - paragraph [ref=e1973]: "0"
+                    - cell "112 kB" [ref=e1974]:
+                      - paragraph [ref=e1975]: 112 kB
+                    - cell "Disabled" [ref=e1976]:
+                      - generic [ref=e1977]:
+                        - img [ref=e1978]
+                        - paragraph [ref=e1981]: Disabled
+                    - cell "View columns Table task_comments actions" [ref=e1982]:
+                      - generic [ref=e1983]:
+                        - link "View columns" [ref=e1984] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/63744
+                          - generic [ref=e1985]: View columns
+                        - button "Table task_comments actions" [ref=e1986] [cursor=pointer]:
+                          - img [ref=e1988]
+                  - row "task_node_links 7 2 160 kB Disabled View columns Table task_node_links actions" [ref=e1992]:
+                    - cell [ref=e1993]:
+                      - img [ref=e1995]
+                    - cell "task_node_links" [ref=e1997]:
+                      - paragraph [ref=e1999]: task_node_links
+                    - cell "7" [ref=e2000]:
+                      - paragraph [ref=e2001]: "7"
+                    - cell "2" [ref=e2002]:
+                      - paragraph [ref=e2003]: "2"
+                    - cell "160 kB" [ref=e2004]:
+                      - paragraph [ref=e2005]: 160 kB
+                    - cell "Disabled" [ref=e2006]:
+                      - generic [ref=e2007]:
+                        - img [ref=e2008]
+                        - paragraph [ref=e2011]: Disabled
+                    - cell "View columns Table task_node_links actions" [ref=e2012]:
+                      - generic [ref=e2013]:
+                        - link "View columns" [ref=e2014] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/29352
+                          - generic [ref=e2015]: View columns
+                        - button "Table task_node_links actions" [ref=e2016] [cursor=pointer]:
+                          - img [ref=e2018]
+                  - row "task_subtasks 7 3 64 kB Disabled View columns Table task_subtasks actions" [ref=e2022]:
+                    - cell [ref=e2023]:
+                      - img [ref=e2025]
+                    - cell "task_subtasks" [ref=e2027]:
+                      - paragraph [ref=e2029]: task_subtasks
+                    - cell "7" [ref=e2030]:
+                      - paragraph [ref=e2031]: "7"
+                    - cell "3" [ref=e2032]:
+                      - paragraph [ref=e2033]: "3"
+                    - cell "64 kB" [ref=e2034]:
+                      - paragraph [ref=e2035]: 64 kB
+                    - cell "Disabled" [ref=e2036]:
+                      - generic [ref=e2037]:
+                        - img [ref=e2038]
+                        - paragraph [ref=e2041]: Disabled
+                    - cell "View columns Table task_subtasks actions" [ref=e2042]:
+                      - generic [ref=e2043]:
+                        - link "View columns" [ref=e2044] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/31887
+                          - generic [ref=e2045]: View columns
+                        - button "Table task_subtasks actions" [ref=e2046] [cursor=pointer]:
+                          - img [ref=e2048]
+                  - row "tasks 15 1 272 kB Disabled View columns Table tasks actions" [ref=e2052]:
+                    - cell [ref=e2053]:
+                      - img [ref=e2055]
+                    - cell "tasks" [ref=e2057]:
+                      - paragraph [ref=e2059]: tasks
+                    - cell "15" [ref=e2060]:
+                      - paragraph [ref=e2061]: "15"
+                    - cell "1" [ref=e2062]:
+                      - paragraph [ref=e2063]: "1"
+                    - cell "272 kB" [ref=e2064]:
+                      - paragraph [ref=e2065]: 272 kB
+                    - cell "Disabled" [ref=e2066]:
+                      - generic [ref=e2067]:
+                        - img [ref=e2068]
+                        - paragraph [ref=e2071]: Disabled
+                    - cell "View columns Table tasks actions" [ref=e2072]:
+                      - generic [ref=e2073]:
+                        - link "View columns" [ref=e2074] [cursor=pointer]:
+                          - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables/26861
+                          - generic [ref=e2075]: View columns
+                        - button "Table tasks actions" [ref=e2076] [cursor=pointer]:
+                          - img [ref=e2078]
+                - rowgroup [ref=e2082]:
+                  - row "50 tables loaded" [ref=e2083]:
+                    - cell "50 tables loaded" [ref=e2084]
+  - alert [ref=e373]: Tables | Database | Supabase
