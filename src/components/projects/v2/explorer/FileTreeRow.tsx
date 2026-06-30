@@ -8,6 +8,7 @@ import {
 import { cn } from "@/lib/utils";
 import { FileIcon } from "./FileIcons";
 import { ProjectNode } from "@/lib/db/schema";
+import { VersionPill } from "../files-tab/VersionPill";
 
 const NODE_DRAG_MIME = "application/x-nb-node";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -291,12 +292,15 @@ export const FileTreeRow = React.memo(function FileTreeRow({
                     onCancel={onRenameCancel}
                 />
             ) : (
-                <span className={cn(
-                    "text-sm whitespace-nowrap overflow-hidden text-ellipsis mr-auto",
-                    isSelected ? "text-indigo-700 dark:text-indigo-300 font-medium" : "text-zinc-700 dark:text-zinc-300"
-                )}>
-                    {node.name}
-                </span>
+                <div className="flex items-center gap-1.5 min-w-0 mr-auto">
+                    <span className={cn(
+                        "text-sm whitespace-nowrap overflow-hidden text-ellipsis",
+                        isSelected ? "text-indigo-700 dark:text-indigo-300 font-medium" : "text-zinc-700 dark:text-zinc-300"
+                    )}>
+                        {node.name}
+                    </span>
+                    <VersionPill v={node.currentVersion} className="h-4 px-1 text-[9px]" />
+                </div>
             )}
  
             {badge}
