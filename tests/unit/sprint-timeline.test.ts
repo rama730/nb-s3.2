@@ -81,6 +81,17 @@ describe("sprint timeline", () => {
               lastEventType: null,
               lastEventAt: null,
               lastEventBy: null,
+              versionEvents: [
+                {
+                  id: "version-2",
+                  nodeId: "node-1",
+                  versionNumber: 2,
+                  createdAt: "2026-04-13T10:00:00.000Z",
+                  createdBy: "user-1",
+                  createdByName: "Ramanayudu",
+                  comment: "Updated the task implementation",
+                },
+              ],
             },
             {
               id: "link-2",
@@ -102,18 +113,32 @@ describe("sprint timeline", () => {
 
     assert.deepEqual(
       rows.map((row) => row.kind),
-      ["kickoff", "task", "file", "file", "task", "closeout"],
+      ["kickoff", "task", "file", "file_version", "file", "task", "closeout"],
     );
     assert.equal(rows[0]?.kind, "kickoff");
     assert.equal(rows[1]?.kind, "task");
     assert.equal(rows[2]?.kind, "file");
     assert.equal(rows[2]?.file.nodeName, "SprintShell.tsx");
-    const secondFileRow = rows[3];
+    const versionRow = rows[3];
+    assert.equal(versionRow?.kind, "file_version");
+    assert.equal(
+      versionRow && versionRow.kind === "file_version"
+        ? versionRow.versionEvent.createdByName
+        : null,
+      "Ramanayudu",
+    );
+    assert.equal(
+      versionRow && versionRow.kind === "file_version"
+        ? versionRow.versionEvent.versionNumber
+        : null,
+      2,
+    );
+    const secondFileRow = rows[4];
     assert.equal(secondFileRow?.kind, "file");
     assert.equal(secondFileRow && secondFileRow.kind === "file" ? secondFileRow.file.nodeName : null, "sprint-detail.ts");
-    assert.equal(rows[4]?.kind, "task");
-    assert.equal(rows[4]?.task.id, "task-2");
-    assert.equal(rows[5]?.kind, "closeout");
+    assert.equal(rows[5]?.kind, "task");
+    assert.equal(rows[5]?.task.id, "task-2");
+    assert.equal(rows[6]?.kind, "closeout");
   });
 
   it("can omit kickoff and closeout anchors for follow-up pages", () => {
