@@ -367,10 +367,19 @@ function runGitGrep(pattern: string, wordBoundary: boolean): RawHit[] {
   // `git grep -n` — add `-w` when we want word-boundary matching on
   // identifier-style queries, otherwise fall back to `--fixed-strings` for
   // path-shaped queries containing `/` and `.`.
+  //
+  // Crucial: we append `:(exclude)artifacts`, `:(exclude)node_modules`, and
+  // `:(exclude).next` to prevent recursive matches in the generated audit report
+  // and untracked build artifacts, which otherwise cause buffer overflows (ENOBUFS).
   try {
+    const exclusions = [
+      ":(exclude)artifacts",
+      ":(exclude)node_modules",
+      ":(exclude).next",
+    ];
     const args = wordBoundary
-      ? ["grep", "-n", "-w", "--", pattern]
-      : ["grep", "-n", "--fixed-strings", "--", pattern];
+      ? ["grep", "-n", "-w", "--", pattern, ...exclusions]
+      : ["grep", "-n", "--fixed-strings", "--", pattern, ...exclusions];
     const stdout = execFileSync("git", args, {
       cwd: REPO_ROOT,
       encoding: "utf8",
