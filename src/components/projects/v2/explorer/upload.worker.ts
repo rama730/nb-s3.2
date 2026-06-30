@@ -11,7 +11,6 @@ self.onmessage = async (e: MessageEvent) => {
     }
 
     const MAX_CONCURRENCY = 5;
-    let active = 0;
     let cursor = 0;
     let successCount = 0;
     let failCount = 0;
@@ -20,20 +19,17 @@ self.onmessage = async (e: MessageEvent) => {
     const results: { fileId: string; success: boolean; error?: string }[] = [];
 
     const pump = async () => {
-        while (cursor < total) {
-            if (active >= MAX_CONCURRENCY) {
-                await new Promise((r) => setTimeout(r, 50));
-                continue;
-            }
+        const uploadNext = async (): Promise<void> => {
+            if (cursor >= total) return;
+            const nodeIdx = cursor++;
+            if (nodeIdx >= total) return;
+            const node = uploadNodes[nodeIdx];
+            if (!node) return uploadNext();
 
-            const node = uploadNodes[cursor++];
-            if (!node) continue;
-            active++;
             const uploadUrl = uploadUrls[node.s3Key];
             if (!uploadUrl) {
                 failCount++;
                 results.push({ fileId: node.fileId, success: false, error: "Missing signed upload URL" });
-                active--;
                 self.postMessage({
                     type: "progress",
                     jobId,
@@ -42,46 +38,65 @@ self.onmessage = async (e: MessageEvent) => {
                     success: successCount,
                     failed: failCount
                 });
-                continue;
+                return uploadNext();
             }
 
-            fetch(uploadUrl, {
-                method: "PUT",
-                headers: { "Content-Type": node.file.type || "application/octet-stream" },
-                body: node.file,
-            })
-                .then((response) => {
+            let attempt = 0;
+            const maxAttempts = 3;
+            let uploadSuccess = false;
+            let lastError: unknown = null;
+
+            while (attempt < maxAttempts) {
+                try {
+                    const response = await fetch(uploadUrl, {
+                        method: "PUT",
+                        headers: { "Content-Type": node.file.type || "application/octet-stream" },
+                        body: node.file,
+                    });
                     if (!response.ok) {
                         throw new Error(`Upload failed (${response.status})`);
                     }
-                    successCount++;
-                    results.push({ fileId: node.fileId, success: true });
-                })
-                .catch((error: unknown) => {
-                    failCount++;
-                    results.push({
-                        fileId: node.fileId,
-                        success: false,
-                        error: error instanceof Error ? error.message : String(error),
-                    });
-                })
-                .finally(() => {
-                    active--;
-                    self.postMessage({
-                        type: "progress",
-                        jobId,
-                        completed: successCount + failCount,
-                        total,
-                        success: successCount,
-                        failed: failCount
-                    });
-                });
-        }
+                    uploadSuccess = true;
+                    break;
+                } catch (error: unknown) {
+                    attempt++;
+                    lastError = error;
+                    if (attempt < maxAttempts) {
+                        const delay = Math.pow(2, attempt) * 500;
+                        await new Promise((resolve) => setTimeout(resolve, delay));
+                    }
+                }
+            }
 
-        // Wait for trailing active uploads
-        while (active > 0) {
-            await new Promise((r) => setTimeout(r, 50));
-        }
+            if (uploadSuccess) {
+                successCount++;
+                results.push({ fileId: node.fileId, success: true });
+            } else {
+                failCount++;
+                results.push({
+                    fileId: node.fileId,
+                    success: false,
+                    error: lastError instanceof Error ? lastError.message : String(lastError),
+                });
+            }
+
+            self.postMessage({
+                type: "progress",
+                jobId,
+                completed: successCount + failCount,
+                total,
+                success: successCount,
+                failed: failCount
+            });
+
+            return uploadNext();
+        };
+
+        const workers = Array.from(
+            { length: Math.min(MAX_CONCURRENCY, total) },
+            () => uploadNext()
+        );
+        await Promise.all(workers);
 
         self.postMessage({
             type: "done",
