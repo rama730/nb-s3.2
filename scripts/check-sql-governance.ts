@@ -49,13 +49,37 @@ export function validateSqlGovernance(rootDir: string = process.cwd()): Validati
 
   for (const rel of actualMigrationFiles) {
     if (!expectedMigrationFiles.includes(rel)) {
-      errors.push(`${rel}: new migration file detected; update an existing migration/remigration flow instead of adding a new file.`);
+      errors.push(`${rel}: unapproved migration file; add it to the append-only governance manifest and Drizzle journal.`);
     }
   }
 
   for (const rel of expectedMigrationFiles) {
     if (!actualMigrationFiles.includes(rel)) {
       errors.push(`${rel}: migration file is missing from the repository but still declared in the governance manifest.`);
+    }
+  }
+
+  const journalPath = path.join(rootDir, manifest.migrationDirectory, "meta", "_journal.json");
+  const journal = JSON.parse(fs.readFileSync(journalPath, "utf8")) as {
+    entries?: Array<{ tag?: string }>;
+  };
+  const journalTags = new Set(
+    (journal.entries ?? [])
+      .map((entry) => entry.tag)
+      .filter((tag): tag is string => typeof tag === "string" && tag.length > 0),
+  );
+  const manifestTags = new Set(
+    manifest.existingMigrationFiles.map((file) => path.basename(file, ".sql")),
+  );
+
+  for (const tag of manifestTags) {
+    if (!journalTags.has(tag)) {
+      errors.push(`${tag}: migration is approved in the governance manifest but missing from the Drizzle journal.`);
+    }
+  }
+  for (const tag of journalTags) {
+    if (!manifestTags.has(tag)) {
+      errors.push(`${tag}: Drizzle journal entry is missing from the governance manifest.`);
     }
   }
 
