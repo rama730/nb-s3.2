@@ -831,6 +831,7 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
         const conditions = [
             eq(connections.status, 'accepted'),
             or(eq(connections.requesterId, user.id), eq(connections.addresseeId, user.id)),
+            eq(profiles.onboardingStatus, 'completed'),
         ];
 
         // 2J: Trigram search with ILIKE fallback
@@ -1047,7 +1048,11 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
             ? eq(connections.addresseeId, user.id)
             : eq(connections.requesterId, user.id);
 
-        const conditions = [eq(connections.status, 'pending'), userCondition];
+        const conditions = [
+            eq(connections.status, 'pending'),
+            userCondition,
+            eq(profiles.onboardingStatus, 'completed'),
+        ];
         if (searchPattern) {
             conditions.push(
                 sql`(${profiles.fullName} ILIKE ${searchPattern} OR ${profiles.username} ILIKE ${searchPattern})`,
@@ -1301,7 +1306,12 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
                         openTo: profiles.openTo,
                     })
                     .from(profiles)
-                    .where(inArray(profiles.id, suggestedIds));
+                    .where(
+                        and(
+                            inArray(profiles.id, suggestedIds),
+                            eq(profiles.onboardingStatus, 'completed')
+                        )
+                    );
 
                 const profileMap = new Map(suggestedProfiles.map(p => [p.id, p]));
                 const preComputedItems = preComputed.slice(0, limit).map(s => {
@@ -1401,7 +1411,10 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
                 ...((meProfile[0]?.openTo || []).map((v) => v.toLowerCase())),
             ]);
 
-            const candidateBaseConditions = [sql`${profiles.id} <> ${user.id}`];
+            const candidateBaseConditions = [
+                eq(profiles.onboardingStatus, 'completed'),
+                sql`${profiles.id} <> ${user.id}`
+            ];
             candidateBaseConditions.push(sql`NOT EXISTS (
                 SELECT 1
                 FROM ${connectionSuggestionDismissals}
