@@ -50,11 +50,9 @@ import type { ProjectNode } from "@/lib/db/schema";
 import { createClient as createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 
-import {
-  getProjectFileContent,
-  updateProjectFileStats,
-} from "@/app/actions/files/content";
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
+import { RevisionControlModal } from "@/components/ui/RevisionControlModal";
+import { saveFileAsNewVersion } from "@/hooks/useFileVersions";
 
 // Dynamic import keeps `@uiw/react-codemirror` (and its `@codemirror/*`
 // transitive tree) out of the Files-tab initial chunk. The import only
@@ -73,7 +71,7 @@ const CodeMirrorEditor = dynamic(
 // Types
 // ---------------------------------------------------------------------------
 
-export type TextViewerMode = "raw" | "edit";
+export type TextViewerMode = "view" | "raw" | "edit";
 
 export interface TextViewerProps {
   projectId: string;
@@ -128,6 +126,7 @@ export function TextViewer({
   const [savedContent, setSavedContent] = React.useState<string>("");
   const [content, setContent] = React.useState<string>("");
   const [isSaving, setIsSaving] = React.useState(false);
+  const [isModalOpen, setIsModalOpen] = React.useState(false);
 
   // ── Dark theme extension (lazy-loaded) ─────────────────────────────
   // Loaded asynchronously to keep the initial chunk lean. The resolved
@@ -138,7 +137,7 @@ export function TextViewer({
   >(null);
 
   React.useEffect(() => {
-    if (mode !== "edit" || resolvedTheme !== "dark") {
+    if ((mode !== "edit" && mode !== "view") || resolvedTheme !== "dark") {
       setOneDarkTheme(null);
       return;
     }
@@ -165,6 +164,7 @@ export function TextViewer({
 
     void (async () => {
       try {
+        const { getProjectFileContent } = await import("@/app/actions/files/content");
         const text = await getProjectFileContent(projectId, node.id);
         if (cancelled) return;
         setSavedContent(text);
@@ -203,7 +203,7 @@ export function TextViewer({
   }, [mode, savedContent]);
 
   // ── Save ───────────────────────────────────────────────────────────
-  const handleSave = React.useCallback(async () => {
+  const handleSaveClick = React.useCallback(() => {
     if (!canEdit) return;
     if (isSaving) return;
     if (!isDirty) return;
@@ -211,50 +211,75 @@ export function TextViewer({
       showToast("Cannot save: file has no storage key.", "error");
       return;
     }
+    setIsModalOpen(true);
+  }, [canEdit, isSaving, isDirty, node.s3Key, showToast]);
 
-    setIsSaving(true);
-    try {
-      const supabase = createSupabaseBrowserClient();
-      const blob = new Blob([content], {
-        type: node.mimeType || "text/plain",
-      });
-      const { error: uploadError } = await supabase.storage
-        .from("project-files")
-        .update(node.s3Key, blob, { upsert: true });
-      if (uploadError) throw uploadError;
+  const handleRevisionOptionSelected = React.useCallback(
+    async (choice: { option: "overwrite" | "commit"; comment?: string }) => {
+      if (!canEdit || isSaving) return;
+      setIsSaving(true);
 
-      const size = UTF8_ENCODER.encode(content).length;
-      const updatedNode = (await updateProjectFileStats(
-        projectId,
-        node.id,
-        size,
-      )) as ProjectNode | null;
-      if (updatedNode) {
-        upsertNodes(projectId, [updatedNode]);
+      try {
+        const supabase = createSupabaseBrowserClient();
+        const size = UTF8_ENCODER.encode(content).length;
+
+        if (choice.option === "commit") {
+          // Option B: Commit as New Revision
+          const file = new File([content], node.name, {
+            type: node.mimeType || "text/plain",
+          });
+          const result = await saveFileAsNewVersion({
+            projectId,
+            nodeId: node.id,
+            file,
+            comment: choice.comment || "Updated via Editor",
+            supabase,
+          });
+
+          if (result.success) {
+            setSavedContent(content);
+            upsertNodes(projectId, [result.node]);
+            onSaved?.();
+            showToast("New revision committed successfully", "success");
+          } else {
+            showToast(result.error || "Failed to commit revision", "error");
+          }
+        } else {
+          // Option A: Apply to Active Revision
+          const blob = new Blob([content], {
+            type: node.mimeType || "text/plain",
+          });
+          const { error: uploadError } = await supabase.storage
+            .from("project-files")
+            .update(node.s3Key, blob, { upsert: true });
+
+          if (uploadError) throw uploadError;
+
+          const { updateProjectFileStats } = await import("@/app/actions/files/content");
+          const updatedNode = (await updateProjectFileStats(
+            projectId,
+            node.id,
+            size,
+          )) as ProjectNode | null;
+
+          if (updatedNode) {
+            setSavedContent(content);
+            upsertNodes(projectId, [updatedNode]);
+            onSaved?.();
+            showToast("Active revision updated in-place", "success");
+          } else {
+            throw new Error("Failed to update database record stats.");
+          }
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        showToast(`Failed to save: ${message}`, "error");
+      } finally {
+        setIsSaving(false);
       }
-
-      setSavedContent(content);
-      onSaved?.();
-      showToast("File saved", "success");
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Unknown error";
-      showToast(`Failed to save: ${message}`, "error");
-    } finally {
-      setIsSaving(false);
-    }
-  }, [
-    canEdit,
-    content,
-    isDirty,
-    isSaving,
-    node.id,
-    node.mimeType,
-    node.s3Key,
-    onSaved,
-    projectId,
-    showToast,
-    upsertNodes,
-  ]);
+    },
+    [canEdit, content, isSaving, node.id, node.name, node.mimeType, node.s3Key, onSaved, projectId, showToast, upsertNodes]
+  );
 
   // ── Render ─────────────────────────────────────────────────────────
   if (status === "loading") {
@@ -301,6 +326,46 @@ export function TextViewer({
     );
   }
 
+  if (mode === "view") {
+    return (
+      <div
+        data-testid="files-tab-text-viewer-view"
+        className="flex h-full min-h-0 w-full flex-col bg-white dark:bg-zinc-950"
+      >
+        <div className="min-h-0 flex-1">
+          <CodeMirrorEditor
+            value={content}
+            editable={false}
+            readOnly={true}
+            theme={
+              resolvedTheme === "dark"
+                ? oneDarkTheme ?? "dark"
+                : "light"
+            }
+            height="100%"
+            width="100%"
+            className="h-full font-mono text-xs"
+            basicSetup={{
+              lineNumbers: true,
+              foldGutter: false,
+              highlightActiveLine: false,
+              highlightActiveLineGutter: false,
+              bracketMatching: true,
+              closeBrackets: false,
+              autocompletion: false,
+              highlightSelectionMatches: false,
+              searchKeymap: false,
+              lintKeymap: false,
+              foldKeymap: false,
+              completionKeymap: false,
+              closeBracketsKeymap: false,
+            }}
+          />
+        </div>
+      </div>
+    );
+  }
+
   // Edit mode: thinned CodeMirror. No lint (Req 15.4), no cursor-presence
   // (Req 15.13), no conflict resolution, no lock acquisition (Q6). The
   // explicit Save button is the only persistence channel.
@@ -325,7 +390,7 @@ export function TextViewer({
         <Button
           type="button"
           size="sm"
-          onClick={() => void handleSave()}
+          onClick={handleSaveClick}
           disabled={!canEdit || !isDirty || isSaving}
           data-testid="files-tab-text-viewer-save"
         >
@@ -366,6 +431,15 @@ export function TextViewer({
           }}
         />
       </div>
+
+      {isModalOpen && (
+        <RevisionControlModal
+          isOpen={isModalOpen}
+          onOpenChange={setIsModalOpen}
+          fileName={node.name}
+          onSelectOption={handleRevisionOptionSelected}
+        />
+      )}
     </div>
   );
 }
