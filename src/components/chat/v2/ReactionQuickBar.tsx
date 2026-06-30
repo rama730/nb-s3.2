@@ -15,7 +15,11 @@ export function ReactionQuickBar({ align = 'start', onReact, onClose }: Reaction
 
     useEffect(() => {
         const handleClickOutside = (event: MouseEvent | TouchEvent) => {
-            if (ref.current && !ref.current.contains(event.target as Node)) {
+            const target = event.target as HTMLElement;
+            if (target && target.closest('[data-reaction-trigger]')) {
+                return;
+            }
+            if (ref.current && !ref.current.contains(target)) {
                 onClose();
             }
         };
