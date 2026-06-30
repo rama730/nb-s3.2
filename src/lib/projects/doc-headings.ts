@@ -1,6 +1,6 @@
-import { buildProjectReadmePlainText } from "@/lib/projects/readme-plain-text";
+import { buildProjectDocPlainText } from "@/lib/projects/doc-plain-text";
 
-export type ProjectReadmeHeading = {
+export type ProjectDocHeading = {
     id: string;
     level: number;
     text: string;
@@ -22,7 +22,7 @@ export function slugifyReadmeHeading(value: string, existing = new Set<string>()
     return candidate;
 }
 
-export function extractProjectReadmeHeadings(content: string): ProjectReadmeHeading[] {
+export function extractProjectDocHeadings(content: string): ProjectDocHeading[] {
     const ids = new Set<string>();
     let inFence = false;
     return content
@@ -36,13 +36,13 @@ export function extractProjectReadmeHeadings(content: string): ProjectReadmeHead
 
             const match = /^(#{1,4})\s+(.+?)\s*#*\s*$/.exec(line.trim());
             if (!match) return null;
-            const text = buildProjectReadmePlainText(match[2], { maxLength: 120, stripCodeBlocks: false });
+            const text = buildProjectDocPlainText(match[2], { maxLength: 120, stripCodeBlocks: false });
             if (!text) return null;
             return {
                 id: slugifyReadmeHeading(text, ids),
                 level: match[1]?.length ?? 1,
                 text,
-            } satisfies ProjectReadmeHeading;
+            } satisfies ProjectDocHeading;
         })
-        .filter((heading): heading is ProjectReadmeHeading => Boolean(heading));
+        .filter((heading): heading is ProjectDocHeading => Boolean(heading));
 }
