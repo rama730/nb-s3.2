@@ -10,15 +10,15 @@ import {
   requireAuthenticatedUser,
 } from "@/app/api/v1/_shared";
 import { db } from "@/lib/db";
-import { projectMembers, projectReadmes, projects } from "@/lib/db/schema";
+import { projectMembers, projectMarkdowns, projects } from "@/lib/db/schema";
 import { logger } from "@/lib/logger";
 import {
-  createReadmeCollaborationTokenClaims,
-  MISSING_README_COLLABORATION_SECRET_ERROR_CODE,
-  MissingReadmeCollaborationSecretError,
-  signReadmeCollaborationToken,
-} from "@/lib/realtime/readme-collaboration-token";
-import { resolveProjectReadmePermission } from "@/lib/projects/readme";
+  createDocCollaborationTokenClaims,
+  MISSING_DOC_COLLABORATION_SECRET_ERROR_CODE,
+  MissingDocCollaborationSecretError,
+  signDocCollaborationToken,
+} from "@/lib/realtime/doc-collaboration-token";
+import { resolveProjectDocPermission } from "@/lib/projects/doc";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -42,9 +42,12 @@ export async function POST(
     if (auth.response) return auth.response;
     if (!auth.user) return jsonError("Not authenticated", 401, "UNAUTHORIZED");
 
+    const reqBody = await request.json().catch(() => null) || {};
+    const docSlug = reqBody.docSlug || request.nextUrl.searchParams.get("doc") || "readme";
+
     const limitResponse = await enforceRouteLimit(
       request,
-      `api:v1:projects:readmeCollaborationToken:${auth.user.id}:${projectId}`,
+      `api:v1:projects:readmeCollaborationToken:${auth.user.id}:${projectId}:${docSlug}`,
       30,
       60,
     );
@@ -56,8 +59,8 @@ export async function POST(
         visibility: projects.visibility,
         publicTabVisibility: projects.publicTabVisibility,
         memberRole: projectMembers.role,
-        readmeSettings: projectReadmes.settings,
-        readmePublishedVersionId: projectReadmes.publishedVersionId,
+        readmeSettings: projectMarkdowns.settings,
+        readmePublishedVersionId: projectMarkdowns.publishedVersionId,
       })
       .from(projects)
       .leftJoin(
@@ -67,7 +70,7 @@ export async function POST(
           eq(projectMembers.userId, auth.user.id),
         ),
       )
-      .leftJoin(projectReadmes, eq(projectReadmes.projectId, projects.id))
+      .leftJoin(projectMarkdowns, and(eq(projectMarkdowns.projectId, projects.id), eq(projectMarkdowns.slug, docSlug)))
       .where(and(eq(projects.id, projectId), isNull(projects.deletedAt)))
       .limit(1);
 
@@ -76,7 +79,7 @@ export async function POST(
     }
 
     const isOwner = row.ownerId === auth.user.id;
-    const permission = resolveProjectReadmePermission({
+    const permission = resolveProjectDocPermission({
       actorUserId: auth.user.id,
       projectVisibility: row.visibility,
       publicTabVisibility: row.publicTabVisibility,
@@ -88,22 +91,24 @@ export async function POST(
     });
 
     if (!permission.canEdit) {
-      return jsonError("You do not have access to edit this README.", 403, "FORBIDDEN");
+      return jsonError("You do not have access to edit this document.", 403, "FORBIDDEN");
     }
 
     const {
       data: { session },
     } = await auth.supabase.auth.getSession();
-    const claims = createReadmeCollaborationTokenClaims({
+    const claims = createDocCollaborationTokenClaims({
       userId: auth.user.id,
       sessionId: getSessionIdentifier(session),
       projectId,
+      docSlug,
     });
-    const token = signReadmeCollaborationToken(claims);
+    const token = signDocCollaborationToken(claims);
 
     logger.metric("readme_collaboration.token.issued", {
       requestId,
       projectId,
+      docSlug,
       userId: auth.user.id,
       durationMs: Date.now() - startedAt,
     });
@@ -122,15 +127,15 @@ export async function POST(
     });
 
     if (
-      error instanceof MissingReadmeCollaborationSecretError
+      error instanceof MissingDocCollaborationSecretError
       || (typeof error === "object"
         && error !== null
         && "code" in error
-        && error.code === MISSING_README_COLLABORATION_SECRET_ERROR_CODE)
+        && error.code === MISSING_DOC_COLLABORATION_SECRET_ERROR_CODE)
     ) {
-      return jsonError("README collaboration service is not configured.", 503, "UNAVAILABLE");
+      return jsonError("Doc collaboration service is not configured.", 503, "UNAVAILABLE");
     }
 
-    return jsonError("Failed to issue README collaboration token", 500, "INTERNAL_ERROR");
+    return jsonError("Failed to issue Doc collaboration token", 500, "INTERNAL_ERROR");
   }
 }
