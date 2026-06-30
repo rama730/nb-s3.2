@@ -13,9 +13,8 @@ import { useDeliveryAcks } from '@/hooks/useDeliveryAcks';
 import { useMessageWorkLinks } from '@/hooks/useMessageWorkLinks';
 import { useMessageThreadAnchor } from '@/hooks/useMessageThreadAnchor';
 import { formatMessageCalendarLabel } from '@/lib/messages/date-buckets';
-import { buildMessageThreadModel, type MessageThreadItem } from '@/lib/messages/thread-items';
+import { buildMessageThreadModel } from '@/lib/messages/thread-items';
 import { MessageBubbleV2 } from './MessageBubbleV2';
-import { BulkActionsBar } from './BulkActionsBar';
 import { ScrollToBottomFab } from './ScrollToBottomFab';
 import { EmptyConversation } from './EmptyConversation';
 
@@ -50,8 +49,6 @@ interface MessageThreadV2Props {
     onVisibleReadWatermark?: (messageId: string) => void;
     onClearFocusTarget?: () => void;
     onDismissContextJumpState?: () => void;
-    onBulkDelete?: (messageIds: string[]) => void;
-    conversationType?: 'dm' | 'group' | 'project_group';
 }
 
 const EMPTY_PINNED_MESSAGES: MessageWithSender[] = [];
@@ -78,7 +75,6 @@ function compareMessageOrder(left: MessageWithSender, right: MessageWithSender) 
 
 export function MessageThreadV2({
     conversationId,
-    conversationType = 'dm',
     messages,
     pinnedMessages = EMPTY_PINNED_MESSAGES,
     typingUsers = EMPTY_TYPING_USERS,
@@ -97,11 +93,8 @@ export function MessageThreadV2({
     onVisibleReadWatermark,
     onClearFocusTarget,
     onDismissContextJumpState,
-    onBulkDelete,
 }: MessageThreadV2Props) {
     const isPopup = surface === 'popup';
-    const [isSelectMode, setIsSelectMode] = useState(false);
-    const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
     const [focusedMessage, setFocusedMessage] = useState<FocusedMessageState | null>(null);
     const rootRef = useRef<HTMLDivElement | null>(null);
     const latestScrollToLatestSignalRef = useRef(scrollToLatestSignal);
@@ -139,37 +132,46 @@ export function MessageThreadV2({
 
     const prevMessagesRef = useRef(messages);
     const prevConversationIdRef = useRef(conversationId);
+    const prevContextJumpStateRef = useRef(contextJumpState);
     const prevItemsLengthRef = useRef(items.length);
     const [firstItemIndex, setFirstItemIndex] = useState(1_000_000);
     const [justLoadedOlderMessages, setJustLoadedOlderMessages] = useState(false);
 
-    if (conversationId !== prevConversationIdRef.current) {
-        prevConversationIdRef.current = conversationId;
-        prevMessagesRef.current = messages;
-        prevItemsLengthRef.current = items.length;
-        setFirstItemIndex(1_000_000);
-        setJustLoadedOlderMessages(false);
-    } else if (messages !== prevMessagesRef.current) {
-        const prevMessages = prevMessagesRef.current;
-        prevMessagesRef.current = messages;
+    useLayoutEffect(() => {
+        if (
+            conversationId !== prevConversationIdRef.current
+            || contextJumpState !== prevContextJumpStateRef.current
+        ) {
+            prevConversationIdRef.current = conversationId;
+            prevContextJumpStateRef.current = contextJumpState;
+            prevMessagesRef.current = messages;
+            prevItemsLengthRef.current = items.length;
+            setFirstItemIndex(1_000_000);
+            setJustLoadedOlderMessages(false);
+            return;
+        }
 
-        const prevFirstMsgId = prevMessages[0]?.id ?? null;
-        const currentFirstMsg = messages[0] ?? null;
+        if (messages === prevMessagesRef.current) return;
+
+        const previousMessages = prevMessagesRef.current;
+        const previousFirstMessage = previousMessages[0] ?? null;
+        const currentFirstMessage = messages[0] ?? null;
         const loadedOlderMessages = Boolean(
-            prevFirstMsgId
-            && currentFirstMsg
-            && prevFirstMsgId !== currentFirstMsg.id
-            && compareMessageOrder(currentFirstMsg, prevMessages[0]!) < 0
+            previousFirstMessage
+            && currentFirstMessage
+            && previousFirstMessage.id !== currentFirstMessage.id
+            && compareMessageOrder(currentFirstMessage, previousFirstMessage) < 0
         );
-
         const prependedCount = items.length - prevItemsLengthRef.current;
+
+        prevMessagesRef.current = messages;
         prevItemsLengthRef.current = items.length;
 
         if (loadedOlderMessages && prependedCount > 0) {
-            setFirstItemIndex(prev => prev - prependedCount);
+            setFirstItemIndex((previous) => previous - prependedCount);
             setJustLoadedOlderMessages(true);
         }
-    }
+    }, [contextJumpState, conversationId, items.length, messages]);
 
     const orderedMessages = messages;
 
@@ -352,15 +354,20 @@ export function MessageThreadV2({
                 setFocusedMessage({ id: messageId, source });
                 focusAnimationFrameRef.current = null;
             });
-            virtuosoRef.current?.scrollToIndex({
-                index: absoluteIndex,
-                align: 'center',
-                behavior: prefersReducedMotion ? 'auto' : 'smooth',
-            });
+
+            // Layout delay to ensure Virtuoso measurements are accurate
+            setTimeout(() => {
+                virtuosoRef.current?.scrollToIndex({
+                    index: absoluteIndex,
+                    align: 'center',
+                    behavior: 'auto',
+                });
+            }, 60);
+
             focusResetTimeoutRef.current = window.setTimeout(() => {
                 setFocusedMessage((current) => (current?.id === messageId ? null : current));
                 focusResetTimeoutRef.current = null;
-            }, prefersReducedMotion ? 900 : 2200);
+            }, prefersReducedMotion ? 900 : 1250);
             return true;
         }
 
@@ -390,15 +397,6 @@ export function MessageThreadV2({
         olderMessagesRequestInFlightRef.current = true;
         onLoadMore();
     }, [canLoadOlderMessages, hasMore, isFetchingMore, onLoadMore]);
-
-    const handleSelectMessage = useCallback((message: MessageWithSender) => {
-        setIsSelectMode(true);
-        setSelectedMessageIds((current) => {
-            const next = new Set(current);
-            next.add(message.id);
-            return next;
-        });
-    }, []);
 
     useEffect(() => {
         const observedUnreadNodes = unreadVisibilityNodeByMessageIdRef.current;
@@ -717,7 +715,6 @@ export function MessageThreadV2({
                                     && nextItem.message.senderId === item.message.senderId
                                     && (new Date(nextItem.message.createdAt).getTime() - new Date(item.message.createdAt).getTime()) < 5 * 60 * 1000;
 	                                const showTimestamp = !nextMessageSameSenderWithinTime;
-                                    const canSelectMessage = !item.message.id.startsWith('temp-');
 
 	                                return (
 	                                    <div
@@ -727,37 +724,18 @@ export function MessageThreadV2({
                                         id={`msg-${item.message.id}`}
                                         className={`msg-message-row flex w-full min-w-0 items-start gap-2 rounded-md ${ptClass} ${pbClass} px-3`}
                                     >
-	                                        {isSelectMode && canSelectMessage && (
-	                                            <input
-                                                type="checkbox"
-                                                checked={selectedMessageIds.has(item.message.id)}
-                                                onChange={() => {
-                                                    setSelectedMessageIds((prev) => {
-                                                        const next = new Set(prev);
-                                                        if (next.has(item.message.id)) next.delete(item.message.id);
-                                                        else next.add(item.message.id);
-                                                        return next;
-                                                    });
-                                                }}
-                                                className="mt-3 shrink-0 accent-primary"
-                                                aria-label="Select message"
-                                            />
-                                        )}
                                         <div className="min-w-0 flex-1">
                                             <MessageBubbleV2
                                                 message={item.message}
                                                 linkedWork={linkedWorkByMessageId[item.message.id] ?? []}
-                                                showAvatar={item.showAvatar}
 	                                                surface={surface}
 	                                                onReply={onReply}
-                                                    onSelectMessage={handleSelectMessage}
 	                                                onTogglePin={onTogglePin}
                                                 onFocusMessage={handleFocusMessage}
                                                 onContentLoad={handleContentLoad}
                                                 isFocusedReplyTarget={focusedMessage?.id === item.message.id}
                                                 focusSource={focusedMessage?.id === item.message.id ? focusedMessage?.source : null}
                                                 showTimestamp={showTimestamp}
-                                                conversationType={conversationType}
                                                 isConsecutiveFromPrev={isConsecutiveFromPrev}
                                                 isConsecutiveToNext={isConsecutiveToNext}
                                             />
@@ -783,30 +761,6 @@ export function MessageThreadV2({
                     ? `${orderedMessages[orderedMessages.length - 1]!.sender?.fullName || 'Someone'}: ${orderedMessages[orderedMessages.length - 1]!.content || 'sent a message'}`
                     : ''}
             </div>
-            {isSelectMode && selectedMessageIds.size > 0 && (
-                <BulkActionsBar
-                    selectedCount={selectedMessageIds.size}
-                    onDelete={() => {
-                        onBulkDelete?.(Array.from(selectedMessageIds));
-                        setSelectedMessageIds(new Set());
-                        setIsSelectMode(false);
-                    }}
-                    onCopy={async () => {
-                        const selectedMessages = orderedMessages
-                            .filter((m) => selectedMessageIds.has(m.id))
-                            .map((m) => `${m.sender?.fullName || 'Unknown'}: ${m.content || ''}`)
-                            .join('\n');
-                        await navigator.clipboard.writeText(selectedMessages);
-                        toast.success('Messages copied');
-                        setSelectedMessageIds(new Set());
-                        setIsSelectMode(false);
-                    }}
-                    onCancel={() => {
-                        setSelectedMessageIds(new Set());
-                        setIsSelectMode(false);
-                    }}
-                />
-            )}
         </div>
     );
 }
