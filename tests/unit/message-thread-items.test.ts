@@ -218,7 +218,7 @@ test('date rows stay attached to their first message after mixed stale and lates
     }
 });
 
-test('peer avatars are assigned to the tail of each sender run', () => {
+test('message thread items do not carry per-message avatar presentation state', () => {
     const model = buildMessageThreadModel({
         conversationId: 'conversation-1',
         viewerId: 'viewer-1',
@@ -232,17 +232,10 @@ test('peer avatars are assigned to the tail of each sender run', () => {
         ],
     });
 
-    const avatarById = new Map(
-        model.items
-            .filter((item) => item.type === 'message')
-            .map((item) => [item.id, item.showAvatar] as const),
-    );
+    const messageItems = model.items.filter((item) => item.type === 'message');
 
-    assert.equal(avatarById.get('own-before'), false);
-    assert.equal(avatarById.get('peer-1'), false);
-    assert.equal(avatarById.get('peer-2'), true);
-    assert.equal(avatarById.get('own-after'), false);
-    assert.equal(avatarById.get('peer-isolated'), true);
+    assert.equal(messageItems.length, 5);
+    assert.equal(messageItems.some((item) => 'showAvatar' in item), false);
 });
 
 test('thread group header indexes use the virtualizer flat index space', () => {
