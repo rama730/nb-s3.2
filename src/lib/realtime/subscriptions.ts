@@ -62,19 +62,47 @@ export function subscribeActiveResource(params: {
     onStatus?: (status: REALTIME_SUBSCRIBE_STATES) => void
 }): RealtimeChannel {
     const { supabase, resourceType, resourceId, bindings, onStatus } = params
-    let channel = supabase.channel(`active-resource:${resourceType}:${resourceId}`)
+    const channelName = `active-resource:${resourceType}:${resourceId}`
+
+    const existingChannel = supabase.getChannels().find(
+        (ch) => ch.topic === `realtime:${channelName}` || ch.topic === channelName
+    )
+    if (existingChannel) {
+        void supabase.removeChannel(existingChannel)
+    }
+
+    let channel = supabase.channel(channelName)
+    const groupedBindings = new Map<string, ActiveResourceBinding[]>()
 
     for (const binding of bindings) {
+        const groupKey = `${binding.table}\u0000${binding.filter ?? ""}`
+        const group = groupedBindings.get(groupKey)
+        if (group) {
+            group.push(binding)
+        } else {
+            groupedBindings.set(groupKey, [binding])
+        }
+    }
+
+    for (const grouped of groupedBindings.values()) {
+        const [firstBinding] = grouped
+        if (!firstBinding) continue
+        const event = grouped.length === 1 ? firstBinding.event : "*"
         channel = channel.on(
             'postgres_changes' as any,
             {
-                event: binding.event,
+                event,
                 schema: 'public',
-                table: binding.table,
-                ...(binding.filter ? { filter: binding.filter } : {}),
+                table: firstBinding.table,
+                ...(firstBinding.filter ? { filter: firstBinding.filter } : {}),
             },
             (payload: RealtimePostgresChangesPayload<Record<string, unknown>>) => {
-                binding.handler(payload as DbRealtimePayload)
+                const eventType = payload.eventType as DbRealtimeEventType | undefined
+                for (const binding of grouped) {
+                    if (binding.event === "*" || binding.event === eventType) {
+                        binding.handler(payload as DbRealtimePayload)
+                    }
+                }
             },
         )
     }
@@ -85,7 +113,11 @@ export function subscribeActiveResource(params: {
                 module: 'realtime',
                 resourceType,
                 resourceId,
-                error: err instanceof Error ? err.message : String(err),
+                error: err instanceof Error
+                    ? err.message
+                    : (typeof err === 'object' && err
+                        ? (err as any).message || JSON.stringify(err)
+                        : String(err)),
             });
         }
         onStatus?.(status);
@@ -186,4 +218,38 @@ export function subscribeNotificationInbox(params: {
         ],
         onStatus,
     })
+}
+
+export function subscribeProjectStage(params: {
+    supabase: SupabaseClient
+    projectId: string
+    onUpdate: (payload: DbRealtimePayload) => void
+}): RealtimeChannel {
+    const { supabase, projectId, onUpdate } = params;
+    return subscribeActiveResource({
+        supabase,
+        resourceType: 'project_hydration',
+        resourceId: projectId,
+        bindings: [
+            {
+                event: 'UPDATE',
+                table: 'projects',
+                filter: `id=eq.${projectId}`,
+                handler: onUpdate,
+            },
+        ],
+    });
+}
+
+export function subscribeProjectStats(params: {
+    supabase: SupabaseClient
+    projectId: string
+    onStatsUpdate: (payload: { viewCount?: number; followersCount?: number }) => void
+}): RealtimeChannel {
+    const { supabase, projectId, onStatsUpdate } = params;
+    const channel = supabase.channel(`project-stats:${projectId}`);
+    channel.on("broadcast", { event: "stats_update" }, ({ payload }: { payload: { viewCount?: number; followersCount?: number } }) => {
+        onStatsUpdate(payload);
+    });
+    return channel.subscribe();
 }
