@@ -3,11 +3,11 @@
 import { useDeferredValue, useState } from "react";
 import { FileText, Loader2, Search } from "lucide-react";
 
-import { ProjectReadmeReferenceOptionCard } from "@/components/projects/readme/ProjectReadmeReferencePreview";
-import { useProjectReadmeImportCandidates } from "@/hooks/hub/useProjectReadmeData";
-import type { ProjectReadmeReferenceOption } from "@/lib/projects/readme-blocks";
+import { ProjectDocReferenceOptionCard } from "@/components/projects/doc/ProjectDocReferencePreview";
+import { useProjectDocImportCandidates } from "@/hooks/hub/useProjectDocData";
+import type { ProjectDocReferenceOption } from "@/lib/projects/doc-blocks";
 
-export function ProjectReadmeImportPicker({
+export function ProjectDocImportPicker({
     projectId,
     importing,
     onImport,
@@ -18,7 +18,7 @@ export function ProjectReadmeImportPicker({
 }) {
     const [query, setQuery] = useState("");
     const deferredQuery = useDeferredValue(query);
-    const candidatesQuery = useProjectReadmeImportCandidates(projectId, deferredQuery, Boolean(projectId));
+    const candidatesQuery = useProjectDocImportCandidates(projectId, deferredQuery, Boolean(projectId));
 
     const candidates = candidatesQuery.data ?? [];
 
@@ -29,9 +29,9 @@ export function ProjectReadmeImportPicker({
                     <FileText className="h-4 w-4" />
                 </span>
                 <div>
-                    <p className="text-sm font-semibold text-zinc-950 dark:text-zinc-50">Use existing README from Files</p>
+                    <p className="text-sm font-semibold text-zinc-950 dark:text-zinc-50">Use existing document from Files</p>
                     <p className="mt-0.5 text-xs leading-5 text-zinc-500">
-                        Choose README.md, docs.md, .mdx, .markdown, or a README-like text file. It imports as a private draft first.
+                        Choose a Markdown file (.md, .mdx, .markdown) or similar text file. It imports as a private draft first.
                     </p>
                 </div>
             </div>
@@ -51,10 +51,10 @@ export function ProjectReadmeImportPicker({
                     ))
                 ) : candidatesQuery.error ? (
                     <p className="rounded-xl bg-red-50 p-3 text-sm text-red-700 dark:bg-red-950/20 dark:text-red-300">
-                        Failed to load README files.
+                        Failed to load document files.
                     </p>
                 ) : candidates.length ? (
-                    candidates.map((candidate: ProjectReadmeReferenceOption) => (
+                    candidates.map((candidate: ProjectDocReferenceOption) => (
                         <button
                             key={candidate.id}
                             type="button"
@@ -62,19 +62,19 @@ export function ProjectReadmeImportPicker({
                             onClick={() => onImport(candidate.id)}
                             className="text-left disabled:cursor-not-allowed disabled:opacity-60"
                         >
-                            <ProjectReadmeReferenceOptionCard option={candidate} />
+                            <ProjectDocReferenceOptionCard option={candidate} />
                         </button>
                     ))
                 ) : (
                     <p className="rounded-xl border border-dashed border-zinc-200 p-3 text-sm text-zinc-500 dark:border-zinc-800">
-                        No README-like files found yet. Upload or create a Markdown file in Files, then return here.
+                        No document files found yet. Upload or create a Markdown file in Files, then return here.
                     </p>
                 )}
             </div>
             {importing ? (
                 <p className="mt-3 inline-flex items-center gap-2 text-xs font-semibold text-blue-600 dark:text-blue-300">
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    Importing selected README
+                    Importing selected document
                 </p>
             ) : null}
         </div>
