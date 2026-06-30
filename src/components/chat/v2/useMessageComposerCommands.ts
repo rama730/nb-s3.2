@@ -345,13 +345,8 @@ export function useMessageComposerCommands({
             setMentionQuery(null);
         }
 
-        if (!structuredDraft.kind && structuredActionsEnabled) {
-            const slashMatch = textBeforeCursor.match(/(?:^|\s)\/([^\s]*)$/);
-            if (slashMatch) {
-                openSlashMenu(slashMatch[1] ?? '');
-            } else if (slashMenuOpen) {
-                closeSlashMenu();
-            }
+        if (slashMenuOpen) {
+            closeSlashMenu();
         }
     }, [closeSlashMenu, openSlashMenu, participants, slashMenuOpen, structuredActionsEnabled, structuredDraft.kind]);
 
