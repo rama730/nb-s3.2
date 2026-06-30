@@ -60,7 +60,7 @@ function buildMergedContent(sections: ReadmeSection[], choices: Record<string, R
         .trim();
 }
 
-export function ProjectReadmeConflictResolver({
+export function ProjectDocConflictResolver({
     localContent,
     serverContent,
     onKeepLocal,
@@ -89,7 +89,7 @@ export function ProjectReadmeConflictResolver({
                 <div className="flex items-start gap-2">
                     <GitMerge className="mt-0.5 h-4 w-4 shrink-0" />
                     <div>
-                        <p className="text-sm font-semibold">README draft changed in another session.</p>
+                        <p className="text-sm font-semibold">Document draft changed in another session.</p>
                         <p className="mt-0.5 text-xs leading-5 opacity-85">
                             Choose the local or server version per section, then apply the merged draft.
                         </p>
