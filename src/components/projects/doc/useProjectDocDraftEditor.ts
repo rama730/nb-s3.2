@@ -2,32 +2,33 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 
-import type { ProjectReadmeQualityReport } from "@/lib/projects/readme";
+import { normalizeProjectDocContent, normalizeProjectDocSlug, type ProjectDocQualityReport } from "@/lib/projects/doc";
 
-export type ProjectReadmeEditorSaveResult = {
-    qualityReport: ProjectReadmeQualityReport;
+export type ProjectDocEditorSaveResult = {
+    qualityReport: ProjectDocQualityReport;
     draftUpdatedAt: string | null;
     conflict?: boolean;
     serverDraftContent?: string;
 };
 
-export type ProjectReadmeEditorConflict = {
+export type ProjectDocEditorConflict = {
     serverDraftContent: string;
     serverDraftUpdatedAt: string | null;
 };
 
-export type ProjectReadmeDraftSaveState = "saved" | "dirty" | "saving" | "conflict";
+export type ProjectDocDraftSaveState = "saved" | "dirty" | "saving" | "conflict";
 
-type UseProjectReadmeDraftEditorInput = {
+type UseProjectDocDraftEditorInput = {
     projectId: string;
+    docSlug?: string;
     initialContent: string;
     initialDraftUpdatedAt: string | null;
-    initialQualityReport: ProjectReadmeQualityReport;
-    onSave: (content: string, expectedDraftUpdatedAt: string | null) => Promise<ProjectReadmeEditorSaveResult | null>;
+    initialQualityReport: ProjectDocQualityReport;
+    onSave: (content: string, expectedDraftUpdatedAt: string | null) => Promise<ProjectDocEditorSaveResult | null>;
     autosaveDelayMs?: number;
 };
 
-function fallbackQualityReport(content: string): ProjectReadmeQualityReport {
+function fallbackQualityReport(content: string): ProjectDocQualityReport {
     return {
         score: 0,
         issues: [],
@@ -36,26 +37,29 @@ function fallbackQualityReport(content: string): ProjectReadmeQualityReport {
     };
 }
 
-export function useProjectReadmeDraftEditor({
+export function useProjectDocDraftEditor({
     projectId,
+    docSlug = "readme",
     initialContent,
     initialDraftUpdatedAt,
     initialQualityReport,
     onSave,
     autosaveDelayMs = 1500,
-}: UseProjectReadmeDraftEditorInput) {
-    const localDraftKey = useMemo(() => `project-readme-draft:${projectId}`, [projectId]);
-    const [content, setContentState] = useState(initialContent);
+}: UseProjectDocDraftEditorInput) {
+    const normalizedDocSlug = useMemo(() => normalizeProjectDocSlug(docSlug), [docSlug]);
+    const localDraftKey = useMemo(() => `project-doc-draft:${projectId}:${normalizedDocSlug}`, [projectId, normalizedDocSlug]);
+    const initialNormalizedContent = useMemo(() => normalizeProjectDocContent(initialContent), [initialContent]);
+    const [content, setContentState] = useState(initialNormalizedContent);
     const [expectedDraftUpdatedAt, setExpectedDraftUpdatedAt] = useState<string | null>(initialDraftUpdatedAt);
-    const [qualityReport, setQualityReport] = useState<ProjectReadmeQualityReport>(initialQualityReport);
+    const [qualityReport, setQualityReport] = useState<ProjectDocQualityReport>(initialQualityReport);
     const [localNotice, setLocalNotice] = useState<string | null>(null);
-    const [conflict, setConflict] = useState<ProjectReadmeEditorConflict | null>(null);
-    const [saveState, setSaveState] = useState<ProjectReadmeDraftSaveState>("saved");
+    const [conflict, setConflict] = useState<ProjectDocEditorConflict | null>(null);
+    const [saveState, setSaveState] = useState<ProjectDocDraftSaveState>("saved");
     const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
     const [isPending, startTransition] = useTransition();
-    const contentRef = useRef(initialContent);
+    const contentRef = useRef(initialNormalizedContent);
     const expectedDraftUpdatedAtRef = useRef<string | null>(initialDraftUpdatedAt);
-    const lastSavedContentRef = useRef(initialContent);
+    const lastSavedContentRef = useRef(initialNormalizedContent);
     const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const saveSequenceRef = useRef(0);
@@ -123,16 +127,21 @@ export function useProjectReadmeDraftEditor({
             writeLocalBackup(value);
         }
     }, [writeLocalBackup, setContentStateDebounced, clearAutosaveTimer, clearLocalBackup]);
-    const applySuccessfulSave = useCallback((saved: ProjectReadmeEditorSaveResult, savedContent: string, notice: string) => {
+    const applySuccessfulSave = useCallback((saved: ProjectDocEditorSaveResult, savedContent: string, notice: string) => {
+        const committedContent = saved.serverDraftContent ?? savedContent;
+        if (saved.serverDraftContent && saved.serverDraftContent !== savedContent && contentRef.current === savedContent) {
+            contentRef.current = saved.serverDraftContent;
+            setContentState(saved.serverDraftContent);
+        }
         setExpectedDraftUpdatedAt(saved.draftUpdatedAt);
         expectedDraftUpdatedAtRef.current = saved.draftUpdatedAt;
         setQualityReport(saved.qualityReport);
-        lastSavedContentRef.current = savedContent;
+        lastSavedContentRef.current = committedContent;
         setLastSavedAt(Date.now());
         setConflict(null);
         setLocalNotice(notice);
 
-        if (contentRef.current === savedContent) {
+        if (contentRef.current === committedContent) {
             setSaveState("saved");
             clearLocalBackup();
         } else {
@@ -180,7 +189,7 @@ export function useProjectReadmeDraftEditor({
         }, autosaveDelayMs);
     }, [autosaveDelayMs, clearAutosaveTimer, saveNow, startTransition]);
 
-    const applyDraftResult = useCallback((result: ProjectReadmeEditorSaveResult | null, notice: string) => {
+    const applyDraftResult = useCallback((result: ProjectDocEditorSaveResult | null, notice: string) => {
         if (!result) return;
         const nextContent = result.serverDraftContent ?? contentRef.current;
         contentRef.current = nextContent;
@@ -239,9 +248,10 @@ export function useProjectReadmeDraftEditor({
         mountedRef.current = true;
         try {
             const emergencyDraft = window.localStorage.getItem(localDraftKey);
-            if (emergencyDraft && !initialContent.trim()) {
-                contentRef.current = emergencyDraft;
-                setContentState(emergencyDraft);
+            if (emergencyDraft && !initialNormalizedContent.trim()) {
+                const normalizedEmergencyDraft = normalizeProjectDocContent(emergencyDraft);
+                contentRef.current = normalizedEmergencyDraft;
+                setContentState(normalizedEmergencyDraft);
                 setSaveState("dirty");
                 setLocalNotice("Recovered local draft");
             }
@@ -253,7 +263,7 @@ export function useProjectReadmeDraftEditor({
             clearAutosaveTimer();
             if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
         };
-    }, [localDraftKey]);
+    }, [clearAutosaveTimer, initialNormalizedContent, localDraftKey]);
 
     useEffect(() => {
         expectedDraftUpdatedAtRef.current = expectedDraftUpdatedAt;
