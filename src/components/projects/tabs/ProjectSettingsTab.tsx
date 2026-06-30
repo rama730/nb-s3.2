@@ -54,7 +54,7 @@ import {
     getProjectSettingsAuditAction,
     readProjectMemberNotificationSettingsAction,
     readProjectNotificationSettingsAction,
-    readProjectReadmeSettingsAction,
+    readProjectDocSettingsAction,
     removeProjectMemberAction,
     resetProjectMemberNotificationSettingsAction,
     resetProjectNotificationSettingsAction,
@@ -67,7 +67,7 @@ import {
     updateProjectMemberRoleAction,
     updateProjectNotificationSettingsAction,
     updateProjectPublicTabVisibilityAction,
-    updateProjectReadmeSettingsAction,
+    updateProjectDocSettingsAction,
     updateProjectVisibilityAction,
 } from "@/app/actions/project";
 import { cn } from "@/lib/utils";
@@ -118,12 +118,13 @@ import {
     type ProjectSettingsVisibility,
 } from "@/lib/projects/settings-policies";
 import {
-    DEFAULT_PROJECT_README_SETTINGS,
-    normalizeProjectReadmeSettings,
-    type ProjectReadmeSettings,
-} from "@/lib/projects/readme";
+    DEFAULT_PROJECT_DOC_SETTINGS,
+    normalizeProjectDocSettings,
+    type ProjectDocSettings,
+} from "@/lib/projects/doc";
 import {
     normalizeProjectRoleFormValues,
+    type ProjectRoleFormValue,
     type ProjectRolesFormValues,
 } from "@/lib/projects/project-roles-form";
 
@@ -564,6 +565,7 @@ function resetSettingsFromProject(project: any) {
     return {
         visibility: normalizeProjectVisibility(project?.visibility),
         publicTabVisibility: normalizeProjectPublicTabVisibility(project?.publicTabVisibility ?? project?.public_tab_visibility),
+        memberUpdatesEnabled: project?.memberUpdatesEnabled ?? project?.member_updates_enabled ?? true,
     };
 }
 
@@ -671,8 +673,8 @@ export default function ProjectSettingsTab({
     const [projectNotificationData, setProjectNotificationData] = useState<ProjectNotificationSettingsData | null>(null);
     const [projectNotificationDraft, setProjectNotificationDraft] = useState<ProjectNotificationPolicy>(() => buildDefaultProjectNotificationPolicy());
     const [projectNotificationLoading, setProjectNotificationLoading] = useState(false);
-    const [readmeSettings, setReadmeSettings] = useState<ProjectReadmeSettings>(() => DEFAULT_PROJECT_README_SETTINGS);
-    const [readmeSettingsDraft, setReadmeSettingsDraft] = useState<ProjectReadmeSettings>(() => DEFAULT_PROJECT_README_SETTINGS);
+    const [readmeSettings, setReadmeSettings] = useState<ProjectDocSettings>(() => DEFAULT_PROJECT_DOC_SETTINGS);
+    const [readmeSettingsDraft, setReadmeSettingsDraft] = useState<ProjectDocSettings>(() => DEFAULT_PROJECT_DOC_SETTINGS);
     const [readmeSettingsLoading, setReadmeSettingsLoading] = useState(false);
     const [readmeSettingsSaving, setReadmeSettingsSaving] = useState(false);
     const [memberNotificationData, setMemberNotificationData] = useState<MemberNotificationSettingsData | null>(null);
@@ -688,12 +690,23 @@ export default function ProjectSettingsTab({
 
     const initialSettings = useMemo(() => resetSettingsFromProject(project), [project]);
     const initialIdentity = useMemo(() => resetIdentityFromProject(project), [project]);
-    const initialRoles = useMemo<ProjectRolesFormValues>(
-        () => ({ roles: normalizeProjectRoleFormValues(project?.openRoles ?? project?.open_roles) }),
-        [project?.openRoles, project?.open_roles],
-    );
+    const initialRoles = useMemo<ProjectRolesFormValues>(() => {
+        const openRoles = normalizeProjectRoleFormValues(project?.openRoles ?? project?.open_roles);
+        const metadata = (project?.importSource?.metadata || project?.import_source?.metadata || {}) as any;
+        const leadRole: ProjectRoleFormValue = {
+            id: "lead-role",
+            role: metadata.leadFocus || "Lead",
+            count: 1,
+            description: metadata.leadDescription || "",
+            skills: [],
+        };
+        return {
+            roles: [leadRole, ...openRoles],
+        };
+    }, [project]);
     const [visibility, setVisibility] = useState<ProjectSettingsVisibility>(initialSettings.visibility);
     const [publicTabVisibility, setPublicTabVisibility] = useState<ProjectPublicTabVisibility>(initialSettings.publicTabVisibility);
+    const [memberUpdatesEnabled, setMemberUpdatesEnabled] = useState<boolean>(initialSettings.memberUpdatesEnabled);
     const [projectTitle, setProjectTitle] = useState(initialIdentity.title);
     const [shortDescription, setShortDescription] = useState(initialIdentity.shortDescription);
     const [description, setDescription] = useState(initialIdentity.description);
@@ -726,6 +739,7 @@ export default function ProjectSettingsTab({
     useEffect(() => {
         setVisibility(initialSettings.visibility);
         setPublicTabVisibility(initialSettings.publicTabVisibility);
+        setMemberUpdatesEnabled(initialSettings.memberUpdatesEnabled);
     }, [initialSettings]);
 
     useEffect(() => {
@@ -826,6 +840,7 @@ export default function ProjectSettingsTab({
     const rolesDirty = rolesFormDirty || deletedRoleIds.length > 0;
     const notificationDirty = JSON.stringify(projectNotificationDraft) !== JSON.stringify(projectNotificationData?.policy ?? buildDefaultProjectNotificationPolicy());
     const readmeDirty = JSON.stringify(readmeSettingsDraft) !== JSON.stringify(readmeSettings);
+    const updatesDirty = memberUpdatesEnabled !== initialSettings.memberUpdatesEnabled;
     const sectionDirty =
         activeSection === "general"
             ? identityDirty
@@ -837,7 +852,9 @@ export default function ProjectSettingsTab({
                         ? readmeDirty
                         : activeSection === "notifications"
                             ? notificationDirty
-                            : false;
+                            : activeSection === "updates"
+                                ? updatesDirty
+                                : false;
 
     const loadDangerPreflight = useCallback(async () => {
         setDangerPreflightLoading(true);
@@ -983,17 +1000,17 @@ export default function ProjectSettingsTab({
     const loadReadmeSettings = useCallback(async () => {
         setReadmeSettingsLoading(true);
         try {
-            const result = await readProjectReadmeSettingsAction(projectId);
+            const result = await readProjectDocSettingsAction(projectId);
             if (!result.success) {
                 toast.error(result.error);
                 return;
             }
-            const normalized = normalizeProjectReadmeSettings(result.settings);
+            const normalized = normalizeProjectDocSettings(result.settings);
             setReadmeSettings(normalized);
             setReadmeSettingsDraft(normalized);
         } catch (error) {
-            console.error("Failed to load README settings", error);
-            toast.error("Failed to load README settings.");
+            console.error("Failed to load document settings", error);
+            toast.error("Failed to load document settings.");
         } finally {
             setReadmeSettingsLoading(false);
         }
@@ -1030,7 +1047,7 @@ export default function ProjectSettingsTab({
     }, [activeSection, loadReadmeSettings]);
 
     useEffect(() => {
-        if (activeSection !== "collaborators") return;
+        if (activeSection !== "collaborators" && activeSection !== "roles-applications") return;
         const timer = window.setTimeout(() => {
             void loadCollaborators("initial");
         }, collaboratorData ? 180 : 0);
@@ -1174,7 +1191,9 @@ export default function ProjectSettingsTab({
                         return;
                     }
 
-                    const nextRoles = normalizeProjectRoleFormValues((result as { openRoles?: unknown }).openRoles ?? values.roles);
+                    const leadRole = values.roles.find((r) => r.id === "lead-role");
+                    const nextOpenRoles = normalizeProjectRoleFormValues((result as { openRoles?: unknown }).openRoles);
+                    const nextRoles = leadRole ? [leadRole, ...nextOpenRoles] : nextOpenRoles;
                     resetRolesForm({ roles: nextRoles });
                     setDeletedRoleIds([]);
                     toast.success("Project roles updated.");
@@ -1307,20 +1326,20 @@ export default function ProjectSettingsTab({
     const handleSaveReadmeSettings = useCallback(async () => {
         setReadmeSettingsSaving(true);
         try {
-            const result = await updateProjectReadmeSettingsAction(projectId, readmeSettingsDraft);
+            const result = await updateProjectDocSettingsAction(projectId, readmeSettingsDraft);
             if (!result.success) {
                 toast.error(result.error);
                 return;
             }
-            const normalized = normalizeProjectReadmeSettings(result.settings);
+            const normalized = normalizeProjectDocSettings(result.settings);
             setReadmeSettings(normalized);
             setReadmeSettingsDraft(normalized);
-            toast.success("README settings updated.");
+            toast.success("Document settings updated.");
             void loadSettingsAudit();
             onProjectUpdated();
         } catch (error) {
-            console.error("Failed to save README settings", error);
-            toast.error("Failed to save README settings.");
+            console.error("Failed to save document settings", error);
+            toast.error("Failed to save document settings.");
         } finally {
             setReadmeSettingsSaving(false);
         }
@@ -1415,6 +1434,27 @@ export default function ProjectSettingsTab({
         }
     }, [memberNotificationData, projectId]);
 
+    const handleSaveUpdatesSettings = useCallback(async () => {
+        setSavingSettings(true);
+        try {
+            const result = await updateProject(projectId, {
+                memberUpdatesEnabled,
+            });
+            if (!result?.success) {
+                toast.error("Failed to update updates settings.");
+                return;
+            }
+            toast.success("Updates settings updated.");
+            onProjectUpdated();
+            router.refresh();
+        } catch (error) {
+            console.error("Failed to save updates settings", error);
+            toast.error(error instanceof Error ? error.message : "Failed to save updates settings.");
+        } finally {
+            setSavingSettings(false);
+        }
+    }, [memberUpdatesEnabled, onProjectUpdated, projectId, router]);
+
     const handleSaveCurrentSection = useCallback(() => {
         if (activeSection === "general") {
             void handleSaveGeneral();
@@ -1434,8 +1474,12 @@ export default function ProjectSettingsTab({
         }
         if (activeSection === "notifications") {
             void handleSaveNotifications();
+            return;
         }
-    }, [activeSection, handleSaveAccess, handleSaveGeneral, handleSaveNotifications, handleSaveReadmeSettings, handleSaveRoles]);
+        if (activeSection === "updates") {
+            void handleSaveUpdatesSettings();
+        }
+    }, [activeSection, handleSaveAccess, handleSaveGeneral, handleSaveNotifications, handleSaveReadmeSettings, handleSaveRoles, handleSaveUpdatesSettings]);
 
     const handleCancelCurrentSection = useCallback(() => {
         if (activeSection === "general") {
@@ -1463,6 +1507,10 @@ export default function ProjectSettingsTab({
         }
         if (activeSection === "notifications") {
             setProjectNotificationDraft(projectNotificationData?.policy ?? buildDefaultProjectNotificationPolicy());
+            return;
+        }
+        if (activeSection === "updates") {
+            setMemberUpdatesEnabled(initialSettings.memberUpdatesEnabled);
         }
     }, [activeSection, handleCancelRoles, initialIdentity, initialSettings, projectNotificationData?.policy, readmeSettings]);
 
@@ -2347,7 +2395,7 @@ export default function ProjectSettingsTab({
                                 items={[
                                     "Project header, cards, search, and notification titles update from this single identity source.",
                                     "Shared links use the project avatar and short description through canonical metadata.",
-                                    "Application intake, collaborator previews, README, and Updates surfaces reuse these same fields.",
+                                    "Application intake, collaborator previews, Docs, and Updates surfaces reuse these same fields.",
                                 ]}
                             />
                         </AdvancedDisclosure>
@@ -2369,7 +2417,7 @@ export default function ProjectSettingsTab({
                         {isProjectOwner ? (
                             <SettingsCard
                                 title="Project visibility"
-                                description="This one owner-controlled policy is used by project cards, detail pages, search, files, applications, notifications, and future README/Updates surfaces."
+                                description="This one owner-controlled policy is used by project cards, detail pages, search, files, applications, notifications, and future Docs/Updates surfaces."
                             >
                                 <div className="grid gap-3">
                                     {VISIBILITY_OPTIONS.map((option) => (
@@ -2650,6 +2698,7 @@ export default function ProjectSettingsTab({
                                 disabled={savingSettings}
                                 onAddRole={handleAddSettingsRole}
                                 onRemoveRole={handleRemoveSettingsRole}
+                                members={collaboratorMembers}
                             />
                         </SettingsCard>
 
@@ -2725,29 +2774,15 @@ export default function ProjectSettingsTab({
                             title="Files and workspace"
                             description="Control file intake clearly: leaders can always upload, members can be toggled on or off, and viewers stay read-focused."
                             icon={Folder}
-	                            meta={[
-	                                ["Always allowed", String(fileWorkspaceData?.summary.alwaysAllowedCount ?? 0)],
-	                                ["Members on", String(fileWorkspaceData?.summary.enabledMemberCount ?? 0)],
-	                                ["Members off", String(fileWorkspaceData?.summary.disabledMemberCount ?? 0)],
-	                                ["Manual files", String(fileWorkspaceData?.summary.manualFileCount ?? 0)],
-	                                ["Hidden from analytics", String((fileWorkspaceData?.summary.manualFileCount ?? 0) - (fileWorkspaceData?.summary.analyticsVisibleManualFileCount ?? 0))],
-	                            ]}
-	                        />
+                            meta={[
+                                ["Always allowed", String(fileWorkspaceData?.summary.alwaysAllowedCount ?? 0)],
+                                ["Members on", String(fileWorkspaceData?.summary.enabledMemberCount ?? 0)],
+                                ["Members off", String(fileWorkspaceData?.summary.disabledMemberCount ?? 0)],
+                            ]}
+                        />
 
-	                        <SettingsCard
-	                            title="Manual file inventory"
-	                            description="Manually uploaded files are managed here. Hide private files from Analytics when they are not project signals."
-	                        >
-	                            <ManualFileInventory
-	                                data={fileWorkspaceData}
-	                                isLoading={fileWorkspaceLoading}
-	                                savingFileId={fileWorkspaceSavingFileId}
-	                                onToggleAnalytics={handleManualFileAnalyticsVisibility}
-	                            />
-	                        </SettingsCard>
-
-	                        <SettingsCard
-	                            title="Member upload permissions"
+                        <SettingsCard
+                            title="Member upload permissions"
                             description="Turn file uploads on or off per member. This is enforced before signed upload URLs, file rows, folders, and replacement versions are created."
                         >
                             <FileWorkspaceMembers
@@ -2759,7 +2794,7 @@ export default function ProjectSettingsTab({
                         </SettingsCard>
 
                         <SettingsCard
-                            title="Bulk Remove Members"
+                            title="Bulk upload control"
                             description="Bulk actions apply only to standard members. Leads and Co-leaders stay on; viewers stay off."
                         >
                             <div className="flex flex-wrap gap-2">
@@ -2808,7 +2843,7 @@ export default function ProjectSettingsTab({
                 {activeSection === "readme" && (
                     <div className="space-y-5">
                         <SummaryCard
-                            title="README publishing"
+                            title="Document publishing"
                             description="Control who can edit project documentation, how media is handled, and whether published changes notify followers or members."
                             icon={FileText}
                             meta={[
@@ -2824,7 +2859,7 @@ export default function ProjectSettingsTab({
                         >
                             <div className="grid gap-3 md:grid-cols-2">
                                 {([
-                                    ["leaders", "Leaders only", "Owners and Co-leaders maintain the canonical published README."],
+                                    ["leaders", "Leaders only", "Owners and Co-leaders maintain the canonical published document."],
                                     ["members", "Members can edit", "Members can help improve the draft; publishing stays leader-only."],
                                 ] as const).map(([value, title, description]) => (
                                     <button
@@ -2848,14 +2883,14 @@ export default function ProjectSettingsTab({
 
                         <SettingsCard
                             title="Media, smart blocks, and notification policy"
-                            description="README media is stored in managed project storage. External images stay off by default so private project data does not leak through third-party URLs."
+                            description="Document media is stored in managed project storage. External images stay off by default so private project data does not leak through third-party URLs."
                         >
                             <div className="grid gap-3">
                                 {([
-                                    ["mediaUploads", "Managed image uploads", "Allow editors to upload README images through access-checked project storage."],
+                                    ["mediaUploads", "Managed image uploads", "Allow editors to upload document images through access-checked project storage."],
                                     ["externalImages", "External images", "Allow externally hosted images. Keep this off for private or sensitive projects."],
                                     ["projectBlocks", "Project smart blocks", "Allow blocks such as roles, contributors, files, tasks, and sprints to render safe project data."],
-                                    ["notifyOnPublish", "Notify on publish", "Send optional README publish notifications through the project notification policy."],
+                                    ["notifyOnPublish", "Notify on publish", "Send optional document publish notifications through the project notification policy."],
                                 ] as const).map(([key, title, description]) => (
                                     <div key={key} className="flex items-center justify-between gap-4 rounded-2xl border border-zinc-200 p-4 dark:border-zinc-800">
                                         <div>
@@ -2876,14 +2911,14 @@ export default function ProjectSettingsTab({
                         <AdvancedDisclosure
                             open={Boolean(advancedOpen.readme)}
                             onToggle={() => toggleAdvanced("readme")}
-                            title="README affected surfaces"
+                            title="Document affected surfaces"
                         >
                             <AffectedAreas
                                 items={[
-                                    "The top-level README tab uses these settings for editor access, image rendering, and smart blocks.",
-                                    "The Access tab controls whether a published README is visible to public visitors.",
-                                    "Published README images are served through the access-checked README asset route, not direct public storage URLs.",
-                                    "README excerpts can support project share metadata only when the project itself is public and readable.",
+                                    "The top-level Docs tab uses these settings for editor access, image rendering, and smart blocks.",
+                                    "The Access tab controls whether a published document is visible to public visitors.",
+                                    "Published document images are served through the access-checked document asset route, not direct public storage URLs.",
+                                    "Document excerpts can support project share metadata only when the project itself is public and readable.",
                                 ]}
                             />
                         </AdvancedDisclosure>
@@ -2898,10 +2933,32 @@ export default function ProjectSettingsTab({
                             icon={Bell}
                             meta={[
                                 ["Public tab", publicTabVisibility.updates ? "Visible" : "Members only"],
-                                ["Publishers", "Owner, Co-leaders, Members"],
+                                ["Publishers", memberUpdatesEnabled ? "Owner, Co-leaders, Members" : "Owner, Co-leaders"],
                                 ["Engagement", "Likes and comments"],
                             ]}
                         />
+
+                        <SettingsCard
+                            title="Publishing permissions"
+                            description="Configure who is allowed to publish progress updates in this project."
+                        >
+                            <div className="flex items-center justify-between gap-4">
+                                <div className="min-w-0 flex-1">
+                                    <p className="text-sm font-semibold text-zinc-950 dark:text-zinc-50">
+                                        Allow members to post updates
+                                    </p>
+                                    <p className="text-xs text-zinc-500 mt-1">
+                                        When enabled, all project members can publish updates. When disabled, only the Lead (Owner) and Co-leaders (Admins) can publish.
+                                    </p>
+                                </div>
+                                <TogglePill
+                                    checked={memberUpdatesEnabled}
+                                    disabled={savingSettings}
+                                    onChange={setMemberUpdatesEnabled}
+                                    label="Allow members to post updates"
+                                />
+                            </div>
+                        </SettingsCard>
 
                         <SettingsCard
                             title="Publishing rules"
@@ -2909,7 +2966,9 @@ export default function ProjectSettingsTab({
                         >
                             <PolicyList
                                 items={[
-                                    "Owner, Co-leaders, and Members can create updates.",
+                                    memberUpdatesEnabled
+                                        ? "Owner, Co-leaders, and Members can create updates."
+                                        : "Only the Owner and Co-leaders can create updates (Member posting is disabled).",
                                     "Viewers and logged-in public visitors can comment on visible updates when the update allows logged-in replies.",
                                     "Owners and Co-leaders can pin, unpin, and moderate updates and comments.",
                                     "Authored updates remain part of project history after a member leaves unless a leader moderates them.",
@@ -3653,9 +3712,9 @@ function CollaboratorCard({
     return (
         <article className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
             <div className="flex items-start gap-3">
-                <div className="relative flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-zinc-100 text-sm font-semibold text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300">
+                <div className="relative flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-full bg-zinc-100 text-sm font-semibold text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300">
                     {reference.avatarUrl ? (
-                        <Image src={reference.avatarUrl} alt="" className="object-cover" fill sizes="48px" />
+                        <Image src={reference.avatarUrl} alt="" className="object-cover rounded-full" fill sizes="48px" />
                     ) : (
                         reference.displayName.slice(0, 1).toUpperCase()
                     )}
@@ -4323,9 +4382,9 @@ function FileWorkspaceMembers({
                         className="flex items-center justify-between gap-4 rounded-2xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950"
                     >
                         <div className="flex min-w-0 items-center gap-3">
-                            <div className="relative flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-zinc-100 text-sm font-semibold text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300">
+                            <div className="relative flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-full bg-zinc-100 text-sm font-semibold text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300">
                                 {member.avatarUrl ? (
-                                    <Image src={member.avatarUrl} alt="" className="object-cover" fill sizes="44px" />
+                                    <Image src={member.avatarUrl} alt="" className="object-cover rounded-full" fill sizes="44px" />
                                 ) : (
                                     displayName.slice(0, 1).toUpperCase()
                                 )}
