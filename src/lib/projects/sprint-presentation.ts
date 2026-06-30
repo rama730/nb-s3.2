@@ -200,19 +200,6 @@ export function buildSprintDrawerPreviews(rows: SprintTimelineRow[]): SprintDraw
       continue;
     }
 
-    if (row.kind === "file") {
-      const key = `file:${row.file.nodeId}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      previews.push({
-        type: "file",
-        id: row.file.nodeId,
-        title: row.file.nodeName,
-        subtitle: row.file.nodePath || row.task.title,
-        occurredAt: row.occurredAt,
-        badgeText: row.file.nodeType,
-      });
-    }
   }
 
   return previews;
