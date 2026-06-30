@@ -17,12 +17,12 @@ import {
 
 import { cn } from "@/lib/utils";
 
-export type ProjectReadmeMorePanel = "style" | "table" | "command" | "callout" | "link" | "reference" | "assets" | "quality" | "history";
+export type ProjectDocMorePanel = "style" | "table" | "command" | "callout" | "link" | "reference" | "assets" | "quality" | "history";
 
 type InsertCategory = "write" | "structure" | "project" | "media" | "review" | "history";
 
-export type ProjectReadmeInsertAction = {
-    id: ProjectReadmeMorePanel;
+export type ProjectDocInsertAction = {
+    id: ProjectDocMorePanel;
     label: string;
     description: string;
     category: InsertCategory;
@@ -30,11 +30,11 @@ export type ProjectReadmeInsertAction = {
     icon: LucideIcon;
 };
 
-export const PROJECT_README_INSERT_ACTIONS: ProjectReadmeInsertAction[] = [
+export const PROJECT_DOC_INSERT_ACTIONS: ProjectDocInsertAction[] = [
     {
         id: "style",
         label: "Style",
-        description: "Choose a README structure for open-source, product, technical, internal, or portfolio pages.",
+        description: "Choose a document structure for open-source, product, technical, internal, or portfolio pages.",
         category: "write",
         aliases: ["style", "template", "preset", "layout", "readme", "open source", "technical", "portfolio", "product"],
         icon: Palette,
@@ -82,7 +82,7 @@ export const PROJECT_README_INSERT_ACTIONS: ProjectReadmeInsertAction[] = [
     {
         id: "assets",
         label: "Image",
-        description: "Upload managed README media with alt text.",
+        description: "Upload managed document media with alt text.",
         category: "media",
         aliases: ["image", "photo", "screenshot", "gif", "demo", "media", "asset", "upload"],
         icon: ImagePlus,
@@ -106,21 +106,21 @@ export const PROJECT_README_INSERT_ACTIONS: ProjectReadmeInsertAction[] = [
     },
 ];
 
-function getAction(panel: ProjectReadmeMorePanel) {
-    return PROJECT_README_INSERT_ACTIONS.find((action) => action.id === panel) ?? null;
+function getAction(panel: ProjectDocMorePanel) {
+    return PROJECT_DOC_INSERT_ACTIONS.find((action) => action.id === panel) ?? null;
 }
 
-export function getProjectReadmeInsertAction(panel: ProjectReadmeMorePanel) {
+export function getProjectDocInsertAction(panel: ProjectDocMorePanel) {
     return getAction(panel);
 }
 
-export function ProjectReadmeMoreMenu({
+export function ProjectDocMoreMenu({
     open,
     onOpenChange,
 }: {
     open: boolean;
     onOpenChange: (open: boolean) => void;
-    onOpenPanel: (panel: ProjectReadmeMorePanel) => void;
+    onOpenPanel: (panel: ProjectDocMorePanel) => void;
 }) {
     return (
         <div className="relative">
@@ -128,7 +128,7 @@ export function ProjectReadmeMoreMenu({
                 type="button"
                 onClick={() => onOpenChange(!open)}
                 className="inline-flex items-center gap-2 rounded-full border border-zinc-200 px-3 py-1.5 text-sm font-semibold text-zinc-700 transition hover:border-blue-300 hover:text-blue-600 dark:border-zinc-800 dark:text-zinc-300"
-                title="Open README tools"
+                title="Open document tools"
             >
                 <Plus className="h-4 w-4" />
                 Insert
