@@ -7,14 +7,6 @@ const withNextIntl = createNextIntlPlugin("./src/i18n/request.ts");
 const withBundleAnalyzer = nextBundleAnalyzer({
   enabled: process.env.ANALYZE === "true",
 });
-const configuredPresenceWsUrl =
-  process.env.NEXT_PUBLIC_PRESENCE_WS_URL || process.env.PRESENCE_WS_URL || "";
-const allowLocalPresenceConnect =
-  process.env.NODE_ENV !== "production" ||
-  /(^|:\/\/)(localhost|127\.0\.0\.1|0\.0\.0\.0|\[?::1\]?)(:|\/|$)/.test(configuredPresenceWsUrl);
-const localPresenceConnectSources = allowLocalPresenceConnect
-  ? ["ws://localhost:*", "ws://127.0.0.1:*", "ws://0.0.0.0:*"]
-  : [];
 const e2eAuthRouteImplRelativePath =
   process.env.NODE_ENV === "production"
     ? "./src/app/api/e2e/auth/route.disabled.ts"
@@ -37,23 +29,6 @@ const nextConfig: NextConfig = {
           { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=()' },
           { key: 'X-DNS-Prefetch-Control', value: 'on' },
           { key: 'Strict-Transport-Security', value: 'max-age=63072000; includeSubDomains; preload' },
-          {
-            key: 'Content-Security-Policy',
-            value: [
-              "default-src 'self'",
-              "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
-              "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-              "img-src 'self' data: blob: https:",
-              "font-src 'self' https://fonts.gstatic.com",
-              [
-                "connect-src 'self' https://*.supabase.co wss://*.supabase.co",
-                ...localPresenceConnectSources,
-              ].join(" "),
-              "frame-ancestors 'none'",
-              "base-uri 'self'",
-              "form-action 'self'",
-            ].join('; '),
-          },
         ],
       },
     ];
@@ -110,7 +85,9 @@ const nextConfig: NextConfig = {
       '@codemirror/view',
     ],
     serverActions: {
-      bodySizeLimit: '16mb',
+      // Binary uploads use signed upload-intent routes. Server actions carry
+      // structured metadata and text only, so keep their parsing budget small.
+      bodySizeLimit: '4mb',
     },
   },
 
@@ -123,12 +100,22 @@ const nextConfig: NextConfig = {
 
   poweredByHeader: false,
   reactStrictMode: true,
-  webpack(config) {
+  webpack(config, { dev }) {
     config.resolve = config.resolve ?? {};
     config.resolve.alias = {
       ...(config.resolve.alias ?? {}),
       "@/app/api/e2e/auth/route-impl": e2eAuthRouteImplAbsolutePath,
     };
+    if (dev) {
+      config.cache = {
+        type: 'filesystem',
+        allowCollectingMemory: false,
+        maxMemoryGenerations: 1,
+      };
+      config.watchOptions = {
+        ignored: ['**/node_modules/**', '**/.next/**', '**/coverage/**', '**/scratch/**'],
+      };
+    }
     return config;
   },
 };
