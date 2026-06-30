@@ -74,7 +74,10 @@ export async function toggleReaction(
         if (!allowed) return { success: false, error: 'Rate limit exceeded' };
 
         // Validate emoji (must be 1-8 chars, basic protection)
-        if (!emoji || emoji.length > 8) return { success: false, error: 'Invalid emoji' };
+        const normalizedEmoji = emoji?.trim();
+        if (!normalizedEmoji || normalizedEmoji.length > 8) {
+            return { success: false, error: 'Invalid emoji' };
+        }
 
         // Check message exists
         const [messageRow] = await db
@@ -115,7 +118,7 @@ export async function toggleReaction(
                 and(
                     eq(messageReactions.messageId, messageId),
                     eq(messageReactions.userId, user.id),
-                    eq(messageReactions.emoji, emoji)
+                    eq(messageReactions.emoji, normalizedEmoji)
                 )
             )
             .limit(1);
@@ -129,7 +132,7 @@ export async function toggleReaction(
                 messageId,
                 conversationId: messageRow.conversationId,
                 userId: user.id,
-                emoji,
+                emoji: normalizedEmoji,
             });
         }
 
