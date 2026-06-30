@@ -1,6 +1,5 @@
 'use client';
 
-import Image from 'next/image';
 import { Loader2, RotateCcw, X } from 'lucide-react';
 import type { PendingAttachment } from './message-composer-v2-shared';
 
@@ -57,14 +56,12 @@ export function ComposerAttachmentsPanel({
                                 </button>
                             </div>
                             {attachment.preview ? (
-                                <div className="mt-2 overflow-hidden rounded-lg border border-zinc-200 dark:border-zinc-700">
-                                    <Image
+                                <div className="mt-2 flex max-h-52 items-center justify-center overflow-hidden rounded-lg border border-zinc-200 bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-950">
+                                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                                    <img
                                         src={attachment.preview}
                                         alt={attachment.file.name}
-                                        width={320}
-                                        height={180}
-                                        unoptimized
-                                        className="h-32 w-full object-cover"
+                                        className="block h-auto max-h-52 w-auto max-w-full object-contain"
                                     />
                                 </div>
                             ) : null}
