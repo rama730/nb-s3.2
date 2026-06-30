@@ -23,6 +23,7 @@ const USER_SHELL_ROUTES: RouteDescriptor[] = [
     { pathname: '/people', routeClass: 'user_shell' },
     { pathname: '/monitor', routeClass: 'user_shell' },
     { pathname: '/onboarding', routeClass: 'user_shell' },
+    { pathname: '/authorize', routeClass: 'user_shell' },
 ]
 
 const PUBLIC_CACHED_ROUTES: RouteDescriptor[] = [
