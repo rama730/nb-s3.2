@@ -18,7 +18,7 @@
  * script in `scripts/backfill-file-hashes.ts` uses `node:crypto` instead.
  */
 
-const CHUNK_SIZE = 4 * 1024 * 1024; // 4 MiB — balances WebCrypto call overhead vs. memory.
+const CHUNK_SIZE = 32 * 1024 * 1024; // 32 MiB — balances WebCrypto call overhead vs. memory.
 
 function assertSubtle(): SubtleCrypto {
   if (typeof globalThis === "undefined" || !globalThis.crypto?.subtle) {
@@ -67,27 +67,29 @@ export type ContentHashResult =
   | { kind: "full"; hashHex: string; bytes: number }
   | { kind: "prefix"; hashHex: string; bytes: number; prefixBytes: number };
 
-export async function computeContentHash(blob: Blob): Promise<ContentHashResult> {
-  const subtle = assertSubtle();
-  const size = blob.size;
-
-  if (size <= CHUNK_SIZE) {
-    const buffer = await blob.arrayBuffer();
-    const digest = await subtle.digest("SHA-256", buffer);
-    return { kind: "full", hashHex: bufferToHex(digest), bytes: size };
-  }
-
-  // Large file: hash only the first CHUNK_SIZE bytes and mark as prefix.
-  // Callers should treat this as a hint, not a strict equality signal.
-  const slice = blob.slice(0, CHUNK_SIZE);
-  const buffer = await slice.arrayBuffer();
-  const digest = await subtle.digest("SHA-256", buffer);
-  return {
-    kind: "prefix",
-    hashHex: bufferToHex(digest),
-    bytes: size,
-    prefixBytes: CHUNK_SIZE,
-  };
+export function computeContentHash(blob: Blob): Promise<ContentHashResult> {
+  return new Promise((resolve, reject) => {
+    try {
+      const worker = new Worker(new URL("./content-hash.worker.ts", import.meta.url));
+      worker.onmessage = (e: MessageEvent<{ result?: ContentHashResult; error?: string }>) => {
+        if (e.data.error) {
+          reject(new Error(e.data.error));
+        } else if (e.data.result) {
+          resolve(e.data.result);
+        } else {
+          reject(new Error("Unexpected worker response"));
+        }
+        worker.terminate();
+      };
+      worker.onerror = (err) => {
+        reject(err);
+        worker.terminate();
+      };
+      worker.postMessage({ blob });
+    } catch (err) {
+      reject(err);
+    }
+  });
 }
 
 /**
