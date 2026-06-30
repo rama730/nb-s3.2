@@ -3,12 +3,12 @@
 import Link from "next/link";
 import { AlertCircle, FileText, FolderOpen, ListTodo, Sparkles, Timer, Users } from "lucide-react";
 
-import { ProjectReadmeSmartBlockPreviewCard } from "@/components/projects/readme/ProjectReadmeReferencePreview";
-import type { ProjectReadmeSmartBlock, ProjectReadmeSmartBlockPreview } from "@/lib/projects/readme-blocks";
+import { ProjectDocSmartBlockPreviewCard } from "@/components/projects/doc/ProjectDocReferencePreview";
+import type { ProjectDocSmartBlock, ProjectDocSmartBlockPreview } from "@/lib/projects/doc-blocks";
 import type { Project } from "@/types/hub";
 import { cn } from "@/lib/utils";
 
-const BLOCK_COPY: Record<ProjectReadmeSmartBlock["kind"], { title: string; icon: typeof Sparkles; tab: string; description: string }> = {
+const BLOCK_COPY: Record<ProjectDocSmartBlock["kind"], { title: string; icon: typeof Sparkles; tab: string; description: string }> = {
     roles: {
         title: "Open roles",
         icon: Users,
@@ -31,7 +31,7 @@ const BLOCK_COPY: Record<ProjectReadmeSmartBlock["kind"], { title: string; icon:
         title: "Referenced tasks",
         icon: ListTodo,
         tab: "tasks",
-        description: "Project work items linked from the README.",
+        description: "Project work items linked from the Doc.",
     },
     sprints: {
         title: "Sprint story",
@@ -40,28 +40,28 @@ const BLOCK_COPY: Record<ProjectReadmeSmartBlock["kind"], { title: string; icon:
         description: "Planning rhythm and sprint movement.",
     },
     unknown: {
-        title: "Unknown README block",
+        title: "Unknown Doc block",
         icon: AlertCircle,
         tab: "readme",
         description: "This block is not recognized and is hidden from public readers.",
     },
 };
 
-export function ProjectReadmeSmartBlock({
+export function ProjectDocSmartBlock({
     block,
     project,
     editorMode = false,
     preview,
     loading = false,
 }: {
-    block: ProjectReadmeSmartBlock;
+    block: ProjectDocSmartBlock;
     project: Project;
     editorMode?: boolean;
-    preview?: ProjectReadmeSmartBlockPreview | null;
+    preview?: ProjectDocSmartBlockPreview | null;
     loading?: boolean;
 }) {
     if (block.kind === "unknown" && !editorMode) return null;
-    if (preview) return <ProjectReadmeSmartBlockPreviewCard preview={preview} />;
+    if (preview) return <ProjectDocSmartBlockPreviewCard preview={preview} />;
     if (loading && block.kind !== "unknown") {
         return (
             <div className="my-4 rounded-2xl border border-zinc-200 bg-zinc-50/70 p-4 dark:border-zinc-800 dark:bg-zinc-950/60">
