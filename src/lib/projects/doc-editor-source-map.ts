@@ -1,4 +1,4 @@
-export type ProjectReadmeEditorTargetKind =
+export type ProjectDocEditorTargetKind =
     | "blockquote"
     | "code"
     | "command"
@@ -11,18 +11,18 @@ export type ProjectReadmeEditorTargetKind =
     | "smart-block"
     | "table";
 
-export type ProjectReadmeEditorSourceTarget = {
+export type ProjectDocEditorSourceTarget = {
     id: string;
-    kind: ProjectReadmeEditorTargetKind;
+    kind: ProjectDocEditorTargetKind;
     startOffset: number;
     endOffset: number;
     startLine: number;
     endLine: number;
 };
 
-export type ProjectReadmeEditorSourcePosition = {
+export type ProjectDocEditorSourcePosition = {
     targetId: string;
-    kind?: ProjectReadmeEditorTargetKind | string | null;
+    kind?: ProjectDocEditorTargetKind | string | null;
     line?: number | null;
     offset?: number | null;
 };
@@ -38,7 +38,7 @@ const HTML_IMAGE_REGEX = /<img\b/i;
 const HTML_TABLE_REGEX = /<\/?(?:table|thead|tbody|tr|td|th)\b/i;
 const HTML_BLOCK_REGEX = /^\s*<\/?[a-z][\s>]/i;
 const SOURCE_MAP_CACHE_LIMIT = 20;
-const sourceTargetCache = new Map<string, ProjectReadmeEditorSourceTarget[]>();
+const sourceTargetCache = new Map<string, ProjectDocEditorSourceTarget[]>();
 
 function stableSourceMapKey(content: string) {
     let hash = 2166136261;
@@ -49,7 +49,7 @@ function stableSourceMapKey(content: string) {
     return `${content.length}:${hash >>> 0}`;
 }
 
-function rememberSourceTargets(key: string, targets: ProjectReadmeEditorSourceTarget[]) {
+function rememberSourceTargets(key: string, targets: ProjectDocEditorSourceTarget[]) {
     if (sourceTargetCache.has(key)) sourceTargetCache.delete(key);
     sourceTargetCache.set(key, targets);
     while (sourceTargetCache.size > SOURCE_MAP_CACHE_LIMIT) {
@@ -64,8 +64,8 @@ function sanitizeTargetKind(kind: string) {
     return kind.replace(/[^a-z0-9-]/gi, "-").toLowerCase() || "block";
 }
 
-export function projectReadmeEditorTargetId(
-    kind: ProjectReadmeEditorTargetKind | string,
+export function projectDocEditorTargetId(
+    kind: ProjectDocEditorTargetKind | string,
     line: number | null | undefined,
     offset: number | null | undefined,
 ) {
@@ -74,7 +74,7 @@ export function projectReadmeEditorTargetId(
     return `readme-editor-${sanitizeTargetKind(kind)}-${safeLine}-${safeOffset}`;
 }
 
-export function getReadmeLineStartOffset(content: string, line: number | null | undefined) {
+export function getDocLineStartOffset(content: string, line: number | null | undefined) {
     const targetLine = Number.isFinite(line) && line ? Math.max(1, Math.trunc(line)) : 1;
     let offset = 0;
     let currentLine = 1;
@@ -87,7 +87,7 @@ export function getReadmeLineStartOffset(content: string, line: number | null | 
     return Math.min(offset, content.length);
 }
 
-function lineKind(line: string): ProjectReadmeEditorTargetKind {
+function lineKind(line: string): ProjectDocEditorTargetKind {
     if (HEADING_REGEX.test(line)) return "heading";
     if (SMART_BLOCK_REGEX.test(line)) return "smart-block";
     if (IMAGE_REGEX.test(line) || HTML_IMAGE_REGEX.test(line)) return "image";
@@ -120,7 +120,7 @@ function isIndentedContinuation(line: string) {
         && !SMART_BLOCK_REGEX.test(line);
 }
 
-function continuesSourceBlock(kind: ProjectReadmeEditorTargetKind, line: string) {
+function continuesSourceBlock(kind: ProjectDocEditorTargetKind, line: string) {
     if (!line.trim()) return false;
     if (kind === "list") return LIST_REGEX.test(line) || isIndentedContinuation(line);
     if (kind === "blockquote") return BLOCKQUOTE_REGEX.test(line) || isIndentedContinuation(line);
@@ -133,15 +133,15 @@ function continuesSourceBlock(kind: ProjectReadmeEditorTargetKind, line: string)
 }
 
 function pushTarget(
-    targets: ProjectReadmeEditorSourceTarget[],
-    kind: ProjectReadmeEditorTargetKind,
+    targets: ProjectDocEditorSourceTarget[],
+    kind: ProjectDocEditorTargetKind,
     startLine: number,
     endLine: number,
     startOffset: number,
     endOffset: number,
 ) {
     targets.push({
-        id: projectReadmeEditorTargetId(kind, startLine, startOffset),
+        id: projectDocEditorTargetId(kind, startLine, startOffset),
         kind,
         startOffset,
         endOffset,
@@ -150,7 +150,7 @@ function pushTarget(
     });
 }
 
-export function buildProjectReadmeEditorSourceTargets(content: string) {
+export function buildProjectDocEditorSourceTargets(content: string) {
     const cacheKey = stableSourceMapKey(content);
     const cached = sourceTargetCache.get(cacheKey);
     if (cached) return cached;
@@ -163,7 +163,7 @@ export function buildProjectReadmeEditorSourceTargets(content: string) {
         runningOffset += line.length + 1;
     });
 
-    const targets: ProjectReadmeEditorSourceTarget[] = [];
+    const targets: ProjectDocEditorSourceTarget[] = [];
     let index = 0;
 
     while (index < lines.length) {
@@ -217,13 +217,13 @@ export function buildProjectReadmeEditorSourceTargets(content: string) {
     return rememberSourceTargets(cacheKey, targets);
 }
 
-export function findProjectReadmeEditorSourceTarget(
-    targets: ProjectReadmeEditorSourceTarget[],
+export function findProjectDocEditorSourceTarget(
+    targets: ProjectDocEditorSourceTarget[],
     offset: number,
 ) {
     if (!targets.length) return null;
     const normalizedOffset = Math.max(0, Math.trunc(offset));
-    let nearest: ProjectReadmeEditorSourceTarget | null = null;
+    let nearest: ProjectDocEditorSourceTarget | null = null;
 
     for (const target of targets) {
         if (normalizedOffset >= target.startOffset && normalizedOffset <= target.endOffset) return target;
