@@ -586,8 +586,113 @@
     {
       "idx": 83,
       "version": "7",
+      "when": 1780943400000,
+      "tag": "0081_project_updates_realtime",
+      "breakpoints": true
+    },
+    {
+      "idx": 84,
+      "version": "7",
+      "when": 1780947000000,
+      "tag": "0082_project_update_drafts",
+      "breakpoints": true
+    },
+    {
+      "idx": 85,
+      "version": "7",
+      "when": 1780950600000,
+      "tag": "0083_project_update_drafts_rls",
+      "breakpoints": true
+    },
+    {
+      "idx": 86,
+      "version": "7",
       "when": 1781102400000,
       "tag": "0084_team_invite_collaboration_status",
+      "breakpoints": true
+    },
+    {
+      "idx": 87,
+      "version": "7",
+      "when": 1781366400000,
+      "tag": "0085_project_update_media_storage",
+      "breakpoints": true
+    },
+    {
+      "idx": 88,
+      "version": "7",
+      "when": 1781424844957,
+      "tag": "0086_virtual_workspace_fields",
+      "breakpoints": true
+    },
+    {
+      "idx": 89,
+      "version": "7",
+      "when": 1781424900000,
+      "tag": "0087_non_transactional_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 90,
+      "version": "7",
+      "when": 1781580600000,
+      "tag": "0088_extension_device_session_editor_metadata",
+      "breakpoints": true
+    },
+    {
+      "idx": 91,
+      "version": "7",
+      "when": 1781604579000,
+      "tag": "0089_project_node_event_sequence_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 92,
+      "version": "7",
+      "when": 1781949600000,
+      "tag": "0090_project_update_comment_threads",
+      "breakpoints": true
+    },
+    {
+      "idx": 93,
+      "version": "7",
+      "when": 1781971200000,
+      "tag": "0091_extension_auth_code_events",
+      "breakpoints": true
+    },
+    {
+      "idx": 94,
+      "version": "7",
+      "when": 1781995800000,
+      "tag": "0092_project_updates_performance_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 95,
+      "version": "7",
+      "when": 1782015602479,
+      "tag": "0094_lovely_toad",
+      "breakpoints": true
+    },
+    {
+      "idx": 96,
+      "version": "7",
+      "when": 1782145543000,
+      "tag": "0095_docs_hub_upgrade",
+      "breakpoints": true
+    },
+    {
+      "idx": 97,
+      "version": "7",
+      "when": 1782604800000,
+      "tag": "0098_onboarding_state_machine",
+      "breakpoints": true
+    },
+    {
+      "idx": 98,
+      "version": "7",
+      "when": 1782691200000,
+      "tag": "0099_schema_lineage_and_fk_indexes",
       "breakpoints": true
     }
   ]
