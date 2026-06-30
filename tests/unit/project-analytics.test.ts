@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
+    buildProjectAnalyticsFiles,
     buildProjectAnalyticsMemberDetail,
     buildProjectAnalyticsMemberSummaries,
     buildProjectAnalyticsOverview,
@@ -280,13 +281,36 @@ test("snapshot and report provide one project intelligence payload", () => {
     assert.ok(report.includes("## Compare"));
 });
 
-test("file analytics builds activity batches for high-volume workspace movement", async () => {
-    const { buildProjectAnalyticsFiles } = await import("../../src/lib/projects/analytics");
+test("file analytics builds activity batches for high-volume workspace movement", () => {
     const input = baseInput();
     const files = buildProjectAnalyticsFiles(input);
     assert.equal(files.activityBatches.length, 1);
     assert.equal(files.activityBatches[0]?.count, 1);
     assert.equal(files.activityBatches[0]?.contributor?.id, "member-1");
+});
+
+test("file analytics attributes file movement to the latest version uploader", () => {
+    const input = baseInput();
+    input.files[0] = {
+        ...input.files[0]!,
+        createdBy: "owner-1",
+        updatedAt: "2026-05-15T00:00:00.000Z",
+    };
+    input.fileVersions = [
+        { id: "version-old", nodeId: "file-1", uploadedBy: "owner-1", uploadedAt: "2026-05-15T00:00:00.000Z" },
+        { id: "version-latest", nodeId: "file-1", uploadedBy: "member-1", uploadedAt: "2026-05-16T08:30:00.000Z" },
+    ];
+
+    const files = buildProjectAnalyticsFiles(input);
+    assert.equal(files.active[0]?.contributorId, "member-1");
+    assert.equal(files.active[0]?.updatedAt, "2026-05-16T08:30:00.000Z");
+    assert.equal(files.activityBatches[0]?.contributor?.id, "member-1");
+    assert.equal(files.activityBatches[0]?.occurredAt, "2026-05-16T08:30:00.000Z");
+
+    const timeline = buildProjectAnalyticsTimeline(input, { source: "files", limit: 10 });
+    const fileEvent = timeline.items.find((event) => event.id === "file:file-1");
+    assert.equal(fileEvent?.actor?.id, "member-1");
+    assert.equal(fileEvent?.occurredAt, "2026-05-16T08:30:00.000Z");
 });
 
 test("timeline sorts chronologically and filters by member and type", () => {
