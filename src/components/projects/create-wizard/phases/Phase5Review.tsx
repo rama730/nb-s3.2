@@ -19,18 +19,18 @@ export default function Phase5Review({ wizardContext, goToPhase }: Phase5ReviewP
     const readmeSummary = (() => {
         if (readmeIntent.mode === 'detected') {
             return {
-                title: 'Use detected README',
-                description: `A private draft will be prepared from ${readmeIntent.sourcePath || 'the detected README'} after project files are available.`,
+                title: 'Use detected document',
+                description: `A private draft will be prepared from ${readmeIntent.sourcePath || 'the detected document'} after project files are available.`,
             };
         }
         if (readmeIntent.mode === 'skip') {
             return {
-                title: 'Skip README for now',
-                description: 'The README tab stays empty until a project leader creates or imports one.',
+                title: 'Skip document for now',
+                description: 'The Docs tab stays empty until a project leader creates or imports one.',
             };
         }
         return {
-            title: 'Create starter README draft',
+            title: 'Create starter document draft',
             description: 'A private draft with overview, setup, project focus, and roles will be prepared.',
         };
     })();
@@ -197,10 +197,10 @@ export default function Phase5Review({ wizardContext, goToPhase }: Phase5ReviewP
                 )}
             </div>
 
-            {/* README Section */}
+            {/* Doc Section */}
             <div className="bg-zinc-50 dark:bg-zinc-800/50 rounded-xl p-6">
                 <div className="flex items-center justify-between mb-4">
-                    <h4 className="font-semibold text-zinc-900 dark:text-zinc-100">Project README</h4>
+                    <h4 className="font-semibold text-zinc-900 dark:text-zinc-100">Project Document</h4>
                     <button
                         type="button"
                         onClick={() => goToPhase(1)}
