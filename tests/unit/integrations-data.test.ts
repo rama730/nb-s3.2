@@ -31,16 +31,34 @@ describe("integrations settings builder", () => {
                 {
                     provider: "github",
                     last_sign_in_at: "2026-03-18T08:00:00.000Z",
+                    identity_data: {
+                        login: "octocat",
+                        name: "The Octocat",
+                        avatar_url: "https://avatars.githubusercontent.com/u/5832347?v=4",
+                    },
                 },
             ] as User["identities"],
             last_sign_in_at: "2026-03-19T10:00:00.000Z",
         });
 
+        const githubProjects = [
+            {
+                id: "proj-1",
+                title: "My Project",
+                repoUrl: "https://github.com/octocat/my-project",
+                defaultBranch: "main",
+                lastSyncAt: "2026-03-19T12:00:00.000Z",
+                lastCommitSha: "abc123commitsha",
+                syncStatus: "ready" as const,
+            }
+        ];
+
         const data = buildIntegrationsData({
             user,
-            githubRepoProjectCount: 2,
+            githubRepoProjectCount: 1,
             githubLastSyncAt: "2026-03-19T12:00:00.000Z",
             passwordLastChangedAt: "2026-03-19T11:00:00.000Z",
+            githubProjects,
         });
 
         assert.equal(data.createdWith, "google");
@@ -54,6 +72,11 @@ describe("integrations settings builder", () => {
         assert.equal(data.authConnections[2]?.verificationState, "verified");
         assert.equal(data.externalServices[0]?.status, "connected");
         assert.equal(data.externalServices[0]?.lastUsedAt, "2026-03-19T12:00:00.000Z");
+        assert.equal(data.externalServices[0]?.githubUsername, "octocat");
+        assert.equal(data.externalServices[0]?.githubFullName, "The Octocat");
+        assert.equal(data.externalServices[0]?.githubAvatarUrl, "https://avatars.githubusercontent.com/u/5832347?v=4");
+        assert.equal(data.externalServices[0]?.projects?.length, 1);
+        assert.equal(data.externalServices[0]?.projects?.[0]?.title, "My Project");
     });
 
     it("recommends adding email when only oauth sign-in exists", () => {
