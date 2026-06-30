@@ -1,0 +1,260 @@
+- generic [ref=f1e1]:
+  - generic [ref=f1e2]:
+    - banner [ref=f1e3]:
+      - generic [ref=f1e4]:
+        - link "Navigate to home" [ref=f1e7] [cursor=pointer]:
+          - /url: /
+          - img [ref=f1e11]
+          - generic [ref=f1e14]: NB
+        - navigation "Main navigation" [ref=f1e15]:
+          - link "Hub" [ref=f1e16] [cursor=pointer]:
+            - /url: /hub
+            - img [ref=f1e17]
+            - generic [ref=f1e22]: Hub
+          - link "Connections" [ref=f1e23] [cursor=pointer]:
+            - /url: /people
+            - img [ref=f1e24]
+            - generic [ref=f1e29]: Connections
+          - link "Messages" [ref=f1e30] [cursor=pointer]:
+            - /url: /messages
+            - img [ref=f1e31]
+            - generic [ref=f1e33]: Messages
+          - link "Settings" [ref=f1e34] [cursor=pointer]:
+            - /url: /settings
+            - img [ref=f1e35]
+            - generic [ref=f1e38]: Settings
+        - generic [ref=f1e39]:
+          - button "Toggle theme" [ref=f1e151] [cursor=pointer]:
+            - img [ref=f1e152]
+          - link "Sign in" [ref=f1e41] [cursor=pointer]:
+            - /url: /login
+    - main [ref=f1e42]:
+      - generic [ref=f1e45]:
+        - generic [ref=f1e48]:
+          - generic [ref=f1e49]:
+            - link "Hub" [ref=f1e50] [cursor=pointer]:
+              - /url: /hub
+              - img [ref=f1e51]
+              - text: Hub
+            - generic [ref=f1e53]:
+              - heading "DeepScope AI" [level=1] [ref=f1e54]
+              - generic [ref=f1e55]:
+                - generic [ref=f1e56]: Created by
+                - link "Ramanayudu CH" [ref=f1e57] [cursor=pointer]:
+                  - /url: /u/ramanayudu_ch
+              - generic "Active Project" [ref=f1e58]
+            - generic [ref=f1e60]:
+              - generic "Total Views" [ref=f1e61]:
+                - img [ref=f1e62]
+                - generic [ref=f1e65]: "271"
+              - generic "Followers" [ref=f1e66]:
+                - img [ref=f1e67]
+                - generic [ref=f1e72]: "0"
+          - generic [ref=f1e73]:
+            - button "Follow" [ref=f1e74] [cursor=pointer]:
+              - img [ref=f1e75]
+              - generic [ref=f1e78]: Follow
+            - button "Share Project" [ref=f1e80] [cursor=pointer]:
+              - img [ref=f1e81]
+        - generic [ref=f1e89]:
+          - button "Dashboard" [ref=f1e90] [cursor=pointer]:
+            - img [ref=f1e91]
+            - text: Dashboard
+          - button "Docs" [ref=f1e96] [cursor=pointer]:
+            - img [ref=f1e97]
+            - text: Docs
+          - button "Updates" [ref=f1e99] [cursor=pointer]:
+            - img [ref=f1e100]
+            - text: Updates
+          - button "Files" [ref=f1e104] [cursor=pointer]:
+            - img [ref=f1e105]
+            - text: Files
+        - region "Project detail content" [ref=f1e107]:
+          - generic [ref=f1e154]:
+            - main [ref=f1e155]:
+              - generic [ref=f1e157]:
+                - heading "Project Feed" [level=2] [ref=f1e158]
+                - paragraph [ref=f1e159]: Progress posts for followers and project visitors.
+              - generic [ref=f1e160]:
+                - button "Open update by Ramanayudu CH" [active] [ref=f1e161] [cursor=pointer]:
+                  - generic [ref=f1e162]:
+                    - link "Ramanayudu CH" [ref=f1e163]:
+                      - /url: /u/ramanayudu_ch
+                      - generic "Ramanayudu CH" [ref=f1e164]:
+                        - img "Ramanayudu CH" [ref=f1e165]
+                    - generic [ref=f1e166]:
+                      - generic [ref=f1e167]:
+                        - generic [ref=f1e169]:
+                          - link "Ramanayudu CH" [ref=f1e170]:
+                            - /url: /u/ramanayudu_ch
+                          - generic [ref=f1e171]: Lead Frontend Developer
+                          - generic [ref=f1e172]: · 22 Jun
+                        - button "Update options" [ref=f1e173]:
+                          - img [ref=f1e174]
+                      - generic [ref=f1e178]:
+                        - text: testing metadeta
+                        - 'link "Task: Update the related files" [ref=f1e179]':
+                          - /url: /projects/deepscope-ai?tab=tasks&drawerType=task&drawerId=9fbd8943-e594-473c-8f82-5830851d1d7a
+                        - text: and
+                        - 'link "Sprint: Sprint 1" [ref=f1e180]':
+                          - /url: /projects/deepscope-ai/sprints/f088c7ff-197e-4181-86f2-0c2754d65b36
+                        - text: and
+                        - link ".first_run" [ref=f1e181]:
+                          - /url: /projects/deepscope-ai?tab=files&fileId=d24410fd-c75d-4113-9305-7ec2262d4bda
+                      - generic [ref=f1e182]:
+                        - button "0" [ref=f1e183]:
+                          - img [ref=f1e184]
+                          - text: "0"
+                        - button "0" [ref=f1e186]:
+                          - img [ref=f1e187]
+                          - text: "0"
+                - button "Open update by Ramanayudu CH" [ref=f1e189] [cursor=pointer]:
+                  - generic [ref=f1e190]:
+                    - link "Ramanayudu CH" [ref=f1e191]:
+                      - /url: /u/ramanayudu_ch
+                      - generic "Ramanayudu CH" [ref=f1e192]:
+                        - img "Ramanayudu CH" [ref=f1e193]
+                    - generic [ref=f1e194]:
+                      - generic [ref=f1e195]:
+                        - generic [ref=f1e197]:
+                          - link "Ramanayudu CH" [ref=f1e198]:
+                            - /url: /u/ramanayudu_ch
+                          - generic [ref=f1e199]: Lead Frontend Developer
+                          - generic [ref=f1e200]: · 21 Jun
+                        - button "Update options" [ref=f1e201]:
+                          - img [ref=f1e202]
+                      - generic [ref=f1e206]: Checking image !
+                      - button "Open ChatGPT Image Mar 29, 2025 at 01_01_13 PM.webp" [ref=f1e208]:
+                        - img "ChatGPT Image Mar 29, 2025 at 01 01 13 PM" [ref=f1e210]
+                      - generic [ref=f1e211]:
+                        - button "1" [ref=f1e212]:
+                          - img [ref=f1e213]
+                          - text: "1"
+                        - button "0" [ref=f1e215]:
+                          - img [ref=f1e216]
+                          - text: "0"
+                - button "Open update by Ramanayudu CH" [ref=f1e218] [cursor=pointer]:
+                  - generic [ref=f1e219]:
+                    - link "Ramanayudu CH" [ref=f1e220]:
+                      - /url: /u/ramanayudu_ch
+                      - generic "Ramanayudu CH" [ref=f1e221]:
+                        - img "Ramanayudu CH" [ref=f1e222]
+                    - generic [ref=f1e223]:
+                      - generic [ref=f1e224]:
+                        - generic [ref=f1e226]:
+                          - link "Ramanayudu CH" [ref=f1e227]:
+                            - /url: /u/ramanayudu_ch
+                          - generic [ref=f1e228]: Lead Frontend Developer
+                          - generic [ref=f1e229]: · 21 Jun
+                        - button "Update options" [ref=f1e230]:
+                          - img [ref=f1e231]
+                      - generic [ref=f1e235]:
+                        - text: checking
+                        - 'link "Task: Update the related files" [ref=f1e236]':
+                          - /url: /projects/deepscope-ai?tab=tasks&drawerType=task&drawerId=9fbd8943-e594-473c-8f82-5830851d1d7a
+                      - generic [ref=f1e237]:
+                        - button "1" [ref=f1e238]:
+                          - img [ref=f1e239]
+                          - text: "1"
+                        - button "0" [ref=f1e241]:
+                          - img [ref=f1e242]
+                          - text: "0"
+                - button "Open update by Ramanayudu CH" [ref=f1e244] [cursor=pointer]:
+                  - generic [ref=f1e245]:
+                    - link "Ramanayudu CH" [ref=f1e246]:
+                      - /url: /u/ramanayudu_ch
+                      - generic "Ramanayudu CH" [ref=f1e247]:
+                        - img "Ramanayudu CH" [ref=f1e248]
+                    - generic [ref=f1e249]:
+                      - generic [ref=f1e250]:
+                        - generic [ref=f1e252]:
+                          - link "Ramanayudu CH" [ref=f1e253]:
+                            - /url: /u/ramanayudu_ch
+                          - generic [ref=f1e254]: Lead Frontend Developer
+                          - generic [ref=f1e255]: · 20 Jun
+                        - button "Update options" [ref=f1e256]:
+                          - img [ref=f1e257]
+                      - generic [ref=f1e261]:
+                        - 'link "Task: Update the related files" [ref=f1e262]':
+                          - /url: /projects/deepscope-ai?tab=tasks&drawerType=task&drawerId=9fbd8943-e594-473c-8f82-5830851d1d7a
+                        - text: we are working on this task!!!
+                      - generic [ref=f1e263]:
+                        - button "2" [ref=f1e264]:
+                          - img [ref=f1e265]
+                          - text: "2"
+                        - button "5" [ref=f1e267]:
+                          - img [ref=f1e268]
+                          - text: "5"
+                - button "Open update by Rama" [ref=f1e270] [cursor=pointer]:
+                  - generic [ref=f1e271]:
+                    - link "Rama" [ref=f1e272]:
+                      - /url: /u/ch_rama
+                      - generic "Rama" [ref=f1e273]:
+                        - img "Rama" [ref=f1e274]
+                    - generic [ref=f1e275]:
+                      - generic [ref=f1e276]:
+                        - generic [ref=f1e278]:
+                          - link "Rama" [ref=f1e279]:
+                            - /url: /u/ch_rama
+                          - generic [ref=f1e280]: UI/UX Designer
+                          - generic [ref=f1e281]: · 7 Jun
+                          - generic [ref=f1e282]: Edited
+                        - button "Update options" [ref=f1e283]:
+                          - img [ref=f1e284]
+                      - generic [ref=f1e288]:
+                        - text: hello there I'm just updated
+                        - link "SECURITY.md" [ref=f1e289]:
+                          - /url: /projects/deepscope-ai?tab=files&fileId=9a0966ed-c08c-4b52-98a1-3453fad1e26d
+                        - text: hope you like it!!
+                      - generic [ref=f1e290]:
+                        - button "1" [ref=f1e291]:
+                          - img [ref=f1e292]
+                          - text: "1"
+                        - button "0" [ref=f1e294]:
+                          - img [ref=f1e295]
+                          - text: "0"
+            - complementary [ref=f1e297]:
+              - generic [ref=f1e322]:
+                - generic [ref=f1e323]:
+                  - generic [ref=f1e324]:
+                    - paragraph [ref=f1e325]: Threads
+                    - paragraph [ref=f1e326]: 22 Jun
+                  - button "Close detail" [ref=f1e327] [cursor=pointer]:
+                    - img [ref=f1e328]
+                - article [ref=f1e332]:
+                  - generic [ref=f1e333]:
+                    - link "Ramanayudu CH" [ref=f1e334] [cursor=pointer]:
+                      - /url: /u/ramanayudu_ch
+                      - generic "Ramanayudu CH" [ref=f1e335]:
+                        - img "Ramanayudu CH" [ref=f1e336]
+                    - generic [ref=f1e337]:
+                      - generic [ref=f1e338]:
+                        - link "Ramanayudu CH" [ref=f1e339] [cursor=pointer]:
+                          - /url: /u/ramanayudu_ch
+                        - generic [ref=f1e340]: Lead Frontend Developer
+                      - paragraph [ref=f1e341]:
+                        - text: testing metadeta
+                        - 'link "Task: Update the related files" [ref=f1e342] [cursor=pointer]':
+                          - /url: /projects/deepscope-ai?tab=tasks&drawerType=task&drawerId=9fbd8943-e594-473c-8f82-5830851d1d7a
+                        - text: and
+                        - 'link "Sprint: Sprint 1" [ref=f1e343] [cursor=pointer]':
+                          - /url: /projects/deepscope-ai/sprints/f088c7ff-197e-4181-86f2-0c2754d65b36
+                        - text: and
+                        - link ".first_run" [ref=f1e344] [cursor=pointer]:
+                          - /url: /projects/deepscope-ai?tab=files&fileId=d24410fd-c75d-4113-9305-7ec2262d4bda
+                      - generic [ref=f1e345]:
+                        - generic [ref=f1e346]:
+                          - img [ref=f1e347]
+                          - text: "0"
+                        - generic [ref=f1e349]:
+                          - img [ref=f1e350]
+                          - text: "0"
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=f1e142] [cursor=pointer]:
+    - generic [ref=f1e354]:
+      - text: Compiling
+      - generic [ref=f1e355]:
+        - generic [ref=f1e356]: .
+        - generic [ref=f1e357]: .
+        - generic [ref=f1e358]: .
+  - alert [ref=f1e150]
