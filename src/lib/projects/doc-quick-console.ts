@@ -1,11 +1,11 @@
-import type { ProjectReadmeHeading } from "@/lib/projects/readme";
-import { buildProjectReadmePlainText } from "@/lib/projects/readme-plain-text";
-import { projectReadmeCommandBlockId, projectReadmeCommandLineTargetId } from "@/lib/projects/readme-navigation";
+import type { ProjectDocHeading } from "@/lib/projects/doc";
+import { buildProjectDocPlainText } from "@/lib/projects/doc-plain-text";
+import { projectDocCommandBlockId, projectDocCommandLineTargetId } from "@/lib/projects/doc-navigation";
 
-export type ProjectReadmeCommandTargetKind = "block" | "inline";
-export type ProjectReadmeCommandRiskLevel = "none" | "caution" | "danger";
-export type ProjectReadmeCommandConfidence = "high" | "medium" | "low";
-export type ProjectReadmeCommandGroup =
+export type ProjectDocCommandTargetKind = "block" | "inline";
+export type ProjectDocCommandRiskLevel = "none" | "caution" | "danger";
+export type ProjectDocCommandConfidence = "high" | "medium" | "low";
+export type ProjectDocCommandGroup =
     | "recommended"
     | "install"
     | "claude"
@@ -19,31 +19,31 @@ export type ProjectReadmeCommandGroup =
     | "database"
     | "other";
 
-export type ProjectReadmeQuickCommand = {
+export type ProjectDocQuickCommand = {
     id: string;
     blockId: string;
     targetId: string;
-    targetKind: ProjectReadmeCommandTargetKind;
+    targetKind: ProjectDocCommandTargetKind;
     blockIndex: number;
     commandIndex: number;
     codeLineStart: number | null;
     codeLineEnd: number | null;
     command: string;
     label: string;
-    group: ProjectReadmeCommandGroup;
+    group: ProjectDocCommandGroup;
     groupLabel: string;
     detail: string | null;
     language: string | null;
     heading: string | null;
     platforms: string[];
     ecosystemTags: string[];
-    confidence: ProjectReadmeCommandConfidence;
+    confidence: ProjectDocCommandConfidence;
     confidenceLabel: string;
-    riskLevel: ProjectReadmeCommandRiskLevel;
+    riskLevel: ProjectDocCommandRiskLevel;
     riskLabel: string | null;
 };
 
-export type ProjectReadmeRailReport = {
+export type ProjectDocRailReport = {
     summary: string | null;
     briefItems: Array<{ label: string; value: string }>;
     summaryItems: Array<{ label: string; value: string }>;
@@ -58,10 +58,10 @@ export type ProjectReadmeRailReport = {
     optionCount: number;
 };
 
-export type ProjectReadmeQuickConsoleSummary = {
-    commands: ProjectReadmeQuickCommand[];
-    headings: ProjectReadmeHeading[];
-    report: ProjectReadmeRailReport;
+export type ProjectDocQuickConsoleSummary = {
+    commands: ProjectDocQuickCommand[];
+    headings: ProjectDocHeading[];
+    report: ProjectDocRailReport;
 };
 
 const FENCED_CODE_BLOCK_REGEX = /```([a-zA-Z0-9_-]+)?[^\n]*\n([\s\S]*?)```/g;
@@ -80,7 +80,7 @@ const COMMAND_LANGUAGES = new Set([
 const CONFIG_LANGUAGES = new Set(["json", "jsonc", "toml", "yaml", "yml"]);
 const COMMAND_START_REGEX = /^(?:sudo|npm|pnpm|yarn|bun|npx|node|git|gh|vercel|docker|docker-compose|curl|wget|brew|pip|pipx|python|uv|tsx|ts-node|make|cargo|go|psql|redis-cli|supabase|drizzle-kit|claude|gemini|code|cursor|windsurf|cline|copilot|tessl|cd|cp|mv|mkdir|rm|chmod|chown|export|source|eval|echo|cat|sed|awk|ssh|scp|rsync|tar|unzip|bash|sh|zsh|irm|powershell)\b/i;
 
-export const PROJECT_README_PRIMARY_COMMAND_GROUPS = new Set<ProjectReadmeCommandGroup>([
+export const PROJECT_DOC_PRIMARY_COMMAND_GROUPS = new Set<ProjectDocCommandGroup>([
     "recommended",
     "install",
     "claude",
@@ -93,9 +93,9 @@ export const PROJECT_README_PRIMARY_COMMAND_GROUPS = new Set<ProjectReadmeComman
     "other",
 ]);
 
-type ProjectReadmeCommandTarget = {
+type ProjectDocCommandTarget = {
     id: string;
-    kind: ProjectReadmeCommandTargetKind;
+    kind: ProjectDocCommandTargetKind;
     offset: number;
     line: number;
     blockIndex: number;
@@ -103,14 +103,14 @@ type ProjectReadmeCommandTarget = {
     language: string | null;
 };
 
-type ProjectReadmeExtractedCommand = {
+type ProjectDocExtractedCommand = {
     command: string;
     startLine: number | null;
     endLine: number | null;
 };
 
 function cleanHeadingText(value: string) {
-    const text = buildProjectReadmePlainText(value, { maxLength: 96, stripCodeBlocks: false });
+    const text = buildProjectDocPlainText(value, { maxLength: 96, stripCodeBlocks: false });
     if (!text) return null;
     if (/^(?:align|src|width|height|alt)\b/i.test(text)) return null;
     return text;
@@ -164,7 +164,7 @@ function shouldTreatAsCommandBlock(language: string | null, lines: string[]) {
     return lines.some(isShellLikeCommand);
 }
 
-function splitCopyableCommands(code: string, language: string | null): ProjectReadmeExtractedCommand[] {
+function splitCopyableCommands(code: string, language: string | null): ProjectDocExtractedCommand[] {
     const rawLines = code
         .replace(/\r\n?/g, "\n")
         .split("\n")
@@ -184,7 +184,7 @@ function splitCopyableCommands(code: string, language: string | null): ProjectRe
         }];
     }
 
-    const commands: ProjectReadmeExtractedCommand[] = [];
+    const commands: ProjectDocExtractedCommand[] = [];
     let current: string[] = [];
     let currentStartLine: number | null = null;
     let currentEndLine: number | null = null;
@@ -269,8 +269,8 @@ function lineForOffset(content: string, offset: number) {
     return content.slice(0, offset).split("\n").length;
 }
 
-export function collectProjectReadmeCommandTargets(content: string): ProjectReadmeCommandTarget[] {
-    const candidates: Array<Omit<ProjectReadmeCommandTarget, "id" | "blockIndex">> = [];
+export function collectProjectDocCommandTargets(content: string): ProjectDocCommandTarget[] {
+    const candidates: Array<Omit<ProjectDocCommandTarget, "id" | "blockIndex">> = [];
     const fencedRanges: Array<{ start: number; end: number }> = [];
 
     for (const match of content.matchAll(FENCED_CODE_BLOCK_REGEX)) {
@@ -305,12 +305,12 @@ export function collectProjectReadmeCommandTargets(content: string): ProjectRead
         .sort((a, b) => a.offset - b.offset)
         .map((candidate, blockIndex) => ({
             ...candidate,
-            id: projectReadmeCommandBlockId(blockIndex),
+            id: projectDocCommandBlockId(blockIndex),
             blockIndex,
         }));
 }
 
-export function buildProjectReadmeCommandTargetMaps(content: string) {
+export function buildProjectDocCommandTargetMaps(content: string) {
     const byOffset = new Map<number, string>();
     const byLine = new Map<number, string>();
     const inlineByOffset = new Map<number, string>();
@@ -324,7 +324,7 @@ export function buildProjectReadmeCommandTargetMaps(content: string) {
         map.set(line, list);
     };
 
-    for (const target of collectProjectReadmeCommandTargets(content)) {
+    for (const target of collectProjectDocCommandTargets(content)) {
         const targetOffsetMap = target.kind === "inline" ? inlineByOffset : byOffset;
         const targetLineMap = target.kind === "inline" ? inlineByLine : byLine;
         const targetQueueMap = target.kind === "inline" ? inlineByLineQueue : byLineQueue;
@@ -336,7 +336,7 @@ export function buildProjectReadmeCommandTargetMaps(content: string) {
     return { byOffset, byLine, inlineByOffset, inlineByLine, byLineQueue, inlineByLineQueue };
 }
 
-function inferCommandGroup(command: string, heading: string | null, language: string | null): ProjectReadmeCommandGroup {
+function inferCommandGroup(command: string, heading: string | null, language: string | null): ProjectDocCommandGroup {
     const value = `${heading ?? ""} ${language ?? ""} ${command}`.toLowerCase();
     if (/^--[a-z0-9-]+/.test(command.trim())) return "options";
     if (/\b(start here|quick start|get started|getting started|recommended|one command)\b/.test(value)) return "recommended";
@@ -352,7 +352,7 @@ function inferCommandGroup(command: string, heading: string | null, language: st
     return "other";
 }
 
-export function projectReadmeCommandGroupLabel(group: ProjectReadmeCommandGroup) {
+export function projectDocCommandGroupLabel(group: ProjectDocCommandGroup) {
     switch (group) {
         case "recommended": return "Recommended";
         case "install": return "Install";
@@ -369,7 +369,7 @@ export function projectReadmeCommandGroupLabel(group: ProjectReadmeCommandGroup)
     }
 }
 
-function inferCommandLabel(command: string, heading: string | null, index: number, group: ProjectReadmeCommandGroup) {
+function inferCommandLabel(command: string, heading: string | null, index: number, group: ProjectDocCommandGroup) {
     const value = command.toLowerCase();
     if (group === "recommended") return "Start here";
     if (group === "claude") return "Claude plugin";
@@ -395,7 +395,7 @@ function inferCommandLabel(command: string, heading: string | null, index: numbe
     return index === 0 ? "Command" : `Command ${index + 1}`;
 }
 
-function inferCommandDetail(command: string, heading: string | null, group: ProjectReadmeCommandGroup) {
+function inferCommandDetail(command: string, heading: string | null, group: ProjectDocCommandGroup) {
     const value = command.toLowerCase();
     const headingDetail = usefulHeadingDetail(heading);
     if (group === "options") return headingDetail ? `Option from ${headingDetail}` : "Installer flag";
@@ -445,9 +445,9 @@ function inferCommandConfidence(
     command: string,
     heading: string | null,
     language: string | null,
-    group: ProjectReadmeCommandGroup,
-    targetKind: ProjectReadmeCommandTargetKind,
-): ProjectReadmeCommandConfidence {
+    group: ProjectDocCommandGroup,
+    targetKind: ProjectDocCommandTargetKind,
+): ProjectDocCommandConfidence {
     const normalizedLanguage = language?.toLowerCase() ?? "";
     const hasUsefulContext = Boolean(usefulHeadingDetail(heading));
     if (CONFIG_LANGUAGES.has(normalizedLanguage) && group === "config") return "high";
@@ -459,7 +459,7 @@ function inferCommandConfidence(
     return group === "other" ? "medium" : "high";
 }
 
-function commandConfidenceLabel(confidence: ProjectReadmeCommandConfidence) {
+function commandConfidenceLabel(confidence: ProjectDocCommandConfidence) {
     switch (confidence) {
         case "high": return "Direct match";
         case "medium": return "Review match";
@@ -468,7 +468,7 @@ function commandConfidenceLabel(confidence: ProjectReadmeCommandConfidence) {
     }
 }
 
-function inferCommandRisk(command: string): { riskLevel: ProjectReadmeCommandRiskLevel; riskLabel: string | null } {
+function inferCommandRisk(command: string): { riskLevel: ProjectDocCommandRiskLevel; riskLabel: string | null } {
     const value = command.toLowerCase();
     if (/\brm\s+-[rf]*r[rf]*\b/.test(value) || /\bdd\s+if=/.test(value) || /\bmkfs\b/.test(value) || /\bdrop\s+database\b/.test(value)) {
         return { riskLevel: "danger", riskLabel: "Destructive command" };
@@ -497,9 +497,9 @@ function inferCommandRisk(command: string): { riskLevel: ProjectReadmeCommandRis
     return { riskLevel: "none", riskLabel: null };
 }
 
-export function extractProjectReadmeCommandShortcuts(content: string): ProjectReadmeQuickCommand[] {
-    const commands: ProjectReadmeQuickCommand[] = [];
-    for (const target of collectProjectReadmeCommandTargets(content)) {
+export function extractProjectDocCommandShortcuts(content: string): ProjectDocQuickCommand[] {
+    const commands: ProjectDocQuickCommand[] = [];
+    for (const target of collectProjectDocCommandTargets(content)) {
         const heading = findNearestHeading(content, target.offset);
         const copyableCommands = target.kind === "inline"
             ? [{ command: target.code.trim(), startLine: null, endLine: null }].filter((entry) => Boolean(entry.command))
@@ -510,7 +510,7 @@ export function extractProjectReadmeCommandShortcuts(content: string): ProjectRe
             const risk = inferCommandRisk(command);
             const confidence = inferCommandConfidence(command, heading, target.language, group, target.kind);
             const targetId = target.kind === "block" && copyableCommands.length > 1
-                ? projectReadmeCommandLineTargetId(target.blockIndex, commandIndex)
+                ? projectDocCommandLineTargetId(target.blockIndex, commandIndex)
                 : target.id;
             commands.push({
                 id: `${target.id}-${commandIndex}`,
@@ -524,7 +524,7 @@ export function extractProjectReadmeCommandShortcuts(content: string): ProjectRe
                 command,
                 label: inferCommandLabel(command, heading, commandIndex, group),
                 group,
-                groupLabel: projectReadmeCommandGroupLabel(group),
+                groupLabel: projectDocCommandGroupLabel(group),
                 detail: inferCommandDetail(command, heading, group),
                 language: target.language,
                 heading,
@@ -541,11 +541,11 @@ export function extractProjectReadmeCommandShortcuts(content: string): ProjectRe
 }
 
 function summarizeReadmeContent(content: string, excerpt?: string | null) {
-    return buildProjectReadmePlainText(excerpt, { maxLength: 150 })
-        ?? buildProjectReadmePlainText(content, { maxLength: 150 });
+    return buildProjectDocPlainText(excerpt, { maxLength: 150 })
+        ?? buildProjectDocPlainText(content, { maxLength: 150 });
 }
 
-function inferReadmeNextAction(commands: ProjectReadmeQuickCommand[]) {
+function inferReadmeNextAction(commands: ProjectDocQuickCommand[]) {
     const preferred = commands.find((command) => command.group === "recommended")
         ?? commands.find((command) => command.group === "install" || command.group === "claude" || command.group === "agents")
         ?? commands.find((command) => command.group === "develop")
@@ -554,7 +554,7 @@ function inferReadmeNextAction(commands: ProjectReadmeQuickCommand[]) {
     return `${preferred.label}: ${preferred.command.split("\n")[0]?.trim() ?? preferred.command}`;
 }
 
-function buildUniqueRiskWarnings(commands: ProjectReadmeQuickCommand[]) {
+function buildUniqueRiskWarnings(commands: ProjectDocQuickCommand[]) {
     const warnings = new Set<string>();
     commands.forEach((command) => {
         if (command.riskLevel === "none") return;
@@ -563,7 +563,7 @@ function buildUniqueRiskWarnings(commands: ProjectReadmeQuickCommand[]) {
     return Array.from(warnings).slice(0, 3);
 }
 
-function buildUniquePlatforms(commands: ProjectReadmeQuickCommand[]) {
+function buildUniquePlatforms(commands: ProjectDocQuickCommand[]) {
     const platforms = new Set<string>();
     commands.forEach((command) => {
         command.platforms.forEach((platform) => platforms.add(platform));
@@ -573,14 +573,14 @@ function buildUniquePlatforms(commands: ProjectReadmeQuickCommand[]) {
 
 function buildReadmeLimitations(input: {
     content: string;
-    commands: ProjectReadmeQuickCommand[];
+    commands: ProjectDocQuickCommand[];
     references: unknown[];
-    headings: ProjectReadmeHeading[];
+    headings: ProjectDocHeading[];
 }) {
     const limitations: string[] = [];
-    const hasReadableContent = Boolean(buildProjectReadmePlainText(input.content, { maxLength: 32 }));
+    const hasReadableContent = Boolean(buildProjectDocPlainText(input.content, { maxLength: 32 }));
     if (!hasReadableContent) {
-        limitations.push("README is empty");
+        limitations.push("Doc is empty");
         return limitations;
     }
     if (!input.commands.length) limitations.push("No copyable setup commands detected");
@@ -591,9 +591,9 @@ function buildReadmeLimitations(input: {
 
 function buildReadmeSummaryItems(input: {
     content: string;
-    commands: ProjectReadmeQuickCommand[];
+    commands: ProjectDocQuickCommand[];
     references: unknown[];
-    headings: ProjectReadmeHeading[];
+    headings: ProjectDocHeading[];
 }) {
     const items: Array<{ label: string; value: string }> = [];
     if (input.commands.length) {
@@ -608,7 +608,7 @@ function buildReadmeSummaryItems(input: {
     if (input.references.length) items.push({ label: "Links", value: `${input.references.length} project references` });
     if (input.headings.length) items.push({ label: "Outline", value: `${input.headings.length} sections` });
     if (/\b(?:benchmark|saved|saving|token|report|kvm)\b/i.test(input.content)) {
-        items.push({ label: "Report", value: "README includes measurable results" });
+        items.push({ label: "Report", value: "Doc includes measurable results" });
     }
     return items.slice(0, 4);
 }
@@ -616,9 +616,9 @@ function buildReadmeSummaryItems(input: {
 function buildReadmeBriefItems(input: {
     content: string;
     excerpt?: string | null;
-    commands: ProjectReadmeQuickCommand[];
+    commands: ProjectDocQuickCommand[];
     references: unknown[];
-    headings: ProjectReadmeHeading[];
+    headings: ProjectDocHeading[];
 }) {
     const items: Array<{ label: string; value: string }> = [];
     const purpose = summarizeReadmeContent(input.content, input.excerpt);
@@ -638,7 +638,7 @@ function buildReadmeBriefItems(input: {
     if (nextAction) items.push({ label: "Start here", value: nextAction });
     if (setupCommands.length) items.push({ label: "Setup paths", value: `${setupCommands.length} install or agent setup command${setupCommands.length === 1 ? "" : "s"}` });
     if (platforms.length) items.push({ label: "Platforms", value: platforms.join(", ") });
-    if (input.headings.length) items.push({ label: "Structure", value: `${input.headings.length} README section${input.headings.length === 1 ? "" : "s"}` });
+    if (input.headings.length) items.push({ label: "Structure", value: `${input.headings.length} Doc section${input.headings.length === 1 ? "" : "s"}` });
     if (input.references.length) items.push({ label: "Project links", value: `${input.references.length} linked project item${input.references.length === 1 ? "" : "s"}` });
     if (warnings.length) items.push({ label: "Review", value: warnings.join(", ") });
     if (lowConfidenceCount) items.push({ label: "Check", value: `${lowConfidenceCount} low-confidence command match${lowConfidenceCount === 1 ? "" : "es"}` });
@@ -647,18 +647,18 @@ function buildReadmeBriefItems(input: {
     return items.slice(0, 7);
 }
 
-export function buildProjectReadmeRailReport(input: {
+export function buildProjectDocRailReport(input: {
     content: string;
     excerpt?: string | null;
-    commands: ProjectReadmeQuickCommand[];
+    commands: ProjectDocQuickCommand[];
     references: unknown[];
-    headings: ProjectReadmeHeading[];
-}): ProjectReadmeRailReport {
+    headings: ProjectDocHeading[];
+}): ProjectDocRailReport {
     const lower = input.content.toLowerCase();
     const optionCount = input.commands.filter((command) => command.group === "options").length;
     const riskyCommands = input.commands.filter((command) => command.riskLevel !== "none");
     const limitations = buildReadmeLimitations(input);
-    const hasReadableContent = Boolean(buildProjectReadmePlainText(input.content, { maxLength: 32 }));
+    const hasReadableContent = Boolean(buildProjectDocPlainText(input.content, { maxLength: 32 }));
     const readiness = !hasReadableContent
         ? "empty"
         : input.commands.length || input.references.length || input.headings.length
@@ -690,15 +690,15 @@ export function buildProjectReadmeRailReport(input: {
     };
 }
 
-export function buildProjectReadmeQuickConsoleSummary(
+export function buildProjectDocQuickConsoleSummary(
     content: string,
-    headings: ProjectReadmeHeading[],
-): ProjectReadmeQuickConsoleSummary {
-    const commands = extractProjectReadmeCommandShortcuts(content);
+    headings: ProjectDocHeading[],
+): ProjectDocQuickConsoleSummary {
+    const commands = extractProjectDocCommandShortcuts(content);
     return {
         commands,
         headings,
-        report: buildProjectReadmeRailReport({
+        report: buildProjectDocRailReport({
             content,
             commands,
             headings,
