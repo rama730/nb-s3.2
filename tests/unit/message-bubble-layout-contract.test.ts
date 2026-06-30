@@ -73,6 +73,7 @@ test('rich message content is bounded inside popup message lanes', () => {
     const linkPreview = readProjectFile('src/components/chat/v2/LinkPreviewCard.tsx');
     const structuredCard = readProjectFile('src/components/chat/v2/StructuredMessageCardV2.tsx');
     const rendering = readProjectFile('src/components/chat/v2/message-rendering.tsx');
+    const attachments = readProjectFile('src/components/chat/v2/message-attachments.tsx');
     const chips = readProjectFile('src/components/chat/v2/MessageContextChipRowV2.tsx');
     const reactionBar = readProjectFile('src/components/chat/v2/ReactionQuickBar.tsx');
     const reactionPills = readProjectFile('src/components/chat/v2/ReactionPillRow.tsx');
@@ -91,14 +92,35 @@ test('rich message content is bounded inside popup message lanes', () => {
     assert.match(structuredCard, /msg-rich-content/);
     assert.match(structuredCard, /w-full max-w-full min-w-0/);
     assert.match(rendering, /msg-rich-content/);
-    assert.match(rendering, /w-full max-w-full min-w-0/);
+    assert.match(rendering, /max-w-full min-w-0/);
+    assert.match(attachments, /w-fit min-w-0 max-w-full/);
     assert.match(chips, /min-w-0 max-w-full/);
     assert.match(reactionBar, /msg-reaction-quick-bar/);
     assert.match(cssBlock(css, '.msg-reaction-quick-bar'), /width:\s*max-content/);
     assert.match(cssBlock(css, '.msg-reaction-quick-bar'), /max-width:\s*min\(18rem, calc\(100vw - 2rem\)\)/);
     assert.match(reactionPills, /msg-reaction-row/);
-    assert.match(reactionPills, /w-full min-w-0 max-w-full flex-wrap/);
+    assert.match(reactionPills, /w-fit min-w-0 max-w-full flex-wrap/);
     assert.match(richContent, /overflow:\s*hidden/);
+});
+
+test('popup rich containers use their normal message-card sizing', () => {
+    const bubble = readProjectFile('src/components/chat/v2/MessageBubbleV2.tsx');
+    const application = readProjectFile('src/components/chat/v2/ApplicationSystemCardV2.tsx');
+    const code = readProjectFile('src/components/chat/v2/message-rendering.tsx');
+    const attachments = readProjectFile('src/components/chat/v2/message-attachments.tsx');
+    const linkPreview = readProjectFile('src/components/chat/v2/LinkPreviewCard.tsx');
+    const structured = readProjectFile('src/components/chat/v2/StructuredMessageCardV2.tsx');
+    const contextChips = readProjectFile('src/components/chat/v2/MessageContextChipRowV2.tsx');
+    const reactions = readProjectFile('src/components/chat/v2/ReactionPillRow.tsx');
+    const css = readProjectFile('src/app/globals.css');
+
+    const bubbleShell = cssBlock(css, '.msg-bubble-shell');
+
+    assert.doesNotMatch(bubbleShell, /zoom\s*:|scale\s*:/);
+    assert.doesNotMatch(css, /msg-popup-compact-card/);
+    for (const source of [bubble, application, code, attachments, linkPreview, structured, contextChips, reactions]) {
+        assert.doesNotMatch(source, /msg-popup-compact-card|disablePopupCompaction/);
+    }
 });
 
 test('message thread opens at the rendered latest item', () => {
@@ -115,9 +137,16 @@ test('message thread opens at the rendered latest item', () => {
     assert.match(thread, /canLoadOlderMessages\(\)/);
     assert.match(thread, /const absoluteIndex = firstItemIndex \+ index/);
     assert.match(thread, /startIndex - firstItemIndex/);
-    assert.match(thread, /showAvatar=\{item\.showAvatar\}/);
+    assert.doesNotMatch(thread, /showAvatar/);
     assert.match(anchor, /shouldLoadOlderMessages/);
     assert.doesNotMatch(thread, /followOutput=/);
+});
+
+test('message rows do not render sender profile pictures', () => {
+    const bubble = readProjectFile('src/components/chat/v2/MessageBubbleV2.tsx');
+
+    assert.doesNotMatch(bubble, /UserAvatar/);
+    assert.doesNotMatch(bubble, /showAvatar/);
 });
 
 test('scrolling date headers are keyed rows and loading has a separate row', () => {
@@ -151,7 +180,7 @@ test('scrolling date headers are keyed rows and loading has a separate row', () 
 test('async rich content notifies the single scroll controller', () => {
     const thread = readProjectFile('src/components/chat/v2/MessageThreadV2.tsx');
     const bubble = readProjectFile('src/components/chat/v2/MessageBubbleV2.tsx');
-    const rendering = readProjectFile('src/components/chat/v2/message-rendering.tsx');
+    const attachments = readProjectFile('src/components/chat/v2/message-attachments.tsx');
     const linkPreview = readProjectFile('src/components/chat/v2/LinkPreviewCard.tsx');
 
     assert.match(thread, /autoscrollToBottom\(\)/);
@@ -159,12 +188,30 @@ test('async rich content notifies the single scroll controller', () => {
     assert.match(bubble, /onContentLoad\?: \(\) => void/);
     assert.match(bubble, /renderedLinkPreview/);
     assert.match(bubble, /loading=\{!linkPreview\}/);
-    assert.match(rendering, /onContentLoad\?: \(\) => void/);
-    assert.match(rendering, /aspectRatio/);
-    assert.match(rendering, /src=\{`\$\{currentAttachment\.url\}#view=FitH&toolbar=0&navpanes=0`\}/);
-    assert.match(rendering, /sandbox="allow-scripts allow-same-origin"/);
+    assert.match(attachments, /onContentLoad\?: \(\) => void/);
+    assert.match(attachments, /aspectRatio/);
+    assert.match(attachments, /src=\{`\$\{currentAttachment\.url\}#view=FitH&toolbar=0&navpanes=0`\}/);
+    assert.match(attachments, /sandbox="allow-scripts allow-same-origin"/);
     assert.match(linkPreview, /loading = false/);
     assert.match(linkPreview, /onLoad=\{onContentLoad\}/);
+});
+
+test('message media preserves source aspect ratios from storage through rendering', () => {
+    const attachments = readProjectFile('src/components/chat/v2/message-attachments.tsx');
+    const attachmentRoute = readProjectFile('src/app/api/v1/messages/attachments/[attachmentId]/route.ts');
+    const mediaMetadata = readProjectFile('src/lib/messages/media-metadata.ts');
+
+    assert.match(attachments, /fitMediaWithinBounds/);
+    assert.match(attachments, /object-contain/);
+    assert.doesNotMatch(attachments, /object-cover/);
+    assert.doesNotMatch(attachments, /clampedAspect|Math\.max\(0\.5|Math\.min\(2\.0/);
+    assert.doesNotMatch(attachments, /focus-within:ring|focus:ring/);
+    assert.match(attachmentRoute, /MESSAGE_MEDIA_PREVIEW_MAX_WIDTH/);
+    assert.match(attachmentRoute, /resize:\s*"contain"/);
+    assert.doesNotMatch(attachmentRoute, /resize:\s*"cover"/);
+    assert.doesNotMatch(attachmentRoute, /height:\s*480/);
+    assert.match(mediaMetadata, /maxWidth:\s*320/);
+    assert.match(mediaMetadata, /maxHeight:\s*360/);
 });
 
 test('realtime keeps optimistic messages until a server message is renderable', () => {
