@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { AlertTriangle, Check, TerminalSquare } from "lucide-react";
 
-import { extractProjectReadmeCommandShortcuts } from "@/lib/projects/readme-quick-console";
+import { extractProjectDocCommandShortcuts } from "@/lib/projects/doc-quick-console";
 import { cn } from "@/lib/utils";
 
 type CommandPresetId = "pnpm" | "npm" | "yarn" | "powershell" | "docker" | "git" | "custom";
@@ -105,7 +105,7 @@ function parseSelectedCommandBlock(value: string) {
     };
 }
 
-export function ProjectReadmeCommandBuilder({
+export function ProjectDocCommandBuilder({
     selectedMarkdown = "",
     onInsert,
     onClose,
@@ -120,7 +120,7 @@ export function ProjectReadmeCommandBuilder({
     const [heading, setHeading] = useState(selectedCommand?.heading ?? "Install and run");
     const [command, setCommand] = useState(selectedCommand?.command ?? "pnpm install\npnpm dev");
     const preview = useMemo(() => buildMarkdownCommand(language, heading, command), [command, heading, language]);
-    const inferredCommands = useMemo(() => extractProjectReadmeCommandShortcuts(preview), [preview]);
+    const inferredCommands = useMemo(() => extractProjectDocCommandShortcuts(preview), [preview]);
     const hasCommand = command.trim().length > 0;
 
     const applyPreset = (nextPresetId: CommandPresetId) => {
@@ -144,7 +144,7 @@ export function ProjectReadmeCommandBuilder({
                 <p className="mt-1.5 text-sm leading-6 text-zinc-500">
                     {selectedCommand
                         ? "The selected fenced command is loaded here so you can replace it cleanly."
-                        : "Pick a common command style, edit it, and README will render it with a copy button."}
+                        : "Pick a common command style, edit it, and document will render it with a copy button."}
                 </p>
             </div>
 
