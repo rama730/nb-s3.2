@@ -26,7 +26,14 @@ import { logger } from "@/lib/logger";
 import { useToast } from "@/components/ui-custom/Toast";
 import { useFileVersions } from "@/hooks/useFileVersions";
 import { getVersionSignedUrl } from "@/app/actions/files/versions";
+import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 import type { FileVersion } from "@/lib/db/schema";
+import { VersionPill } from "../VersionPill";
+
+type FileVersionWithUploader = FileVersion & {
+  uploadedByName?: string | null;
+  uploadedByUsername?: string | null;
+};
 
 // ─── Helpers ─────────────────────────────────────────────────────────
 
@@ -46,7 +53,7 @@ function formatDate(date: Date | string | null | undefined): string {
   if (Number.isNaN(value.getTime())) return "—";
   return value.toLocaleString(undefined, {
     dateStyle: "medium",
-    timeStyle: "short",
+    timeStyle: "medium",
   });
 }
 
@@ -64,6 +71,7 @@ export interface FileVersionHistoryPanelProps {
   isDeleted?: boolean;
   /** Optional uploader display names keyed by user id. */
   uploaderNames?: Record<string, string>;
+  onCompareClick?: (versionNumber: number) => void;
 }
 
 // ─── Component ───────────────────────────────────────────────────────
@@ -76,9 +84,10 @@ export function FileVersionHistoryPanel({
   currentVersion,
   isDeleted = false,
   uploaderNames,
+  onCompareClick,
 }: FileVersionHistoryPanelProps): React.JSX.Element {
   const { showToast } = useToast();
-  const { versions, isLoading, error, listVersions, restoreVersion } =
+  const { versions, isLoading, error, listVersions, restoreVersion, deleteVersion } =
     useFileVersions(projectId, nodeId);
 
   const [pendingAction, setPendingAction] = React.useState<string | null>(null);
@@ -86,7 +95,6 @@ export function FileVersionHistoryPanel({
   // ── Fetch versions on mount ────────────────────────────────────────
   React.useEffect(() => {
     void listVersions();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ── Performance mark (Req 17.2) ────────────────────────────────────
@@ -109,22 +117,42 @@ export function FileVersionHistoryPanel({
 
       const actionKey = `restore:${version.id}`;
       setPendingAction(actionKey);
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(
+          new CustomEvent("file:version-changed-start", {
+            detail: { nodeId },
+          }),
+        );
+      }
       try {
         const result = await restoreVersion(version.version);
         if (result.success) {
           showToast(
-            `Restored v${version.version} as v${result.version.version}`,
+            `Restored v${version.version} successfully`,
             "success",
           );
+          
+          if ((result as any).node) {
+            useFilesWorkspaceStore.getState().setNodes(projectId, [(result as any).node]);
+          }
+
+          if (typeof window !== "undefined") {
+            window.dispatchEvent(
+              new CustomEvent("file:version-changed", {
+                detail: { nodeId, version: version.version },
+              }),
+            );
+          }
+
           // Emit telemetry (Req 16.4) — Task 7.5 wires this
           logger.metric("files_tab.version_restored", {
             module: "files-tab",
             projectId,
             nodeId,
             restoredFromVersion: version.version,
-            newVersion: result.version.version,
+            newVersion: version.version,
           });
-          // Refresh the list to show the new version row
+          // Refresh the list to show the updated active version
           await listVersions();
         } else {
           showToast(result.error || "Restore failed", "error");
@@ -170,9 +198,69 @@ export function FileVersionHistoryPanel({
     [projectId, nodeId, nodeName, showToast],
   );
 
+  // ── Delete handler (Lead / Co-Lead) ─────────────────────────────────
+  const handleDelete = React.useCallback(
+    async (version: FileVersion) => {
+      if (isDeleted) return;
+      if (!canEdit) return;
+
+      const confirmDelete = window.confirm(
+        `Are you sure you want to permanently delete version ${version.version}? This will also delete its bytes from S3 and cannot be undone.`
+      );
+      if (!confirmDelete) return;
+
+      const actionKey = `delete:${version.id}`;
+      setPendingAction(actionKey);
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(
+          new CustomEvent("file:version-changed-start", {
+            detail: { nodeId },
+          }),
+        );
+      }
+      try {
+        const result = await deleteVersion(version.version);
+        if (result.success) {
+          showToast(`Deleted version ${version.version} successfully`, "success");
+          
+          if ((result as any).node) {
+            useFilesWorkspaceStore.getState().setNodes(projectId, [(result as any).node]);
+            if (typeof window !== "undefined") {
+              window.dispatchEvent(
+                new CustomEvent("file:version-changed", {
+                  detail: { nodeId, version: (result as any).nextActiveVersion },
+                }),
+              );
+            }
+          }
+          await listVersions();
+        } else {
+          showToast((result as any).error || "Delete failed", "error");
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Delete failed";
+        showToast(message, "error");
+      } finally {
+        setPendingAction(null);
+      }
+    },
+    [canEdit, isDeleted, projectId, nodeId, deleteVersion, listVersions, showToast]
+  );
+
   // ── Uploader label helper ───────────────────────────────────────────
   const uploaderLabel = React.useCallback(
-    (userId: string | null | undefined) => {
+    (version: FileVersionWithUploader) => {
+      const directName =
+        typeof version.uploadedByName === "string"
+          ? version.uploadedByName.trim()
+          : "";
+      if (directName) return directName;
+      const directUsername =
+        typeof version.uploadedByUsername === "string"
+          ? version.uploadedByUsername.trim()
+          : "";
+      if (directUsername) return directUsername;
+      const userId = version.uploadedBy;
       if (!userId) return "Unknown";
       const named = uploaderNames?.[userId];
       if (named) return named;
@@ -201,9 +289,12 @@ export function FileVersionHistoryPanel({
           <History className="h-3.5 w-3.5" aria-hidden="true" />
           Version History
         </h3>
-        <p className="mt-0.5 truncate text-[11px] text-zinc-400 dark:text-zinc-500">
-          {nodeName}
-        </p>
+        <div className="mt-0.5 flex items-center gap-1.5">
+          <p className="truncate text-[11px] text-zinc-400 dark:text-zinc-500">
+            {nodeName}
+          </p>
+          <VersionPill v={currentVersion} className="h-3.5 px-1 text-[9px]" />
+        </div>
       </div>
 
       {/* Soft-deleted banner (Req 10.7, 14.2) */}
@@ -274,7 +365,7 @@ export function FileVersionHistoryPanel({
                         )}
                       </div>
                       <div className="mt-0.5 text-[11px] text-zinc-500 dark:text-zinc-400">
-                        {formatDate(version.uploadedAt)} · {uploaderLabel(version.uploadedBy)}
+                        {formatDate(version.uploadedAt)} · {uploaderLabel(version)}
                       </div>
                       {version.comment && (
                         <div className="mt-1 rounded bg-zinc-50 px-1.5 py-0.5 text-[11px] text-zinc-600 ring-1 ring-zinc-200 dark:bg-zinc-900 dark:text-zinc-300 dark:ring-zinc-800">
@@ -284,13 +375,13 @@ export function FileVersionHistoryPanel({
                     </div>
 
                     {/* Actions */}
-                    <div className="flex flex-col gap-1">
+                    <div className="flex flex-col gap-1 shrink-0">
                       <button
                         type="button"
                         disabled={pendingAction === dlKey}
                         onClick={() => void handleDownload(version)}
                         aria-label={`Download version ${version.version}`}
-                        className="inline-flex items-center gap-0.5 rounded border border-zinc-200 bg-white px-1.5 py-0.5 text-[10px] font-medium text-zinc-700 transition-colors hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                        className="inline-flex items-center justify-center gap-0.5 rounded border border-zinc-200 bg-white px-1.5 py-0.5 text-[10px] font-medium text-zinc-700 transition-colors hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
                       >
                         {pendingAction === dlKey ? (
                           <Loader2 className="h-3 w-3 animate-spin" />
@@ -298,6 +389,17 @@ export function FileVersionHistoryPanel({
                           <Download className="h-3 w-3" />
                         )}
                       </button>
+
+                      {onCompareClick && (
+                        <button
+                          type="button"
+                          onClick={() => onCompareClick(version.version)}
+                          aria-label={`Compare version ${version.version}`}
+                          className="inline-flex items-center justify-center gap-0.5 rounded border border-zinc-200 bg-white px-1.5 py-0.5 text-[10px] font-medium text-zinc-700 transition-colors hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                        >
+                          Compare
+                        </button>
+                      )}
 
                       {/* Restore button: Req 10.4, 10.5, 14.3, 24.2 */}
                       {showRestoreAction && !isCurrent && (
@@ -307,12 +409,29 @@ export function FileVersionHistoryPanel({
                           onClick={() => void handleRestore(version)}
                           aria-label={`Restore version ${version.version}`}
                           data-testid={`version-restore-${version.version}`}
-                          className="inline-flex items-center gap-0.5 rounded border border-indigo-200 bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700 transition-colors hover:bg-indigo-100 disabled:opacity-50 dark:border-indigo-500/30 dark:bg-indigo-500/10 dark:text-indigo-200 dark:hover:bg-indigo-500/20"
+                          className="inline-flex items-center justify-center gap-0.5 rounded border border-indigo-200 bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700 transition-colors hover:bg-indigo-100 disabled:opacity-50 dark:border-indigo-500/30 dark:bg-indigo-500/10 dark:text-indigo-200 dark:hover:bg-indigo-500/20"
                         >
                           {pendingAction === restoreKey ? (
                             <Loader2 className="h-3 w-3 animate-spin" />
                           ) : (
                             <RotateCcw className="h-3 w-3" />
+                          )}
+                        </button>
+                      )}
+
+                      {/* Delete button: Leads/Co-Leads only */}
+                      {canEdit && (
+                        <button
+                          type="button"
+                          disabled={pendingAction === `delete:${version.id}`}
+                          onClick={() => void handleDelete(version)}
+                          aria-label={`Delete version ${version.version}`}
+                          className="inline-flex items-center justify-center gap-0.5 rounded border border-red-200 bg-red-50 px-1.5 py-0.5 text-[10px] font-medium text-red-700 transition-colors hover:bg-red-100 disabled:opacity-50 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-200 dark:hover:bg-red-500/20"
+                        >
+                          {pendingAction === `delete:${version.id}` ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : (
+                            <Trash2 className="h-3 w-3" />
                           )}
                         </button>
                       )}
