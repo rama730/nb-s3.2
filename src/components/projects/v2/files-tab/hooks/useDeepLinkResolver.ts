@@ -23,6 +23,7 @@ import { useEffect, useRef } from "react";
 import type { StartupStage } from "./useFilesTabStartupStage";
 import { useNavigateTo, type NavigateTo } from "./useNavigateTo";
 import { evaluateDeepLinkPath, type DeepLinkEvaluation } from "../url";
+import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 
 // ─── Public result type ──────────────────────────────────────────────
 
@@ -174,11 +175,27 @@ export function useDeepLinkResolver(
     void resolveDeepLinkFromSearch(raw, {
       projectId,
       findNodeByPathAny: lookupRef.current,
-    }).then((result) => {
+    }).then(async (result) => {
       switch (result.kind) {
-        case "ok":
-          navigateRef.current(result.nodeId);
+        case "ok": {
+          const currentNodes = useFilesWorkspaceStore.getState().byProjectId[projectId]?.nodesById || {};
+          if (currentNodes[result.nodeId]) {
+            navigateRef.current(result.nodeId);
+          } else {
+            try {
+              const { getNodeMetadataBatch } = await import("@/app/actions/files/nodes");
+              const batchResult = await getNodeMetadataBatch(projectId, [result.nodeId], { includeBreadcrumbs: true });
+              if (batchResult.success && batchResult.data.nodes.length > 0) {
+                const upsertNodes = useFilesWorkspaceStore.getState().upsertNodes;
+                upsertNodes(projectId, batchResult.data.nodes);
+              }
+            } catch (e) {
+              console.warn("[files-tab] deep-link metadata prefetch failed", e);
+            }
+            navigateRef.current(result.nodeId);
+          }
           return;
+        }
         case "none":
           // No `?path=` → stay at root, no error indicator.
           return;
