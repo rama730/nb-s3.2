@@ -347,7 +347,7 @@ export function V3AttachmentPicker({
   return createPortal(
     <div
       data-composer-portal="true"
-      className="fixed inset-0 z-[100] bg-black/30 flex items-center justify-center p-4"
+      className="fixed inset-0 z-[320] bg-black/30 flex items-center justify-center p-4"
       role="dialog"
       aria-modal="true"
       aria-label="Attachment picker"
