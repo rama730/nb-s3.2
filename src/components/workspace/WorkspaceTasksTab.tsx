@@ -3,6 +3,7 @@
 import React, { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchWorkspaceTasksAction } from "@/app/actions/workspace";
+import { queryKeys } from "@/lib/query-keys";
 import { useUIStore } from "@/lib/stores/ui-store";
 import { Virtuoso } from "react-virtuoso";
 import { Loader2, Inbox, Calendar, Folder } from "lucide-react";
@@ -24,7 +25,7 @@ export default function WorkspaceTasksTab({ isActive = true }: WorkspaceTasksTab
 
     // Fetch tasks, enabled ONLY when drawer is open and tab is active
     const { data, isLoading, error } = useQuery({
-        queryKey: ["workspace", "tasks"],
+        queryKey: queryKeys.workspace.tasks(),
         queryFn: () => fetchWorkspaceTasksAction(),
         enabled: isWorkspaceOpen && isActive,
         staleTime: 30_000,
