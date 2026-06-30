@@ -1,11 +1,11 @@
 import { inngest } from "../client";
 import simpleGit from "simple-git";
 import { db } from "@/lib/db";
-import { projects, projectNodes, projectNodeEvents, projectNodeLocks } from "@/lib/db/schema";
+import { projects, projectNodes, projectNodeEvents, projectNodeLocks, projectGitDeltas, projectNodeConflicts, profiles, importJobFiles, uploadIntents } from "@/lib/db/schema";
 import { eq, and, isNull, lt, sql, inArray } from "drizzle-orm";
 import { createAdminClient } from "@/lib/supabase/server";
 import { tmpdir } from "os";
-import { mkdtemp, rm, readFile, writeFile, mkdir, readdir, stat } from "fs/promises";
+import { mkdtemp, rm, readFile, writeFile, mkdir, readdir, stat, rename } from "fs/promises";
 import { join, relative, dirname } from "path";
 import { pipeline } from "stream/promises";
 import { createWriteStream, createReadStream } from "fs";
@@ -29,6 +29,40 @@ const GIT_COMMAND_TIMEOUT_MS = (() => {
     return Number.isFinite(v) && v >= 30_000 && v <= 120_000 ? Math.floor(v) : 120000;
 })();
 const LOCK_NAMESPACE = "project-git-sync";
+
+function errorMessage(error: unknown) {
+    return error instanceof Error ? error.message : String(error);
+}
+
+function hasNodeErrorCode(error: unknown, code: string) {
+    return !!error && typeof error === "object" && "code" in error
+        && (error as { code?: unknown }).code === code;
+}
+
+async function cleanupTemporaryDirectory(tempDir: string, operation: "push" | "pull") {
+    try {
+        await rm(tempDir, { recursive: true, force: true });
+    } catch (error) {
+        logger.warn("github.sync.temp_cleanup_failed", {
+            module: "git-sync",
+            action: operation,
+            path: tempDir,
+            error: errorMessage(error),
+        });
+    }
+}
+
+async function markGitDeltasFailed(deltaIds: string[], error: unknown) {
+    if (deltaIds.length === 0) return;
+    await db
+        .update(projectGitDeltas)
+        .set({
+            status: "failed",
+            processingError: errorMessage(error).slice(0, 2000),
+            processedAt: new Date(),
+        })
+        .where(inArray(projectGitDeltas.id, deltaIds));
+}
 
 function resolveQueueAgeMs(event: { ts?: string | number | null }) {
     const raw = event.ts;
@@ -153,7 +187,12 @@ async function readLatestCommitSha(tempDir: string): Promise<string | null> {
         });
         const sha = String(stdout || "").trim();
         return sha || null;
-    } catch {
+    } catch (error) {
+        logger.warn("github.sync.commit_sha_unavailable", {
+            module: "git-sync",
+            path: tempDir,
+            error: errorMessage(error),
+        });
         return null;
     }
 }
@@ -180,7 +219,7 @@ export const gitPush = inngest.createFunction(
             queueAgeMs: resolveQueueAgeMs(event as { ts?: string | number | null }),
         });
 
-        await step.run("push-to-github", async () => {
+        const result = await step.run("push-to-github", async () => {
             const [project] = await db
                 .select({
                     githubRepoUrl: projects.githubRepoUrl,
@@ -194,8 +233,8 @@ export const gitPush = inngest.createFunction(
             if (!project?.githubRepoUrl) {
                 throw new Error("No GitHub repository connected");
             }
-
-            const branch = (project.githubDefaultBranch || "main").trim() || "main";
+            const eventData = event.data as any;
+            const targetBranch = eventData.targetBranch || eventData.branch || (project.githubDefaultBranch || "main").trim() || "main";
             const sourceMetadata = ((project.importSource as Record<string, unknown> | null)?.metadata || {}) as Record<string, unknown>;
             const preferredInstallationIdRaw = sourceMetadata.githubInstallationId;
             const preferredInstallationId =
@@ -208,120 +247,308 @@ export const gitPush = inngest.createFunction(
                 sealedImportToken: sourceMetadata.importAuth,
             });
 
+            // Claim pending deltas transactionally
+            const claimedDeltas = await db.transaction(async (tx) => {
+                await tx.execute(sql`SELECT 1 FROM projects WHERE id = ${projectId} FOR UPDATE`);
+
+                const deltas = await tx
+                    .select()
+                    .from(projectGitDeltas)
+                    .where(
+                        and(
+                            eq(projectGitDeltas.projectId, projectId),
+                            eq(projectGitDeltas.targetBranch, targetBranch),
+                            inArray(projectGitDeltas.status, ['pending', 'failed'])
+                        )
+                    )
+                    .orderBy(projectGitDeltas.sequenceNumber, projectGitDeltas.deltaOrder);
+
+                if (deltas.length === 0) return [];
+
+                const deltaIds = deltas.map((d) => d.id);
+                await tx
+                    .update(projectGitDeltas)
+                    .set({
+                        status: 'processing',
+                        processedAt: new Date(),
+                    })
+                    .where(inArray(projectGitDeltas.id, deltaIds));
+
+                return deltas;
+            });
+
+            if (claimedDeltas.length === 0) {
+                logger.metric("github.sync.push.skipped", {
+                    projectId,
+                    reason: "no_pending_deltas",
+                });
+                return { success: true, skipped: "no_pending_deltas" as const };
+            }
+
+            try {
             const tenantLockedRun = await withTenantSyncLock(userId, async () => withProjectSyncLock(projectId, async () => {
+                const cacheDir = `/tmp/nb-bare-cache/${projectId}`;
+                await mkdir("/tmp/nb-bare-cache", { recursive: true });
+
+                let cacheExists = false;
+                try {
+                    const statResult = await stat(cacheDir);
+                    if (statResult.isDirectory()) {
+                        cacheExists = true;
+                    }
+                } catch (error) {
+                    if (!hasNodeErrorCode(error, "ENOENT")) throw error;
+                }
+
+                if (!cacheExists) {
+                    await withGitCredentialEnv(access.token, async (gitEnv) => {
+                        await execFileAsync("git", ["clone", "--bare", project.githubRepoUrl!, cacheDir], {
+                            env: gitEnv,
+                            timeout: GIT_COMMAND_TIMEOUT_MS,
+                        });
+                    });
+                } else {
+                    await withGitCredentialEnv(access.token, async (gitEnv) => {
+                        await execFileAsync("git", ["-C", cacheDir, "fetch", "origin", `${targetBranch}:${targetBranch}`], {
+                            env: gitEnv,
+                            timeout: GIT_COMMAND_TIMEOUT_MS,
+                        }).catch(async () => {
+                            await execFileAsync("git", ["-C", cacheDir, "fetch", "origin"], {
+                                env: gitEnv,
+                                timeout: GIT_COMMAND_TIMEOUT_MS,
+                            });
+                        });
+                    });
+                }
+
                 const tempDir = await mkdtemp(join(tmpdir(), "nb-git-push-"));
 
                 try {
-                    await cloneRepository(project.githubRepoUrl!, tempDir, branch, access.token);
-                    assertRepositoryWithinBudgets(tempDir, { job: "git push", projectId });
+                    await execFileAsync("git", ["clone", cacheDir, tempDir]);
+                    const repoGit = simpleGit(tempDir);
+                    await execFileAsync("git", ["-C", tempDir, "checkout", "-B", targetBranch]);
+
                     const adminClient = await createAdminClient();
 
-                    const activeNodes = await db
-                        .select({
-                            id: projectNodes.id,
-                            name: projectNodes.name,
-                            parentId: projectNodes.parentId,
-                            type: projectNodes.type,
-                            s3Key: projectNodes.s3Key,
-                            gitHash: projectNodes.gitHash,
-                        })
-                        .from(projectNodes)
-                        .where(
-                            and(
-                                eq(projectNodes.projectId, projectId),
-                                isNull(projectNodes.deletedAt),
-                            ),
-                        );
-
-                    const nodesById = new Map(
-                        activeNodes.map((n) => [n.id, { name: n.name, parentId: n.parentId }]),
-                    );
-                    const repoFiles = new Set<string>();
-                    for await (const file of walkDir(tempDir)) {
-                        repoFiles.add(file);
+                    for (const delta of claimedDeltas) {
+                        const targetPath = resolvePathUnderRoot(tempDir, delta.path, "delta path");
+                        if (delta.action === "add" || delta.action === "modify") {
+                            if (!delta.s3Key) {
+                                throw new Error(`Missing s3Key for delta: ${delta.id}`);
+                            }
+                            await mkdir(dirname(targetPath), { recursive: true });
+                            const { data, error } = await adminClient.storage
+                                .from("project-files")
+                                .download(delta.s3Key);
+                            if (error || !data) {
+                                throw new Error(`Failed to download file content from S3: ${error?.message || "Empty content"}`);
+                            }
+                            const contentBuffer = Buffer.from(await data.arrayBuffer());
+                            await writeFile(targetPath, contentBuffer);
+                        } else if (delta.action === "rename") {
+                            if (!delta.oldPath) {
+                                throw new Error(`Missing oldPath for rename delta: ${delta.id}`);
+                            }
+                            const oldPath = resolvePathUnderRoot(tempDir, delta.oldPath, "delta oldPath");
+                            await mkdir(dirname(targetPath), { recursive: true });
+                            try {
+                                await rename(oldPath, targetPath);
+                            } catch (error) {
+                                throw new Error(
+                                    `Failed to apply rename delta ${delta.id}: ${errorMessage(error)}`,
+                                    { cause: error },
+                                );
+                            }
+                        } else if (delta.action === "delete") {
+                            await rm(targetPath, { force: true });
+                        }
                     }
 
-                    const fileNodes = activeNodes.filter((n) => n.type === "file" && n.s3Key);
-                    await runWithConcurrency(fileNodes, GITHUB_WORKER_BUDGETS.applyConcurrency, async (node) => {
-                        const filePath = buildNodePath(node.id, nodesById);
-                        const targetPath = resolvePathUnderRoot(tempDir, filePath, "workspace file path");
-                        repoFiles.delete(filePath);
+                    const [profile] = await db
+                        .select({ username: profiles.username })
+                        .from(profiles)
+                        .where(eq(profiles.id, userId))
+                        .limit(1);
+                    const username = profile?.username || "collaborator";
+                    await repoGit.addConfig("user.name", username);
+                    await repoGit.addConfig("user.email", `${username}@users.noreply.nb.app`);
 
-                        await mkdir(dirname(targetPath), { recursive: true });
-
-                        const { data, error } = await adminClient.storage
-                            .from("project-files")
-                            .download(node.s3Key!);
-
-                        if (error) {
-                            logger.warn("github.sync.push.storage.download_failed", {
-                                projectId,
-                                s3Key: node.s3Key,
-                                error: error.message,
-                            });
-                            return;
-                        }
-
-                        if (!data) {
-                            logger.warn("github.sync.push.storage.empty_data", {
-                                projectId,
-                                nodeId: node.id,
-                                filePath,
-                                s3Key: node.s3Key,
-                            });
-                            return;
-                        }
-
-                        let existingHash: string | null = null;
-                        try {
-                            const hashStream = createHash("sha256");
-                            await pipeline(createReadStream(targetPath), hashStream);
-                            existingHash = hashStream.digest("hex");
-                        } catch {
-                            // Missing or unreadable file
-                        }
-
-                        if (existingHash === node.gitHash) {
-                            return; // Already matched database version
-                        }
-
-                        const writeStream = createWriteStream(targetPath);
-                        await pipeline(Readable.fromWeb(data.stream() as any), writeStream);
-                    });
-
-                    await runWithConcurrency(
-                        Array.from(repoFiles),
-                        GITHUB_WORKER_BUDGETS.applyConcurrency,
-                        async (repoFilePath) => {
-                            const targetPath = resolvePathUnderRoot(tempDir, repoFilePath, "workspace removal path");
-                            await rm(targetPath, { force: true }).catch(() => {});
-                        },
-                    );
-
-                    const repoGit = simpleGit(tempDir);
-                    await repoGit.addConfig("user.email", "bot@networkbuilders.local");
-                    await repoGit.addConfig("user.name", "Network Builders Bot");
                     await repoGit.add(".");
-
                     const status = await repoGit.status();
                     if (status.files.length === 0) {
+                        // Mark claimed deltas processed since no changes exist in commit
+                        const deltaIds = claimedDeltas.map((d) => d.id);
+                        await db
+                            .update(projectGitDeltas)
+                            .set({
+                                status: 'processed',
+                                processedAt: new Date(),
+                            })
+                            .where(inArray(projectGitDeltas.id, deltaIds));
+
                         await db
                             .update(projects)
                             .set({
                                 githubLastSyncAt: new Date(),
                             })
                             .where(eq(projects.id, projectId));
-                        logger.metric("github.sync.push.skipped", {
-                            projectId,
-                            reason: "no_changes",
-                        });
+                        
                         return { success: true, skipped: "no_changes" as const };
                     }
 
                     await repoGit.commit(commitMessage || "Update from NB workspace");
-                    await pushRepository(tempDir, branch, access.token);
+
+                    await withGitCredentialEnv(access.token, async (gitEnv) => {
+                        await execFileAsync("git", ["-C", tempDir, "fetch", "origin", targetBranch], {
+                            env: gitEnv,
+                            timeout: GIT_COMMAND_TIMEOUT_MS,
+                        });
+                    });
+
+                    let hasConflicts = false;
+                    try {
+                        await execFileAsync("git", ["-C", tempDir, "rebase", `origin/${targetBranch}`], {
+                            timeout: GIT_COMMAND_TIMEOUT_MS,
+                        });
+                    } catch (rebaseError: any) {
+                        hasConflicts = true;
+                        const { stdout: conflictFilesStr } = await execFileAsync("git", ["-C", tempDir, "diff", "--name-only", "--diff-filter=U"]);
+                        const conflictFiles = conflictFilesStr.split(/\r?\n/).filter(Boolean);
+
+                        for (const filePath of conflictFiles) {
+                            const fullPath = resolvePathUnderRoot(tempDir, filePath, "conflict file");
+                            let mergedContent = "";
+                            try {
+                                mergedContent = await readFile(fullPath, "utf8");
+                            } catch (error) {
+                                logger.warn("github.sync.conflict_merged_read_failed", {
+                                    module: "git-sync",
+                                    projectId,
+                                    path: filePath,
+                                    error: errorMessage(error),
+                                });
+                            }
+
+                            let canonicalContent = "";
+                            let incomingContent = "";
+                            try {
+                                const { stdout: ours } = await execFileAsync("git", ["-C", tempDir, "show", `:2:${filePath}`]);
+                                canonicalContent = ours;
+                            } catch (error) {
+                                logger.warn("github.sync.conflict_canonical_read_failed", {
+                                    module: "git-sync",
+                                    projectId,
+                                    path: filePath,
+                                    error: errorMessage(error),
+                                });
+                            }
+                            try {
+                                const { stdout: theirs } = await execFileAsync("git", ["-C", tempDir, "show", `:3:${filePath}`]);
+                                incomingContent = theirs;
+                            } catch (error) {
+                                logger.warn("github.sync.conflict_incoming_read_failed", {
+                                    module: "git-sync",
+                                    projectId,
+                                    path: filePath,
+                                    error: errorMessage(error),
+                                });
+                            }
+
+                            const nodePath = `/${filePath}`;
+                            const node = await db.query.projectNodes.findFirst({
+                                where: and(
+                                    eq(projectNodes.projectId, projectId),
+                                    eq(projectNodes.path, nodePath),
+                                    isNull(projectNodes.deletedAt)
+                                )
+                            });
+
+                            if (node) {
+                                await db.insert(projectNodeConflicts).values({
+                                    projectId,
+                                    nodeId: node.id,
+                                    taskId: claimedDeltas[0]?.taskId || null,
+                                    gitBranch: targetBranch,
+                                    canonicalContent,
+                                    incomingContent,
+                                    mergedContent,
+                                    conflictStatus: 'unresolved',
+                                    createdAt: new Date(),
+                                });
+                            }
+                        }
+
+                        try {
+                            await execFileAsync("git", ["-C", tempDir, "rebase", "--abort"]);
+                        } catch (error) {
+                            logger.warn("github.sync.rebase_abort_failed", {
+                                module: "git-sync",
+                                projectId,
+                                error: errorMessage(error),
+                            });
+                        }
+                    }
+
+                    if (hasConflicts) {
+                        const deltaIds = claimedDeltas.map((d) => d.id);
+                        await db
+                            .update(projectGitDeltas)
+                            .set({
+                                status: 'conflict',
+                                processingError: 'Rebase conflict',
+                                processedAt: new Date(),
+                            })
+                            .where(inArray(projectGitDeltas.id, deltaIds));
+
+                        return { success: false, conflict: true };
+                    }
+
+                    await withGitCredentialEnv(access.token, async (gitEnv) => {
+                        await execFileAsync("git", ["-C", tempDir, "push", "origin", targetBranch], {
+                            env: gitEnv,
+                            timeout: GIT_COMMAND_TIMEOUT_MS,
+                        });
+                    });
 
                     const latestSha = await readLatestCommitSha(tempDir);
+
+                    // Update bare cache
+                    await withGitCredentialEnv(access.token, async (gitEnv) => {
+                        await execFileAsync("git", ["-C", cacheDir, "fetch", "origin", `${targetBranch}:${targetBranch}`], {
+                            env: gitEnv,
+                            timeout: GIT_COMMAND_TIMEOUT_MS,
+                        }).catch((error) => {
+                            logger.warn("github.sync.cache_refresh_failed", {
+                                module: "git-sync",
+                                projectId,
+                                error: errorMessage(error),
+                            });
+                        });
+                    });
+
+                    // Mark deltas as processed
+                    const deltaIds = claimedDeltas.map((d) => d.id);
+                    await db
+                        .update(projectGitDeltas)
+                        .set({
+                            status: 'processed',
+                            processedCommitSha: latestSha,
+                            processedAt: new Date(),
+                        })
+                        .where(inArray(projectGitDeltas.id, deltaIds));
+
+                    // Update projectNodes to git_synced
+                    const nodeIdsToUpdate = claimedDeltas.map((d) => d.nodeId).filter((id): id is string => !!id);
+                    if (nodeIdsToUpdate.length > 0) {
+                        await db
+                            .update(projectNodes)
+                            .set({
+                                syncStatus: 'merged',
+                                lastSyncedCommitSha: latestSha,
+                                updatedAt: new Date(),
+                            })
+                            .where(inArray(projectNodes.id, nodeIdsToUpdate));
+                    }
 
                     await db
                         .update(projects)
@@ -338,7 +565,7 @@ export const gitPush = inngest.createFunction(
                         metadata: {
                             commitMessage,
                             commitSha: latestSha,
-                            fileCount: fileNodes.length,
+                            fileCount: claimedDeltas.length,
                             authSource: access.source,
                             installationId: access.installationId,
                         },
@@ -353,11 +580,18 @@ export const gitPush = inngest.createFunction(
 
                     return { success: true, commitSha: latestSha };
                 } finally {
-                    await rm(tempDir, { recursive: true, force: true }).catch(() => {});
+                    await cleanupTemporaryDirectory(tempDir, "push");
                 }
             }));
 
             if (tenantLockedRun.skipped) {
+                // Return deltas back to pending
+                const deltaIds = claimedDeltas.map((d) => d.id);
+                await db
+                    .update(projectGitDeltas)
+                    .set({ status: 'pending' })
+                    .where(inArray(projectGitDeltas.id, deltaIds));
+
                 logger.metric("github.sync.push.skipped", {
                     projectId,
                     reason: "tenant-concurrency",
@@ -365,6 +599,13 @@ export const gitPush = inngest.createFunction(
                 return { success: true, skipped: "tenant_in_progress" as const };
             }
             if (tenantLockedRun.value?.skipped) {
+                // Return deltas back to pending
+                const deltaIds = claimedDeltas.map((d) => d.id);
+                await db
+                    .update(projectGitDeltas)
+                    .set({ status: 'pending' })
+                    .where(inArray(projectGitDeltas.id, deltaIds));
+
                 logger.metric("github.sync.push.skipped", {
                     projectId,
                     reason: "lock-in-progress",
@@ -372,7 +613,18 @@ export const gitPush = inngest.createFunction(
                 return { success: true, skipped: "in_progress" as const };
             }
             return tenantLockedRun.value?.value;
+            } catch (error) {
+                await markGitDeltasFailed(claimedDeltas.map((delta) => delta.id), error);
+                logger.error("github.sync.push.failed", {
+                    module: "git-sync",
+                    projectId,
+                    error: errorMessage(error),
+                });
+                throw error;
+            }
         });
+
+        return result;
     },
 );
 
@@ -694,7 +946,7 @@ export const gitPull = inngest.createFunction(
                         deletedFiles: deletedCount,
                     };
                 } finally {
-                    await rm(tempDir, { recursive: true, force: true }).catch(() => {});
+                    await cleanupTemporaryDirectory(tempDir, "pull");
                 }
             }));
 
@@ -719,6 +971,69 @@ export const gitPull = inngest.createFunction(
             return tenantLockedRun.value?.value;
         });
     },
+);
+
+export const uploadIntentCleanup = inngest.createFunction(
+    { id: "upload-intent-cleanup" },
+    { cron: "*/15 * * * *" },
+    async ({ step }) => {
+        await step.run("cleanup-expired-intents", async () => {
+            const now = new Date();
+            const expiredIntents = await db
+                .select({
+                    id: uploadIntents.id,
+                    bucket: uploadIntents.bucket,
+                    storageKey: uploadIntents.storageKey,
+                })
+                .from(uploadIntents)
+                .where(
+                    and(
+                        eq(uploadIntents.status, "pending"),
+                        lt(uploadIntents.expiresAt, now)
+                    )
+                );
+
+            if (expiredIntents.length === 0) return;
+
+            const adminClient = await createAdminClient();
+            const bucketKeysMap: Record<string, string[]> = {};
+            for (const intent of expiredIntents) {
+                if (!bucketKeysMap[intent.bucket]) {
+                    bucketKeysMap[intent.bucket] = [];
+                }
+                bucketKeysMap[intent.bucket]!.push(intent.storageKey);
+            }
+
+            // Clean up from S3
+            for (const [bucket, keys] of Object.entries(bucketKeysMap)) {
+                try {
+                    await adminClient.storage.from(bucket).remove(keys);
+                } catch (err) {
+                    logger.error("upload_intent.cleanup_storage_failed", {
+                        module: "git-sync",
+                        bucket,
+                        error: errorMessage(err),
+                    });
+                }
+            }
+
+            const intentIds = expiredIntents.map((i) => i.id);
+
+            // Update any importJobFiles reference first to mark them failed
+            await db
+                .update(importJobFiles)
+                .set({
+                    status: 'failed',
+                    errorMessage: 'Upload intent expired and cleaned up',
+                })
+                .where(inArray(importJobFiles.uploadIntentId, intentIds));
+
+            // Delete upload intents
+            await db
+                .delete(uploadIntents)
+                .where(inArray(uploadIntents.id, intentIds));
+        });
+    }
 );
 
 export const lockCleanup = inngest.createFunction(
