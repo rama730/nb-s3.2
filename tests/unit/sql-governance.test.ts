@@ -13,11 +13,23 @@ function write(filePath: string, content: string) {
 
 function writeManifest(rootDir: string, existingMigrationFiles: string[], allowedUtilitySqlFiles: string[] = []) {
   write(
+    path.join(rootDir, "drizzle/meta/_journal.json"),
+    JSON.stringify({
+      entries: existingMigrationFiles.map((file, idx) => ({
+        idx,
+        version: "7",
+        when: idx + 1,
+        tag: path.basename(file, ".sql"),
+        breakpoints: true,
+      })),
+    }),
+  );
+  write(
     path.join(rootDir, "standards/sql-governance.manifest.json"),
     JSON.stringify(
       {
         policyVersion: 1,
-        defaultChangeKind: "remigration",
+        defaultChangeKind: "append_only",
         migrationDirectory: "drizzle",
         existingMigrationFiles,
         allowedUtilitySqlFiles,
@@ -48,6 +60,6 @@ describe("check-sql-governance script", () => {
 
     const result = validateSqlGovernance(tmp);
     assert.ok(result.errors.length > 0, "Expected violations but none were reported");
-    assert.ok(result.errors.some((line) => line.includes("new migration file detected")));
+    assert.ok(result.errors.some((line) => line.includes("unapproved migration file")));
   });
 });
