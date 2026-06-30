@@ -147,6 +147,8 @@ This step expects:
 - a recent `.e2e-last-run-id`
 - rollout promotion env vars when `check:hardening-rollout` is used
 
+The rollout command is fail-closed: it requires an explicit target, a completed production E2E run id, and the required stability window. Credentialed E2E must use a disposable `E2E_DATABASE_URL` distinct from `DATABASE_URL`; migration replay similarly requires `DATABASE_URL_FRESH`.
+
 ## 7. Produce the final 1M-readiness decision
 
 Report only:
