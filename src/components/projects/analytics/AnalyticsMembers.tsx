@@ -71,7 +71,7 @@ export function AnalyticsMembers({
                         <button
                             key={member.person.id}
                             type="button"
-                            onClick={() => onSelectMember(member.person.id)}
+                            onClick={() => onSelectMember(member.person.username || member.person.id)}
                             className="rounded-xl border border-zinc-200 bg-white p-2.5 text-left transition hover:border-blue-300 hover:shadow-sm dark:border-zinc-800 dark:bg-zinc-950 dark:hover:border-blue-500"
                         >
                             <div className="flex items-center gap-2.5">
