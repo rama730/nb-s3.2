@@ -34,7 +34,6 @@ import { refreshConversationCache } from '@/lib/messages/v2-refresh';
 import { getEffectiveMessageAttentionUnreadCount } from '@/lib/messages/attention';
 import { isTemporaryMessageId } from '@/lib/messages/utils';
 import { queryKeys } from '@/lib/query-keys';
-import { deleteMessageV2 } from '@/app/actions/messaging/v2';
 import { ConversationHeaderV2 } from './ConversationHeaderV2';
 import { ConversationListV2 } from './ConversationListV2';
 import { DropZoneOverlay } from './DropZoneOverlay';
@@ -658,36 +657,6 @@ export function MessagesWorkspaceV2({
         });
     }, [pinMessage, selectedConversationId]);
 
-    const handleBulkDelete = useCallback(async (messageIds: string[]) => {
-        if (!selectedConversationId || messageIds.length === 0) return;
-
-        const persistentMessageIds = messageIds.filter((messageId) => !isTemporaryMessageId(messageId));
-        if (persistentMessageIds.length === 0) {
-            toast.info('Queued messages can be removed from their message status');
-            return;
-        }
-
-        try {
-            const results = await Promise.all(
-                persistentMessageIds.map((messageId) => deleteMessageV2(messageId, 'me')),
-            );
-            const failed = results.filter((result) => !result.success);
-            if (failed.length > 0) {
-                toast.error(failed[0]?.error || 'Failed to delete some messages');
-                return;
-            }
-
-            await refreshConversationCache(queryClient, selectedConversationId, { includeUnread: true });
-            toast.success(
-                persistentMessageIds.length === 1
-                    ? 'Message deleted'
-                    : `${persistentMessageIds.length} messages deleted`,
-            );
-        } catch (error) {
-            toast.error(error instanceof Error ? error.message : 'Failed to delete messages');
-        }
-    }, [queryClient, selectedConversationId]);
-
     const handlePrefetchConversation = useCallback((conversationId: string) => {
         const existing = queryClient.getQueryData(queryKeys.messages.v2.thread(conversationId));
         if (existing) return;
@@ -950,7 +919,6 @@ export function MessagesWorkspaceV2({
                                 <MessageThreadV2
                                     key={selectedConversationId!}
                                     conversationId={selectedConversationId!}
-                                    conversationType={activeConversation.type}
                                     messages={thread.messages}
                                     pinnedMessages={thread.pinnedMessages}
                                     typingUsers={activeTypingUsers}
@@ -966,7 +934,6 @@ export function MessagesWorkspaceV2({
                                     onLoadMore={handleThreadLoadMore}
 	                                    onReply={handleReply}
 	                                    onTogglePin={handleTogglePin}
-                                        onBulkDelete={handleBulkDelete}
 	                                    onVisibleReadWatermark={handleVisibleReadWatermark}
                                     onClearFocusTarget={clearMessageFocus}
                                     onRequestMessageContext={async (messageId) => {
