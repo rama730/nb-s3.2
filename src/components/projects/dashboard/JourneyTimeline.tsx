@@ -38,6 +38,25 @@ export const JourneyTimeline = memo(function JourneyTimeline({
     const reduceMotion = useReducedMotionPreference();
     const scrollContainerRef = useRef<HTMLDivElement>(null);
     const [timelineWidth, setTimelineWidth] = useState(0);
+    const [activeStageLimit, setActiveStageLimit] = useState(hasAnimated ? currentStageIndex : 0);
+
+    // Synchronize activeStageLimit step-by-step with currentStageIndex to match progress line animation
+    useEffect(() => {
+        if (activeStageLimit === currentStageIndex) return;
+
+        const stepDelay = hasAnimated ? 300 : 250;
+        const timer = setTimeout(() => {
+            setActiveStageLimit((prev) => {
+                if (prev < currentStageIndex) {
+                    return prev + 1;
+                } else {
+                    return prev - 1;
+                }
+            });
+        }, stepDelay);
+
+        return () => clearTimeout(timer);
+    }, [currentStageIndex, activeStageLimit, hasAnimated]);
 
     useEffect(() => {
         const container = scrollContainerRef.current;
@@ -62,6 +81,9 @@ export const JourneyTimeline = memo(function JourneyTimeline({
         const container = scrollContainerRef.current;
         if (!container || currentStageIndex <= 2) return;
 
+        const delay = hasAnimated ? 50 : 1100;
+        const behavior = hasAnimated ? "auto" : "smooth";
+
         const scrollTimer = setTimeout(() => {
             // Find active stage item dynamically using data-stage-index
             const activeChild = container.querySelector(`[data-stage-index="${currentStageIndex}"]`) as HTMLElement;
@@ -70,13 +92,13 @@ export const JourneyTimeline = memo(function JourneyTimeline({
                 const targetScrollLeft = activeChild.offsetLeft - (container.clientWidth / 2) + (activeChild.clientWidth / 2);
                 container.scrollTo({
                     left: targetScrollLeft,
-                    behavior: "smooth",
+                    behavior,
                 });
             }
-        }, 1100);
+        }, delay);
 
         return () => clearTimeout(scrollTimer);
-    }, [currentStageIndex]);
+    }, [currentStageIndex, hasAnimated]);
 
     const containerStyle = useMemo(() => {
         if (stages.length > 5) {
@@ -218,8 +240,8 @@ export const JourneyTimeline = memo(function JourneyTimeline({
                             />
                         )}
                         {stages.map((stage: string, index: number) => {
-                            const isCompleted = index < currentStageIndex;
-                            const isCurrent = index === currentStageIndex;
+                            const isCompleted = index < activeStageLimit;
+                            const isCurrent = index === activeStageLimit;
 
                             const widthClass = stages.length > 5
                                 ? "flex-shrink-0"
