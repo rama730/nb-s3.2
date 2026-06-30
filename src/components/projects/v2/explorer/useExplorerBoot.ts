@@ -7,6 +7,7 @@ import {
   getProjectBatchNodes,
   
   getProjectTreeFlat,
+  initializeProjectWorkspaceRoot,
 } from "@/app/actions/files/nodes";
 import { filesParentKey, useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 import type { ProjectNode } from "@/lib/db/schema";
@@ -25,7 +26,7 @@ export function useExplorerBoot(options: {
   syncStatus?: string;
   showToast: (msg: string, type: "success" | "error" | "info") => void;
 }) {
-  const { projectId, isActive, syncStatus, showToast } = options;
+  const { projectId, canEdit, isActive, syncStatus, showToast } = options;
 
   const [isBooting, setIsBooting] = useState(true);
   const [accessError, setAccessError] = useState<string | null>(null);
@@ -44,6 +45,7 @@ export function useExplorerBoot(options: {
   const setFolderMeta = useFilesWorkspaceStore((s) => s.setFolderMeta);
   const setTaskLinkCounts = useFilesWorkspaceStore((s) => s.setTaskLinkCounts);
   const toggleExpanded = useFilesWorkspaceStore((s) => s.toggleExpanded);
+  const batchUpdateStore = useFilesWorkspaceStore((s) => s.batchUpdateStore);
 
   const bootedRef = useRef(false);
   const batchLoadedRef = useRef(false);
@@ -224,8 +226,6 @@ export function useExplorerBoot(options: {
         if (!isActiveRef.current) return;
 
         if (isComplete && allNodes && allNodes.length > 0) {
-          upsertNodes(projectId, allNodes);
-
           const grouped: Record<string, string[]> = {};
           allNodes.forEach(n => {
             const parentKey = filesParentKey(n.parentId);
@@ -233,19 +233,42 @@ export function useExplorerBoot(options: {
             grouped[parentKey].push(n.id);
           });
 
-          Object.entries(grouped).forEach(([parentKey, childIds]) => {
+          const payloads = Object.entries(grouped).map(([parentKey, childIds]) => {
             const pid = parentKey === "__root__" ? null : parentKey;
             const dedupedChildIds = Array.from(new Set(childIds));
-            setChildren(projectId, pid, dedupedChildIds);
-            markChildrenLoaded(projectId, pid);
-            setFolderMeta(projectId, pid, { nextCursor: null, hasMore: false });
+            return {
+              parentId: pid,
+              childIds: dedupedChildIds,
+              nextCursor: null,
+              hasMore: false,
+              loaded: true
+            };
           });
 
           // Also mark root as loaded if it was empty
-          if (!grouped["__root__"]) markChildrenLoaded(projectId, null);
+          if (!grouped["__root__"]) {
+            payloads.push({
+              parentId: null,
+              childIds: [],
+              nextCursor: null,
+              hasMore: false,
+              loaded: true
+            });
+          }
+
+          batchUpdateStore(projectId, payloads, allNodes);
+
+          // Fetch task link counts for all loaded files (Req 7.1)
+          const fileIds = allNodes.filter((n) => n.type === "file").map((n) => n.id);
+          if (fileIds.length > 0) {
+            const counts = await getTaskLinkCounts(projectId, fileIds);
+            setTaskLinkCounts(projectId, counts);
+          }
         } else {
-          // If project is completely empty (no system root yet), fallback to loadFolderContent 
-          // because it has the `ensureSystemRootFolder` auto-creation logic.
+          // Provisioning is an explicit command so directory reads remain side-effect free.
+          if (canEdit) {
+            await initializeProjectWorkspaceRoot(projectId);
+          }
           await loadFolderContent(null, "refresh");
         }
       } catch (e) {
@@ -276,7 +299,7 @@ export function useExplorerBoot(options: {
     } else {
       setIsBooting(false);
     }
-  }, [projectId, loadFolderContent, toggleExpanded]);
+  }, [canEdit, projectId, loadFolderContent, toggleExpanded]);
 
   useEffect(() => {
     if (!isActive) return;
@@ -337,11 +360,18 @@ export function useExplorerBoot(options: {
           markChildrenLoaded(projectId, pid);
           setFolderMeta(projectId, pid, { nextCursor: null, hasMore: false });
         });
+
+        // Fetch task link counts for all loaded files (Req 7.1)
+        const fileIds = allNodes.filter((n) => n.type === "file").map((n) => n.id);
+        if (fileIds.length > 0) {
+          const counts = await getTaskLinkCounts(projectId, fileIds);
+          setTaskLinkCounts(projectId, counts);
+        }
       } catch (e) {
         console.error("Batch hydration failed", e);
       }
     })();
-  }, [isActive, projectId, upsertNodes, setChildren, markChildrenLoaded, setFolderMeta]);
+  }, [isActive, projectId, upsertNodes, setChildren, markChildrenLoaded, setFolderMeta, setTaskLinkCounts]);
 
   // 3. User Interaction Expansion (Lazy Load)
   const handleToggleFolder = useCallback(
