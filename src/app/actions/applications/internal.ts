@@ -1150,7 +1150,7 @@ export async function getApplicationStatusAction(projectId: string): Promise<App
                 if (application.decisionBy === user.id) {
                     return {
                         status: 'rejected',
-                        roleId: application.roleId,
+                        roleId: application.roleId || undefined,
                         roleTitle,
                         decisionReason,
                         lifecycleStatus,
@@ -1161,7 +1161,7 @@ export async function getApplicationStatusAction(projectId: string): Promise<App
                 const { canApply, waitTime } = calculateCooldown(application.updatedAt);
                 return {
                     status: 'rejected',
-                    roleId: application.roleId,
+                    roleId: application.roleId || undefined,
                     roleTitle,
                     decisionReason,
                     lifecycleStatus,
@@ -1183,7 +1183,7 @@ export async function getApplicationStatusAction(projectId: string): Promise<App
 
             return {
                 status: application.status as ApplicationCoreStatus,
-                roleId: application.roleId,
+                roleId: application.roleId || undefined,
                 roleTitle,
                 decisionReason,
                 lifecycleStatus,
@@ -1591,7 +1591,7 @@ export async function acceptApplicationAction(
                         user.id,
                         applicationId,
                         application.projectId,
-                        application.roleId,
+                        application.roleId || "",
                         application.project?.title || 'Project',
                         application.role?.title || application.role?.role || 'Role',
                         'accepted',
@@ -1611,7 +1611,7 @@ export async function acceptApplicationAction(
             trackApplicationEvent('apply_accepted', {
                 applicationId,
                 projectId: application.projectId,
-                roleId: application.roleId,
+                roleId: application.roleId || undefined,
                 actorId: user.id,
                 source: 'requests',
                 applicationTraceId: traceId,
@@ -1747,7 +1747,7 @@ export async function rejectApplicationAction(
                         user.id,
                         applicationId,
                         application.projectId,
-                        application.roleId,
+                        application.roleId || "",
                         application.project?.title || 'Project',
                         application.role?.title || application.role?.role || 'Role',
                         'rejected',
@@ -1765,7 +1765,7 @@ export async function rejectApplicationAction(
             trackApplicationEvent('apply_rejected', {
                 applicationId,
                 projectId: application.projectId,
-                roleId: application.roleId,
+                roleId: application.roleId || undefined,
                 actorId: user.id,
                 reasonCode: normalizedReason || null,
                 source: 'requests',
@@ -1872,7 +1872,7 @@ export async function editPendingApplicationAction(
                 application.applicantId,
                 application.creatorId,
                 application.projectId,
-                application.roleId,
+                application.roleId || "",
                 projectTitle,
                 roleTitle,
                 normalizedMessage,
@@ -1895,7 +1895,7 @@ export async function editPendingApplicationAction(
         trackApplicationEvent('apply_edited', {
             applicationId: application.id,
             projectId: application.projectId,
-            roleId: application.roleId,
+            roleId: application.roleId || undefined,
             actorId: user.id,
             source: 'messages',
             applicationTraceId: traceId,
@@ -1982,7 +1982,7 @@ export async function withdrawApplicationAction(
                     user.id,
                     applicationId,
                     application.projectId,
-                    application.roleId,
+                    application.roleId || "",
                     application.project?.title || 'Project',
                     application.role?.title || application.role?.role || 'Role',
                     'withdrawn',
@@ -2000,7 +2000,7 @@ export async function withdrawApplicationAction(
         trackApplicationEvent('apply_withdrawn', {
             applicationId,
             projectId: application.projectId,
-            roleId: application.roleId,
+            roleId: application.roleId || undefined,
             actorId: user.id,
             reasonCode: 'withdrawn_by_applicant',
             source: 'messages',
@@ -2126,7 +2126,7 @@ export async function reopenApplicationAction(
                     user.id,
                     applicationId,
                     application.projectId,
-                    application.roleId,
+                    application.roleId || "",
                     application.project?.title || 'Project',
                     application.role?.title || application.role?.role || 'Role',
                     'pending',
@@ -2144,7 +2144,7 @@ export async function reopenApplicationAction(
         trackApplicationEvent('apply_reopened', {
             applicationId,
             projectId: application.projectId,
-            roleId: application.roleId,
+            roleId: application.roleId || undefined,
             actorId: user.id,
             source: 'messages',
             applicationTraceId: traceId,
@@ -3105,7 +3105,7 @@ export async function proposeApplicationRoleChangeAction(
                     user.id,
                     applicationId,
                     application.projectId,
-                    application.roleId,
+                    application.roleId || "",
                     application.project?.title || 'Project',
                     newRole.title || newRole.role || 'Proposed Role',
                     'proposed',
@@ -3125,7 +3125,7 @@ export async function proposeApplicationRoleChangeAction(
         trackApplicationEvent('apply_proposed', {
             applicationId,
             projectId: application.projectId,
-            roleId: application.roleId,
+            roleId: application.roleId || undefined,
             actorId: user.id,
             source: 'messages',
             applicationTraceId: traceId,
@@ -3372,7 +3372,7 @@ export async function declineProposedRoleAction(
                     user.id,
                     applicationId,
                     application.projectId,
-                    application.roleId,
+                    application.roleId || "",
                     application.project?.title || 'Project',
                     application.role?.title || application.role?.role || 'Original Role',
                     'pending',
@@ -3391,7 +3391,7 @@ export async function declineProposedRoleAction(
         trackApplicationEvent('apply_reopened', {
             applicationId,
             projectId: application.projectId,
-            roleId: application.roleId,
+            roleId: application.roleId || undefined,
             actorId: user.id,
             source: 'messages',
             applicationTraceId: traceId,
