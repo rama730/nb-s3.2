@@ -11,6 +11,7 @@ const ROUTE_FILE = "route.ts";
 const SHARED_IMPORT_RE = /from\s+["'][^"']*\/api\/v1\/(_shared|_envelope)["']/;
 const DIRECT_NEXT_RESPONSE_RE = /NextResponse\.json\s*\(/;
 const HELPER_CALL_RE = /\b(jsonSuccess|jsonError)\s*\(/;
+const PUBLIC_500_ERROR_DETAIL_RE = /jsonError\s*\(\s*(?:error|err|e)(?:\?\.)?\.message\s*,\s*5\d{2}\b/;
 
 // Routes that use third-party SDK response handlers (e.g. Inngest serve())
 const ENVELOPE_EXEMPT_ROUTES = new Set<string>([
@@ -58,6 +59,12 @@ export function validateApiEnvelopeContract(rootDir: string = process.cwd()): Va
     if (!SHARED_IMPORT_RE.test(source)) {
       errors.push(
         `${rel}: jsonSuccess/jsonError must be imported from /api/v1/_shared or /api/v1/_envelope.`,
+      );
+    }
+
+    if (PUBLIC_500_ERROR_DETAIL_RE.test(source)) {
+      errors.push(
+        `${rel}: public 5xx responses must not expose caught error.message values; log details and return a stable generic message.`,
       );
     }
   }
