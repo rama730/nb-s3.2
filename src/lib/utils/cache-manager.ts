@@ -109,35 +109,7 @@ export class CacheManager {
     async getDetailedBreakdown(): Promise<StorageCategoryUsage[]> {
         const breakdown: StorageCategoryUsage[] = [];
 
-        // 1. App Bundle Cache (Cache API)
-        let cacheSize = 0;
-        if (typeof caches !== "undefined") {
-            const keys = await caches.keys();
-            for (const key of keys) {
-                const cache = await caches.open(key);
-                const reqs = await cache.keys();
-                for (const req of reqs) {
-                    const res = await cache.match(req);
-                    if (res) {
-                        try {
-                            const blob = await res.blob();
-                            cacheSize += blob.size;
-                        } catch {
-                            // ignore opaque or errored responses
-                        }
-                    }
-                }
-            }
-        }
-        breakdown.push({
-            id: "app-cache",
-            label: "Application Bundle",
-            description: "Static assets, fonts, icons, and code chunks for faster loading.",
-            size: cacheSize,
-            isPrimary: false,
-        });
-
-        // 2. User Workspace (LocalStorage - Offline Queues & Drafts)
+        // 1. User Workspace (LocalStorage - Offline Queues & Drafts)
         let workspaceSize = 0;
         let hasPendingWork = false;
         if (typeof localStorage !== "undefined") {
@@ -154,6 +126,29 @@ export class CacheManager {
                 // Gracefully handle quota exceeded or access errors
             }
         }
+
+        // 2. Storage estimate total usage
+        let totalUsage = 0;
+        if (typeof navigator !== "undefined" && navigator.storage && navigator.storage.estimate) {
+            try {
+                const estimate = await navigator.storage.estimate();
+                totalUsage = estimate.usage || 0;
+            } catch {
+                // ignore
+            }
+        }
+
+        // Cache size is total usage minus workspace size
+        const cacheSize = Math.max(0, totalUsage - workspaceSize);
+
+        breakdown.push({
+            id: "app-cache",
+            label: "Application Bundle",
+            description: "Static assets, fonts, icons, and code chunks for faster loading.",
+            size: cacheSize,
+            isPrimary: false,
+        });
+
         breakdown.push({
             id: "user-workspace",
             label: "Workspace Data",
