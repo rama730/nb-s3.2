@@ -106,39 +106,45 @@ function renderMetadataStrip(options: RenderMetadataOptions): string {
   const role: Role = options.role ?? "Role_Owner";
   const canEdit = options.canEdit ?? role !== "Role_Viewer";
   return renderToStaticMarkup(
-    React.createElement(QueryClientProvider, {
-      client: testQueryClient,
-      children: React.createElement(FilesTabRoleProvider, {
-        role,
-        canEdit,
-        children: React.createElement(MetadataStrip, {
+    React.createElement(
+      QueryClientProvider,
+      { client: testQueryClient },
+      React.createElement(
+        FilesTabRoleProvider,
+        { role, canEdit },
+        React.createElement(MetadataStrip, {
           node: options.node,
           canEdit,
           signedUrl: options.signedUrl ?? null,
+          mode: "view",
+          onView: () => {},
           onRaw: () => {},
           onEdit: () => {},
           onDownload: () => {},
         }),
-      }),
-    })
+      ),
+    )
   );
 }
 
 function renderFileActionsBar(role: Role): string {
   const canEdit = role !== "Role_Viewer";
   return renderToStaticMarkup(
-    React.createElement(QueryClientProvider, {
-      client: testQueryClient,
-      children: React.createElement(FilesTabRoleProvider, {
-        role,
-        canEdit,
-        children: React.createElement(FileActionsBar, {
+    React.createElement(
+      QueryClientProvider,
+      { client: testQueryClient },
+      React.createElement(
+        FilesTabRoleProvider,
+        { role, canEdit },
+        React.createElement(FileActionsBar, {
+          mode: "view",
+          onView: () => {},
           onRaw: () => {},
           onEdit: () => {},
           onDownload: () => {},
         }),
-      }),
-    })
+      ),
+    )
   );
 }
 
@@ -162,7 +168,7 @@ function fieldText(html: string, field: string): string | null {
   if (!match) return null;
   // Strip nested tags (e.g. VersionPill renders <span data-testid=…>vN</span>
   // inside the `version` field). The remaining text is the visible value.
-  return match[1].replace(/<[^>]*>/g, "").trim();
+  return (match[1] || "").replace(/<[^>]*>/g, "").trim();
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -170,7 +176,7 @@ function fieldText(html: string, field: string): string | null {
 // ─────────────────────────────────────────────────────────────────────
 
 describe("MetadataStrip — all fields rendered (Req 5.1)", () => {
-  it("renders name, size, updated-at ISO string, updated-by, and MIME type", () => {
+  it("renders name, size, last-updated attribution, and MIME type", () => {
     const html = renderMetadataStrip({
       node: makeNode({
         name: "hello.txt",
@@ -184,8 +190,10 @@ describe("MetadataStrip — all fields rendered (Req 5.1)", () => {
 
     assert.equal(fieldText(html, "name"), "hello.txt");
     assert.equal(fieldText(html, "size"), "12.5 KB");
-    assert.equal(fieldText(html, "updated-at"), "2026-05-10T14:23:00.000Z");
-    assert.equal(fieldText(html, "updated-by"), "by Alex Example");
+    assert.match(
+      fieldText(html, "updated-at") ?? "",
+      /^Last updated .+ by Alex Example$/,
+    );
     assert.equal(fieldText(html, "mime-type"), "text/plain");
   });
 
@@ -202,7 +210,26 @@ describe("MetadataStrip — all fields rendered (Req 5.1)", () => {
         updatedByUsername: "alex",
       }),
     });
-    assert.equal(fieldText(html, "updated-by"), "by alex");
+    assert.match(fieldText(html, "updated-at") ?? "", /^Last updated .+ by alex$/);
+  });
+
+  it("uses the latest file-version timestamp when it is present", () => {
+    const html = renderMetadataStrip({
+      node: makeNode({
+        updatedAt: new Date("2026-01-01T00:00:00Z"),
+        versionUpdatedAt: new Date("2026-05-10T14:23:00Z"),
+        updatedByName: "Version Editor",
+      }),
+    });
+
+    assert.match(
+      html,
+      /<time[^>]+data-field="updated-at"[^>]+date[Tt]ime="2026-05-10T14:23:00\.000Z"/,
+    );
+    assert.match(
+      fieldText(html, "updated-at") ?? "",
+      /^Last updated .+ by Version Editor$/,
+    );
   });
 
   it("lowercases the MIME type for display (design § MetadataStrip)", () => {
@@ -223,7 +250,7 @@ describe("MetadataStrip — all fields rendered (Req 5.1)", () => {
       html,
       /<time[^>]+data-field="updated-at"[^>]+date[Tt]ime="2025-01-02T03:04:05\.000Z"/,
     );
-    assert.equal(fieldText(html, "updated-at"), "2025-01-02T03:04:05.000Z");
+    assert.match(fieldText(html, "updated-at") ?? "", /^Last updated .+/);
   });
 });
 
@@ -266,11 +293,12 @@ describe("MetadataStrip — '—' fallback for each missing field (Req 5.9)", ()
     assert.equal(fieldText(html, "updated-at"), DASH);
   });
 
-  it("renders '—' when neither display name nor username is recorded", () => {
+  it("omits actor text when neither display name nor username is recorded", () => {
     const html = renderMetadataStrip({
       node: makeNode({ updatedByName: null, updatedByUsername: null }),
     });
-    assert.equal(fieldText(html, "updated-by"), DASH);
+    assert.doesNotMatch(fieldText(html, "updated-at") ?? "", /\sby\s/);
+    assert.equal(fieldText(html, "updated-by"), null);
   });
 
   it("renders '—' when the MIME type is blank", () => {
@@ -289,7 +317,7 @@ describe("MetadataStrip — '—' fallback for each missing field (Req 5.9)", ()
 
   it("renders the remaining available fields when one field is missing", () => {
     // Req 5.9 — "render the remaining available fields". When `mimeType`
-    // is absent, the name/size/updated-at/updated-by still render their
+    // is absent, the name/size/updated-at attribution still render their
     // real values.
     const html = renderMetadataStrip({
       node: makeNode({
@@ -302,7 +330,7 @@ describe("MetadataStrip — '—' fallback for each missing field (Req 5.9)", ()
     assert.equal(fieldText(html, "name"), "doc.pdf");
     assert.equal(fieldText(html, "size"), "2.0 KB");
     assert.equal(fieldText(html, "mime-type"), DASH);
-    assert.equal(fieldText(html, "updated-by"), "by Alex");
+    assert.match(fieldText(html, "updated-at") ?? "", /^Last updated .+ by Alex$/);
   });
 });
 
@@ -394,48 +422,39 @@ describe("MetadataStrip — data-node-id equals node.id (Req 17, design § Metad
 // Edit button absent for Role_Viewer (Req 5.4, 19.3)
 // ─────────────────────────────────────────────────────────────────────
 
-describe("FileActionsBar — Edit absent for Role_Viewer (Req 5.4, 19.3)", () => {
-  it("hides the Edit button when role is Role_Viewer", () => {
+describe("FileActionsBar — Dropdown & Role Gating (Req 5.4, 19.3)", () => {
+  const FILE_ACTIONS_BAR_SRC = readFileSync(
+    path.resolve(
+      __dirname,
+      "../../../src/components/projects/v2/files-tab/file/FileActionsBar.tsx",
+    ),
+    "utf8",
+  );
+
+  it("always renders the Actions dropdown trigger", () => {
     const html = renderFileActionsBar("Role_Viewer");
-    assert.doesNotMatch(html, /data-testid="files-tab-file-actions-edit"/);
-    // Raw and Download remain visible — they are browse / view actions.
-    assert.match(html, /data-testid="files-tab-file-actions-raw"/);
-    assert.match(html, /data-testid="files-tab-file-actions-download"/);
+    assert.match(html, /data-testid="files-tab-file-actions-dropdown-trigger"/);
   });
 
-  it("shows the Edit button for Role_Owner", () => {
-    const html = renderFileActionsBar("Role_Owner");
-    assert.match(html, /data-testid="files-tab-file-actions-edit"/);
+  it("hides edit, replace, attach options from code for Role_Viewer", () => {
+    assert.match(FILE_ACTIONS_BAR_SRC, /canEditOption\s*=\s*canEdit/);
+    assert.match(FILE_ACTIONS_BAR_SRC, /canReplaceOption\s*=\s*canReplace/);
+    assert.match(FILE_ACTIONS_BAR_SRC, /canAttachOption\s*=\s*canAttachToTask/);
   });
 
-  it("shows the Edit button for Role_Member", () => {
-    const html = renderFileActionsBar("Role_Member");
-    assert.match(html, /data-testid="files-tab-file-actions-edit"/);
+  it("does not render replace input for Role_Viewer", () => {
+    const html = renderFileActionsBarWithNode("Role_Viewer");
+    assert.doesNotMatch(html, /data-testid="files-tab-file-actions-replace-input"/);
   });
 
-  it("MetadataStrip → FileActionsBar also hides Edit for Role_Viewer", () => {
-    // The strip composes FileActionsBar internally. Verify the same
-    // gating through the MetadataStrip render path so a refactor that
-    // bypasses the context cannot silently re-expose Edit.
-    const html = renderMetadataStrip({
-      node: makeNode(),
-      role: "Role_Viewer",
-      canEdit: false,
-    });
-    assert.doesNotMatch(html, /data-testid="files-tab-file-actions-edit"/);
-    assert.match(html, /data-testid="files-tab-file-actions-raw"/);
-    assert.match(html, /data-testid="files-tab-file-actions-download"/);
+  it("renders replace input for Role_Owner", () => {
+    const html = renderFileActionsBarWithNode("Role_Owner");
+    assert.match(html, /data-testid="files-tab-file-actions-replace-input"/);
   });
 
-  it("MetadataStrip → FileActionsBar shows Edit for Role_Owner / Role_Member", () => {
-    for (const role of ["Role_Owner", "Role_Member"] as const) {
-      const html = renderMetadataStrip({ node: makeNode(), role });
-      assert.match(
-        html,
-        /data-testid="files-tab-file-actions-edit"/,
-        `${role} must see the Edit button via MetadataStrip`,
-      );
-    }
+  it("renders replace input for Role_Member", () => {
+    const html = renderFileActionsBarWithNode("Role_Member");
+    assert.match(html, /data-testid="files-tab-file-actions-replace-input"/);
   });
 });
 
@@ -546,20 +565,23 @@ describe("FileView — 0-byte media placeholder (Req 5.6) — source-level contr
 function renderFileActionsBarWithNode(role: Role): string {
   const canEdit = role !== "Role_Viewer";
   return renderToStaticMarkup(
-    React.createElement(QueryClientProvider, {
-      client: testQueryClient,
-      children: React.createElement(FilesTabRoleProvider, {
-        role,
-        canEdit,
-        children: React.createElement(FileActionsBar, {
+    React.createElement(
+      QueryClientProvider,
+      { client: testQueryClient },
+      React.createElement(
+        FilesTabRoleProvider,
+        { role, canEdit },
+        React.createElement(FileActionsBar, {
+          mode: "view",
+          onView: () => {},
           onRaw: () => {},
           onEdit: () => {},
           onDownload: () => {},
           projectId: "proj-test-123",
           nodeId: "node-test-456",
         }),
-      }),
-    })
+      ),
+    )
   );
 }
 
@@ -568,8 +590,8 @@ describe("FileActionsBar — Replace… button (Req 11.1, 11.2, 24.1)", () => {
     const html = renderFileActionsBarWithNode("Role_Viewer");
     assert.doesNotMatch(
       html,
-      /data-testid="files-tab-file-actions-replace"/,
-      "Role_Viewer must not see the Replace button (Req 11.2, 24.1)",
+      /data-testid="files-tab-file-actions-replace-input"/,
+      "Role_Viewer must not see the Replace button input (Req 11.2, 24.1)",
     );
   });
 
@@ -577,19 +599,17 @@ describe("FileActionsBar — Replace… button (Req 11.1, 11.2, 24.1)", () => {
     const html = renderFileActionsBarWithNode("Role_Owner");
     assert.match(
       html,
-      /data-testid="files-tab-file-actions-replace"/,
-      "Role_Owner must see the Replace button (Req 11.1)",
+      /data-testid="files-tab-file-actions-replace-input"/,
+      "Role_Owner must see the Replace button input (Req 11.1)",
     );
-    // Verify the button text
-    assert.match(html, /Replace…/);
   });
 
   it("shows the Replace button for Role_Member (Req 11.1)", () => {
     const html = renderFileActionsBarWithNode("Role_Member");
     assert.match(
       html,
-      /data-testid="files-tab-file-actions-replace"/,
-      "Role_Member must see the Replace button (Req 11.1)",
+      /data-testid="files-tab-file-actions-replace-input"/,
+      "Role_Member must see the Replace button input (Req 11.1)",
     );
   });
 
@@ -598,8 +618,8 @@ describe("FileActionsBar — Replace… button (Req 11.1, 11.2, 24.1)", () => {
     const html = renderFileActionsBar("Role_Owner");
     assert.doesNotMatch(
       html,
-      /data-testid="files-tab-file-actions-replace"/,
-      "Replace button requires both projectId and nodeId",
+      /data-testid="files-tab-file-actions-replace-input"/,
+      "Replace button input requires both projectId and nodeId",
     );
   });
 
@@ -614,12 +634,28 @@ describe("FileActionsBar — Replace… button (Req 11.1, 11.2, 24.1)", () => {
     assert.match(html, /type="file"[^>]*class="hidden"/);
   });
 
-  it("Replace button has accessible label (Req 11.1)", () => {
-    const html = renderFileActionsBarWithNode("Role_Owner");
+  it("Replace button has accessible label and text in source (Req 11.1)", () => {
+    const FILE_ACTIONS_BAR_SRC = readFileSync(
+      path.resolve(
+        __dirname,
+        "../../../src/components/projects/v2/files-tab/file/FileActionsBar.tsx",
+      ),
+      "utf8",
+    );
     assert.match(
-      html,
+      FILE_ACTIONS_BAR_SRC,
       /aria-label="Replace file with new version"/,
-      "Replace button must have an accessible label",
+      "Replace button must have an accessible label in source code",
+    );
+    assert.match(
+      FILE_ACTIONS_BAR_SRC,
+      /Replace…/,
+      "Replace button must have 'Replace…' label in source code",
+    );
+    assert.match(
+      FILE_ACTIONS_BAR_SRC,
+      /canReplaceOption/,
+      "Replace button must guard rendering with canReplaceOption in source code",
     );
   });
 });
