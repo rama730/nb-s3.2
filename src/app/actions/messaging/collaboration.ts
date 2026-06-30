@@ -66,6 +66,33 @@ function actorNotificationSnapshot(user: { user_metadata?: Record<string, unknow
     };
 }
 
+async function readActorNotificationSnapshot(user: { id?: string | null; user_metadata?: Record<string, unknown> | null }) {
+    const fallback = actorNotificationSnapshot(user);
+    if (!user.id) return fallback;
+    try {
+        const [profile] = await db
+            .select({
+                fullName: profiles.fullName,
+                username: profiles.username,
+                avatarUrl: profiles.avatarUrl,
+            })
+            .from(profiles)
+            .where(eq(profiles.id, user.id))
+            .limit(1);
+        return {
+            actorName: profile?.fullName || profile?.username || fallback.actorName,
+            actorAvatarUrl: profile?.avatarUrl ?? fallback.actorAvatarUrl,
+        };
+    } catch (error) {
+        logger.warn("messages.actor_notification_snapshot_failed", {
+            module: "messaging",
+            userId: user.id,
+            error: error instanceof Error ? error.message : String(error),
+        });
+        return fallback;
+    }
+}
+
 function projectTaskHref(projectSlugOrId: string, taskId: string) {
     return `/projects/${encodeURIComponent(projectSlugOrId)}?tab=tasks&drawerType=task&drawerId=${encodeURIComponent(taskId)}`;
 }
@@ -908,7 +935,7 @@ export async function sendStructuredMessageActionV2(params: {
                 : [null];
 
             try {
-                const actor = actorNotificationSnapshot(user);
+                const actor = await readActorNotificationSnapshot(user);
                 if (structured.entityRefs.projectId) {
                     const kindLabel = workflowKindLabel(workflowKind);
                     await enqueueProjectNotificationEvent({
@@ -1140,7 +1167,7 @@ export async function resolveMessageWorkflowActionV2(params: {
 
         if (memberJoinLifecycle?.changed && workflow.projectId && workflow.assigneeUserId) {
             try {
-                const actor = actorNotificationSnapshot(user);
+                const actor = await readActorNotificationSnapshot(user);
                 const memberName = memberJoinLifecycle.target?.fullName || memberJoinLifecycle.target?.username || "A member";
                 await enqueueProjectNotificationEvent({
                     projectId: workflow.projectId,
@@ -1191,7 +1218,7 @@ export async function resolveMessageWorkflowActionV2(params: {
                 : [null];
 
             try {
-                const actor = actorNotificationSnapshot(user);
+                const actor = await readActorNotificationSnapshot(user);
                 if (workflow.projectId) {
                     await enqueueProjectNotificationEvent({
                         projectId: workflow.projectId,
@@ -1452,7 +1479,7 @@ export async function convertMessageToTaskActionV2(params: {
 
         if (taskAssigneeId && taskAssigneeId !== user.id) {
             try {
-                const actor = actorNotificationSnapshot(user);
+                const actor = await readActorNotificationSnapshot(user);
                 await enqueueProjectNotificationEvent({
                     projectId: params.projectId,
                     actorUserId: user.id,
