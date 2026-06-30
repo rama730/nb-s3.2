@@ -23,7 +23,7 @@ export const SPRINT_TIMELINE_MODE_LABELS: Record<SprintTimelineMode, string> = {
   files: "Files",
 };
 
-export const SPRINT_DRAWER_TYPES = ["task", "file"] as const;
+export const SPRINT_DRAWER_TYPES = ["task"] as const;
 export type SprintDrawerType = (typeof SPRINT_DRAWER_TYPES)[number];
 
 export type SprintStatus = "planning" | "active" | "completed";
@@ -49,6 +49,12 @@ export type SprintListItem = {
   status: SprintStatus;
   createdAt: string | null;
   updatedAt: string | null;
+  creator?: {
+    id: string;
+    fullName: string | null;
+    avatarUrl: string | null;
+    roleLabel: string | null;
+  } | null;
 };
 
 export type SprintPermissionSet = {
@@ -182,22 +188,14 @@ export type SprintDrawerState =
     };
 
 export type SprintDrawerPreview =
-  | {
-      type: "task";
-      id: string;
-      title: string;
-      subtitle: string;
-      occurredAt: string | null;
-      badgeText: string;
-    }
-  | {
-      type: "file";
-      id: string;
-      title: string;
-      subtitle: string;
-      occurredAt: string | null;
-      badgeText: string;
-    };
+  {
+    type: "task";
+    id: string;
+    title: string;
+    subtitle: string;
+    occurredAt: string | null;
+    badgeText: string;
+  };
 
 export type SprintCompareMetric = {
   current: number;
@@ -305,12 +303,10 @@ export const SPRINT_FILTER_LABELS: Record<SprintTimelineFilter, string> = {
   files: "Files",
 };
 
-const sprintRouteStateSchema = z.object({
-  filter: z.enum(SPRINT_TIMELINE_FILTERS).optional(),
-  mode: z.enum(SPRINT_TIMELINE_MODES).optional(),
-  drawerType: z.enum(SPRINT_DRAWER_TYPES).optional(),
-  drawerId: z.string().trim().min(1).optional(),
-});
+const sprintRouteFilterSchema = z.enum(SPRINT_TIMELINE_FILTERS);
+const sprintRouteModeSchema = z.enum(SPRINT_TIMELINE_MODES);
+const sprintRouteDrawerTypeSchema = z.enum(SPRINT_DRAWER_TYPES);
+const sprintRouteDrawerIdSchema = z.string().trim().min(1);
 
 function clampPercentage(value: number) {
   if (!Number.isFinite(value)) return 0;
@@ -441,30 +437,23 @@ export function parseSprintRouteState(input: URLSearchParams | SearchParamsReade
             drawerId: Array.isArray(input.drawerId) ? input.drawerId[0] : input.drawerId,
           };
 
-  const parsed = sprintRouteStateSchema.safeParse(source);
-  if (!parsed.success) {
-    return {
-      filter: "all" as SprintTimelineFilter,
-      mode: "chronological" as SprintTimelineMode,
-      drawer: { type: "none", id: null } as SprintDrawerState,
-      hasExplicitFilter: false,
-      hasExplicitMode: false,
-    };
-  }
-
-  const filter = parsed.data.filter ?? "all";
-  const mode = parsed.data.mode ?? "chronological";
+  const parsedFilter = sprintRouteFilterSchema.safeParse(source.filter);
+  const parsedMode = sprintRouteModeSchema.safeParse(source.mode);
+  const parsedDrawerType = sprintRouteDrawerTypeSchema.safeParse(source.drawerType);
+  const parsedDrawerId = sprintRouteDrawerIdSchema.safeParse(source.drawerId);
+  const filter = parsedFilter.success ? parsedFilter.data : "all";
+  const mode = parsedMode.success ? parsedMode.data : "chronological";
   const drawer =
-    parsed.data.drawerType && parsed.data.drawerId
-      ? ({ type: parsed.data.drawerType, id: parsed.data.drawerId } as SprintDrawerState)
+    parsedDrawerType.success && parsedDrawerId.success
+      ? ({ type: parsedDrawerType.data, id: parsedDrawerId.data } as SprintDrawerState)
       : ({ type: "none", id: null } as SprintDrawerState);
 
   return {
     filter,
     mode,
     drawer,
-    hasExplicitFilter: parsed.data.filter !== undefined,
-    hasExplicitMode: parsed.data.mode !== undefined,
+    hasExplicitFilter: parsedFilter.success,
+    hasExplicitMode: parsedMode.success,
   };
 }
 
