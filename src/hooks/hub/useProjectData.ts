@@ -2,5 +2,5 @@
 
 export * from "./useProjectAnalyticsData";
 export * from "./useProjectMembers";
-export * from "./useProjectReadmeData";
+export * from "./useProjectDocData";
 export * from "./useProjectTasksData";
