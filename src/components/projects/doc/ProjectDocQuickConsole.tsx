@@ -2,29 +2,41 @@
 
 import { memo, useCallback, useEffect, useId, useMemo, useReducer, useRef, useState, type KeyboardEvent } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Check, ClipboardList, Copy, ExternalLink, FileText, Hash, Link2, SquareTerminal } from "lucide-react";
+import { Check, ClipboardList, Copy, ExternalLink, FileText, Hash, Link2, SquareTerminal, ChevronDown, Plus, X, Search, Loader2, Pencil } from "lucide-react";
 import { Virtuoso } from "react-virtuoso";
+import { useRouter, usePathname, useSearchParams } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 
 import {
     normalizeReadmeReferenceLabel,
-    type ProjectReadmeInlineReference,
-    type ProjectReadmeReferenceOption,
-    type ProjectReadmeSmartBlockPreview,
-} from "@/lib/projects/readme-blocks";
-import type { ProjectReadmeHeading } from "@/lib/projects/readme";
+    type ProjectDocInlineReference,
+    type ProjectDocReferenceOption,
+    type ProjectDocSmartBlockPreview,
+} from "@/lib/projects/doc-blocks";
+import { normalizeProjectDocSlug, type ProjectDocHeading } from "@/lib/projects/doc";
 import {
-    PROJECT_README_PRIMARY_COMMAND_GROUPS,
-    type ProjectReadmeCommandGroup,
-    type ProjectReadmeQuickCommand,
-    type ProjectReadmeRailReport,
-} from "@/lib/projects/readme-quick-console";
-import type { ProjectReadmeRailAction, ProjectReadmeRailTabId } from "@/lib/projects/readme-view-model";
-import { buildProjectReadmePlainText } from "@/lib/projects/readme-plain-text";
+    PROJECT_DOC_PRIMARY_COMMAND_GROUPS,
+    type ProjectDocCommandGroup,
+    type ProjectDocQuickCommand,
+    type ProjectDocRailReport,
+} from "@/lib/projects/doc-quick-console";
+import type { ProjectDocRailAction, ProjectDocRailTabId } from "@/lib/projects/doc-view-model";
+import { buildProjectDocPlainText } from "@/lib/projects/doc-plain-text";
 import { cn } from "@/lib/utils";
+import {
+    useProjectMarkdowns,
+    PROJECT_MARKDOWNS_LIST_QUERY_KEY,
+    PROJECT_DOC_DRAFT_QUERY_KEY,
+    PROJECT_DOC_QUERY_KEY,
+} from "@/hooks/hub/useProjectDocData";
+import { createProjectMarkdownAction, readProjectMarkdownSearchAction } from "@/app/actions/project";
+import { ProjectDocLinkDialog } from "@/components/projects/doc/ProjectDocLinkDialog";
+
 
 type ReadmeRailVariant = "rail" | "compact";
 
-const COMMAND_GROUP_ORDER: ProjectReadmeCommandGroup[] = [
+const COMMAND_GROUP_ORDER: ProjectDocCommandGroup[] = [
     "recommended",
     "install",
     "claude",
@@ -40,8 +52,8 @@ const COMMAND_GROUP_ORDER: ProjectReadmeCommandGroup[] = [
 ];
 const LARGE_RAIL_LIST_THRESHOLD = 80;
 
-function groupCommandsByIntent(commands: ProjectReadmeQuickCommand[]) {
-    const grouped = new Map<ProjectReadmeCommandGroup, ProjectReadmeQuickCommand[]>();
+function groupCommandsByIntent(commands: ProjectDocQuickCommand[]) {
+    const grouped = new Map<ProjectDocCommandGroup, ProjectDocQuickCommand[]>();
     commands.forEach((command) => {
         const list = grouped.get(command.group) ?? [];
         list.push(command);
@@ -54,19 +66,20 @@ function groupCommandsByIntent(commands: ProjectReadmeQuickCommand[]) {
     });
 }
 
-function renderReadmeRailTabIcon(id: ProjectReadmeRailTabId) {
+function renderReadmeRailTabIcon(id: ProjectDocRailTabId) {
     const className = "h-3.5 w-3.5 shrink-0";
     switch (id) {
         case "brief": return <FileText className={className} />;
         case "commands": return <SquareTerminal className={className} />;
         case "links": return <Link2 className={className} />;
         case "outline": return <Hash className={className} />;
+        case "search": return <Search className={className} />;
         default: return <ClipboardList className={className} />;
     }
 }
 
 function cleanRailBriefText(value: string | null | undefined, maxLength = 360) {
-    return buildProjectReadmePlainText(value, { maxLength });
+    return buildProjectDocPlainText(value, { maxLength });
 }
 
 async function copyTextWithFallback(value: string) {
@@ -88,15 +101,15 @@ async function copyTextWithFallback(value: string) {
 }
 
 type ReadmeRailState = {
-    openTab: ProjectReadmeRailTabId | null;
+    openTab: ProjectDocRailTabId | null;
     selectedActionId: string | null;
 };
 
 type ReadmeRailAction =
-    | { type: "toggle_tab"; id: ProjectReadmeRailTabId }
+    | { type: "toggle_tab"; id: ProjectDocRailTabId }
     | { type: "close_tab" }
     | { type: "select_action"; actionId: string; closePanel: boolean }
-    | { type: "sync_tabs"; availableTabIds: ProjectReadmeRailTabId[] };
+    | { type: "sync_tabs"; availableTabIds: ProjectDocRailTabId[] };
 
 function readmeRailReducer(state: ReadmeRailState, action: ReadmeRailAction): ReadmeRailState {
     switch (action.type) {
@@ -123,12 +136,12 @@ function ReadmeRailTabButton({
     active,
     onToggle,
 }: {
-    id: ProjectReadmeRailTabId;
+    id: ProjectDocRailTabId;
     instanceId: string;
     label: string;
     count?: number | null;
     active: boolean;
-    onToggle: (id: ProjectReadmeRailTabId) => void;
+    onToggle: (id: ProjectDocRailTabId) => void;
 }) {
     return (
         <button
@@ -171,12 +184,12 @@ const ReferenceRow = memo(function ReferenceRow({
     highlighted,
     onExecuteAction,
 }: {
-    action: ProjectReadmeRailAction;
-    option?: ProjectReadmeReferenceOption | null;
-    fallback: ProjectReadmeInlineReference;
+    action: ProjectDocRailAction;
+    option?: ProjectDocReferenceOption | null;
+    fallback: ProjectDocInlineReference;
     active: boolean;
     highlighted: boolean;
-    onExecuteAction: (action: ProjectReadmeRailAction) => void;
+    onExecuteAction: (action: ProjectDocRailAction) => void;
 }) {
     const label = normalizeReadmeReferenceLabel(fallback.kind, option?.title || fallback.label);
     const detail = option?.context || option?.status || option?.kindLabel || option?.subtitle || null;
@@ -248,12 +261,12 @@ const CommandShortcutRow = memo(function CommandShortcutRow({
     copied,
     onExecuteAction,
 }: {
-    action: ProjectReadmeRailAction;
-    command: ProjectReadmeQuickCommand;
+    action: ProjectDocRailAction;
+    command: ProjectDocQuickCommand;
     active: boolean;
     highlighted: boolean;
     copied: boolean;
-    onExecuteAction: (action: ProjectReadmeRailAction) => void;
+    onExecuteAction: (action: ProjectDocRailAction) => void;
 }) {
     const copyCommand = () => onExecuteAction(action);
 
@@ -356,11 +369,11 @@ const HeadingRow = memo(function HeadingRow({
     highlighted,
     onExecuteAction,
 }: {
-    action: ProjectReadmeRailAction;
-    heading: ProjectReadmeHeading;
+    action: ProjectDocRailAction;
+    heading: ProjectDocHeading;
     active: boolean;
     highlighted: boolean;
-    onExecuteAction: (action: ProjectReadmeRailAction) => void;
+    onExecuteAction: (action: ProjectDocRailAction) => void;
 }) {
     const showHeading = () => onExecuteAction(action);
 
@@ -390,7 +403,201 @@ const HeadingRow = memo(function HeadingRow({
     );
 });
 
-export function ProjectReadmeQuickConsole({
+function DocumentSwitcher({ 
+    projectId, 
+    activeSlug,
+    canEdit,
+    onEdit,
+}: { 
+    projectId: string; 
+    activeSlug: string;
+    canEdit: boolean;
+    onEdit?: () => void;
+}) {
+    const router = useRouter();
+    const pathname = usePathname();
+    const searchParams = useSearchParams();
+    
+    const [isLinkDialogOpen, setIsLinkDialogOpen] = useState(false);
+    
+    const { data: markdowns = [], isLoading } = useProjectMarkdowns(projectId);
+
+    // Client-side sorting fallback
+    const sortedMarkdowns = useMemo(() => {
+        return [...markdowns].sort((a, b) => {
+            if (a.slug === "readme") return -1;
+            if (b.slug === "readme") return 1;
+            return a.filename.localeCompare(b.filename, undefined, { sensitivity: 'base', numeric: true });
+        });
+    }, [markdowns]);
+
+    const handleSelect = (slug: string) => {
+        const params = new URLSearchParams(searchParams ? searchParams.toString() : "");
+        params.set("tab", "docs");
+        params.set("doc", normalizeProjectDocSlug(slug));
+        router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+    };
+
+    return (
+        <>
+            {isLoading ? (
+                <div className="flex h-9 items-center justify-center px-3 text-zinc-400 text-xs gap-1.5 shrink-0">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    Loading...
+                </div>
+            ) : (
+                sortedMarkdowns.map((doc) => (
+                    <button
+                        key={doc.id}
+                        type="button"
+                        onClick={() => handleSelect(doc.slug)}
+                        className={cn(
+                            "inline-flex h-9 items-center justify-center rounded-lg border px-2.5 text-xs font-semibold transition-colors truncate shrink-0 select-none",
+                            doc.slug === activeSlug
+                                ? "border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-500/60 dark:bg-blue-500/10 dark:text-blue-300"
+                                : "border-zinc-200 bg-zinc-50 text-zinc-600 hover:border-zinc-300 hover:text-zinc-700 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-400 dark:hover:border-zinc-700"
+                        )}
+                    >
+                        <FileText className="h-3.5 w-3.5 shrink-0 mr-1.5 text-zinc-500" />
+                        <span className="truncate">{doc.filename}</span>
+                    </button>
+                ))
+            )}
+            
+            {canEdit && (
+                <button
+                    type="button"
+                    onClick={() => setIsLinkDialogOpen(true)}
+                    className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-dashed border-zinc-300 bg-zinc-50/50 hover:bg-zinc-100 hover:border-zinc-400 dark:border-zinc-800 dark:bg-zinc-950/50 dark:hover:bg-zinc-900 transition-colors shrink-0"
+                    title="Add Document..."
+                >
+                    <Plus className="h-3.5 w-3.5 text-zinc-500" />
+                </button>
+            )}
+
+            {canEdit && onEdit && (
+                <button
+                    type="button"
+                    onClick={onEdit}
+                    className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-2.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 hover:border-blue-300 hover:text-blue-600 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-300 dark:hover:bg-zinc-900 transition-colors shrink-0"
+                >
+                    <Pencil className="h-3.5 w-3.5 text-zinc-500" />
+                    <span>Edit</span>
+                </button>
+            )}
+
+            <ProjectDocLinkDialog
+                projectId={projectId}
+                isOpen={isLinkDialogOpen}
+                onClose={() => setIsLinkDialogOpen(false)}
+            />
+        </>
+    );
+}
+
+function SearchPanel({ projectId, onSelectMatch }: { projectId: string; onSelectMatch: (docSlug: string, line: number) => void }) {
+    const [query, setQuery] = useState("");
+    const [results, setResults] = useState<any[]>([]);
+    const [searching, setSearching] = useState(false);
+    
+    useEffect(() => {
+        const trimmed = query.trim();
+        if (!trimmed) {
+            setResults([]);
+            return;
+        }
+        
+        const timer = setTimeout(async () => {
+            setSearching(true);
+            try {
+                const res = await readProjectMarkdownSearchAction(projectId, trimmed);
+                if (res.success) {
+                    setResults(res.results);
+                } else {
+                    toast.error(res.error || "Search failed");
+                }
+            } catch (err) {
+                console.error(err);
+            } finally {
+                setSearching(false);
+            }
+        }, 300);
+        
+        return () => clearTimeout(timer);
+    }, [query, projectId]);
+
+    return (
+        <div className="space-y-4">
+            <div className="relative">
+                <Search className="absolute left-3 top-2.5 h-4 w-4 text-zinc-400" />
+                <input
+                    type="text"
+                    placeholder="Search docs..."
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    className="w-full rounded-lg border border-zinc-200 bg-zinc-50 pl-9 pr-8 py-2 text-sm text-zinc-900 placeholder-zinc-400 focus:border-blue-500 focus:bg-white focus:outline-none dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-100 dark:focus:bg-zinc-900 transition-colors"
+                />
+                {query && (
+                    <button
+                        type="button"
+                        onClick={() => setQuery("")}
+                        className="absolute right-2.5 top-2.5 p-0.5 rounded-full hover:bg-zinc-200 dark:hover:bg-zinc-800 text-zinc-400 hover:text-zinc-600 transition-colors"
+                    >
+                        <X className="h-3 w-3" />
+                    </button>
+                )}
+            </div>
+            
+            <div className="space-y-4 max-h-[24rem] overflow-y-auto pr-1 app-scroll app-scroll-y">
+                {searching ? (
+                    <div className="flex items-center justify-center py-8 text-zinc-400 text-sm gap-2">
+                        <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+                        Searching documents...
+                    </div>
+                ) : query && results.length === 0 ? (
+                    <div className="text-center py-8 text-zinc-400 text-sm">
+                        No matches found for &quot;{query}&quot;
+                    </div>
+                ) : !query ? (
+                    <div className="text-center py-8 text-zinc-400 text-xs">
+                        Type a search query to search across all documents.
+                    </div>
+                ) : (
+                    results.map((docResult) => (
+                        <div key={docResult.slug} className="space-y-1.5">
+                            <div className="flex items-center gap-1.5 px-1">
+                                <FileText className="h-3.5 w-3.5 text-zinc-400" />
+                                <span className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">{docResult.filename}</span>
+                            </div>
+                            <div className="space-y-1">
+                                {docResult.matches.map((match: any) => (
+                                    <button
+                                        key={match.line}
+                                        type="button"
+                                        onClick={() => onSelectMatch(docResult.slug, match.line)}
+                                        className="flex w-full flex-col gap-0.5 rounded-lg border border-zinc-100 bg-zinc-50/50 p-2 text-left hover:border-blue-200 hover:bg-blue-50/30 dark:border-zinc-800/60 dark:bg-zinc-900/30 dark:hover:border-blue-500/50 dark:hover:bg-blue-950/20 transition-all group"
+                                    >
+                                        <div className="flex items-center justify-between text-[10px] text-zinc-400 dark:text-zinc-500">
+                                            <span>Line {match.line}</span>
+                                            <span className="opacity-0 group-hover:opacity-100 text-blue-600 dark:text-blue-400 font-semibold transition-opacity">Jump to line &rarr;</span>
+                                        </div>
+                                        <p className="line-clamp-2 font-mono text-[11px] leading-relaxed text-zinc-700 dark:text-zinc-300">
+                                            {match.text}
+                                        </p>
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    ))
+                )}
+            </div>
+        </div>
+    );
+}
+
+export function ProjectDocQuickConsole({
+    projectId,
+    docSlug = "readme",
     excerpt,
     headings,
     commands,
@@ -412,28 +619,34 @@ export function ProjectReadmeQuickConsole({
     selectedActionId,
     variant = "rail",
     className,
+    canEdit = false,
+    onEdit,
 }: {
+    projectId: string;
+    docSlug?: string;
     excerpt?: string | null;
-    headings: ProjectReadmeHeading[];
-    commands: ProjectReadmeQuickCommand[];
-    references: ProjectReadmeInlineReference[];
-    report?: ProjectReadmeRailReport | null;
-    railActions: ProjectReadmeRailAction[];
-    recommendedAction?: ProjectReadmeRailAction | null;
+    headings: ProjectDocHeading[];
+    commands: ProjectDocQuickCommand[];
+    references: ProjectDocInlineReference[];
+    report?: ProjectDocRailReport | null;
+    railActions: ProjectDocRailAction[];
+    recommendedAction?: ProjectDocRailAction | null;
     highlightedTargetId?: string | null;
     highlightedTargetToken?: number | null;
     instanceId?: string;
-    onRailAction?: (action: ProjectReadmeRailAction) => void;
-    onOpenTabChange?: (openTab: ProjectReadmeRailTabId | null) => void;
+    onRailAction?: (action: ProjectDocRailAction) => void;
+    onOpenTabChange?: (openTab: ProjectDocRailTabId | null) => void;
     onSelectedActionChange?: (selectedActionId: string | null) => void;
-    openTab?: ProjectReadmeRailTabId | null;
-    railTabs?: ProjectReadmeRailTabId[];
-    referencePreviewByKey?: Map<string, ProjectReadmeSmartBlockPreview>;
+    openTab?: ProjectDocRailTabId | null;
+    railTabs?: ProjectDocRailTabId[];
+    referencePreviewByKey?: Map<string, ProjectDocSmartBlockPreview>;
     referencesError?: boolean;
     referencesLoading?: boolean;
     selectedActionId?: string | null;
     variant?: ReadmeRailVariant;
     className?: string;
+    canEdit?: boolean;
+    onEdit?: () => void;
 }) {
     const generatedId = useId().replace(/[^a-zA-Z0-9_-]/g, "");
     const railInstanceId = instanceId ?? generatedId;
@@ -441,28 +654,28 @@ export function ProjectReadmeQuickConsole({
     const cleanExcerpt = cleanRailBriefText(excerpt);
     const cleanSummary = cleanRailBriefText(report?.summary);
     const briefItems = report?.briefItems ?? [];
-    const primaryCommands = useMemo(() => commands.filter((command) => PROJECT_README_PRIMARY_COMMAND_GROUPS.has(command.group)), [commands]);
+    const primaryCommands = useMemo(() => commands.filter((command) => PROJECT_DOC_PRIMARY_COMMAND_GROUPS.has(command.group)), [commands]);
     const configCommands = useMemo(() => commands.filter((command) => command.group === "config"), [commands]);
     const optionCommands = useMemo(() => commands.filter((command) => command.group === "options"), [commands]);
     const commandGroups = useMemo(() => groupCommandsByIntent(primaryCommands), [primaryCommands]);
     const configCommandGroups = useMemo(() => groupCommandsByIntent(configCommands), [configCommands]);
     const optionCommandGroups = useMemo(() => groupCommandsByIntent(optionCommands), [optionCommands]);
     const actionByCommandId = useMemo(() => {
-        const map = new Map<string, ProjectReadmeRailAction>();
+        const map = new Map<string, ProjectDocRailAction>();
         railActions.forEach((action) => {
             if (action.kind === "command" && action.command) map.set(action.command.id, action);
         });
         return map;
     }, [railActions]);
     const actionByReferenceKey = useMemo(() => {
-        const map = new Map<string, ProjectReadmeRailAction>();
+        const map = new Map<string, ProjectDocRailAction>();
         railActions.forEach((action) => {
             if (action.kind === "reference" && action.referencePreviewKey) map.set(action.referencePreviewKey, action);
         });
         return map;
     }, [railActions]);
     const actionByHeadingId = useMemo(() => {
-        const map = new Map<string, ProjectReadmeRailAction>();
+        const map = new Map<string, ProjectDocRailAction>();
         railActions.forEach((action) => {
             if (action.kind === "heading" && action.heading) map.set(action.heading.id, action);
         });
@@ -491,6 +704,36 @@ export function ProjectReadmeQuickConsole({
     const copiedTimerRef = useRef<number | null>(null);
     const [copiedActionId, setCopiedActionId] = useState<string | null>(null);
     const [railAnnouncement, setRailAnnouncement] = useState("");
+    const router = useRouter();
+    const pathname = usePathname();
+    const searchParams = useSearchParams();
+
+    const handleSelectMatch = useCallback((matchSlug: string, line: number) => {
+        const normalizedMatchSlug = normalizeProjectDocSlug(matchSlug);
+        const normalizedActiveSlug = normalizeProjectDocSlug(docSlug);
+        const params = new URLSearchParams(searchParams ? searchParams.toString() : "");
+        params.set("tab", "docs");
+        params.set("doc", normalizedMatchSlug);
+        
+        if (normalizedMatchSlug === normalizedActiveSlug) {
+            const targetId = `line-${line}`;
+            onRailAction?.({
+                id: `search-jump-${line}`,
+                kind: "heading",
+                railTab: "search",
+                label: `Line ${line}`,
+                description: null,
+                targetId,
+                copyText: null,
+                openHref: null,
+                sourceIndex: 0,
+                platforms: [],
+            });
+        } else {
+            router.replace(`${pathname}?${params.toString()}#line-${line}`, { scroll: false });
+        }
+    }, [docSlug, pathname, searchParams, router, onRailAction]);
+
     const [localRailState, dispatchRail] = useReducer(readmeRailReducer, { openTab: null, selectedActionId: null });
     const railState = {
         openTab: openTab !== undefined ? openTab : localRailState.openTab,
@@ -498,13 +741,14 @@ export function ProjectReadmeQuickConsole({
     };
     const availableTabIds = useMemo(() => {
         if (railTabs?.length) return railTabs;
-        const ids: ProjectReadmeRailTabId[] = [];
+        const ids: ProjectDocRailTabId[] = [];
         if (briefAvailable) ids.push("brief");
         if (primaryCommands.length) ids.push("commands");
         if (references.length) ids.push("links");
         if (headings.length) ids.push("outline");
         if (configCommands.length) ids.push("config");
         if (optionCommands.length) ids.push("options");
+        ids.push("search");
         return ids;
     }, [briefAvailable, configCommands.length, headings.length, optionCommands.length, primaryCommands.length, railTabs, references.length]);
     const hasContent = availableTabIds.length > 0;
@@ -521,7 +765,7 @@ export function ProjectReadmeQuickConsole({
         if (copiedTimerRef.current) window.clearTimeout(copiedTimerRef.current);
     }, []);
 
-    const executeRailAction = useCallback((action: ProjectReadmeRailAction) => {
+    const executeRailAction = useCallback((action: ProjectDocRailAction) => {
         const nextOpenTab = variant === "compact" ? null : railState.openTab;
         onSelectedActionChange?.(action.id);
         onOpenTabChange?.(nextOpenTab);
@@ -532,19 +776,19 @@ export function ProjectReadmeQuickConsole({
             setRailAnnouncement(`Moved to ${action.label}`);
             return;
         }
-        setRailAnnouncement(`Copying ${action.label} and moving to README target`);
+        setRailAnnouncement(`Copying ${action.label} and moving to document target`);
         void copyTextWithFallback(action.copyText)
             .then(() => {
                 setCopiedActionId(action.id);
-                setRailAnnouncement(`Copied ${action.label} and moved to README target`);
+                setRailAnnouncement(`Copied ${action.label} and moved to document target`);
                 if (copiedTimerRef.current) window.clearTimeout(copiedTimerRef.current);
                 copiedTimerRef.current = window.setTimeout(() => {
                     setCopiedActionId((current) => current === action.id ? null : current);
                 }, 1400);
             })
             .catch((error) => {
-                console.error("[ProjectReadmeQuickConsole] Copy command failed", error);
-                setRailAnnouncement(`Could not copy ${action.label}, but moved to README target`);
+                console.error("[ProjectDocQuickConsole] Copy command failed", error);
+                setRailAnnouncement(`Could not copy ${action.label}, but moved to document target`);
             });
     }, [onOpenTabChange, onRailAction, onSelectedActionChange, railState.openTab, variant]);
 
@@ -571,13 +815,13 @@ export function ProjectReadmeQuickConsole({
         buttons[nextIndex]?.focus();
     };
 
-    const toggleRailTab = (id: ProjectReadmeRailTabId) => {
+    const toggleRailTab = (id: ProjectDocRailTabId) => {
         const nextOpenTab = railState.openTab === id ? null : id;
         onOpenTabChange?.(nextOpenTab);
         dispatchRail({ type: "toggle_tab", id });
     };
 
-    const renderCommandGroups = (groups: Array<[ProjectReadmeCommandGroup, ProjectReadmeQuickCommand[]]>) => (
+    const renderCommandGroups = (groups: Array<[ProjectDocCommandGroup, ProjectDocQuickCommand[]]>) => (
         <div className="space-y-3">
             {groups.map(([group, groupCommands]) => (
                 <div key={group} className="space-y-1.5">
@@ -606,7 +850,7 @@ export function ProjectReadmeQuickConsole({
         </div>
     );
 
-    const renderCommandRow = (command: ProjectReadmeQuickCommand) => {
+    const renderCommandRow = (command: ProjectDocQuickCommand) => {
         const action = actionByCommandId.get(command.id);
         if (!action) return null;
         return (
@@ -622,7 +866,7 @@ export function ProjectReadmeQuickConsole({
         );
     };
 
-    const renderCommandList = (list: ProjectReadmeQuickCommand[], groups: Array<[ProjectReadmeCommandGroup, ProjectReadmeQuickCommand[]]>) => {
+    const renderCommandList = (list: ProjectDocQuickCommand[], groups: Array<[ProjectDocCommandGroup, ProjectDocQuickCommand[]]>) => {
         if (list.length <= LARGE_RAIL_LIST_THRESHOLD) return renderCommandGroups(groups);
         return (
             <div className="h-[28rem] min-h-0">
@@ -644,7 +888,7 @@ export function ProjectReadmeQuickConsole({
                 <section>
                     <div className="mb-2 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.28em] text-blue-500">
                         <FileText className="h-3.5 w-3.5" />
-                        README Brief
+                        Doc Brief
                     </div>
                     {briefFactItems.length ? (
                         <dl className="grid gap-2.5">
@@ -680,7 +924,7 @@ export function ProjectReadmeQuickConsole({
                 <section>
                     <div className="mb-2 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.28em] text-blue-500">
                         <ClipboardList className="h-3.5 w-3.5" />
-                        README Report
+                        Doc Report
                     </div>
                     {cleanSummary && !briefItems.some((item) => item.value === cleanSummary) ? (
                         <p className="text-sm leading-6 text-zinc-600 dark:text-zinc-400">{cleanSummary}</p>
@@ -780,9 +1024,9 @@ export function ProjectReadmeQuickConsole({
         <section>
             <div className="mb-2 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.28em] text-blue-500">
                 <Hash className="h-3.5 w-3.5" />
-                On This README
+                On This Document
             </div>
-            <nav className="space-y-1" aria-label="README sections">
+            <nav className="space-y-1" aria-label="Document sections">
                 {headings.length > LARGE_RAIL_LIST_THRESHOLD ? (
                     <div className="h-[28rem] min-h-0">
                         <Virtuoso
@@ -895,6 +1139,20 @@ export function ProjectReadmeQuickConsole({
                 ),
             }
             : null,
+        {
+            id: "search" as const,
+            label: "Search",
+            count: null,
+            content: () => (
+                <section>
+                    <div className="mb-2 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.28em] text-blue-500">
+                        <Search className="h-3.5 w-3.5" />
+                        Search Documents
+                    </div>
+                    <SearchPanel projectId={projectId} onSelectMatch={handleSelectMatch} />
+                </section>
+            ),
+        },
     ].filter((tab): tab is NonNullable<typeof tab> => Boolean(tab));
     const tabOrder = new Map(availableTabIds.map((id, index) => [id, index]));
     const tabs = baseTabs
@@ -904,21 +1162,29 @@ export function ProjectReadmeQuickConsole({
 
     return (
         <aside
-            aria-label="README tools"
+            aria-label="Document tools"
             className={cn(
                 variant === "compact"
                     ? "sticky top-20 z-20 flex max-h-[min(70dvh,calc(100dvh-var(--ui-topnav-height)-6rem))] min-h-0 flex-col space-y-3 rounded-md border border-zinc-200 bg-white/95 p-3 shadow-lg backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/95"
-                    : "flex h-[calc(100dvh-var(--ui-topnav-height)-7rem)] max-h-[calc(100dvh-var(--ui-topnav-height)-7rem)] min-h-0 flex-col space-y-3 border-l border-zinc-200 pl-6 dark:border-zinc-800",
+                    : "flex h-[calc(100dvh-var(--ui-topnav-height)-4.5rem)] max-h-[calc(100dvh-var(--ui-topnav-height)-4.5rem)] min-h-0 flex-col space-y-3 border-l border-zinc-200 pl-6 dark:border-zinc-800",
                 className,
             )}
             data-readme-highlight-token={highlightedTargetToken ?? undefined}
             data-readme-rail-variant={variant}
         >
             <span className="sr-only" aria-live="polite">{railAnnouncement}</span>
+            <div className="flex flex-wrap items-center gap-2 shrink-0 w-full mb-3">
+                <DocumentSwitcher 
+                    projectId={projectId} 
+                    activeSlug={docSlug} 
+                    canEdit={canEdit}
+                    onEdit={onEdit}
+                />
+            </div>
             <motion.div
                 ref={tabListRef}
                 className={cn("grid shrink-0 gap-2", variant === "compact" ? "grid-cols-2 sm:grid-cols-3" : "grid-cols-2")}
-                aria-label="README rail buttons"
+                aria-label="Document rail buttons"
                 role="tablist"
                 onKeyDown={handleTabListKeyDown}
             >
@@ -941,9 +1207,9 @@ export function ProjectReadmeQuickConsole({
                         id={`readme-rail-${railInstanceId}-panel-${activeTab.id}`}
                         role="tabpanel"
                         aria-labelledby={`readme-rail-${railInstanceId}-tab-${activeTab.id}`}
-                        initial={{ height: 0, opacity: 0 }}
-                        animate={{ height: "auto", opacity: 1 }}
-                        exit={{ height: 0, opacity: 0 }}
+                        initial={variant === "compact" ? { height: 0, opacity: 0 } : { opacity: 0 }}
+                        animate={variant === "compact" ? { height: "auto", opacity: 1 } : { opacity: 1 }}
+                        exit={variant === "compact" ? { height: 0, opacity: 0 } : { opacity: 0 }}
                         transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
                         className="min-h-0 flex-1 overflow-hidden border-t border-zinc-200 dark:border-zinc-800"
                         data-readme-compact-panel={variant === "compact" ? "true" : undefined}
@@ -951,8 +1217,8 @@ export function ProjectReadmeQuickConsole({
                         <div
                             className={cn(
                                 "space-y-5 pt-3",
-                                variant === "rail" && "h-full min-h-0 overflow-y-auto overscroll-contain pb-24 pr-1 app-scroll app-scroll-y app-scroll-gutter",
-                                variant === "compact" && "max-h-[min(70dvh,28rem)] overflow-y-auto overscroll-contain pb-20 pr-1 app-scroll app-scroll-y app-scroll-gutter",
+                                variant === "rail" && "h-full min-h-0 overflow-y-auto overscroll-contain pb-10 pr-1 app-scroll app-scroll-y app-scroll-gutter",
+                                variant === "compact" && "max-h-[min(70dvh,28rem)] overflow-y-auto overscroll-contain pb-10 pr-1 app-scroll app-scroll-y app-scroll-gutter",
                             )}
                         >
                             {activeTab.content()}
