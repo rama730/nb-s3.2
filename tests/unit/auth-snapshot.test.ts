@@ -36,7 +36,7 @@ describe('auth snapshot helpers', () => {
             role: 'authenticated',
             iat: nowSeconds,
             exp: nowSeconds + 60,
-            app_metadata: { role: 'member', roles: ['member', 'builder'] },
+            app_metadata: { role: 'member', roles: ['member', 'builder'], onboarding_complete: true },
             user_metadata: { username: 'edge-user', onboarded: true },
         }, process.env.SUPABASE_JWT_SECRET as string)
 
@@ -70,5 +70,15 @@ describe('auth snapshot helpers', () => {
         assert.equal(user.email, 'another@example.com')
         assert.equal(user.user_metadata.username, 'another-user')
         assert.equal(user.app_metadata.role, 'authenticated')
+    })
+
+    it('does not trust mutable user metadata for onboarding completion', () => {
+        const snapshot = mod.buildAuthSnapshotFromClaims({
+            sub: 'user-untrusted-metadata',
+            app_metadata: { role: 'authenticated' },
+            user_metadata: { username: 'self-asserted', onboarded: true },
+        })
+
+        assert.equal(snapshot?.onboardingComplete, false)
     })
 })
