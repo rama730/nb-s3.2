@@ -4,6 +4,7 @@ import React, { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { fetchWorkspaceJoinRequestsAction } from "@/app/actions/workspace";
 import { acceptApplicationAction, rejectApplicationAction } from "@/app/actions/applications";
+import { queryKeys } from "@/lib/query-keys";
 import { useUIStore } from "@/lib/stores/ui-store";
 import { Loader2, User, Check, X, ShieldAlert, ArrowRight, MessageSquareCode } from "lucide-react";
 import { toast } from "sonner";
@@ -19,7 +20,7 @@ export default function WorkspaceMembersTab({ isActive = true }: WorkspaceMember
 
     // Fetch incoming join requests, enabled ONLY when drawer is open and tab is active
     const { data, isLoading, error } = useQuery({
-        queryKey: ["workspace", "members"],
+        queryKey: queryKeys.workspace.members(),
         queryFn: () => fetchWorkspaceJoinRequestsAction(),
         enabled: isWorkspaceOpen && isActive,
         staleTime: 30_000,
@@ -37,7 +38,7 @@ export default function WorkspaceMembersTab({ isActive = true }: WorkspaceMember
         },
         onSuccess: () => {
             toast.success("Application accepted successfully!");
-            queryClient.invalidateQueries({ queryKey: ["workspace", "members"] });
+            queryClient.invalidateQueries({ queryKey: queryKeys.workspace.members() });
         },
         onError: (err: any) => {
             toast.error(err.message || "Failed to accept application");
@@ -57,7 +58,7 @@ export default function WorkspaceMembersTab({ isActive = true }: WorkspaceMember
         },
         onSuccess: () => {
             toast.success("Application declined");
-            queryClient.invalidateQueries({ queryKey: ["workspace", "members"] });
+            queryClient.invalidateQueries({ queryKey: queryKeys.workspace.members() });
         },
         onError: (err: any) => {
             toast.error(err.message || "Failed to decline application");
