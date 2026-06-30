@@ -195,7 +195,7 @@ export const useMessagesV2UiStore = create<MessagesV2UiState>()(
                     const pruned: Record<string, string> = {};
                     // Keep the last 50 entries (most recently written)
                     for (const key of keys.slice(-50)) {
-                        pruned[key] = drafts[key];
+                        pruned[key] = drafts[key] ?? "";
                     }
                     state.draftsByConversation = pruned;
                 }
