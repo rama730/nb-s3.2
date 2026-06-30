@@ -1,3 +1,7 @@
+import {
+    splitMarkdownByInlineReferences,
+} from "@/lib/projects/doc-blocks";
+
 export const PROJECT_UPDATE_TYPES = [
     "progress",
     "milestone",
@@ -70,7 +74,17 @@ export type ProjectUpdateCommentView = {
     userId: string | null;
     author: {
         id: string;
+        fullName?: string | null;
+        username?: string | null;
+        avatarUrl?: string | null;
     } | null;
+    content?: string;
+    canDelete?: boolean;
+    deletedAt?: string | null;
+    createdAt?: string;
+    updatedAt?: string;
+    targetUserId?: string | null;
+    targetUsername?: string | null;
 };
 
 export type ProjectUpdateContextOption = {
@@ -104,7 +118,7 @@ export const PROJECT_UPDATE_COMMENT_PAGE_SIZE = 20;
 export const PROJECT_UPDATE_VIRTUALIZE_THRESHOLD = 80;
 export const PROJECT_UPDATE_MAX_MEDIA_ITEMS = 4;
 export const PROJECT_UPDATE_MAX_REFERENCES = 8;
-export const PROJECT_UPDATE_MEDIA_BUCKET = "project-files";
+export const PROJECT_UPDATE_MEDIA_BUCKET = "project-updates-media";
 export const PROJECT_UPDATE_MEDIA_MAX_BYTES = 8 * 1024 * 1024;
 export const PROJECT_UPDATE_ALLOWED_IMAGE_MIME_TYPES = new Set([
     "image/jpeg",
@@ -135,6 +149,7 @@ export const PROJECT_UPDATE_SCHEMA_CONTRACT = {
         "project_update_likes_unique",
         "project_update_comments_update_created_idx",
         "project_update_comments_update_active_idx",
+        "project_update_comments_parent_idx",
         "project_update_comments_project_created_idx",
         "project_update_comments_user_created_idx",
         "project_update_drafts_updated_at_idx",
@@ -164,8 +179,31 @@ export function sanitizeProjectUpdateContent(value: unknown, maxLength = 2_000) 
     return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
 }
 
+const LEGACY_PROJECT_UPDATE_SMART_BLOCK_REGEX = /\{%\s*project\.([a-z_]+)([^%]*)%\}/gi;
+
+function legacySmartBlockLabel(kind: string) {
+    if (kind === "tasks") return "Project tasks";
+    if (kind === "sprints") return "Project sprints";
+    if (kind === "files") return "Project files";
+    if (kind === "roles") return "Project roles";
+    if (kind === "contributors") return "Project contributors";
+    return "Project reference";
+}
+
+export function projectUpdateDisplayText(value: string) {
+    const normalizedSmartBlocks = value.replace(
+        LEGACY_PROJECT_UPDATE_SMART_BLOCK_REGEX,
+        (_raw, kind: string) => legacySmartBlockLabel(kind?.toLowerCase?.() ?? ""),
+    );
+    return splitMarkdownByInlineReferences(normalizedSmartBlocks)
+        .map((segment) => segment.kind === "reference" ? segment.reference.label : segment.content)
+        .join("")
+        .replace(/\s+/g, " ")
+        .trim();
+}
+
 export function projectUpdateExcerpt(value: string, maxLength = 180) {
-    const normalized = value.replace(/\s+/g, " ").trim();
+    const normalized = projectUpdateDisplayText(value);
     if (normalized.length <= maxLength) return normalized;
     return `${normalized.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
 }
