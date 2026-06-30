@@ -20,6 +20,7 @@ type SuiteName =
     | 'messages-reconnect-storm'
     | 'presence-room-fanout'
     | 'worker-isolation'
+    | 'extension-sync'
 
 const SUITE_CONFIG: Record<SuiteName, {
     script: string;
@@ -70,6 +71,13 @@ const SUITE_CONFIG: Record<SuiteName, {
         requiresAuthCookie: true,
         requiredEnv: ['WORKER_LOAD_URL'],
         thresholds: { p95Ms: 900, failedRate: 0.03, checksRate: 0.99 },
+    },
+    'extension-sync': {
+        script: repoPath('qa', 'load', 'extension-sync.k6.js'),
+        requiresAuthCookie: false,
+        requiredEnv: ['EXTENSION_TOKEN', 'EXTENSION_PROJECT_ID', 'EXTENSION_FILE_PATH'],
+        thresholds: { p95Ms: 900, failedRate: 0.02, checksRate: 0.99, extraTrendP95Ms: 1200 },
+        extraTrendMetric: 'extension_signed_range_ms',
     },
 }
 
@@ -189,6 +197,9 @@ function main() {
                 PRESENCE_WS_LOAD_URL: process.env.PRESENCE_WS_LOAD_URL || undefined,
                 WORKER_BASE_URL: process.env.WORKER_BASE_URL || undefined,
                 WORKER_LOAD_URL: process.env.WORKER_LOAD_URL || undefined,
+                EXTENSION_TOKEN: process.env.EXTENSION_TOKEN || undefined,
+                EXTENSION_PROJECT_ID: process.env.EXTENSION_PROJECT_ID || undefined,
+                EXTENSION_FILE_PATH: process.env.EXTENSION_FILE_PATH || undefined,
             },
         })
 
