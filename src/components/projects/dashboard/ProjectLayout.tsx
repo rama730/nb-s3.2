@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, type CSSProperties } from "react";
 import Link from "next/link";
 import {
     LayoutDashboard, ListTodo, FolderOpen, BookOpenText,
-    Settings, Share2, ChevronLeft, Bell, Timer, BarChart3, Edit, Loader2, Megaphone
+    Settings, Share2, ChevronLeft, Bell, Timer, BarChart3, Edit, Loader2, Newspaper
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Project } from "@/types/hub";
@@ -25,7 +25,7 @@ interface ProjectLayoutProps {
     canManageSettings?: boolean;
     publicTabVisibility?: ProjectPublicTabVisibility | null;
     activeTab: string;
-    isReadmeEditing?: boolean;
+    isDocEditing?: boolean;
     onTabChange: (tabId: string) => void;
     followersCount?: number;
     viewCount?: number;
@@ -41,8 +41,8 @@ interface ProjectLayoutProps {
 
 const TABS = [
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
-    { id: "readme", label: "README", icon: BookOpenText },
-    { id: "updates", label: "Updates", icon: Megaphone },
+    { id: "readme", label: "Docs", icon: BookOpenText },
+    { id: "updates", label: "Updates", icon: Newspaper },
     { id: "sprints", label: "Sprints", icon: Timer },
     { id: "tasks", label: "Tasks", icon: ListTodo },
     { id: "analytics", label: "Analytics", icon: BarChart3 },
@@ -52,7 +52,7 @@ const TABS = [
 
 export default function ProjectLayout({
     children, project, isOwner, activeTab, onTabChange,
-    isReadmeEditing = false,
+    isDocEditing = false,
     isOwnerOrMember,
     canManageSettings,
     publicTabVisibility,
@@ -72,12 +72,13 @@ export default function ProjectLayout({
     const layoutRef = useRef<HTMLDivElement>(null);
     const tabsRef = useRef<HTMLDivElement>(null);
     const contentRef = useRef<HTMLElement>(null);
+    const nestedScrollTopsRef = useRef<Map<HTMLElement, number>>(new Map());
 
     const isFilesTab = activeTab === "files";
     const isSettingsTab = activeTab === "settings";
     const isUpdatesTab = activeTab === "updates";
-    const isReadmeEditWorkspaceTab = activeTab === "readme" && isReadmeEditing;
-    const isContainedWorkspaceTab = isFilesTab || isReadmeEditWorkspaceTab;
+    const isDocEditWorkspaceTab = activeTab === "readme" && isDocEditing;
+    const isContainedWorkspaceTab = isFilesTab || isDocEditWorkspaceTab;
 
     // Detect route scroll for sticky header state. Workspace tabs own nested
     // scroll panes, so capture descendant scroll events there too.
@@ -85,7 +86,7 @@ export default function ProjectLayout({
         const routeRoot = document.querySelector<HTMLElement>('[data-scroll-root="route"]');
         const scrollTarget: HTMLElement | Window = routeRoot ?? window;
         const layoutRoot = layoutRef.current;
-        const nestedScrollTops = new Map<HTMLElement, number>();
+        const nestedScrollTops = nestedScrollTopsRef.current;
         let rafId = 0;
 
         const hasNestedScrolledContent = () => {
@@ -97,7 +98,7 @@ export default function ProjectLayout({
                     nestedScrollTops.delete(element);
                     continue;
                 }
-                if (scrollTop > 10) scrolled = true;
+                if (scrollTop > 0.5) scrolled = true;
             }
             return scrolled;
         };
@@ -106,14 +107,22 @@ export default function ProjectLayout({
             if (rafId) return;
 
             rafId = requestAnimationFrame(() => {
-                const scrollY = routeRoot ? routeRoot.scrollTop : window.scrollY;
-                const shouldBeScrolled = scrollY > 10 || hasNestedScrolledContent();
-                setIsScrolled((prev) => (prev === shouldBeScrolled ? prev : shouldBeScrolled));
+                if (isContainedWorkspaceTab) {
+                    const shouldBeScrolled = hasNestedScrolledContent();
+                    if (shouldBeScrolled) {
+                        setIsScrolled(true);
+                    }
+                } else {
+                    const scrollY = routeRoot ? routeRoot.scrollTop : window.scrollY;
+                    const shouldBeScrolled = scrollY > 10 || hasNestedScrolledContent();
+                    setIsScrolled((prev) => (prev === shouldBeScrolled ? prev : shouldBeScrolled));
+                }
                 rafId = 0;
             });
         };
 
         const handleRouteScroll = () => {
+            if (isContainedWorkspaceTab) return;
             scheduleScrollState();
         };
         const handleNestedScroll = (event: Event) => {
@@ -121,7 +130,7 @@ export default function ProjectLayout({
             const contentRoot = contentRef.current;
             const target = event.target;
             if (!(target instanceof HTMLElement) || !contentRoot?.contains(target)) return;
-            if (target.scrollTop > 0) {
+            if (target.scrollTop > 0.5) {
                 nestedScrollTops.set(target, target.scrollTop);
             } else {
                 nestedScrollTops.delete(target);
@@ -129,16 +138,67 @@ export default function ProjectLayout({
             scheduleScrollState();
         };
 
+        const handleWheel = (event: WheelEvent) => {
+            if (!isContainedWorkspaceTab) return;
+            const deltaY = event.deltaY;
+            if (deltaY === 0) return;
+
+            if (deltaY > 0) {
+                setIsScrolled(true);
+                return;
+            }
+
+            let target = event.target as HTMLElement | null;
+            const contentRoot = contentRef.current;
+            let canScrollUp = false;
+            while (target && target !== contentRoot) {
+                if (target.scrollTop > 0.5) {
+                    canScrollUp = true;
+                    break;
+                }
+                target = target.parentElement;
+            }
+            if (!canScrollUp) {
+                setIsScrolled(false);
+            }
+        };
+
         scrollTarget.addEventListener("scroll", handleRouteScroll as EventListener, { passive: true });
         layoutRoot?.addEventListener("scroll", handleNestedScroll, { capture: true, passive: true });
+        layoutRoot?.addEventListener("wheel", handleWheel, { capture: true, passive: true });
         scheduleScrollState();
 
         return () => {
             scrollTarget.removeEventListener("scroll", handleRouteScroll as EventListener);
             layoutRoot?.removeEventListener("scroll", handleNestedScroll, { capture: true });
+            layoutRoot?.removeEventListener("wheel", handleWheel, { capture: true });
             if (rafId) cancelAnimationFrame(rafId);
         };
     }, [isContainedWorkspaceTab]);
+
+    // Clean up unmounted scroll targets on children transition and re-evaluate scroll state.
+    useEffect(() => {
+        const nestedScrollTops = nestedScrollTopsRef.current;
+        const contentRoot = contentRef.current;
+        if (!contentRoot) return;
+        let changed = false;
+        for (const [element] of nestedScrollTops) {
+            if (!contentRoot.contains(element)) {
+                nestedScrollTops.delete(element);
+                changed = true;
+            }
+        }
+        if (changed) {
+            const routeRoot = document.querySelector<HTMLElement>('[data-scroll-root="route"]');
+            const scrollY = routeRoot ? routeRoot.scrollTop : window.scrollY;
+            let hasScrolled = false;
+            for (const [_, scrollTop] of nestedScrollTops) {
+                if (scrollTop > 0.5) hasScrolled = true;
+            }
+            const shouldBeScrolled = scrollY > 10 || hasScrolled;
+            setIsScrolled(shouldBeScrolled);
+        }
+    }, [children]);
 
     useEffect(() => {
         setTabsReady(true);
@@ -180,14 +240,14 @@ export default function ProjectLayout({
             isContainedWorkspaceTab ? "h-full min-h-0 overflow-hidden flex flex-col" : "min-h-screen"
         )}
             data-project-layout-owned-workspace={isContainedWorkspaceTab ? "true" : undefined}
-            data-project-readme-edit-workspace={isReadmeEditWorkspaceTab ? "true" : undefined}
+            data-project-readme-edit-workspace={isDocEditWorkspaceTab ? "true" : undefined}
             data-project-tabs-height-measured="true"
             style={layoutStyle}
         >
             {/* Top Row: Context & Actions (NOT sticky; scrolls away) */}
             <div
                 className={cn(
-                    "bg-white/80 dark:bg-zinc-950/80 backdrop-blur-md shrink-0 overflow-hidden transition-[height,opacity,transform] duration-300 ease-in-out",
+                    "bg-white/80 dark:bg-zinc-950/80 backdrop-blur-md shrink-0 overflow-hidden transition-[height,opacity,transform] duration-200 ease-in-out",
                     isContainedWorkspaceTab && isScrolled
                         ? "h-0 -translate-y-2 opacity-0 pointer-events-none"
                         : "h-14 translate-y-0 opacity-100",
@@ -248,19 +308,6 @@ export default function ProjectLayout({
 
                         {/* Right: Actions */}
                         <div className="flex items-center gap-2">
-                            {/* Edit (Owner) */}
-                            {isOwner && onEdit && (
-                                <button
-                                    type="button"
-                                    onClick={onEdit}
-                                    className="hidden sm:flex items-center gap-1.5 px-3 py-2 rounded-md app-accent-solid hover:bg-primary/90 transition-[background-color,box-shadow] text-sm font-medium shadow-sm"
-                                    title="Edit Project"
-                                >
-                                    <Edit className="w-4 h-4" />
-                                    Edit
-                                </button>
-                            )}
-
                             {/* Follow */}
                             <button
                                 type="button"
