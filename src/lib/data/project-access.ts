@@ -19,6 +19,7 @@ export type ProjectAccess = {
         visibility: Visibility;
         status: Status;
         slug?: string | null;
+        publicTabVisibility?: unknown;
     } | null;
     isOwner: boolean;
     isMember: boolean;
@@ -57,6 +58,7 @@ export async function getProjectAccessById(projectId: string, userId: string | n
             visibility: projects.visibility,
             status: projects.status,
             slug: projects.slug,
+            publicTabVisibility: projects.publicTabVisibility,
         })
         .from(projects)
         .where(and(eq(projects.id, projectId), isNull(projects.deletedAt)))
@@ -116,6 +118,7 @@ export async function getProjectAccessByIds(projectIds: string[], userId: string
             visibility: projects.visibility,
             status: projects.status,
             slug: projects.slug,
+            publicTabVisibility: projects.publicTabVisibility,
         })
         .from(projects)
         .where(and(inArray(projects.id, projectIds), isNull(projects.deletedAt)));
