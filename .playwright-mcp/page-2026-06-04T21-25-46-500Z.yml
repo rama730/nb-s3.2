@@ -1,0 +1,67 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - banner [ref=e3]:
+      - generic [ref=e4]:
+        - link "Navigate to home" [ref=e7] [cursor=pointer]:
+          - /url: /
+          - img [ref=e11]
+          - generic [ref=e14]: NB
+        - navigation "Main navigation" [ref=e15]:
+          - link "Hub" [ref=e16] [cursor=pointer]:
+            - /url: /hub
+            - img [ref=e17]
+            - generic [ref=e22]: Hub
+          - link "Connections" [ref=e23] [cursor=pointer]:
+            - /url: /people
+            - img [ref=e24]
+            - generic [ref=e29]: Connections
+          - link "Messages" [ref=e30] [cursor=pointer]:
+            - /url: /messages
+            - img [ref=e31]
+            - generic [ref=e33]: Messages
+          - link "Settings" [ref=e34] [cursor=pointer]:
+            - /url: /settings
+            - img [ref=e35]
+            - generic [ref=e38]: Settings
+        - generic [ref=e39]:
+          - button "Theme (loading)" [disabled]
+    - main [ref=e43]:
+      - generic [ref=e46]:
+        - generic [ref=e49]:
+          - generic [ref=e50]:
+            - link "Hub" [ref=e51] [cursor=pointer]:
+              - /url: /hub
+              - img [ref=e52]
+              - text: Hub
+            - generic [ref=e54]:
+              - heading "E2E Applications Fixture Project" [level=1] [ref=e55]
+              - generic [ref=e56]:
+                - generic [ref=e57]: Created by
+                - link "E2E Peer User" [ref=e58] [cursor=pointer]:
+                  - /url: /u/e2e_peer_user
+              - generic "Active Project" [ref=e59]
+            - generic [ref=e61]:
+              - generic "Total Views" [ref=e62]:
+                - img [ref=e63]
+                - generic [ref=e66]: "1"
+              - generic "Followers" [ref=e67]:
+                - img [ref=e68]
+                - generic [ref=e73]: "0"
+          - generic [ref=e74]:
+            - button "Follow" [ref=e75] [cursor=pointer]:
+              - img [ref=e76]
+              - generic [ref=e79]: Follow
+            - button "Share Project" [ref=e81] [cursor=pointer]:
+              - img [ref=e82]
+        - generic [ref=e90]:
+          - button "Dashboard" [disabled] [ref=e91]:
+            - img [ref=e92]
+            - text: Dashboard
+          - button "Updates" [disabled] [ref=e97]:
+            - img [ref=e98]
+            - text: Updates
+          - button "Files" [disabled] [ref=e102]:
+            - img [ref=e103]
+            - text: Files
+        - region "Project detail content" [ref=e105]
+  - region "Notifications alt+T"
