@@ -50,6 +50,7 @@ const MobileSidebarDrawer = dynamic(() => import('@/components/hub/MobileSidebar
 
 import { toProjectCardViewModel, ProjectCardViewModel } from '@/lib/view-models/project-card';
 import { queryKeys } from '@/lib/query-keys';
+import { toHubUser } from '@/lib/view-models/hub-user';
 
 const CREATE_PROJECT_MODAL_STORAGE_KEY = 'hub:create-project-modal-state';
 
@@ -136,18 +137,10 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
     const search = urlFilters.q || undefined;
     const hideOpened = urlFilters.hideOpened;
 
-    const currentUser = useMemo(() => {
-        if (user) {
-            return {
-                id: user.id,
-                email: user.email,
-                username: (user.user_metadata?.username as string) || undefined,
-                full_name: (user.user_metadata?.full_name as string) || undefined,
-                avatar_url: (user.user_metadata?.avatar_url as string) || undefined,
-            } as User;
-        }
-        return returnUserData;
-    }, [user, returnUserData]);
+    const currentUser = useMemo(
+        () => toHubUser(user, returnUserData),
+        [user, returnUserData],
+    );
 
     const { data: myFollowedProjects } = useUserFollowedProjects(currentUser?.id);
     const { seenIds, setHideSeen, markSeen } = useHubSessionSeen();
@@ -468,7 +461,7 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
 
                             {/* Projects Grid */}
                             {isLoading && visibleProjects.length === 0 ? (
-                                <div className={`grid gap-6 ${viewMode === VIEW_MODES.GRID ? 'md:grid-cols-2 lg:grid-cols-3' : 'grid-cols-1'}`}>
+                                <div className={`grid gap-x-4 gap-y-3 ${viewMode === VIEW_MODES.GRID ? 'md:grid-cols-2 lg:grid-cols-3' : 'grid-cols-1'}`}>
                                     {[1, 2, 3, 4, 5, 6].map((i) => (
                                         <ProjectCardSkeleton key={i} />
                                     ))}
@@ -520,7 +513,7 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
                                             }}
                                             components={{
                                                 List: ({ children, ...props }) => (
-                                                    <div {...props} className={`grid gap-6 ${viewMode === VIEW_MODES.GRID ? 'md:grid-cols-2 lg:grid-cols-3' : 'grid-cols-1'} pb-24`}>
+                                                    <div {...props} className={`grid gap-x-4 gap-y-3 ${viewMode === VIEW_MODES.GRID ? 'md:grid-cols-2 lg:grid-cols-3' : 'grid-cols-1'} pb-24`}>
                                                         {children}
                                                     </div>
                                                 ),
