@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useMemo } from "react";
 import dynamic from "next/dynamic";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { ProjectAnalyticsTabId } from "@/lib/projects/analytics";
@@ -15,10 +15,6 @@ import {
     isAnalyticsContextDefault,
 } from "@/components/projects/analytics/AnalyticsShared";
 
-const AnalyticsFiles = dynamic(
-    () => import("@/components/projects/analytics/AnalyticsFiles").then((mod) => mod.AnalyticsFiles),
-    { loading: () => <AnalyticsLoadingState />, ssr: false },
-);
 const AnalyticsMembers = dynamic(
     () => import("@/components/projects/analytics/AnalyticsMembers").then((mod) => mod.AnalyticsMembers),
     { loading: () => <AnalyticsLoadingState />, ssr: false },
@@ -27,20 +23,8 @@ const AnalyticsOverview = dynamic(
     () => import("@/components/projects/analytics/AnalyticsOverview").then((mod) => mod.AnalyticsOverview),
     { loading: () => <AnalyticsLoadingState />, ssr: false },
 );
-const AnalyticsRisks = dynamic(
-    () => import("@/components/projects/analytics/AnalyticsRisks").then((mod) => mod.AnalyticsRisks),
-    { loading: () => <AnalyticsLoadingState />, ssr: false },
-);
-const AnalyticsSprints = dynamic(
-    () => import("@/components/projects/analytics/AnalyticsSprints").then((mod) => mod.AnalyticsSprints),
-    { loading: () => <AnalyticsLoadingState />, ssr: false },
-);
 const AnalyticsTimeline = dynamic(
     () => import("@/components/projects/analytics/AnalyticsTimeline").then((mod) => mod.AnalyticsTimeline),
-    { loading: () => <AnalyticsLoadingState />, ssr: false },
-);
-const AnalyticsWorkflow = dynamic(
-    () => import("@/components/projects/analytics/AnalyticsWorkflow").then((mod) => mod.AnalyticsWorkflow),
     { loading: () => <AnalyticsLoadingState />, ssr: false },
 );
 
@@ -52,10 +36,6 @@ interface AnalyticsTabProps {
 const ANALYTICS_TABS: ProjectAnalyticsTabId[] = [
     "overview",
     "members",
-    "workflow",
-    "sprints",
-    "files",
-    "risks",
     "timeline",
 ];
 
@@ -84,26 +64,49 @@ export default function AnalyticsTab({ projectId, project }: AnalyticsTabProps) 
     const pathname = usePathname();
     const searchParams = useSearchParams();
     const lastUrlRef = useRef<string | null>(null);
-    const initialAnalyticsTab = searchParams.get("analyticsTab");
-    const initialSelectedMember = searchParams.get("memberId");
+    const currentAnalyticsTabFromUrl = searchParams.get("analyticsTab");
+    const currentSelectedMemberFromUrl = searchParams.get("memberId");
     const initialContextMember = searchParams.get("analyticsMember");
     const initialSource = searchParams.get("analyticsSource");
     const initialDateRange = searchParams.get("analyticsWindow");
     const [activeTab, setActiveTab] = useState<ProjectAnalyticsTabId>(() => {
-        return isAnalyticsTabId(initialAnalyticsTab) ? initialAnalyticsTab : "overview";
+        return isAnalyticsTabId(currentAnalyticsTabFromUrl) ? currentAnalyticsTabFromUrl : "overview";
     });
-    const [selectedMemberId, setSelectedMemberId] = useState<string | null>(() => initialSelectedMember);
+    const [selectedMemberId, setSelectedMemberId] = useState<string | null>(() => currentSelectedMemberFromUrl);
+
+    // Sync state with URL search params changes (e.g. back navigation or tab changes)
+    useEffect(() => {
+        if (isAnalyticsTabId(currentAnalyticsTabFromUrl)) {
+            setActiveTab(currentAnalyticsTabFromUrl);
+        } else {
+            setActiveTab("overview");
+        }
+    }, [currentAnalyticsTabFromUrl]);
+
+    useEffect(() => {
+        setSelectedMemberId(currentSelectedMemberFromUrl);
+    }, [currentSelectedMemberFromUrl]);
+
     const [context, setContext] = useState(() => {
         return {
             memberId: initialContextMember,
-            source: isAnalyticsSource(initialSource) ? initialSource : defaultAnalyticsContext.source,
-            dateRange: isAnalyticsDateRange(initialDateRange) ? initialDateRange : defaultAnalyticsContext.dateRange,
+            source: initialSource && isAnalyticsSource(initialSource) ? initialSource : defaultAnalyticsContext.source,
+            dateRange: initialDateRange && isAnalyticsDateRange(initialDateRange) ? initialDateRange : defaultAnalyticsContext.dateRange,
         };
     });
-    const [memberFilterOpen, setMemberFilterOpen] = useState(() => Boolean(initialContextMember));
+    const [memberFilterOpen, setMemberFilterOpen] = useState(true);
     const overviewQuery = useProjectAnalyticsOverview(projectId, context);
     const membersQuery = useProjectAnalyticsMembers(projectId, null, memberFilterOpen);
     const selectedContextMember = membersQuery.data?.find((member) => member.person.id === context.memberId) ?? null;
+
+    // Resolve selectedMemberId (username or UUID) to actual UUID for query
+    const resolvedMemberId = useMemo(() => {
+        if (!selectedMemberId) return null;
+        const found = membersQuery.data?.find(
+            (m) => m.person.username === selectedMemberId || m.person.id === selectedMemberId
+        );
+        return found?.person.id ?? selectedMemberId;
+    }, [selectedMemberId, membersQuery.data]);
 
     useEffect(() => {
         const params = new URLSearchParams(searchParams.toString());
@@ -134,7 +137,7 @@ export default function AnalyticsTab({ projectId, project }: AnalyticsTabProps) 
             if (!overviewQuery.data) {
                 return (
                     <AnalyticsShellCard>
-                        <AnalyticsEmptyState title="Project intelligence unavailable" description="We could not load the project intelligence overview." />
+                        <AnalyticsEmptyState title="Project analytics unavailable" description="We could not load the project analytics overview." />
                     </AnalyticsShellCard>
                 );
             }
@@ -145,16 +148,12 @@ export default function AnalyticsTab({ projectId, project }: AnalyticsTabProps) 
                 <AnalyticsMembers
                     projectId={projectId}
                     context={context}
-                    selectedMemberId={selectedMemberId}
-                    onSelectMember={setSelectedMemberId}
+                    selectedMemberId={resolvedMemberId}
+                    onSelectMember={(idOrUsername) => setSelectedMemberId(idOrUsername)}
                     onBack={() => setSelectedMemberId(null)}
                 />
             );
         }
-        if (activeTab === "workflow") return <AnalyticsWorkflow projectId={projectId} context={context} memberName={selectedContextMember?.person.name ?? null} />;
-        if (activeTab === "sprints") return <AnalyticsSprints projectId={projectId} context={context} memberName={selectedContextMember?.person.name ?? null} />;
-        if (activeTab === "files") return <AnalyticsFiles projectId={projectId} context={context} memberName={selectedContextMember?.person.name ?? null} />;
-        if (activeTab === "risks") return <AnalyticsRisks projectId={projectId} context={context} memberName={selectedContextMember?.person.name ?? null} />;
         return <AnalyticsTimeline projectId={projectId} context={context} onContextChange={setContext} />;
     };
 
@@ -164,7 +163,7 @@ export default function AnalyticsTab({ projectId, project }: AnalyticsTabProps) 
                 <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="max-w-4xl">
                         <p className="text-[10px] font-semibold uppercase tracking-[0.28em] text-blue-500">Analytics</p>
-                        <h2 className="mt-1.5 text-xl font-semibold tracking-tight text-zinc-950 dark:text-zinc-50">Project Intelligence</h2>
+                        <h2 className="mt-1.5 text-xl font-semibold tracking-tight text-zinc-950 dark:text-zinc-50">Project Analytics</h2>
                         <p className="mt-2 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
                             A quiet read on next moves, support signals, workflow, sprints, files, risks, and recent movement for {project?.title || "this project"}.
                         </p>
@@ -189,60 +188,6 @@ export default function AnalyticsTab({ projectId, project }: AnalyticsTabProps) 
                             {ANALYTICS_TAB_COPY[tab]}
                         </button>
                     ))}
-                </div>
-                <div className="mt-3 grid gap-2 rounded-2xl border border-zinc-200 bg-zinc-50 p-2.5 dark:border-zinc-800 dark:bg-zinc-900/50 lg:grid-cols-[1.2fr_1fr_1fr_auto]">
-                    <label className="space-y-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300">
-                        <span>Member focus</span>
-                        <select
-                            value={context.memberId ?? "all"}
-                            onFocus={() => setMemberFilterOpen(true)}
-                            onPointerDown={() => setMemberFilterOpen(true)}
-                            onChange={(event) => setContext((current) => ({
-                                ...current,
-                                memberId: event.target.value === "all" ? null : event.target.value,
-                            }))}
-                            className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs dark:border-zinc-800 dark:bg-zinc-950"
-                        >
-                            <option value="all">All members</option>
-                            {(membersQuery.data ?? []).map((member) => (
-                                <option key={member.person.id} value={member.person.id}>{member.person.name}</option>
-                            ))}
-                        </select>
-                    </label>
-                    <label className="space-y-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300">
-                        <span>Surface</span>
-                        <select
-                            value={context.source ?? "all"}
-                            onChange={(event) => setContext((current) => ({ ...current, source: event.target.value as typeof context.source }))}
-                            className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs dark:border-zinc-800 dark:bg-zinc-950"
-                        >
-                            {SOURCE_FILTERS.map((source) => (
-                                <option key={source.id} value={source.id}>{source.label}</option>
-                            ))}
-                        </select>
-                    </label>
-                    <label className="space-y-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300">
-                        <span>Window</span>
-                        <select
-                            value={context.dateRange}
-                            onChange={(event) => setContext((current) => ({ ...current, dateRange: event.target.value as typeof context.dateRange }))}
-                            className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs dark:border-zinc-800 dark:bg-zinc-950"
-                        >
-                            {ANALYTICS_DATE_RANGE_OPTIONS.map((range) => (
-                                <option key={range.id} value={range.id}>{range.label}</option>
-                            ))}
-                        </select>
-                    </label>
-                    <div className="flex items-end">
-                        <button
-                            type="button"
-                            onClick={() => setContext(defaultAnalyticsContext)}
-                            disabled={isAnalyticsContextDefault(context)}
-                            className="w-full rounded-xl border border-zinc-200 px-3 py-2 text-xs font-semibold text-zinc-600 transition hover:border-blue-300 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-800 dark:text-zinc-300"
-                        >
-                            Reset
-                        </button>
-                    </div>
                 </div>
             </AnalyticsShellCard>
 
