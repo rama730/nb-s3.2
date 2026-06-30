@@ -12,13 +12,12 @@ import { db } from "@/lib/db";
 import {
     profiles,
     projectMembers,
-    projectNodeEvents,
     projectNodes,
     projectOpenRoles,
-    projectReadmeAssets,
-    projectReadmeVersions,
-    projectReadmes,
-    projectReadmeDraftContributors,
+    projectMarkdownAssets,
+    projectMarkdownVersions,
+    projectMarkdowns,
+    projectMarkdownDraftContributors,
     projectSprints,
     projects,
     tasks,
@@ -28,41 +27,43 @@ import { logger } from "@/lib/logger";
 import { enqueueProjectNotificationEvent } from "@/lib/notifications/project-events";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { consumeRateLimit } from "@/lib/security/rate-limit";
+import { recordNodeEvent } from "@/lib/files/internal-helpers";
 import { createUploadIntent, finalizeUploadIntent } from "@/lib/upload/upload-intents";
 import { normalizeAndValidateFileSize, normalizeAndValidateMimeType } from "@/lib/upload/security";
 import {
-    buildProjectReadmePublishMetadata,
-    buildProjectReadmeStorageKey,
-    DEFAULT_PROJECT_README_SETTINGS,
-    PROJECT_README_ALLOWED_IMAGE_MIME_TYPES,
-    PROJECT_README_ASSET_BUCKET,
-    PROJECT_README_ASSET_MAX_BYTES,
-    buildProjectReadmeQualityReport,
-    normalizeProjectReadmeContent,
-    normalizeProjectReadmeHeadings,
-    normalizeProjectReadmeSettings,
+    buildProjectDocPublishMetadata,
+    buildProjectDocStorageKey,
+    DEFAULT_PROJECT_DOC_SETTINGS,
+    PROJECT_DOC_ALLOWED_IMAGE_MIME_TYPES,
+    PROJECT_DOC_ASSET_BUCKET,
+    PROJECT_DOC_ASSET_MAX_BYTES,
+    buildProjectDocQualityReport,
+    normalizeProjectDocContent,
+    normalizeProjectDocHeadings,
+    normalizeProjectDocSettings,
+    normalizeProjectDocSlug,
     readmeImageExtensionFromMimeType,
-    resolveProjectReadmePermission,
-    type ProjectReadmeAsset,
-    type ProjectReadmeDraftPayload,
-    type ProjectReadmePublishedPayload,
-    type ProjectReadmeQualityReport,
-    type ProjectReadmeSettings,
-    type ProjectReadmeVersion,
-} from "@/lib/projects/readme";
-import { isReadmeLikePath } from "@/lib/projects/readme-create-intent";
+    resolveProjectDocPermission,
+    type ProjectDocAsset,
+    type ProjectDocDraftPayload,
+    type ProjectDocPublishedPayload,
+    type ProjectDocQualityReport,
+    type ProjectDocSettings,
+    type ProjectDocVersion,
+} from "@/lib/projects/doc";
+import { isDocLikePath } from "@/lib/projects/doc-create-intent";
 import { normalizeProjectPublicTabVisibility } from "@/lib/projects/settings-policies";
 import type {
-    ProjectReadmeReferenceKind,
-    ProjectReadmeReferenceOption,
-    ProjectReadmeSmartBlock,
-    ProjectReadmeSmartBlockPreview,
-} from "@/lib/projects/readme-blocks";
-import { parseProjectReadmeSmartBlocks } from "@/lib/projects/readme-blocks";
+    ProjectDocReferenceKind,
+    ProjectDocReferenceOption,
+    ProjectDocSmartBlock,
+    ProjectDocSmartBlockPreview,
+} from "@/lib/projects/doc-blocks";
+import { parseProjectDocSmartBlocks } from "@/lib/projects/doc-blocks";
 
 const PUBLIC_PROJECT_DETAIL_SHELL_CACHE_TAG = "public-project-detail-shell";
 const PUBLIC_PROJECT_DETAIL_METADATA_CACHE_TAG = "public-project-detail-metadata";
-const PROJECT_README_ASSET_ROUTE_PREFIX = "/api/v1/projects";
+const PROJECT_DOC_ASSET_ROUTE_PREFIX = "/api/v1/projects";
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const profileDisplayNameSql = (userId: unknown) => sql<string | null>`(
     SELECT COALESCE(NULLIF(full_name, ''), NULLIF(username, ''))
@@ -70,8 +71,10 @@ const profileDisplayNameSql = (userId: unknown) => sql<string | null>`(
     WHERE id = ${userId}
     LIMIT 1
 )`;
+const docSlugSchema = z.string().optional().default("readme").transform((value) => normalizeProjectDocSlug(value));
 
 const readmeSettingsSchema = z.object({
+    docSlug: docSlugSchema,
     editPolicy: z.enum(["leaders", "members"]).optional(),
     publicVisibility: z.literal("inherit_project").optional(),
     mediaUploads: z.boolean().optional(),
@@ -81,11 +84,13 @@ const readmeSettingsSchema = z.object({
 });
 
 const saveDraftSchema = z.object({
+    docSlug: docSlugSchema,
     content: z.string(),
     expectedDraftUpdatedAt: z.string().nullable().optional(),
 });
 
 const publishSchema = z.object({
+    docSlug: docSlugSchema,
     content: z.string().optional(),
     changeSummary: z.string().max(500).nullable().optional(),
     notifyFollowers: z.boolean().optional(),
@@ -94,6 +99,7 @@ const publishSchema = z.object({
 });
 
 const uploadUrlSchema = z.object({
+    docSlug: docSlugSchema,
     mimeType: z.string(),
     sizeBytes: z.number().int().positive(),
     altText: z.string().max(240).nullable().optional(),
@@ -110,11 +116,13 @@ const referenceOptionsSchema = z.object({
 });
 
 const importCandidatesSchema = z.object({
+    docSlug: docSlugSchema,
     query: z.string().max(80).optional(),
     limit: z.number().int().min(1).max(30).optional(),
 });
 
 const importReadmeSchema = z.object({
+    docSlug: docSlugSchema,
     nodeId: z.string().uuid(),
     expectedDraftUpdatedAt: z.string().nullable().optional(),
     publish: z.boolean().optional(),
@@ -140,9 +148,9 @@ function toIso(value: Date | string | null | undefined) {
     return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 }
 
-function normalizeStoredQualityReport(value: unknown, fallbackContent: string): ProjectReadmeQualityReport {
+function normalizeStoredQualityReport(value: unknown, fallbackContent: string): ProjectDocQualityReport {
     if (value && typeof value === "object") {
-        const report = value as Partial<ProjectReadmeQualityReport>;
+        const report = value as Partial<ProjectDocQualityReport>;
         if (
             typeof report.score === "number"
             && Array.isArray(report.issues)
@@ -152,27 +160,29 @@ function normalizeStoredQualityReport(value: unknown, fallbackContent: string): 
         ) {
             return {
                 score: report.score,
-                issues: report.issues as ProjectReadmeQualityReport["issues"],
+                issues: report.issues as ProjectDocQualityReport["issues"],
                 sectionPresence: report.sectionPresence as Record<string, boolean>,
                 contentBytes: report.contentBytes,
             };
         }
     }
-    return buildProjectReadmeQualityReport(fallbackContent);
+    return buildProjectDocQualityReport(fallbackContent);
 }
 
-function toReadmeVersion(row: (typeof projectReadmeVersions.$inferSelect & { createdByName?: string | null }) | null | undefined, displayVersionNumber?: number, coAuthorsData?: { id: string; name: string; avatarUrl: string | null }[]): ProjectReadmeVersion | null {
+function toDocVersion(row: (typeof projectMarkdownVersions.$inferSelect & { createdByName?: string | null }) | null | undefined, displayVersionNumber?: number, coAuthorsData?: { id: string; name: string; avatarUrl: string | null }[]): ProjectDocVersion | null {
     if (!row) return null;
+    const content = normalizeProjectDocContent(row.content);
+    const cleanedMetadata = content === row.content ? null : buildProjectDocPublishMetadata(content);
     return {
         id: row.id,
         projectId: row.projectId,
         versionNumber: row.versionNumber,
         displayVersionNumber: displayVersionNumber ?? row.versionNumber,
-        content: row.content,
-        excerpt: row.excerpt,
-        headings: normalizeProjectReadmeHeadings(row.headings),
-        qualityReport: normalizeStoredQualityReport(row.qualityReport, row.content),
-        contentHash: row.contentHash,
+        content,
+        excerpt: cleanedMetadata?.excerpt ?? row.excerpt,
+        headings: cleanedMetadata?.headings ?? normalizeProjectDocHeadings(row.headings),
+        qualityReport: cleanedMetadata?.qualityReport ?? normalizeStoredQualityReport(row.qualityReport, content),
+        contentHash: cleanedMetadata?.contentHash ?? row.contentHash,
         changeSummary: row.changeSummary,
         coAuthors: coAuthorsData ?? [],
         createdBy: row.createdBy,
@@ -182,7 +192,7 @@ function toReadmeVersion(row: (typeof projectReadmeVersions.$inferSelect & { cre
     };
 }
 
-function toReadmeAsset(row: typeof projectReadmeAssets.$inferSelect): ProjectReadmeAsset {
+function toDocAsset(row: typeof projectMarkdownAssets.$inferSelect): ProjectDocAsset {
     return {
         id: row.id,
         projectId: row.projectId,
@@ -213,7 +223,8 @@ async function requireUserId() {
     return userId;
 }
 
-async function getReadmeProjectContext(projectId: string, actorUserId: string | null) {
+async function getDocProjectContext(projectId: string, actorUserId: string | null, docSlug: string = "readme") {
+    docSlug = normalizeProjectDocSlug(docSlug);
     const [project] = await db
         .select({
             id: projects.id,
@@ -226,6 +237,7 @@ async function getReadmeProjectContext(projectId: string, actorUserId: string | 
             importSource: projects.importSource,
             githubRepoUrl: projects.githubRepoUrl,
             githubDefaultBranch: projects.githubDefaultBranch,
+            key: projects.key,
         })
         .from(projects)
         .where(and(eq(projects.id, projectId), isNull(projects.deletedAt)))
@@ -238,12 +250,12 @@ async function getReadmeProjectContext(projectId: string, actorUserId: string | 
             columns: { role: true },
         })
         : null;
-    const readme = await db.query.projectReadmes.findFirst({
-        where: eq(projectReadmes.projectId, projectId),
+    const readme = await db.query.projectMarkdowns.findFirst({
+        where: and(eq(projectMarkdowns.projectId, projectId), eq(projectMarkdowns.slug, docSlug)),
     });
-    const settings = normalizeProjectReadmeSettings(readme?.settings);
+    const settings = normalizeProjectDocSettings(readme?.settings);
     const hasPublishedReadme = Boolean(readme?.publishedVersionId);
-    const permission = resolveProjectReadmePermission({
+    const permission = resolveProjectDocPermission({
         actorUserId,
         projectVisibility: project.visibility,
         publicTabVisibility: project.publicTabVisibility,
@@ -256,43 +268,47 @@ async function getReadmeProjectContext(projectId: string, actorUserId: string | 
     return { project, membership, readme, settings, permission };
 }
 
-async function getOrCreateReadme(projectId: string, userId: string, settings: ProjectReadmeSettings = DEFAULT_PROJECT_README_SETTINGS) {
-    const existing = await db.query.projectReadmes.findFirst({
-        where: eq(projectReadmes.projectId, projectId),
+async function getOrCreateMarkdown(projectId: string, userId: string, docSlug: string = "readme", settings: ProjectDocSettings = DEFAULT_PROJECT_DOC_SETTINGS) {
+    docSlug = normalizeProjectDocSlug(docSlug);
+    const existing = await db.query.projectMarkdowns.findFirst({
+        where: and(eq(projectMarkdowns.projectId, projectId), eq(projectMarkdowns.slug, docSlug)),
     });
     if (existing) return existing;
+    const filename = docSlug === "readme" ? "README.md" : `${docSlug.toUpperCase()}.md`;
     const [created] = await db
-        .insert(projectReadmes)
+        .insert(projectMarkdowns)
         .values({
             projectId,
+            slug: docSlug,
+            filename,
             draftContent: "",
             draftUpdatedBy: userId,
             draftUpdatedAt: new Date(),
             settings,
         })
         .returning();
-    if (!created) throw new Error("Failed to create README");
+    if (!created) throw new Error("Failed to create markdown document");
     return created;
 }
 
 async function readPublishedVersion(versionId: string | null | undefined) {
     if (!versionId) return null;
-    return db.query.projectReadmeVersions.findFirst({
-        where: and(eq(projectReadmeVersions.id, versionId), isNull(projectReadmeVersions.deletedAt)),
+    return db.query.projectMarkdownVersions.findFirst({
+        where: and(eq(projectMarkdownVersions.id, versionId), isNull(projectMarkdownVersions.deletedAt)),
     });
 }
 
-function revalidateProjectReadme(project: { id: string; slug: string | null }) {
+function revalidateProjectDoc(project: { id: string; slug: string | null }) {
     const slugOrId = project.slug || project.id;
     revalidatePath(`/projects/${slugOrId}`);
-    revalidatePath(`/projects/${slugOrId}?tab=readme`);
+    revalidatePath(`/projects/${slugOrId}?tab=docs&doc=readme`);
     revalidateTag(PUBLIC_PROJECT_DETAIL_SHELL_CACHE_TAG, "max");
     revalidateTag(PUBLIC_PROJECT_DETAIL_METADATA_CACHE_TAG, "max");
 }
 
 function extractAssetIdsFromContent(content: string, projectId: string) {
     const escaped = projectId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const regex = new RegExp(`/api/v1/projects/${escaped}/readme-assets/([a-f0-9-]{36})`, "gi");
+    const regex = new RegExp(`/api/v1/projects/${escaped}/doc-assets/([a-f0-9-]{36})`, "gi");
     return Array.from(new Set(Array.from(content.matchAll(regex)).map((match) => match[1])));
 }
 
@@ -308,14 +324,19 @@ function projectSprintHref(project: { id: string; slug: string | null }, sprintI
     return `/projects/${encodeURIComponent(project.slug || project.id)}/sprints/${encodeURIComponent(sprintId)}`;
 }
 
-function projectFileHref(project: { id: string; slug: string | null }, row: Pick<typeof projectNodes.$inferSelect, "path" | "name">) {
-    const path = (row.path || row.name || "")
-        .split("/")
-        .map((segment) => segment.trim())
-        .filter(Boolean)
-        .map((segment) => encodeURIComponent(segment))
-        .join("/");
-    return path ? `${projectHref(project, "files")}&path=${path}` : projectHref(project, "files");
+function encodeProjectNodePath(row: { path: string | null; name: string }) {
+    const pathParts = row.path && row.path !== "/"
+        ? row.path.split("/").filter(Boolean)
+        : [row.name];
+    return pathParts.map((part) => encodeURIComponent(part)).join("/");
+}
+
+function projectFileHref(project: { id: string; slug: string | null }, row: { id: string; path: string | null; name: string }) {
+    const encodedPath = encodeProjectNodePath(row);
+    const fileId = encodeURIComponent(row.id);
+    return encodedPath
+        ? `${projectHref(project, "files")}&fileId=${fileId}&path=${encodedPath}`
+        : `${projectHref(project, "files")}&fileId=${fileId}`;
 }
 
 function projectRoleApplyHref(project: { id: string; slug: string | null }, roleId: string) {
@@ -332,8 +353,8 @@ function normalizeReferenceCount(value: number | null | undefined) {
 }
 
 function canReadReferenceKind(
-    kind: ProjectReadmeReferenceKind,
-    context: Awaited<ReturnType<typeof getReadmeProjectContext>>,
+    kind: ProjectDocReferenceKind,
+    context: Awaited<ReturnType<typeof getDocProjectContext>>,
 ) {
     if (context.permission.canEdit || context.permission.accessLevel === "owner" || context.membership) return true;
     if (context.project.visibility !== "public" || !context.permission.canReadPublished) return false;
@@ -345,15 +366,15 @@ function canReadReferenceKind(
     return true;
 }
 
-function blockKey(block: Pick<ProjectReadmeSmartBlock, "kind" | "ids" | "index">) {
+function blockKey(block: Pick<ProjectDocSmartBlock, "kind" | "ids" | "index">) {
     return `${block.kind}:${block.ids.join(",")}:${block.index}`;
 }
 
-function unavailablePreview(block: Pick<ProjectReadmeSmartBlock, "kind" | "ids" | "index">, description = "This project reference is not available to this viewer."): ProjectReadmeSmartBlockPreview {
+function unavailablePreview(block: Pick<ProjectDocSmartBlock, "kind" | "ids" | "index">, description = "This project reference is not available to this viewer."): ProjectDocSmartBlockPreview {
     return {
         key: blockKey({ kind: block.kind, ids: block.ids ?? [], index: block.index ?? 0 }),
         kind: block.kind,
-        title: block.kind === "unknown" ? "Unknown README block" : "Reference unavailable",
+        title: block.kind === "unknown" ? "Unknown document block" : "Reference unavailable",
         description,
         items: [],
         unavailableCount: block.ids?.length ?? 0,
@@ -428,11 +449,12 @@ type TaskReferenceRow = Pick<typeof tasks.$inferSelect,
     creatorName?: string | null;
 };
 
-function optionFromTask(row: TaskReferenceRow, project: { id: string; slug: string | null }): ProjectReadmeReferenceOption {
+function optionFromTask(row: TaskReferenceRow, project: { id: string; slug: string | null; key?: string | null }): ProjectDocReferenceOption {
     const assignee = truncateReferenceText(row.assigneeName, 40);
     const creator = truncateReferenceText(row.creatorName, 40);
     const assignment = assignee ? `assigned to ${assignee}` : creator ? `created by ${creator}` : "unassigned";
     const priority = row.priority ? `${formatLabel(row.priority)} priority` : null;
+    const taskCode = project.key && row.taskNumber ? `${project.key}-${row.taskNumber}` : row.id;
     return {
         id: row.id,
         kind: "tasks",
@@ -443,11 +465,11 @@ function optionFromTask(row: TaskReferenceRow, project: { id: string; slug: stri
         meta: assignment,
         context: [formatLabel(row.status), assignment, priority].filter(Boolean).join(" · "),
         badges: [priority].filter((badge): badge is string => Boolean(badge)),
-        href: projectTaskHref(project, row.id),
+        href: projectTaskHref(project, taskCode),
     };
 }
 
-function optionFromSprint(row: typeof projectSprints.$inferSelect, project: { id: string; slug: string | null }): ProjectReadmeReferenceOption {
+function optionFromSprint(row: typeof projectSprints.$inferSelect, project: { id: string; slug: string | null }): ProjectDocReferenceOption {
     const dateRange = formatSprintDateRange(row.startDate, row.endDate);
     return {
         id: row.id,
@@ -462,7 +484,7 @@ function optionFromSprint(row: typeof projectSprints.$inferSelect, project: { id
     };
 }
 
-function optionFromFile(row: typeof projectNodes.$inferSelect, project: { id: string; slug: string | null }): ProjectReadmeReferenceOption {
+function optionFromFile(row: typeof projectNodes.$inferSelect, project: { id: string; slug: string | null }): ProjectDocReferenceOption {
     const versions = row.currentVersion > 1 ? `${row.currentVersion} versions` : "1 version";
     const fileType = formatFileType(row);
     return {
@@ -478,7 +500,7 @@ function optionFromFile(row: typeof projectNodes.$inferSelect, project: { id: st
     };
 }
 
-function isReadmeImportCandidate(row: Pick<typeof projectNodes.$inferSelect, "name" | "path" | "mimeType" | "size">) {
+function isDocImportCandidate(row: Pick<typeof projectNodes.$inferSelect, "name" | "path" | "mimeType" | "size">) {
     const name = row.name.toLowerCase();
     const path = row.path.toLowerCase();
     const mimeType = row.mimeType?.toLowerCase() ?? "";
@@ -504,9 +526,9 @@ function readmePathBasename(path: string) {
     return path.split("/").filter(Boolean).pop() || path;
 }
 
-async function findProjectReadmeNodeByPath(projectId: string, sourcePath: string) {
+async function findProjectDocNodeByPath(projectId: string, sourcePath: string) {
     const normalizedPath = normalizeReadmeCandidatePath(sourcePath);
-    if (!normalizedPath || !isReadmeLikePath(normalizedPath)) return null;
+    if (!normalizedPath || !isDocLikePath(normalizedPath)) return null;
     const fileName = readmePathBasename(normalizedPath);
     const rows = await db.query.projectNodes.findMany({
         where: and(
@@ -529,10 +551,10 @@ async function findProjectReadmeNodeByPath(projectId: string, sourcePath: string
         const rowName = normalizeReadmeCandidatePath(row.name);
         return rowPath === normalizedPath || rowPath === `/${normalizedPath}` || rowName === normalizedPath || rowName === fileName;
     });
-    return [exact, ...rows].find((row): row is typeof projectNodes.$inferSelect => Boolean(row && isReadmeImportCandidate(row))) ?? null;
+    return [exact, ...rows].find((row): row is typeof projectNodes.$inferSelect => Boolean(row && isDocImportCandidate(row))) ?? null;
 }
 
-function resolveProjectGithubSource(project: Awaited<ReturnType<typeof getReadmeProjectContext>>["project"]) {
+function resolveProjectGithubSource(project: Awaited<ReturnType<typeof getDocProjectContext>>["project"]) {
     const importSource = (project.importSource || {}) as {
         repoUrl?: string | null;
         branch?: string | null;
@@ -561,11 +583,11 @@ async function getGithubProviderToken() {
 }
 
 async function fetchGithubReadmeContentForProject(
-    project: Awaited<ReturnType<typeof getReadmeProjectContext>>["project"],
+    project: Awaited<ReturnType<typeof getDocProjectContext>>["project"],
     sourcePath: string,
 ) {
     const normalizedPath = normalizeReadmeCandidatePath(sourcePath);
-    if (!normalizedPath || !isReadmeLikePath(normalizedPath)) return null;
+    if (!normalizedPath || !isDocLikePath(normalizedPath)) return null;
     const { repoUrl, branch } = resolveProjectGithubSource(project);
     if (!repoUrl) return null;
     const parsed = parseGithubRepo(repoUrl);
@@ -595,7 +617,7 @@ async function fetchGithubReadmeContentForProject(
     return Buffer.from(payload.content.replace(/\s/g, ""), "base64").toString("utf8");
 }
 
-function optionFromRole(row: typeof projectOpenRoles.$inferSelect, project: { id: string; slug: string | null }): ProjectReadmeReferenceOption {
+function optionFromRole(row: typeof projectOpenRoles.$inferSelect, project: { id: string; slug: string | null }): ProjectDocReferenceOption {
     const count = normalizeReferenceCount(row.count);
     const filled = count > 0
         ? Math.min(normalizeReferenceCount(row.filled), count)
@@ -624,7 +646,7 @@ function optionFromContributor(row: {
     username: string | null;
     avatarUrl: string | null;
     projectRoleTitle?: string | null;
-}, project: { id: string; slug: string | null; ownerId?: string | null }): ProjectReadmeReferenceOption {
+}, project: { id: string; slug: string | null; ownerId?: string | null }): ProjectDocReferenceOption {
     const roleLabel = formatMemberRole(row.role, row.userId === project.ownerId);
     const projectRoleTitle = truncateReferenceText(row.projectRoleTitle, 48);
     return {
@@ -642,17 +664,19 @@ function optionFromContributor(row: {
     };
 }
 
-export async function readProjectReadmeAction(projectId: string): Promise<
-    | { success: true; data: ProjectReadmePublishedPayload }
+export async function readProjectDocAction(projectId: string, docSlug: string = "readme"): Promise<
+    | { success: true; data: ProjectDocPublishedPayload }
     | { success: false; error: string }
 > {
     try {
+        docSlug = normalizeProjectDocSlug(docSlug);
         const actorUserId = await getOptionalUserId();
-        const context = await getReadmeProjectContext(projectId, actorUserId);
+        const context = await getDocProjectContext(projectId, actorUserId, docSlug);
         if (!context.permission.canReadPublished && !context.permission.canEdit) {
-            return { success: false, error: context.permission.reason || "README unavailable" };
+            return { success: false, error: context.permission.reason || "Document unavailable" };
         }
         let versionRow = null;
+        let linkedNode = null;
         if (context.readme?.linkedNodeId) {
             const node = await db.query.projectNodes.findFirst({
                 where: and(
@@ -661,12 +685,19 @@ export async function readProjectReadmeAction(projectId: string): Promise<
                 )
             });
             if (node) {
+                linkedNode = {
+                    id: node.id,
+                    name: node.name,
+                    path: node.path,
+                    s3Key: node.s3Key ?? "",
+                };
                 try {
                     const content = await getProjectFileContent(projectId, node.id);
-                    const metadata = buildProjectReadmePublishMetadata(content);
+                    const metadata = buildProjectDocPublishMetadata(content);
                     versionRow = {
                         id: `linked-${node.id}`,
                         projectId,
+                        markdownId: context.readme!.id,
                         versionNumber: 1,
                         content: metadata.content,
                         excerpt: metadata.excerpt,
@@ -685,21 +716,21 @@ export async function readProjectReadmeAction(projectId: string): Promise<
                 }
             } else {
                 // If it was deleted, detach it
-                await db.update(projectReadmes)
+                await db.update(projectMarkdowns)
                     .set({ linkedNodeId: null })
-                    .where(eq(projectReadmes.id, context.readme.id));
+                    .where(eq(projectMarkdowns.id, context.readme.id));
             }
         }
 
         let normalizedVersion = null;
         if (versionRow) {
-            normalizedVersion = toReadmeVersion(versionRow);
+            normalizedVersion = toDocVersion(versionRow);
         } else {
             const version = await readPublishedVersion(context.readme?.publishedVersionId);
             if (!version && !context.permission.canEdit) {
-                return { success: false, error: "README has not been published yet." };
+                return { success: false, error: "Document has not been published yet." };
             }
-            normalizedVersion = toReadmeVersion(version);
+            normalizedVersion = toDocVersion(version);
         }
         return {
             success: true,
@@ -709,7 +740,9 @@ export async function readProjectReadmeAction(projectId: string): Promise<
                 permission: context.permission,
                 settings: context.settings,
                 version: normalizedVersion,
-                smartBlocks: normalizedVersion ? parseProjectReadmeSmartBlocks(normalizedVersion.content) : [],
+                smartBlocks: normalizedVersion ? parseProjectDocSmartBlocks(normalizedVersion.content) : [],
+                linkedNodeId: context.readme?.linkedNodeId ?? null,
+                linkedNode,
             },
         };
     } catch (error) {
@@ -718,21 +751,33 @@ export async function readProjectReadmeAction(projectId: string): Promise<
             projectId,
             error: error instanceof Error ? error.message : String(error),
         });
-        return { success: false, error: "Failed to load README." };
+        return { success: false, error: "Failed to load document." };
     }
 }
 
-export async function readProjectReadmeDraftAction(projectId: string): Promise<
-    | { success: true; data: ProjectReadmeDraftPayload }
+export async function readProjectDocDraftAction(projectId: string, docSlug: string = "readme"): Promise<
+    | { success: true; data: ProjectDocDraftPayload }
     | { success: false; error: string }
 > {
     try {
+        docSlug = normalizeProjectDocSlug(docSlug);
         const userId = await requireUserId();
-        const context = await getReadmeProjectContext(projectId, userId);
-        if (!context.permission.canReadDraft) return { success: false, error: "You cannot edit this README." };
-        const readme = await getOrCreateReadme(projectId, userId, context.settings);
+        const context = await getDocProjectContext(projectId, userId, docSlug);
+        if (!context.permission.canReadDraft) return { success: false, error: "You cannot edit this document." };
+        const readme = await getOrCreateMarkdown(projectId, userId, docSlug, context.settings);
         const published = await readPublishedVersion(readme.publishedVersionId);
-        let draftContent = readme.draftContent || "";
+        let draftContent = normalizeProjectDocContent(readme.draftContent || "");
+        let draftUpdatedAt = readme.draftUpdatedAt;
+        if ((readme.draftContent || "") !== draftContent) {
+            draftUpdatedAt = new Date();
+            await db.update(projectMarkdowns)
+                .set({
+                    draftContent,
+                    draftUpdatedAt,
+                    updatedAt: draftUpdatedAt,
+                })
+                .where(eq(projectMarkdowns.id, readme.id));
+        }
 
         let linkedNode = null;
         if (readme.linkedNodeId) {
@@ -752,28 +797,31 @@ export async function readProjectReadmeDraftAction(projectId: string): Promise<
                     s3Key: node.s3Key ?? "",
                 };
                 try {
-                    const fileContent = await getProjectFileContent(projectId, node.id);
+                    const fileContent = normalizeProjectDocContent(await getProjectFileContent(projectId, node.id));
                     const fileUpdatedAt = node.updatedAt ? new Date(node.updatedAt).getTime() : 0;
-                    const draftUpdatedAt = readme.draftUpdatedAt ? new Date(readme.draftUpdatedAt).getTime() : 0;
+                    const currentDraftUpdatedAt = draftUpdatedAt ? new Date(draftUpdatedAt).getTime() : 0;
                     
-                    if (fileUpdatedAt > draftUpdatedAt || !readme.draftContent) {
+                    if (fileUpdatedAt > currentDraftUpdatedAt || !readme.draftContent) {
+                        const nextDraftUpdatedAt = node.updatedAt || new Date();
                         draftContent = fileContent;
+                        draftUpdatedAt = nextDraftUpdatedAt;
                         // Auto-sync the draft in database
-                        await db.update(projectReadmes)
+                        await db.update(projectMarkdowns)
                             .set({
                                 draftContent: fileContent,
-                                draftUpdatedAt: node.updatedAt || new Date(),
+                                draftUpdatedAt: nextDraftUpdatedAt,
+                                updatedAt: nextDraftUpdatedAt,
                             })
-                            .where(eq(projectReadmes.id, readme.id));
+                            .where(eq(projectMarkdowns.id, readme.id));
                     }
                 } catch (err) {
                     logger.error("project_readme.fetch_linked_node_content_failed", { projectId, nodeId: node.id, error: err instanceof Error ? err.message : String(err) });
                 }
             } else {
                 // If it was deleted, detach it!
-                await db.update(projectReadmes)
+                await db.update(projectMarkdowns)
                     .set({ linkedNodeId: null })
-                    .where(eq(projectReadmes.id, readme.id));
+                    .where(eq(projectMarkdowns.id, readme.id));
             }
         }
 
@@ -782,11 +830,11 @@ export async function readProjectReadmeDraftAction(projectId: string): Promise<
             data: {
                 projectId,
                 permission: context.permission,
-                settings: normalizeProjectReadmeSettings(readme.settings),
+                settings: normalizeProjectDocSettings(readme.settings),
                 draftContent,
-                draftUpdatedAt: toIso(readme.draftUpdatedAt),
-                publishedVersion: toReadmeVersion(published),
-                qualityReport: buildProjectReadmeQualityReport(draftContent),
+                draftUpdatedAt: toIso(draftUpdatedAt),
+                publishedVersion: toDocVersion(published),
+                qualityReport: buildProjectDocQualityReport(draftContent),
                 linkedNodeId: linkedNode ? readme.linkedNodeId : null,
                 linkedNode,
             },
@@ -797,52 +845,56 @@ export async function readProjectReadmeDraftAction(projectId: string): Promise<
             projectId,
             error: error instanceof Error ? error.message : String(error),
         });
-        return { success: false, error: "Failed to load README draft." };
+        return { success: false, error: "Failed to load document draft." };
     }
 }
 
-export async function saveProjectReadmeDraftAction(projectId: string, input: unknown) {
+export async function saveProjectDocDraftAction(projectId: string, input: unknown) {
     try {
         const userId = await requireUserId();
         const parsed = saveDraftSchema.parse(input);
-        const content = normalizeProjectReadmeContent(parsed.content);
-        const context = await getReadmeProjectContext(projectId, userId);
-        if (!context.permission.canEdit) return { success: false as const, error: "You cannot edit this README." };
+        const docSlug = parsed.docSlug;
+        const content = normalizeProjectDocContent(parsed.content);
+        const context = await getDocProjectContext(projectId, userId, docSlug);
+        if (!context.permission.canEdit) return { success: false as const, error: "You cannot edit this document." };
         const result = await db.transaction(async (tx) => {
-            let readme = await tx.query.projectReadmes.findFirst({ where: eq(projectReadmes.projectId, projectId) });
+            let readme = await tx.query.projectMarkdowns.findFirst({ where: and(eq(projectMarkdowns.projectId, projectId), eq(projectMarkdowns.slug, docSlug)) });
             if (!readme) {
-                const [created] = await tx.insert(projectReadmes).values({ projectId, draftContent: "", draftUpdatedBy: userId, draftUpdatedAt: new Date(), settings: context.settings }).returning();
+                const filename = docSlug === "readme" ? "README.md" : `${docSlug.toUpperCase()}.md`;
+                const [created] = await tx.insert(projectMarkdowns).values({ projectId, slug: docSlug, filename, draftContent: "", draftUpdatedBy: userId, draftUpdatedAt: new Date(), settings: context.settings }).returning();
                 readme = created;
             }
-            const [lockedReadme] = await tx.select().from(projectReadmes).where(eq(projectReadmes.id, readme!.id)).for('update');
-            if (!lockedReadme) throw new Error("README not found");
+            const [lockedReadme] = await tx.select().from(projectMarkdowns).where(eq(projectMarkdowns.id, readme!.id)).for('update');
+            if (!lockedReadme) throw new Error("Document not found");
 
             const currentUpdatedAt = toIso(lockedReadme.draftUpdatedAt);
 
             if ((lockedReadme.draftContent || "") === content) {
                 return {
                     success: true as const,
+                    draftContent: content,
                     draftUpdatedAt: currentUpdatedAt,
-                    qualityReport: buildProjectReadmeQualityReport(content),
+                    qualityReport: buildProjectDocQualityReport(content),
                     unchanged: true as const,
                 };
             }
 
             const [updated] = await tx
-                .update(projectReadmes)
+                .update(projectMarkdowns)
                 .set({
                     draftContent: content,
                     draftUpdatedBy: userId,
                     draftUpdatedAt: new Date(),
                     updatedAt: new Date(),
                 })
-                .where(eq(projectReadmes.id, lockedReadme.id))
+                .where(eq(projectMarkdowns.id, lockedReadme.id))
                 .returning();
 
             return {
                 success: true as const,
+                draftContent: content,
                 draftUpdatedAt: toIso(updated?.draftUpdatedAt),
-                qualityReport: buildProjectReadmeQualityReport(content),
+                qualityReport: buildProjectDocQualityReport(content),
             };
         });
         if (result.success === true && result.draftUpdatedAt) {
@@ -855,19 +907,19 @@ export async function saveProjectReadmeDraftAction(projectId: string, input: unk
             projectId,
             error: error instanceof Error ? error.message : String(error),
         });
-        return { success: false as const, error: "Failed to save README draft." };
+        return { success: false as const, error: "Failed to save document draft." };
     }
 }
 
-export async function readProjectReadmeImportCandidatesAction(projectId: string, input: unknown): Promise<
-    | { success: true; candidates: ProjectReadmeReferenceOption[] }
+export async function readProjectDocImportCandidatesAction(projectId: string, input: unknown): Promise<
+    | { success: true; candidates: ProjectDocReferenceOption[] }
     | { success: false; error: string }
 > {
     try {
         const userId = await requireUserId();
         const parsed = importCandidatesSchema.parse(input);
-        const context = await getReadmeProjectContext(projectId, userId);
-        if (!context.permission.canEdit) return { success: false, error: "You cannot import a project README." };
+        const context = await getDocProjectContext(projectId, userId);
+        if (!context.permission.canEdit) return { success: false, error: "You cannot import a project document." };
 
         const query = parsed.query?.trim() || "";
         const like = `%${query.replace(/[%_]/g, "\\$&")}%`;
@@ -901,7 +953,7 @@ export async function readProjectReadmeImportCandidatesAction(projectId: string,
             limit: Math.max((parsed.limit ?? 12) * 3, 30),
         });
         const candidates = rows
-            .filter(isReadmeImportCandidate)
+            .filter(isDocImportCandidate)
             .slice(0, parsed.limit ?? 12)
             .map((row) => optionFromFile(row, context.project));
 
@@ -912,43 +964,45 @@ export async function readProjectReadmeImportCandidatesAction(projectId: string,
             projectId,
             error: error instanceof Error ? error.message : String(error),
         });
-        return { success: false, error: "Failed to load README files." };
+        return { success: false, error: "Failed to load document files." };
     }
 }
 
-export async function importProjectReadmeFromFileAction(projectId: string, input: unknown) {
+export async function importProjectDocFromFileAction(projectId: string, input: unknown) {
     try {
         const userId = await requireUserId();
         const parsed = importReadmeSchema.parse(input);
-        const context = await getReadmeProjectContext(projectId, userId);
-        if (!context.permission.canEdit) return { success: false as const, error: "You cannot import a project README." };
+        const docSlug = parsed.docSlug;
+        const context = await getDocProjectContext(projectId, userId, docSlug);
+        if (!context.permission.canEdit) return { success: false as const, error: "You cannot import this document." };
 
         const node = await db.query.projectNodes.findFirst({
             where: and(eq(projectNodes.id, parsed.nodeId), eq(projectNodes.projectId, projectId), eq(projectNodes.type, "file"), isNull(projectNodes.deletedAt)),
         });
-        if (!node || !isReadmeImportCandidate(node)) return { success: false as const, error: "Select a Markdown or README-like file." };
+        if (!node || !isDocImportCandidate(node)) return { success: false as const, error: "Select a Markdown or document file." };
 
         const rawContent = await getProjectFileContent(projectId, parsed.nodeId);
-        const content = normalizeProjectReadmeContent(rawContent);
-        const readme = await getOrCreateReadme(projectId, userId, context.settings);
+        const content = normalizeProjectDocContent(rawContent);
+        const readme = await getOrCreateMarkdown(projectId, userId, docSlug, context.settings);
         const currentUpdatedAt = toIso(readme.draftUpdatedAt);
 
-        let publishedVersion: ProjectReadmeVersion | null = null;
+        let publishedVersion: ProjectDocVersion | null = null;
         let updatedDraftAt: string | null = null;
 
         if (parsed.publish && context.permission.canPublish) {
-            const metadata = buildProjectReadmePublishMetadata(content);
+            const metadata = buildProjectDocPublishMetadata(content);
             const published = await db.transaction(async (tx) => {
                 const now = new Date();
                 const [latest] = await tx
-                    .select({ value: max(projectReadmeVersions.versionNumber) })
-                    .from(projectReadmeVersions)
-                    .where(eq(projectReadmeVersions.projectId, projectId));
+                    .select({ value: max(projectMarkdownVersions.versionNumber) })
+                    .from(projectMarkdownVersions)
+                    .where(eq(projectMarkdownVersions.markdownId, readme.id));
                 const nextVersion = (latest?.value ?? 0) + 1;
                 const [version] = await tx
-                    .insert(projectReadmeVersions)
+                    .insert(projectMarkdownVersions)
                     .values({
                         projectId,
+                        markdownId: readme.id,
                         versionNumber: nextVersion,
                         content: metadata.content,
                         excerpt: metadata.excerpt,
@@ -959,9 +1013,9 @@ export async function importProjectReadmeFromFileAction(projectId: string, input
                         createdBy: userId,
                     })
                     .returning();
-                if (!version) throw new Error("Failed to publish README version");
+                if (!version) throw new Error("Failed to publish version");
 
-                const [updated] = await tx.update(projectReadmes)
+                const [updated] = await tx.update(projectMarkdowns)
                     .set({
                         draftContent: metadata.content,
                         draftUpdatedBy: userId,
@@ -969,53 +1023,45 @@ export async function importProjectReadmeFromFileAction(projectId: string, input
                         publishedVersionId: version.id,
                         updatedAt: now,
                     })
-                    .where(eq(projectReadmes.id, readme.id))
-                    .returning({ draftUpdatedAt: projectReadmes.draftUpdatedAt });
+                    .where(eq(projectMarkdowns.id, readme.id))
+                    .returning({ draftUpdatedAt: projectMarkdowns.draftUpdatedAt });
                 updatedDraftAt = toIso(updated?.draftUpdatedAt ?? now);
 
                 const referencedAssetIds = extractAssetIdsFromContent(metadata.content, projectId);
                 if (referencedAssetIds.length > 0) {
-                    await tx.update(projectReadmeAssets)
+                    await tx.update(projectMarkdownAssets)
                         .set({ status: "published", versionId: version.id })
-                        .where(and(eq(projectReadmeAssets.projectId, projectId), inArray(projectReadmeAssets.id, referencedAssetIds as string[])));
+                        .where(and(eq(projectMarkdownAssets.markdownId, readme.id), inArray(projectMarkdownAssets.id, referencedAssetIds as string[])));
                 }
-                await tx.update(projectReadmeAssets)
+                await tx.update(projectMarkdownAssets)
                     .set({ status: "orphaned" })
-                    .where(and(eq(projectReadmeAssets.projectId, projectId), eq(projectReadmeAssets.status, "draft")));
+                    .where(and(eq(projectMarkdownAssets.markdownId, readme.id), eq(projectMarkdownAssets.status, "draft")));
 
-                await tx.insert(projectNodeEvents).values([
-                    {
-                        projectId,
-                        actorId: userId,
-                        type: "project_readme.imported_from_file",
-                        metadata: { nodeId: parsed.nodeId, fileName: node.name, published: true },
-                    },
-                    {
-                        projectId,
-                        actorId: userId,
-                        type: "project_readme.published",
-                        metadata: {
-                            versionId: version.id,
-                            versionNumber: version.versionNumber,
-                            changeSummary: `Imported from ${node.name}`,
-                            qualityScore: metadata.qualityReport.score,
-                            sourceNodeId: parsed.nodeId,
-                        },
-                    },
-                ]);
+                await recordNodeEvent(projectId, userId, null, "project_readme.imported_from_file", {
+                    nodeId: parsed.nodeId,
+                    fileName: node.name,
+                    published: true,
+                }, tx);
+                await recordNodeEvent(projectId, userId, null, "project_readme.published", {
+                    versionId: version.id,
+                    versionNumber: version.versionNumber,
+                    changeSummary: `Imported from ${node.name}`,
+                    qualityScore: metadata.qualityReport.score,
+                    sourceNodeId: parsed.nodeId,
+                }, tx);
 
                 return version;
             });
-            publishedVersion = toReadmeVersion(published);
+            publishedVersion = toDocVersion(published);
 
             if (context.settings.notifyOnPublish) {
                 enqueueProjectNotificationEvent({
                     projectId,
                     actorUserId: userId,
                     eventKey: "readme.published",
-                    title: "Project README published",
+                    title: "Project document published",
                     body: metadata.excerpt,
-                    href: `/projects/${encodeURIComponent(context.project.slug || context.project.id)}?tab=readme`,
+                    href: `/projects/${encodeURIComponent(context.project.slug || context.project.id)}?tab=docs&doc=${docSlug}`,
                     entityRefs: { projectId },
                     sourceEventId: `readme:${published.id}`,
                 }).catch((error) => logger.warn("project_readme.notification_failed", {
@@ -1026,38 +1072,33 @@ export async function importProjectReadmeFromFileAction(projectId: string, input
                 }));
             }
         } else {
-            const [updated] = await db.update(projectReadmes)
+            const [updated] = await db.update(projectMarkdowns)
                 .set({
                     draftContent: content,
                     draftUpdatedBy: userId,
                     draftUpdatedAt: new Date(),
                     updatedAt: new Date(),
                 })
-                .where(eq(projectReadmes.id, readme.id))
+                .where(eq(projectMarkdowns.id, readme.id))
                 .returning();
             updatedDraftAt = toIso(updated?.draftUpdatedAt);
 
-            await db.insert(projectNodeEvents).values({
-                projectId,
-                actorId: userId,
-                type: "project_readme.imported_from_file",
-                metadata: {
-                    nodeId: parsed.nodeId,
-                    fileName: node.name,
-                    published: false,
-                    publishRequested: Boolean(parsed.publish),
-                    publishSkippedReason: parsed.publish ? "permission" : null,
-                },
+            await recordNodeEvent(projectId, userId, null, "project_readme.imported_from_file", {
+                nodeId: parsed.nodeId,
+                fileName: node.name,
+                published: false,
+                publishRequested: Boolean(parsed.publish),
+                publishSkippedReason: parsed.publish ? "permission" : null,
             });
         }
 
-        revalidateProjectReadme(context.project);
+        revalidateProjectDoc(context.project);
 
         return {
             success: true as const,
             draftContent: content,
             draftUpdatedAt: updatedDraftAt,
-            qualityReport: buildProjectReadmeQualityReport(content),
+            qualityReport: buildProjectDocQualityReport(content),
             published: Boolean(publishedVersion),
             version: publishedVersion,
             sourceFileName: node.name,
@@ -1068,11 +1109,11 @@ export async function importProjectReadmeFromFileAction(projectId: string, input
             projectId,
             error: error instanceof Error ? error.message : String(error),
         });
-        return { success: false as const, error: "Failed to import README from file." };
+        return { success: false as const, error: "Failed to import document from file." };
     }
 }
 
-export async function applyProjectReadmeCreationIntentAction(projectId: string, input: unknown): Promise<
+export async function applyProjectDocCreationIntentAction(projectId: string, input: unknown): Promise<
     | {
         success: true;
         status: "created" | "imported" | "skipped" | "not_found";
@@ -1089,12 +1130,12 @@ export async function applyProjectReadmeCreationIntentAction(projectId: string, 
             return { success: true, status: "skipped", reason: "user_skipped" };
         }
 
-        const context = await getReadmeProjectContext(projectId, userId);
+        const context = await getDocProjectContext(projectId, userId);
         if (!context.permission.canEdit) {
-            return { success: false, error: "You cannot create this README." };
+            return { success: false, error: "You cannot create this document." };
         }
 
-        const readme = await getOrCreateReadme(projectId, userId, context.settings);
+        const readme = await getOrCreateMarkdown(projectId, userId, "readme", context.settings);
         if (readme.publishedVersionId || (readme.draftContent || "").trim().length > 0) {
             return { success: true, status: "skipped", reason: "existing_readme" };
         }
@@ -1106,15 +1147,15 @@ export async function applyProjectReadmeCreationIntentAction(projectId: string, 
 
         if (parsed.mode === "detected") {
             if (sourcePath) {
-                const node = await findProjectReadmeNodeByPath(projectId, sourcePath);
+                const node = await findProjectDocNodeByPath(projectId, sourcePath);
                 if (node) {
-                    content = normalizeProjectReadmeContent(await getProjectFileContent(projectId, node.id));
+                    content = normalizeProjectDocContent(await getProjectFileContent(projectId, node.id));
                     source = "project_file";
                     sourceFileName = node.name;
                 } else {
                     const githubContent = await fetchGithubReadmeContentForProject(context.project, sourcePath);
                     if (githubContent) {
-                        content = normalizeProjectReadmeContent(githubContent);
+                        content = normalizeProjectDocContent(githubContent);
                         source = "github";
                         sourceFileName = readmePathBasename(sourcePath);
                     }
@@ -1125,8 +1166,8 @@ export async function applyProjectReadmeCreationIntentAction(projectId: string, 
                 return { success: true, status: "not_found", reason: "source_missing" };
             }
         } else {
-            content = normalizeProjectReadmeContent(
-                parsed.starterContent || `# ${context.project.title || "Project README"}\n\n`
+            content = normalizeProjectDocContent(
+                parsed.starterContent || `# ${context.project.title || "Project Document"}\n\n`
             );
         }
 
@@ -1135,28 +1176,23 @@ export async function applyProjectReadmeCreationIntentAction(projectId: string, 
         }
 
         const now = new Date();
-        const [updated] = await db.update(projectReadmes)
+        const [updated] = await db.update(projectMarkdowns)
             .set({
                 draftContent: content,
                 draftUpdatedBy: userId,
                 draftUpdatedAt: now,
                 updatedAt: now,
             })
-            .where(eq(projectReadmes.id, readme.id))
+            .where(eq(projectMarkdowns.id, readme.id))
             .returning();
 
-        await db.insert(projectNodeEvents).values({
-            projectId,
-            actorId: userId,
-            type: "project_readme.created_from_project_creation",
-            metadata: {
-                mode: parsed.mode,
-                source,
-                sourcePath: sourcePath || null,
-                sourceFileName,
-                // Creation prepares a private draft only; publishing stays explicit.
-                publishOnCreateRequested: Boolean(parsed.publishOnCreate),
-            },
+        await recordNodeEvent(projectId, userId, null, "project_readme.created_from_project_creation", {
+            mode: parsed.mode,
+            source,
+            sourcePath: sourcePath || null,
+            sourceFileName,
+            // Creation prepares a private draft only; publishing stays explicit.
+            publishOnCreateRequested: Boolean(parsed.publishOnCreate),
         }).catch((error) => {
             logger.warn("project_readme.creation_event_failed", {
                 module: "projects",
@@ -1166,7 +1202,7 @@ export async function applyProjectReadmeCreationIntentAction(projectId: string, 
             });
         });
 
-        revalidateProjectReadme(context.project);
+        revalidateProjectDoc(context.project);
 
         return {
             success: true,
@@ -1180,20 +1216,21 @@ export async function applyProjectReadmeCreationIntentAction(projectId: string, 
             projectId,
             error: error instanceof Error ? error.message : String(error),
         });
-        return { success: false, error: "Failed to prepare project README." };
+        return { success: false, error: "Failed to prepare project document." };
     }
 }
 
-export async function registerReadmeContributorAction(projectId: string) {
+export async function registerReadmeContributorAction(projectId: string, docSlug: string = "readme") {
     try {
+        docSlug = normalizeProjectDocSlug(docSlug);
         const userId = await requireUserId();
-        const context = await getReadmeProjectContext(projectId, userId);
-        if (!context.permission.canEdit) return { success: false as const, error: "Unauthorized" };
+        const context = await getDocProjectContext(projectId, userId, docSlug);
+        if (!context.permission.canEdit || !context.readme) return { success: false as const, error: "Unauthorized" };
 
-        await db.insert(projectReadmeDraftContributors)
-            .values({ projectId, userId, lastContributedAt: new Date() })
+        await db.insert(projectMarkdownDraftContributors)
+            .values({ projectId, markdownId: context.readme.id, userId, lastContributedAt: new Date() })
             .onConflictDoUpdate({
-                target: [projectReadmeDraftContributors.projectId, projectReadmeDraftContributors.userId],
+                target: [projectMarkdownDraftContributors.markdownId, projectMarkdownDraftContributors.userId],
                 set: { lastContributedAt: new Date() }
             });
 
@@ -1204,14 +1241,15 @@ export async function registerReadmeContributorAction(projectId: string) {
     }
 }
 
-export async function getReadmeDraftContributorsAction(projectId: string) {
+export async function getDocDraftContributorsAction(projectId: string, docSlug: string = "readme") {
     try {
+        docSlug = normalizeProjectDocSlug(docSlug);
         const userId = await requireUserId();
-        const context = await getReadmeProjectContext(projectId, userId);
-        if (!context.permission.canEdit) return { success: false as const, error: "Unauthorized" };
+        const context = await getDocProjectContext(projectId, userId, docSlug);
+        if (!context.permission.canEdit || !context.readme) return { success: false as const, error: "Unauthorized" };
 
-        const contributors = await db.query.projectReadmeDraftContributors.findMany({
-            where: eq(projectReadmeDraftContributors.projectId, projectId),
+        const contributors = await db.query.projectMarkdownDraftContributors.findMany({
+            where: eq(projectMarkdownDraftContributors.markdownId, context.readme.id),
         });
 
         const userIds = contributors.map(c => c.userId);
@@ -1234,20 +1272,35 @@ export async function getReadmeDraftContributorsAction(projectId: string) {
     }
 }
 
-export async function publishProjectReadmeAction(projectId: string, input: unknown) {
+export async function publishProjectDocAction(projectId: string, input: unknown) {
     try {
         const userId = await requireUserId();
         const parsed = publishSchema.parse(input);
-        const context = await getReadmeProjectContext(projectId, userId);
-        if (!context.permission.canPublish) return { success: false as const, error: "Only project leaders can publish the README." };
+        const docSlug = parsed.docSlug;
+        const context = await getDocProjectContext(projectId, userId, docSlug);
+        if (!context.permission.canPublish) return { success: false as const, error: "Only project leaders can publish documentation." };
         const published = await db.transaction(async (tx) => {
-            let readme = await tx.query.projectReadmes.findFirst({ where: eq(projectReadmes.projectId, projectId) });
+            let readme = await tx.query.projectMarkdowns.findFirst({
+                where: and(
+                    eq(projectMarkdowns.projectId, projectId),
+                    eq(projectMarkdowns.slug, docSlug)
+                )
+            });
             if (!readme) {
-                const [created] = await tx.insert(projectReadmes).values({ projectId, draftContent: "", draftUpdatedBy: userId, draftUpdatedAt: new Date(), settings: context.settings }).returning();
+                const filename = docSlug === "readme" ? "README.md" : `${docSlug.toUpperCase()}.md`;
+                const [created] = await tx.insert(projectMarkdowns).values({
+                    projectId,
+                    slug: docSlug,
+                    filename,
+                    draftContent: "",
+                    draftUpdatedBy: userId,
+                    draftUpdatedAt: new Date(),
+                    settings: context.settings
+                }).returning();
                 readme = created;
             }
-            const [lockedReadme] = await tx.select().from(projectReadmes).where(eq(projectReadmes.id, readme!.id)).for('update');
-            if (!lockedReadme) throw new Error("README not found");
+            const [lockedReadme] = await tx.select().from(projectMarkdowns).where(eq(projectMarkdowns.id, readme!.id)).for('update');
+            if (!lockedReadme) throw new Error("Document not found");
 
             let activeLinkedNode = null;
             if (lockedReadme.linkedNodeId) {
@@ -1259,23 +1312,23 @@ export async function publishProjectReadmeAction(projectId: string, input: unkno
                 });
                 if (!activeLinkedNode) {
                     // Node has been deleted, detaching
-                    await tx.update(projectReadmes)
+                    await tx.update(projectMarkdowns)
                         .set({ linkedNodeId: null })
-                        .where(eq(projectReadmes.id, lockedReadme.id));
+                        .where(eq(projectMarkdowns.id, lockedReadme.id));
                 }
             }
 
             const currentUpdatedAt = toIso(lockedReadme.draftUpdatedAt);
 
-            const metadata = buildProjectReadmePublishMetadata(parsed.content ?? lockedReadme.draftContent ?? "");
+            const metadata = buildProjectDocPublishMetadata(parsed.content ?? lockedReadme.draftContent ?? "");
             
             const [latest] = await tx
-                .select({ value: max(projectReadmeVersions.versionNumber) })
-                .from(projectReadmeVersions)
-                .where(eq(projectReadmeVersions.projectId, projectId));
+                .select({ value: max(projectMarkdownVersions.versionNumber) })
+                .from(projectMarkdownVersions)
+                .where(eq(projectMarkdownVersions.markdownId, lockedReadme.id));
             const latestVersion = lockedReadme.publishedVersionId
-                ? await tx.query.projectReadmeVersions.findFirst({
-                    where: and(eq(projectReadmeVersions.id, lockedReadme.publishedVersionId), isNull(projectReadmeVersions.deletedAt)),
+                ? await tx.query.projectMarkdownVersions.findFirst({
+                    where: and(eq(projectMarkdownVersions.id, lockedReadme.publishedVersionId), isNull(projectMarkdownVersions.deletedAt)),
                 })
                 : null;
             if (latestVersion?.contentHash === metadata.contentHash) {
@@ -1296,15 +1349,16 @@ export async function publishProjectReadmeAction(projectId: string, input: unkno
 
             // Fetch contributors
             const contributors = await tx
-                .select({ userId: projectReadmeDraftContributors.userId })
-                .from(projectReadmeDraftContributors)
-                .where(eq(projectReadmeDraftContributors.projectId, projectId));
+                .select({ userId: projectMarkdownDraftContributors.userId })
+                .from(projectMarkdownDraftContributors)
+                .where(eq(projectMarkdownDraftContributors.markdownId, lockedReadme.id));
             const coAuthors = contributors.map(c => c.userId);
 
             const [version] = await tx
-                .insert(projectReadmeVersions)
+                .insert(projectMarkdownVersions)
                 .values({
                     projectId,
+                    markdownId: lockedReadme.id,
                     versionNumber: nextVersion,
                     content: metadata.content,
                     excerpt: metadata.excerpt,
@@ -1316,13 +1370,13 @@ export async function publishProjectReadmeAction(projectId: string, input: unkno
                     createdBy: userId,
                 })
                 .returning();
-            if (!version) throw new Error("Failed to publish README version");
+            if (!version) throw new Error("Failed to publish document version");
 
             // Clear contributors after publish
-            await tx.delete(projectReadmeDraftContributors)
-                .where(eq(projectReadmeDraftContributors.projectId, projectId));
+            await tx.delete(projectMarkdownDraftContributors)
+                .where(eq(projectMarkdownDraftContributors.markdownId, lockedReadme.id));
 
-            await tx.update(projectReadmes)
+            await tx.update(projectMarkdowns)
                 .set({
                     draftContent: metadata.content,
                     draftUpdatedBy: userId,
@@ -1330,32 +1384,46 @@ export async function publishProjectReadmeAction(projectId: string, input: unkno
                     publishedVersionId: version.id,
                     updatedAt: new Date(),
                 })
-                .where(eq(projectReadmes.id, lockedReadme.id));
+                .where(eq(projectMarkdowns.id, lockedReadme.id));
             const referencedAssetIds = extractAssetIdsFromContent(metadata.content, projectId);
             if (referencedAssetIds.length > 0) {
-                await tx.update(projectReadmeAssets)
+                await tx.update(projectMarkdownAssets)
                     .set({ status: "published", versionId: version.id })
-                    .where(and(eq(projectReadmeAssets.projectId, projectId), inArray(projectReadmeAssets.id, referencedAssetIds as string[])));
+                    .where(and(eq(projectMarkdownAssets.markdownId, lockedReadme.id), inArray(projectMarkdownAssets.id, referencedAssetIds as string[])));
             }
-            await tx.update(projectReadmeAssets)
-                .set({ status: "orphaned" })
-                .where(and(eq(projectReadmeAssets.projectId, projectId), eq(projectReadmeAssets.status, "draft")));
-            await tx.insert(projectNodeEvents).values({
-                projectId,
-                actorId: userId,
-                type: "project_readme.published",
-                metadata: {
-                    versionId: version.id,
-                    versionNumber: version.versionNumber,
-                    changeSummary: parsed.changeSummary?.trim() || null,
-                    qualityScore: metadata.qualityReport.score,
-                },
-            });
+
+            const orphanedAssets = await tx
+                .select({
+                    id: projectMarkdownAssets.id,
+                    bucket: projectMarkdownAssets.bucket,
+                    storageKey: projectMarkdownAssets.storageKey,
+                })
+                .from(projectMarkdownAssets)
+                .where(and(
+                    eq(projectMarkdownAssets.markdownId, lockedReadme.id),
+                    eq(projectMarkdownAssets.status, "draft")
+                ));
+
+            if (orphanedAssets.length > 0) {
+                await tx.update(projectMarkdownAssets)
+                    .set({ status: "orphaned" })
+                    .where(and(eq(projectMarkdownAssets.markdownId, lockedReadme.id), eq(projectMarkdownAssets.status, "draft")));
+            }
+
+            await recordNodeEvent(projectId, userId, null, "project_readme.published", {
+                versionId: version.id,
+                versionNumber: version.versionNumber,
+                changeSummary: parsed.changeSummary?.trim() || null,
+                qualityScore: metadata.qualityReport.score,
+                docSlug,
+            }, tx);
             return {
                 success: true as const,
                 version,
                 metadata,
                 coAuthors,
+                lockedReadme,
+                orphanedAssets,
                 linkedNode: activeLinkedNode ? {
                     id: activeLinkedNode.id,
                     name: activeLinkedNode.name,
@@ -1365,13 +1433,30 @@ export async function publishProjectReadmeAction(projectId: string, input: unkno
             };
         });
 
-        const { version, metadata, coAuthors, linkedNode } = published;
+        const { version, metadata, coAuthors, lockedReadme, orphanedAssets, linkedNode } = published;
+        if (!lockedReadme) throw new Error("Document not found");
+
+        // Dispatch background media asset cleanup
+        if (orphanedAssets && orphanedAssets.length > 0) {
+            try {
+                const { inngest } = await import("@/inngest/client");
+                await inngest.send({
+                    name: "project/docs.cleanup",
+                    data: {
+                        projectId,
+                        assets: orphanedAssets,
+                    },
+                });
+            } catch (inngestErr) {
+                logger.error("project_readme.send_cleanup_failed", { projectId, error: inngestErr instanceof Error ? inngestErr.message : String(inngestErr) });
+            }
+        }
 
         // Files Tab Sync
         if (parsed.syncToFilesTab) {
             try {
                 const supabase = await createAdminClient();
-                const targetS3Key = linkedNode?.s3Key || `${projectId}/README.md`;
+                const targetS3Key = linkedNode?.s3Key || `${projectId}/${lockedReadme.filename}`;
                 const contentBuffer = Buffer.from(metadata.content, 'utf-8');
                 const size = contentBuffer.byteLength;
                 const mimeType = 'text/markdown';
@@ -1400,7 +1485,7 @@ export async function publishProjectReadmeAction(projectId: string, input: unkno
                             node = await tx.query.projectNodes.findFirst({
                                 where: and(
                                     eq(projectNodes.projectId, projectId),
-                                    eq(projectNodes.name, 'README.md'),
+                                    eq(projectNodes.name, lockedReadme.filename),
                                     isNull(projectNodes.parentId),
                                     isNull(projectNodes.deletedAt)
                                 )
@@ -1412,8 +1497,8 @@ export async function publishProjectReadmeAction(projectId: string, input: unkno
                                 projectId,
                                 parentId: null,
                                 type: 'file',
-                                name: linkedNode?.name || 'README.md',
-                                path: linkedNode?.path || 'README.md',
+                                name: linkedNode?.name || lockedReadme.filename,
+                                path: linkedNode?.path || lockedReadme.filename,
                                 s3Key: targetS3Key,
                                 size,
                                 mimeType,
@@ -1442,7 +1527,7 @@ export async function publishProjectReadmeAction(projectId: string, input: unkno
                             mimeType,
                             contentHash,
                             uploadedBy: userId,
-                            comment: parsed.changeSummary?.trim() || 'Published from README tab',
+                            comment: parsed.changeSummary?.trim() || `Published from ${lockedReadme.filename}`,
                         });
                     });
                 }
@@ -1451,15 +1536,16 @@ export async function publishProjectReadmeAction(projectId: string, input: unkno
             }
         }
 
-        revalidateProjectReadme(context.project);
+        revalidateProjectDoc(context.project);
         if (metadata && (context.settings.notifyOnPublish || parsed.notifyFollowers)) {
+            const title = docSlug === "readme" ? "Project document published" : `Project document ${lockedReadme.filename} published`;
             enqueueProjectNotificationEvent({
                 projectId,
                 actorUserId: userId,
                 eventKey: "readme.published",
-                title: "Project README published",
+                title,
                 body: metadata.excerpt,
-                href: `/projects/${encodeURIComponent(context.project.slug || context.project.id)}?tab=readme`,
+                href: `/projects/${encodeURIComponent(context.project.slug || context.project.id)}?tab=docs&doc=${docSlug}`,
                 entityRefs: { projectId },
                 sourceEventId: `readme:${version.id}`,
             }).catch((error) => logger.warn("project_readme.notification_failed", {
@@ -1478,47 +1564,45 @@ export async function publishProjectReadmeAction(projectId: string, input: unkno
             // ignore
         }
         
-        return { success: true as const, version: toReadmeVersion({ ...version, createdByName }) };
+        return { success: true as const, version: toDocVersion({ ...version, createdByName }) };
     } catch (error) {
         logger.error("project_readme.publish_failed", {
             module: "projects",
             projectId,
             error: error instanceof Error ? error.message : String(error),
         });
-        return { success: false as const, error: error instanceof Error ? error.message : "Failed to publish README." };
+        return { success: false as const, error: error instanceof Error ? error.message : "Failed to publish document." };
     }
 }
 
-export async function restoreProjectReadmeVersionAction(projectId: string, versionId: string) {
+export async function restoreProjectDocVersionAction(projectId: string, versionId: string, docSlug: string = "readme") {
     try {
+        docSlug = normalizeProjectDocSlug(docSlug);
         const userId = await requireUserId();
-        const context = await getReadmeProjectContext(projectId, userId);
-        if (!context.permission.canEdit) return { success: false as const, error: "You cannot edit this README." };
-        const version = await db.query.projectReadmeVersions.findFirst({
-            where: and(eq(projectReadmeVersions.id, versionId), eq(projectReadmeVersions.projectId, projectId), isNull(projectReadmeVersions.deletedAt)),
+        const context = await getDocProjectContext(projectId, userId, docSlug);
+        if (!context.permission.canEdit) return { success: false as const, error: "You cannot edit this document." };
+        if (!context.readme) return { success: false as const, error: "Document not found." };
+        const version = await db.query.projectMarkdownVersions.findFirst({
+            where: and(eq(projectMarkdownVersions.id, versionId), eq(projectMarkdownVersions.markdownId, context.readme.id), isNull(projectMarkdownVersions.deletedAt)),
         });
-        if (!version) return { success: false as const, error: "README version not found." };
-        const readme = await getOrCreateReadme(projectId, userId, context.settings);
-        const [updated] = await db.update(projectReadmes)
+        if (!version) return { success: false as const, error: "Document version not found." };
+        const restoredContent = normalizeProjectDocContent(version.content);
+        const readme = await getOrCreateMarkdown(projectId, userId, docSlug, context.settings);
+        const [updated] = await db.update(projectMarkdowns)
             .set({
-                draftContent: version.content,
+                draftContent: restoredContent,
                 draftUpdatedBy: userId,
                 draftUpdatedAt: new Date(),
                 updatedAt: new Date(),
             })
-            .where(eq(projectReadmes.id, readme.id))
+            .where(eq(projectMarkdowns.id, readme.id))
             .returning();
-        await db.insert(projectNodeEvents).values({
-            projectId,
-            actorId: userId,
-            type: "project_readme.version_restored_to_draft",
-            metadata: { versionId, versionNumber: version.versionNumber },
-        });
+        await recordNodeEvent(projectId, userId, null, "project_readme.version_restored_to_draft", { versionId, versionNumber: version.versionNumber });
         return {
             success: true as const,
-            draftContent: version.content,
+            draftContent: restoredContent,
             draftUpdatedAt: toIso(updated?.draftUpdatedAt),
-            qualityReport: buildProjectReadmeQualityReport(version.content),
+            qualityReport: buildProjectDocQualityReport(restoredContent),
         };
     } catch (error) {
         logger.error("project_readme.restore_failed", {
@@ -1527,61 +1611,49 @@ export async function restoreProjectReadmeVersionAction(projectId: string, versi
             versionId,
             error: error instanceof Error ? error.message : String(error),
         });
-        return { success: false as const, error: "Failed to restore README version." };
+        return { success: false as const, error: "Failed to restore document version." };
     }
 }
 
-export async function setProjectReadmePublishedVersionAction(projectId: string, versionId: string) {
+export async function setProjectDocPublishedVersionAction(projectId: string, versionId: string, docSlug: string = "readme") {
     try {
+        docSlug = normalizeProjectDocSlug(docSlug);
         const userId = await requireUserId();
-        const context = await getReadmeProjectContext(projectId, userId);
-        if (!context.permission.canPublish) return { success: false as const, error: "Only project leaders can set the current README version." };
+        const context = await getDocProjectContext(projectId, userId, docSlug);
+        if (!context.permission.canPublish) return { success: false as const, error: "Only project leaders can set the current version." };
+        if (!context.readme) return { success: false as const, error: "Document not found." };
 
         const result = await db.transaction(async (tx) => {
-            const version = await tx.query.projectReadmeVersions.findFirst({
-                where: and(eq(projectReadmeVersions.id, versionId), eq(projectReadmeVersions.projectId, projectId), isNull(projectReadmeVersions.deletedAt)),
+            const version = await tx.query.projectMarkdownVersions.findFirst({
+                where: and(eq(projectMarkdownVersions.id, versionId), eq(projectMarkdownVersions.markdownId, context.readme!.id), isNull(projectMarkdownVersions.deletedAt)),
             });
             if (!version) return null;
-            const existingReadme = await tx.query.projectReadmes.findFirst({
-                where: eq(projectReadmes.projectId, projectId),
-            });
-            const readme = existingReadme ?? (await tx.insert(projectReadmes)
-                .values({
-                    projectId,
-                    draftContent: "",
-                    draftUpdatedBy: userId,
-                    draftUpdatedAt: new Date(),
-                    settings: context.settings,
-                })
-                .returning())[0];
-            if (!readme) throw new Error("Failed to create README");
-            const [updated] = await tx.update(projectReadmes)
+            const readme = context.readme!;
+            if (!readme) throw new Error("Failed to create document");
+            const nextContent = normalizeProjectDocContent(version.content);
+            const [updated] = await tx.update(projectMarkdowns)
                 .set({
-                    draftContent: version.content,
+                    draftContent: nextContent,
                     draftUpdatedBy: userId,
                     draftUpdatedAt: new Date(),
                     publishedVersionId: version.id,
                     updatedAt: new Date(),
                 })
-                .where(eq(projectReadmes.id, readme.id))
+                .where(eq(projectMarkdowns.id, readme.id))
                 .returning();
-            await tx.insert(projectNodeEvents).values({
-                projectId,
-                actorId: userId,
-                type: "project_readme.version_set_current",
-                metadata: { versionId, versionNumber: version.versionNumber },
-            });
+            await recordNodeEvent(projectId, userId, null, "project_readme.version_set_current", { versionId, versionNumber: version.versionNumber }, tx);
             return { version, updated };
         });
 
-        if (!result) return { success: false as const, error: "README version not found." };
-        revalidateProjectReadme(context.project);
+        if (!result) return { success: false as const, error: "Document version not found." };
+        revalidateProjectDoc(context.project);
+        const draftContent = normalizeProjectDocContent(result.version.content);
         return {
             success: true as const,
-            version: toReadmeVersion(result.version),
-            draftContent: result.version.content,
+            version: toDocVersion(result.version),
+            draftContent,
             draftUpdatedAt: toIso(result.updated?.draftUpdatedAt),
-            qualityReport: buildProjectReadmeQualityReport(result.version.content),
+            qualityReport: buildProjectDocQualityReport(draftContent),
         };
     } catch (error) {
         logger.error("project_readme.set_current_failed", {
@@ -1590,35 +1662,37 @@ export async function setProjectReadmePublishedVersionAction(projectId: string, 
             versionId,
             error: error instanceof Error ? error.message : String(error),
         });
-        return { success: false as const, error: "Failed to set current README version." };
+        return { success: false as const, error: "Failed to set current document version." };
     }
 }
 
-export async function deleteProjectReadmeVersionAction(projectId: string, versionId: string) {
+export async function deleteProjectDocVersionAction(projectId: string, versionId: string, docSlug: string = "readme") {
     try {
+        docSlug = normalizeProjectDocSlug(docSlug);
         const userId = await requireUserId();
-        const context = await getReadmeProjectContext(projectId, userId);
-        if (!context.permission.canPublish) return { success: false as const, error: "Only project leaders can delete README versions." };
+        const context = await getDocProjectContext(projectId, userId, docSlug);
+        if (!context.permission.canPublish) return { success: false as const, error: "Only project leaders can delete versions." };
+        if (!context.readme) return { success: false as const, error: "Document not found." };
 
         const result = await db.transaction(async (tx) => {
-            const readme = await tx.query.projectReadmes.findFirst({ where: eq(projectReadmes.projectId, projectId) });
-            const version = await tx.query.projectReadmeVersions.findFirst({
-                where: and(eq(projectReadmeVersions.id, versionId), eq(projectReadmeVersions.projectId, projectId), isNull(projectReadmeVersions.deletedAt)),
+            const readme = context.readme!;
+            const version = await tx.query.projectMarkdownVersions.findFirst({
+                where: and(eq(projectMarkdownVersions.id, versionId), eq(projectMarkdownVersions.markdownId, readme.id), isNull(projectMarkdownVersions.deletedAt)),
             });
-            if (!readme || !version) return null;
+            if (!version) return null;
 
-            await tx.update(projectReadmeVersions)
+            await tx.update(projectMarkdownVersions)
                 .set({ deletedAt: new Date() })
-                .where(eq(projectReadmeVersions.id, version.id));
+                .where(eq(projectMarkdownVersions.id, version.id));
 
-            let replacement: typeof projectReadmeVersions.$inferSelect | null = null;
+            let replacement: typeof projectMarkdownVersions.$inferSelect | null = null;
             let updatedDraftAt: Date | string | null | undefined = readme.draftUpdatedAt;
             if (readme.publishedVersionId === version.id) {
-                replacement = await tx.query.projectReadmeVersions.findFirst({
-                    where: and(eq(projectReadmeVersions.projectId, projectId), isNull(projectReadmeVersions.deletedAt)),
-                    orderBy: [desc(projectReadmeVersions.versionNumber)],
+                replacement = await tx.query.projectMarkdownVersions.findFirst({
+                    where: and(eq(projectMarkdownVersions.markdownId, readme.id), isNull(projectMarkdownVersions.deletedAt)),
+                    orderBy: [desc(projectMarkdownVersions.versionNumber)],
                 }) ?? null;
-                const [updated] = await tx.update(projectReadmes)
+                const [updated] = await tx.update(projectMarkdowns)
                     .set({
                         publishedVersionId: replacement?.id ?? null,
                         draftContent: replacement?.content ?? readme.draftContent,
@@ -1626,21 +1700,16 @@ export async function deleteProjectReadmeVersionAction(projectId: string, versio
                         draftUpdatedAt: replacement ? new Date() : readme.draftUpdatedAt,
                         updatedAt: new Date(),
                     })
-                    .where(eq(projectReadmes.id, readme.id))
+                    .where(eq(projectMarkdowns.id, readme.id))
                     .returning();
                 updatedDraftAt = updated?.draftUpdatedAt;
             }
 
-            await tx.insert(projectNodeEvents).values({
-                projectId,
-                actorId: userId,
-                type: "project_readme.version_deleted",
-                metadata: {
-                    versionId: version.id,
-                    versionNumber: version.versionNumber,
-                    replacedPublishedVersionId: replacement?.id ?? null,
-                },
-            });
+            await recordNodeEvent(projectId, userId, null, "project_readme.version_deleted", {
+                versionId: version.id,
+                versionNumber: version.versionNumber,
+                replacedPublishedVersionId: replacement?.id ?? null,
+            }, tx);
 
             const readmeNode = await tx.query.projectNodes.findFirst({
                 where: and(eq(projectNodes.projectId, projectId), eq(projectNodes.name, "README.md"), isNull(projectNodes.deletedAt)),
@@ -1663,15 +1732,15 @@ export async function deleteProjectReadmeVersionAction(projectId: string, versio
             return { deleted: version, replacement, draftUpdatedAt: updatedDraftAt };
         });
 
-        if (!result) return { success: false as const, error: "README version not found." };
-        revalidateProjectReadme(context.project);
+        if (!result) return { success: false as const, error: "Document version not found." };
+        revalidateProjectDoc(context.project);
         return {
             success: true as const,
             deletedVersionId: result.deleted.id,
-            publishedVersion: toReadmeVersion(result.replacement),
+            publishedVersion: toDocVersion(result.replacement),
             draftContent: result.replacement?.content ?? null,
             draftUpdatedAt: toIso(result.draftUpdatedAt),
-            qualityReport: buildProjectReadmeQualityReport(result.replacement?.content ?? ""),
+            qualityReport: buildProjectDocQualityReport(result.replacement?.content ?? ""),
         };
     } catch (error) {
         logger.error("project_readme.delete_version_failed", {
@@ -1680,38 +1749,75 @@ export async function deleteProjectReadmeVersionAction(projectId: string, versio
             versionId,
             error: error instanceof Error ? error.message : String(error),
         });
-        return { success: false as const, error: "Failed to delete README version." };
+        return { success: false as const, error: "Failed to delete document version." };
     }
 }
 
-export async function discardProjectReadmeDraftAction(projectId: string) {
+export async function discardProjectDocDraftAction(projectId: string, docSlug: string = "readme") {
     try {
+        docSlug = normalizeProjectDocSlug(docSlug);
         const userId = await requireUserId();
-        const context = await getReadmeProjectContext(projectId, userId);
-        if (!context.permission.canEdit) return { success: false as const, error: "You cannot edit this README." };
-        const readme = await getOrCreateReadme(projectId, userId, context.settings);
-        const published = await readPublishedVersion(readme.publishedVersionId);
-        const nextContent = published?.content ?? "";
-        const [updated] = await db.update(projectReadmes)
-            .set({
-                draftContent: nextContent,
-                draftUpdatedBy: userId,
-                draftUpdatedAt: new Date(),
-                updatedAt: new Date(),
-            })
-            .where(eq(projectReadmes.id, readme.id))
-            .returning();
-        await db.insert(projectNodeEvents).values({
-            projectId,
-            actorId: userId,
-            type: "project_readme.draft_discarded",
-            metadata: { restoredPublishedVersionId: published?.id ?? null },
+        const context = await getDocProjectContext(projectId, userId, docSlug);
+        if (!context.permission.canEdit) return { success: false as const, error: "You cannot edit this document." };
+        
+        const result = await db.transaction(async (tx) => {
+            const readme = await getOrCreateMarkdown(projectId, userId, docSlug, context.settings);
+            const published = await readPublishedVersion(readme.publishedVersionId);
+            const nextContent = normalizeProjectDocContent(published?.content ?? "");
+            
+            const orphanedAssets = await tx
+                .select({
+                    id: projectMarkdownAssets.id,
+                    bucket: projectMarkdownAssets.bucket,
+                    storageKey: projectMarkdownAssets.storageKey,
+                })
+                .from(projectMarkdownAssets)
+                .where(and(
+                    eq(projectMarkdownAssets.markdownId, readme.id),
+                    eq(projectMarkdownAssets.status, "draft")
+                ));
+
+            if (orphanedAssets.length > 0) {
+                await tx.update(projectMarkdownAssets)
+                    .set({ status: "orphaned" })
+                    .where(and(eq(projectMarkdownAssets.markdownId, readme.id), eq(projectMarkdownAssets.status, "draft")));
+            }
+
+            const [updated] = await tx.update(projectMarkdowns)
+                .set({
+                    draftContent: nextContent,
+                    draftUpdatedBy: userId,
+                    draftUpdatedAt: new Date(),
+                    updatedAt: new Date(),
+                })
+                .where(eq(projectMarkdowns.id, readme.id))
+                .returning();
+
+            await recordNodeEvent(projectId, userId, null, "project_readme.draft_discarded", { restoredPublishedVersionId: published?.id ?? null }, tx);
+
+            return { updated, nextContent, orphanedAssets };
         });
+
+        if (result.orphanedAssets && result.orphanedAssets.length > 0) {
+            try {
+                const { inngest } = await import("@/inngest/client");
+                await inngest.send({
+                    name: "project/docs.cleanup",
+                    data: {
+                        projectId,
+                        assets: result.orphanedAssets,
+                    },
+                });
+            } catch (inngestErr) {
+                logger.error("project_readme.send_cleanup_failed", { projectId, error: inngestErr instanceof Error ? inngestErr.message : String(inngestErr) });
+            }
+        }
+
         return {
             success: true as const,
-            draftContent: nextContent,
-            draftUpdatedAt: toIso(updated?.draftUpdatedAt),
-            qualityReport: buildProjectReadmeQualityReport(nextContent),
+            draftContent: result.nextContent,
+            draftUpdatedAt: toIso(result.updated?.draftUpdatedAt),
+            qualityReport: buildProjectDocQualityReport(result.nextContent),
         };
     } catch (error) {
         logger.error("project_readme.discard_draft_failed", {
@@ -1719,29 +1825,31 @@ export async function discardProjectReadmeDraftAction(projectId: string) {
             projectId,
             error: error instanceof Error ? error.message : String(error),
         });
-        return { success: false as const, error: "Failed to discard README draft." };
+        return { success: false as const, error: "Failed to discard document draft." };
     }
 }
 
-export async function listProjectReadmeVersionsAction(projectId: string, cursor?: string | null) {
+export async function listProjectDocVersionsAction(projectId: string, docSlug: string = "readme", cursor?: string | null) {
     try {
+        docSlug = normalizeProjectDocSlug(docSlug);
         const actorUserId = await getOptionalUserId();
-        const context = await getReadmeProjectContext(projectId, actorUserId);
-        if (!context.permission.canReadPublished && !context.permission.canEdit) return { success: false as const, error: "README unavailable." };
+        const context = await getDocProjectContext(projectId, actorUserId, docSlug);
+        if (!context.readme) return { success: true as const, versions: [], hasMore: false, nextCursor: null };
+        if (!context.permission.canReadPublished && !context.permission.canEdit) return { success: false as const, error: "Document unavailable." };
         const cursorDate = cursor ? new Date(cursor) : null;
         const versionConditions = [
-            eq(projectReadmeVersions.projectId, projectId),
-            isNull(projectReadmeVersions.deletedAt),
+            eq(projectMarkdownVersions.markdownId, context.readme.id),
+            isNull(projectMarkdownVersions.deletedAt),
         ];
         if (cursorDate && !Number.isNaN(cursorDate.getTime())) {
-            versionConditions.push(lt(projectReadmeVersions.createdAt, cursorDate));
+            versionConditions.push(lt(projectMarkdownVersions.createdAt, cursorDate));
         }
-        const rows = await db.query.projectReadmeVersions.findMany({
+        const rows = await db.query.projectMarkdownVersions.findMany({
             where: and(...versionConditions),
-            orderBy: [desc(projectReadmeVersions.createdAt), desc(projectReadmeVersions.versionNumber)],
+            orderBy: [desc(projectMarkdownVersions.createdAt), desc(projectMarkdownVersions.versionNumber)],
             limit: 21,
             extras: {
-                createdByName: profileDisplayNameSql(projectReadmeVersions.createdBy).as("createdByName"),
+                createdByName: profileDisplayNameSql(projectMarkdownVersions.createdBy).as("createdByName"),
             },
         });
 
@@ -1762,7 +1870,7 @@ export async function listProjectReadmeVersionsAction(projectId: string, cursor?
             .map((row) => {
                 const coAuthorIds = Array.isArray(row.coAuthors) ? row.coAuthors.map(String) : [];
                 const coAuthorsData = coAuthorIds.map(id => profilesMap.get(id)).filter(Boolean) as { id: string; name: string; avatarUrl: string | null }[];
-                return toReadmeVersion(row, row.versionNumber, coAuthorsData)!;
+                return toDocVersion(row, row.versionNumber, coAuthorsData)!;
             });
         return {
             success: true as const,
@@ -1776,35 +1884,35 @@ export async function listProjectReadmeVersionsAction(projectId: string, cursor?
             projectId,
             error: error instanceof Error ? error.message : String(error),
         });
-        return { success: false as const, error: "Failed to load README versions." };
+        return { success: false as const, error: "Failed to load document versions." };
     }
 }
 
-export async function validateProjectReadmeAction(projectId: string, content: unknown) {
+export async function validateProjectDocAction(projectId: string, content: unknown) {
     try {
         const userId = await requireUserId();
-        const context = await getReadmeProjectContext(projectId, userId);
-        if (!context.permission.canEdit) return { success: false as const, error: "You cannot validate this README." };
-        const normalized = normalizeProjectReadmeContent(content);
+        const context = await getDocProjectContext(projectId, userId);
+        if (!context.permission.canEdit) return { success: false as const, error: "You cannot validate this document." };
+        const normalized = normalizeProjectDocContent(content);
         return {
             success: true as const,
-            qualityReport: buildProjectReadmeQualityReport(normalized),
-            headings: buildProjectReadmePublishMetadata(normalized).headings,
+            qualityReport: buildProjectDocQualityReport(normalized),
+            headings: buildProjectDocPublishMetadata(normalized).headings,
         };
     } catch (error) {
-        return { success: false as const, error: error instanceof Error ? error.message : "Failed to validate README." };
+        return { success: false as const, error: error instanceof Error ? error.message : "Failed to validate document." };
     }
 }
 
-export async function readProjectReadmeReferenceOptionsAction(projectId: string, input: unknown): Promise<
-    | { success: true; options: ProjectReadmeReferenceOption[] }
+export async function readProjectDocReferenceOptionsAction(projectId: string, input: unknown): Promise<
+    | { success: true; options: ProjectDocReferenceOption[] }
     | { success: false; error: string }
 > {
     try {
         const userId = await requireUserId();
         const parsed = referenceOptionsSchema.parse(input);
-        const context = await getReadmeProjectContext(projectId, userId);
-        if (!context.permission.canEdit) return { success: false, error: "You cannot insert README project references." };
+        const context = await getDocProjectContext(projectId, userId);
+        if (!context.permission.canEdit) return { success: false, error: "You cannot insert document project references." };
 
         const query = parsed.query?.trim() || "";
         const like = `%${query.replace(/[%_]/g, "\\$&")}%`;
@@ -1890,20 +1998,20 @@ export async function readProjectReadmeReferenceOptionsAction(projectId: string,
             projectId,
             error: error instanceof Error ? error.message : String(error),
         });
-        return { success: false, error: "Failed to load README references." };
+        return { success: false, error: "Failed to load document references." };
     }
 }
 
-export async function readProjectReadmeSmartBlockPreviewsAction(projectId: string, input: unknown): Promise<
-    | { success: true; previews: ProjectReadmeSmartBlockPreview[] }
+export async function readProjectDocSmartBlockPreviewsAction(projectId: string, input: unknown): Promise<
+    | { success: true; previews: ProjectDocSmartBlockPreview[] }
     | { success: false; error: string }
 > {
     try {
         const actorUserId = await getOptionalUserId();
         const parsed = smartBlockPreviewSchema.parse(input);
-        const context = await getReadmeProjectContext(projectId, actorUserId);
+        const context = await getDocProjectContext(projectId, actorUserId);
         if (!context.permission.canReadPublished && !context.permission.canEdit) {
-            return { success: false, error: "README references unavailable." };
+            return { success: false, error: "Document references unavailable." };
         }
 
         const normalizedBlocks = parsed.map((block, index) => ({
@@ -1911,9 +2019,9 @@ export async function readProjectReadmeSmartBlockPreviewsAction(projectId: strin
             ids: (block.ids ?? []).filter((id) => UUID_RE.test(id)).slice(0, 12),
             index: block.index ?? index,
         }));
-        const readableKinds = new Set<ProjectReadmeReferenceKind>();
-        const idsByKind = new Map<ProjectReadmeReferenceKind, Set<string>>();
-        const needsRecent = new Set<ProjectReadmeReferenceKind>();
+        const readableKinds = new Set<ProjectDocReferenceKind>();
+        const idsByKind = new Map<ProjectDocReferenceKind, Set<string>>();
+        const needsRecent = new Set<ProjectDocReferenceKind>();
 
         for (const block of normalizedBlocks) {
             if (block.kind === "unknown" || !canReadReferenceKind(block.kind, context)) continue;
@@ -1927,8 +2035,8 @@ export async function readProjectReadmeSmartBlockPreviewsAction(projectId: strin
             }
         }
 
-        const tasksById = new Map<string, ProjectReadmeReferenceOption>();
-        let recentTasks: ProjectReadmeReferenceOption[] = [];
+        const tasksById = new Map<string, ProjectDocReferenceOption>();
+        let recentTasks: ProjectDocReferenceOption[] = [];
         if (readableKinds.has("tasks")) {
             const taskIds = [...(idsByKind.get("tasks") ?? [])];
             const [selectedRows, recentRows] = await Promise.all([
@@ -1971,8 +2079,8 @@ export async function readProjectReadmeSmartBlockPreviewsAction(projectId: strin
             recentTasks = recentRows.map((row) => optionFromTask(row, context.project));
         }
 
-        const sprintsById = new Map<string, ProjectReadmeReferenceOption>();
-        let recentSprints: ProjectReadmeReferenceOption[] = [];
+        const sprintsById = new Map<string, ProjectDocReferenceOption>();
+        let recentSprints: ProjectDocReferenceOption[] = [];
         if (readableKinds.has("sprints")) {
             const sprintIds = [...(idsByKind.get("sprints") ?? [])];
             const [selectedRows, recentRows] = await Promise.all([
@@ -1991,8 +2099,8 @@ export async function readProjectReadmeSmartBlockPreviewsAction(projectId: strin
             recentSprints = recentRows.map((row) => optionFromSprint(row, context.project));
         }
 
-        const filesById = new Map<string, ProjectReadmeReferenceOption>();
-        let recentFiles: ProjectReadmeReferenceOption[] = [];
+        const filesById = new Map<string, ProjectDocReferenceOption>();
+        let recentFiles: ProjectDocReferenceOption[] = [];
         if (readableKinds.has("files")) {
             const fileIds = [...(idsByKind.get("files") ?? [])];
             const [selectedRows, recentRows] = await Promise.all([
@@ -2011,8 +2119,8 @@ export async function readProjectReadmeSmartBlockPreviewsAction(projectId: strin
             recentFiles = recentRows.map((row) => optionFromFile(row, context.project));
         }
 
-        const rolesById = new Map<string, ProjectReadmeReferenceOption>();
-        let recentRoles: ProjectReadmeReferenceOption[] = [];
+        const rolesById = new Map<string, ProjectDocReferenceOption>();
+        let recentRoles: ProjectDocReferenceOption[] = [];
         if (readableKinds.has("roles")) {
             const roleIds = [...(idsByKind.get("roles") ?? [])];
             const [selectedRows, recentRows] = await Promise.all([
@@ -2031,8 +2139,8 @@ export async function readProjectReadmeSmartBlockPreviewsAction(projectId: strin
             recentRoles = recentRows.map((row) => optionFromRole(row, context.project));
         }
 
-        const contributorsById = new Map<string, ProjectReadmeReferenceOption>();
-        let recentContributors: ProjectReadmeReferenceOption[] = [];
+        const contributorsById = new Map<string, ProjectDocReferenceOption>();
+        let recentContributors: ProjectDocReferenceOption[] = [];
         if (readableKinds.has("contributors")) {
             const contributorIds = [...(idsByKind.get("contributors") ?? [])];
             const selectedRows = contributorIds.length ? await db
@@ -2071,8 +2179,8 @@ export async function readProjectReadmeSmartBlockPreviewsAction(projectId: strin
             recentContributors = recentRows.map((row) => optionFromContributor(row, context.project));
         }
 
-        const previewFor = (block: (typeof normalizedBlocks)[number]): ProjectReadmeSmartBlockPreview => {
-            if (block.kind === "unknown") return unavailablePreview(block, "This README block is not recognized.");
+        const previewFor = (block: (typeof normalizedBlocks)[number]): ProjectDocSmartBlockPreview => {
+            if (block.kind === "unknown") return unavailablePreview(block, "This document block is not recognized.");
             if (!canReadReferenceKind(block.kind, context)) return unavailablePreview(block);
             const href = projectHref(context.project, block.kind === "files"
                 ? "files"
@@ -2101,7 +2209,7 @@ export async function readProjectReadmeSmartBlockPreviewsAction(projectId: strin
                         : block.kind === "roles"
                             ? recentRoles
                             : recentContributors;
-            const items = block.ids.length ? block.ids.map((id) => byId.get(id)).filter((item): item is ProjectReadmeReferenceOption => Boolean(item)) : recent;
+            const items = block.ids.length ? block.ids.map((id) => byId.get(id)).filter((item): item is ProjectDocReferenceOption => Boolean(item)) : recent;
 
             return {
                 key: blockKey(block),
@@ -2116,7 +2224,7 @@ export async function readProjectReadmeSmartBlockPreviewsAction(projectId: strin
                                 ? "Open roles"
                                 : "Contributors",
                 description: block.ids.length
-                    ? "Selected project context from this README."
+                    ? "Selected project context from this document."
                     : "Current project context rendered from live project data.",
                 href,
                 items,
@@ -2133,28 +2241,29 @@ export async function readProjectReadmeSmartBlockPreviewsAction(projectId: strin
             projectId,
             error: error instanceof Error ? error.message : String(error),
         });
-        return { success: false, error: "Failed to load README project references." };
+        return { success: false, error: "Failed to load document project references." };
     }
 }
 
-export async function createProjectReadmeAssetUploadUrlAction(projectId: string, input: unknown) {
+export async function createProjectDocAssetUploadUrlAction(projectId: string, input: unknown) {
     try {
         const userId = await requireUserId();
         const parsed = uploadUrlSchema.parse(input);
-        const context = await getReadmeProjectContext(projectId, userId);
-        if (!context.permission.canManageAssets) return { success: false as const, error: "README media uploads are not available." };
+        const docSlug = parsed.docSlug;
+        const context = await getDocProjectContext(projectId, userId, docSlug);
+        if (!context.permission.canManageAssets || !context.readme) return { success: false as const, error: "Document media uploads are not available." };
         const { allowed } = await consumeRateLimit(`upload:project-readme-asset:user:${userId}`, 20, 60 * 60);
-        if (!allowed) return { success: false as const, error: "Too many README image upload attempts. Please try again later." };
+        if (!allowed) return { success: false as const, error: "Too many document image upload attempts. Please try again later." };
         const mimeType = normalizeAndValidateMimeType(parsed.mimeType);
-        if (!PROJECT_README_ALLOWED_IMAGE_MIME_TYPES.has(mimeType)) {
+        if (!PROJECT_DOC_ALLOWED_IMAGE_MIME_TYPES.has(mimeType)) {
             return { success: false as const, error: "Unsupported image type. Use JPG, PNG, WebP, or GIF." };
         }
-        const sizeBytes = normalizeAndValidateFileSize(parsed.sizeBytes, PROJECT_README_ASSET_MAX_BYTES, "README image");
-        const storageKey = buildProjectReadmeStorageKey(projectId, userId, readmeImageExtensionFromMimeType(mimeType));
+        const sizeBytes = normalizeAndValidateFileSize(parsed.sizeBytes, PROJECT_DOC_ASSET_MAX_BYTES, "Document image");
+        const storageKey = buildProjectDocStorageKey(projectId, userId, readmeImageExtensionFromMimeType(mimeType));
         const intent = await createUploadIntent({
             userId,
             projectId,
-            bucket: PROJECT_README_ASSET_BUCKET,
+            bucket: PROJECT_DOC_ASSET_BUCKET,
             storageKey,
             scope: "project_file",
             kind: "file",
@@ -2163,9 +2272,9 @@ export async function createProjectReadmeAssetUploadUrlAction(projectId: string,
             metadata: { kind: "project_readme_asset", altText: parsed.altText ?? null },
         });
         const admin = await createAdminClient();
-        const { data, error } = await admin.storage.from(PROJECT_README_ASSET_BUCKET).createSignedUploadUrl(storageKey, { upsert: false });
+        const { data, error } = await admin.storage.from(PROJECT_DOC_ASSET_BUCKET).createSignedUploadUrl(storageKey, { upsert: false });
         if (error || !data?.signedUrl || !data?.token) {
-            return { success: false as const, error: "Failed to prepare README image upload." };
+            return { success: false as const, error: "Failed to prepare document image upload." };
         }
         return {
             success: true as const,
@@ -2173,7 +2282,7 @@ export async function createProjectReadmeAssetUploadUrlAction(projectId: string,
             uploadToken: data.token,
             uploadIntentId: intent.id,
             storagePath: storageKey,
-            bucket: PROJECT_README_ASSET_BUCKET,
+            bucket: PROJECT_DOC_ASSET_BUCKET,
             contentType: mimeType,
         };
     } catch (error) {
@@ -2182,11 +2291,11 @@ export async function createProjectReadmeAssetUploadUrlAction(projectId: string,
             projectId,
             error: error instanceof Error ? error.message : String(error),
         });
-        return { success: false as const, error: "Failed to prepare README image upload." };
+        return { success: false as const, error: "Failed to prepare document image upload." };
     }
 }
 
-export async function finalizeProjectReadmeAssetUploadAction(projectId: string, input: unknown) {
+export async function finalizeProjectDocAssetUploadAction(projectId: string, input: unknown) {
     try {
         const userId = await requireUserId();
         const parsed = z.object({
@@ -2194,19 +2303,22 @@ export async function finalizeProjectReadmeAssetUploadAction(projectId: string, 
             altText: z.string().max(240).nullable().optional(),
             width: z.number().int().positive().nullable().optional(),
             height: z.number().int().positive().nullable().optional(),
+            docSlug: docSlugSchema,
         }).parse(input);
-        const context = await getReadmeProjectContext(projectId, userId);
-        if (!context.permission.canManageAssets) return { success: false as const, error: "README media uploads are not available." };
+        const docSlug = parsed.docSlug;
+        const context = await getDocProjectContext(projectId, userId, docSlug);
+        if (!context.permission.canManageAssets || !context.readme) return { success: false as const, error: "Document media uploads are not available." };
         const intent = await finalizeUploadIntent({
             intentId: parsed.uploadIntentId,
-            bucket: PROJECT_README_ASSET_BUCKET,
+            bucket: PROJECT_DOC_ASSET_BUCKET,
             userId,
             projectId,
             expectedScope: "project_file",
             expectedKind: "file",
         });
-        const [asset] = await db.insert(projectReadmeAssets).values({
+        const [asset] = await db.insert(projectMarkdownAssets).values({
             projectId,
+            markdownId: context.readme!.id,
             bucket: intent.bucket,
             storageKey: intent.storageKey,
             mimeType: intent.expectedMimeType || "application/octet-stream",
@@ -2217,11 +2329,11 @@ export async function finalizeProjectReadmeAssetUploadAction(projectId: string, 
             status: "draft",
             createdBy: userId,
         }).returning();
-        if (!asset) return { success: false as const, error: "Failed to finalize README image." };
+        if (!asset) return { success: false as const, error: "Failed to finalize document image." };
         return {
             success: true as const,
-            asset: toReadmeAsset(asset),
-            markdown: `![${asset.altText || "Project image"}](${PROJECT_README_ASSET_ROUTE_PREFIX}/${projectId}/readme-assets/${asset.id})`,
+            asset: toDocAsset(asset),
+            markdown: `![${asset.altText || "Project image"}](${PROJECT_DOC_ASSET_ROUTE_PREFIX}/${projectId}/doc-assets/${asset.id})`,
         };
     } catch (error) {
         logger.error("project_readme.asset_finalize_failed", {
@@ -2229,20 +2341,20 @@ export async function finalizeProjectReadmeAssetUploadAction(projectId: string, 
             projectId,
             error: error instanceof Error ? error.message : String(error),
         });
-        return { success: false as const, error: "Failed to finalize README image." };
+        return { success: false as const, error: "Failed to finalize document image." };
     }
 }
 
-export async function deleteProjectReadmeAssetAction(projectId: string, assetId: string) {
+export async function deleteProjectDocAssetAction(projectId: string, assetId: string) {
     try {
         const userId = await requireUserId();
-        const context = await getReadmeProjectContext(projectId, userId);
-        if (!context.permission.canManageAssets) return { success: false as const, error: "You cannot manage README assets." };
-        const [asset] = await db.update(projectReadmeAssets)
+        const context = await getDocProjectContext(projectId, userId);
+        if (!context.permission.canManageAssets) return { success: false as const, error: "You cannot manage document assets." };
+        const [asset] = await db.update(projectMarkdownAssets)
             .set({ deletedAt: new Date(), status: "orphaned" })
-            .where(and(eq(projectReadmeAssets.projectId, projectId), eq(projectReadmeAssets.id, assetId), isNull(projectReadmeAssets.deletedAt)))
+            .where(and(eq(projectMarkdownAssets.projectId, projectId), eq(projectMarkdownAssets.id, assetId), isNull(projectMarkdownAssets.deletedAt)))
             .returning();
-        if (!asset) return { success: false as const, error: "README asset not found." };
+        if (!asset) return { success: false as const, error: "Document asset not found." };
         const admin = await createAdminClient();
         await admin.storage.from(asset.bucket).remove([asset.storageKey]);
         return { success: true as const };
@@ -2253,57 +2365,55 @@ export async function deleteProjectReadmeAssetAction(projectId: string, assetId:
             assetId,
             error: error instanceof Error ? error.message : String(error),
         });
-        return { success: false as const, error: "Failed to delete README asset." };
+        return { success: false as const, error: "Failed to delete document asset." };
     }
 }
 
-export async function readProjectReadmeSettingsAction(projectId: string) {
+export async function readProjectDocSettingsAction(projectId: string, docSlug: string = "readme") {
     try {
+        docSlug = normalizeProjectDocSlug(docSlug);
         const userId = await requireUserId();
-        const context = await getReadmeProjectContext(projectId, userId);
-        if (!context.permission.canManageSettings) return { success: false as const, error: "You cannot manage README settings." };
+        const context = await getDocProjectContext(projectId, userId);
+        if (!context.permission.canManageSettings) return { success: false as const, error: "You cannot manage document settings." };
         return { success: true as const, settings: context.settings, permission: context.permission };
     } catch (error) {
-        return { success: false as const, error: "Failed to load README settings." };
+        return { success: false as const, error: "Failed to load document settings." };
     }
 }
 
-export async function updateProjectReadmeSettingsAction(projectId: string, input: unknown) {
+export async function updateProjectDocSettingsAction(projectId: string, input: unknown) {
     try {
         const userId = await requireUserId();
         const parsed = readmeSettingsSchema.parse(input);
-        const context = await getReadmeProjectContext(projectId, userId);
-        if (!context.permission.canManageSettings) return { success: false as const, error: "You cannot manage README settings." };
-        const readme = await getOrCreateReadme(projectId, userId, context.settings);
-        const nextSettings = normalizeProjectReadmeSettings({ ...context.settings, ...parsed });
-        const [updated] = await db.update(projectReadmes)
+        const docSlug = parsed.docSlug;
+        const context = await getDocProjectContext(projectId, userId, docSlug);
+        if (!context.permission.canManageSettings) return { success: false as const, error: "You cannot manage settings." };
+        const readme = await getOrCreateMarkdown(projectId, userId, docSlug, context.settings);
+        const nextSettings = normalizeProjectDocSettings({ ...context.settings, ...parsed });
+        const [updated] = await db.update(projectMarkdowns)
             .set({ settings: nextSettings, updatedAt: new Date() })
-            .where(eq(projectReadmes.id, readme.id))
+            .where(eq(projectMarkdowns.id, readme.id))
             .returning();
-        await db.insert(projectNodeEvents).values({
-            projectId,
-            actorId: userId,
-            type: "project_readme.settings_updated",
-            metadata: { settings: nextSettings },
-        });
-        revalidateProjectReadme(context.project);
-        return { success: true as const, settings: normalizeProjectReadmeSettings(updated?.settings) };
+        await recordNodeEvent(projectId, userId, null, "project_readme.settings_updated", { settings: nextSettings });
+        revalidateProjectDoc(context.project);
+        return { success: true as const, settings: normalizeProjectDocSettings(updated?.settings) };
     } catch (error) {
         logger.error("project_readme.settings_update_failed", {
             module: "projects",
             projectId,
             error: error instanceof Error ? error.message : String(error),
         });
-        return { success: false as const, error: "Failed to update README settings." };
+        return { success: false as const, error: "Failed to update document settings." };
     }
 }
 
-export async function linkProjectReadmeAction(projectId: string, nodeId: string) {
+export async function linkProjectDocAction(projectId: string, nodeId: string, docSlug: string = "readme") {
     try {
+        docSlug = normalizeProjectDocSlug(docSlug);
         const userId = await requireUserId();
-        const context = await getReadmeProjectContext(projectId, userId);
+        const context = await getDocProjectContext(projectId, userId, docSlug);
         if (!context.permission.canEdit) {
-            return { success: false as const, error: "Only project members can link a README file." };
+            return { success: false as const, error: "Only project members can link a document file." };
         }
 
         // Check if the node actually exists, belongs to this project, is a file, and not deleted
@@ -2322,13 +2432,19 @@ export async function linkProjectReadmeAction(projectId: string, nodeId: string)
 
         // Upsert project readme record with linkedNodeId
         await db.transaction(async (tx) => {
-            let readme = await tx.query.projectReadmes.findFirst({
-                where: eq(projectReadmes.projectId, projectId)
+            const readme = await tx.query.projectMarkdowns.findFirst({
+                where: and(
+                    eq(projectMarkdowns.projectId, projectId),
+                    eq(projectMarkdowns.slug, docSlug)
+                )
             });
 
             if (!readme) {
-                await tx.insert(projectReadmes).values({
+                const filename = node.name || (docSlug === "readme" ? "README.md" : `${docSlug.toUpperCase()}.md`);
+                await tx.insert(projectMarkdowns).values({
                     projectId,
+                    slug: docSlug,
+                    filename,
                     linkedNodeId: nodeId,
                     draftContent: "",
                     draftUpdatedBy: userId,
@@ -2336,14 +2452,15 @@ export async function linkProjectReadmeAction(projectId: string, nodeId: string)
                     settings: context.settings,
                 });
             } else {
-                await tx.update(projectReadmes)
+                await tx.update(projectMarkdowns)
                     .set({
+                        filename: node.name || readme.filename,
                         linkedNodeId: nodeId,
                         draftUpdatedBy: userId,
                         draftUpdatedAt: new Date(),
                         updatedAt: new Date(),
                     })
-                    .where(eq(projectReadmes.projectId, projectId));
+                    .where(eq(projectMarkdowns.id, readme.id));
             }
         });
 
@@ -2357,23 +2474,62 @@ export async function linkProjectReadmeAction(projectId: string, nodeId: string)
     }
 }
 
-export async function unlinkProjectReadmeAction(projectId: string) {
+export async function unlinkProjectDocAction(projectId: string, docSlug: string = "readme") {
     try {
+        docSlug = normalizeProjectDocSlug(docSlug);
         const userId = await requireUserId();
-        const context = await getReadmeProjectContext(projectId, userId);
+        const context = await getDocProjectContext(projectId, userId, docSlug);
         if (!context.permission.canEdit) {
-            return { success: false as const, error: "Only project members can unlink a README file." };
+            return { success: false as const, error: "Only project members can unlink a document file." };
         }
 
-        await db.update(projectReadmes)
-            .set({
-                linkedNodeId: null,
-                draftUpdatedBy: userId,
-                draftUpdatedAt: new Date(),
-                updatedAt: new Date(),
-            })
-            .where(eq(projectReadmes.projectId, projectId));
+        if (docSlug === "readme") {
+            await db.update(projectMarkdowns)
+                .set({
+                    linkedNodeId: null,
+                    draftUpdatedBy: userId,
+                    draftUpdatedAt: new Date(),
+                    updatedAt: new Date(),
+                })
+                .where(and(
+                    eq(projectMarkdowns.projectId, projectId),
+                    eq(projectMarkdowns.slug, docSlug)
+                ));
+        } else {
+            if (context.readme) {
+                // Find all assets to clean up storage
+                const assets = await db
+                    .select({
+                        bucket: projectMarkdownAssets.bucket,
+                        storageKey: projectMarkdownAssets.storageKey,
+                    })
+                    .from(projectMarkdownAssets)
+                    .where(eq(projectMarkdownAssets.markdownId, context.readme.id));
 
+                if (assets.length > 0) {
+                    try {
+                        const admin = await createAdminClient();
+                        for (const asset of assets) {
+                            await admin.storage.from(asset.bucket).remove([asset.storageKey]);
+                        }
+                    } catch (err) {
+                        logger.error("project_readme.unlink_delete_assets_failed", {
+                            projectId,
+                            docSlug,
+                            error: err instanceof Error ? err.message : String(err),
+                        });
+                    }
+                }
+
+                await db.delete(projectMarkdowns)
+                    .where(and(
+                        eq(projectMarkdowns.projectId, projectId),
+                        eq(projectMarkdowns.slug, docSlug)
+                    ));
+            }
+        }
+
+        revalidateProjectDoc(context.project);
         revalidatePath(`/projects/${context.project.slug}/readme`);
         revalidatePath(`/projects/${context.project.slug}/files`);
 
@@ -2381,5 +2537,214 @@ export async function unlinkProjectReadmeAction(projectId: string) {
     } catch (error) {
         logger.error("project_readme.unlink_failed", { projectId, error: error instanceof Error ? error.message : String(error) });
         return { success: false as const, error: "Internal server error." };
+    }
+}
+
+export async function readProjectMarkdownSearchAction(projectId: string, queryText: string) {
+    try {
+        const actorUserId = await getOptionalUserId();
+        const [project] = await db
+            .select({
+                id: projects.id,
+                slug: projects.slug,
+                ownerId: projects.ownerId,
+                visibility: projects.visibility,
+                publicTabVisibility: projects.publicTabVisibility,
+            })
+            .from(projects)
+            .where(and(eq(projects.id, projectId), isNull(projects.deletedAt)))
+            .limit(1);
+        if (!project) return { success: false as const, error: "Project not found" };
+
+        const membership = actorUserId
+            ? await db.query.projectMembers.findFirst({
+                where: and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, actorUserId)),
+                columns: { role: true },
+            })
+            : null;
+
+        const docs = await db
+            .select({
+                id: projectMarkdowns.id,
+                slug: projectMarkdowns.slug,
+                filename: projectMarkdowns.filename,
+                draftContent: projectMarkdowns.draftContent,
+                publishedVersionId: projectMarkdowns.publishedVersionId,
+                settings: projectMarkdowns.settings,
+                publishedContent: projectMarkdownVersions.content,
+            })
+            .from(projectMarkdowns)
+            .leftJoin(projectMarkdownVersions, eq(projectMarkdowns.publishedVersionId, projectMarkdownVersions.id))
+            .where(eq(projectMarkdowns.projectId, projectId));
+
+        const results: { slug: string; filename: string; matches: { line: number; text: string }[] }[] = [];
+        const isOwner = actorUserId === project.ownerId;
+        const term = queryText.trim().toLowerCase();
+
+        if (!term) {
+            return { success: true as const, results: [] };
+        }
+
+        for (const doc of docs) {
+            const settings = normalizeProjectDocSettings(doc.settings);
+            const hasPublishedReadme = Boolean(doc.publishedVersionId);
+            const permission = resolveProjectDocPermission({
+                actorUserId,
+                projectVisibility: project.visibility,
+                publicTabVisibility: project.publicTabVisibility,
+                settings,
+                membershipRole: isOwner ? "owner" : membership?.role,
+                isOwner,
+                isActiveMember: isOwner || Boolean(membership),
+                hasPublishedReadme,
+            });
+
+            if (!permission.canReadPublished && !permission.canEdit) {
+                continue;
+            }
+
+            const contentToSearch = (permission.canReadDraft ? doc.draftContent : doc.publishedContent) || "";
+            if (!contentToSearch) continue;
+
+            const lines = contentToSearch.split("\n");
+            const matches: { line: number; text: string }[] = [];
+
+            lines.forEach((lineText, idx) => {
+                if (lineText.toLowerCase().includes(term)) {
+                    matches.push({
+                        line: idx + 1,
+                        text: lineText.trim(),
+                    });
+                }
+            });
+
+            if (matches.length > 0) {
+                results.push({
+                    slug: doc.slug,
+                    filename: doc.filename,
+                    matches: matches.slice(0, 100),
+                });
+            }
+        }
+
+        return { success: true as const, results };
+    } catch (error) {
+        logger.error("project_readme.search_failed", { projectId, queryText, error: error instanceof Error ? error.message : String(error) });
+        return { success: false as const, error: "Failed to perform search." };
+    }
+}
+
+export async function listProjectMarkdownsAction(projectId: string) {
+    try {
+        const actorUserId = await getOptionalUserId();
+        const [project] = await db
+            .select({
+                id: projects.id,
+                slug: projects.slug,
+                ownerId: projects.ownerId,
+                visibility: projects.visibility,
+                publicTabVisibility: projects.publicTabVisibility,
+            })
+            .from(projects)
+            .where(and(eq(projects.id, projectId), isNull(projects.deletedAt)))
+            .limit(1);
+        if (!project) return { success: false as const, error: "Project not found" };
+
+        const membership = actorUserId
+            ? await db.query.projectMembers.findFirst({
+                where: and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, actorUserId)),
+                columns: { role: true },
+            })
+            : null;
+
+        const docs = await db
+            .select({
+                id: projectMarkdowns.id,
+                slug: projectMarkdowns.slug,
+                filename: projectMarkdowns.filename,
+                linkedNodeId: projectMarkdowns.linkedNodeId,
+                publishedVersionId: projectMarkdowns.publishedVersionId,
+                settings: projectMarkdowns.settings,
+            })
+            .from(projectMarkdowns)
+            .where(eq(projectMarkdowns.projectId, projectId));
+
+        const results: { id: string; slug: string; filename: string; linkedNodeId: string | null }[] = [];
+        const isOwner = actorUserId === project.ownerId;
+
+        for (const doc of docs) {
+            const settings = normalizeProjectDocSettings(doc.settings);
+            const hasPublishedReadme = Boolean(doc.publishedVersionId);
+            const permission = resolveProjectDocPermission({
+                actorUserId,
+                projectVisibility: project.visibility,
+                publicTabVisibility: project.publicTabVisibility,
+                settings,
+                membershipRole: isOwner ? "owner" : membership?.role,
+                isOwner,
+                isActiveMember: isOwner || Boolean(membership),
+                hasPublishedReadme,
+            });
+
+            if (permission.canReadPublished || permission.canEdit) {
+                results.push({
+                    id: doc.id,
+                    slug: doc.slug,
+                    filename: doc.filename,
+                    linkedNodeId: doc.linkedNodeId,
+                });
+            }
+        }
+
+        // Sort documents: 'readme' slug first, then alphabetically by filename
+        results.sort((a, b) => {
+            if (a.slug === "readme") return -1;
+            if (b.slug === "readme") return 1;
+            return a.filename.localeCompare(b.filename, undefined, { sensitivity: 'base', numeric: true });
+        });
+
+        return { success: true as const, markdowns: results };
+    } catch (error) {
+        logger.error("project_readme.list_markdowns_failed", { projectId, error: error instanceof Error ? error.message : String(error) });
+        return { success: false as const, error: "Failed to list documents." };
+    }
+}
+
+const createMarkdownSchema = z.object({
+    filename: z.string().min(1).max(100),
+    content: z.string().optional().default(""),
+});
+
+export async function createProjectMarkdownAction(projectId: string, input: unknown) {
+    try {
+        const userId = await requireUserId();
+        const parsed = createMarkdownSchema.parse(input);
+        const filename = parsed.filename.trim();
+        const slug = normalizeProjectDocSlug(filename, "doc");
+        
+        const context = await getDocProjectContext(projectId, userId, slug);
+        if (!context.permission.canEdit) return { success: false as const, error: "You cannot create documents in this project." };
+        
+        const readme = await getOrCreateMarkdown(projectId, userId, slug, context.settings);
+        
+        await db.update(projectMarkdowns)
+            .set({ filename })
+            .where(eq(projectMarkdowns.id, readme.id));
+            
+        if (parsed.content) {
+            await db.update(projectMarkdowns)
+                .set({ draftContent: parsed.content, draftUpdatedAt: new Date() })
+                .where(eq(projectMarkdowns.id, readme.id));
+        }
+
+        revalidateProjectDoc(context.project);
+
+        return { success: true as const, slug };
+    } catch (error) {
+        logger.error("project_readme.create_markdown_failed", {
+            projectId,
+            error: error instanceof Error ? error.message : String(error),
+        });
+        return { success: false as const, error: error instanceof Error ? error.message : "Failed to create document." };
     }
 }
