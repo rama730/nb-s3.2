@@ -94,6 +94,12 @@ function buildCsrfError(message: string) {
 }
 
 export function validateCsrf(request: Request): NextResponse | null {
+  // SEC-C3: Bypass CSRF check for API clients using Bearer tokens
+  const authHeader = request.headers.get("authorization")?.trim();
+  if (authHeader && authHeader.toLowerCase().startsWith("bearer ")) {
+    return null;
+  }
+
   const host = request.headers.get("host")?.trim() || "";
   const trustedOrigin = resolveTrustedOrigin(request);
 
