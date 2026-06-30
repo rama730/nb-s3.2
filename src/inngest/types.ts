@@ -77,6 +77,29 @@ type NotificationDeliveryRefreshEvent = {
     };
 };
 
+type ProjectUpdateCleanupEvent = {
+    data: {
+        projectId: string;
+        updateId: string;
+        media: Array<{
+            url?: string | null;
+            bucket?: string | null;
+            storageKey?: string | null;
+        }>;
+    };
+};
+
+type ProjectDocsCleanupEvent = {
+    data: {
+        projectId: string;
+        assets: Array<{
+            id: string;
+            bucket: string;
+            storageKey: string;
+        }>;
+    };
+};
+
 export const schemas = new EventSchemas().fromRecord<{
     "project/import": ProjectImportEvent;
     "project/import.hydrate": ProjectImportEvent;
@@ -89,4 +112,6 @@ export const schemas = new EventSchemas().fromRecord<{
     "notification/fanout": NotificationFanoutInngestEvent;
     "notification/burst": NotificationFanoutInngestEvent;
     "notification/delivery.refresh": NotificationDeliveryRefreshEvent;
+    "project/updates.cleanup": ProjectUpdateCleanupEvent;
+    "project/docs.cleanup": ProjectDocsCleanupEvent;
 }>();
