@@ -2,7 +2,7 @@
 
 import { AlertTriangle, CheckCircle2, FileText, ImagePlus, PlayCircle, ShieldAlert, Wrench } from "lucide-react";
 
-import type { ProjectReadmeQualityIssue, ProjectReadmeQualityReport } from "@/lib/projects/readme";
+import type { ProjectDocQualityIssue, ProjectDocQualityReport } from "@/lib/projects/doc";
 import { cn } from "@/lib/utils";
 
 const SECTION_FIXES: Record<string, {
@@ -42,7 +42,7 @@ const SECTION_FIXES: Record<string, {
     },
 };
 
-function issueTone(issue: ProjectReadmeQualityIssue) {
+function issueTone(issue: ProjectDocQualityIssue) {
     if (issue.severity === "error") return "border-red-200 bg-red-50 text-red-700 dark:border-red-900/70 dark:bg-red-950/20 dark:text-red-300";
     if (issue.severity === "warning") return "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900/70 dark:bg-amber-950/20 dark:text-amber-200";
     return "border-zinc-200 bg-zinc-50 text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900/50 dark:text-zinc-400";
@@ -54,12 +54,12 @@ function scoreTone(score: number) {
     return "text-red-600 dark:text-red-300";
 }
 
-export function ProjectReadmeQualityPanel({
+export function ProjectDocQualityPanel({
     report,
     onInsertFix,
     onJumpToSection,
 }: {
-    report: ProjectReadmeQualityReport;
+    report: ProjectDocQualityReport;
     onInsertFix: (markdown: string) => void;
     onJumpToSection: (issueId: string) => void;
 }) {
@@ -73,7 +73,7 @@ export function ProjectReadmeQualityPanel({
     const sizeKb = Math.max(1, Math.round(report.contentBytes / 1024));
 
     return (
-        <section className="space-y-4" aria-label="README quality report" data-readme-quality-panel="true" data-readme-visual-quality-panel="true">
+        <section className="space-y-4" aria-label="Document quality report" data-readme-quality-panel="true" data-readme-visual-quality-panel="true">
             <div className="rounded-2xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
                 <div className="flex items-center justify-between gap-3">
                     <div>
@@ -121,7 +121,7 @@ export function ProjectReadmeQualityPanel({
                     <IssueCard key={issue.id} issue={issue} onInsertFix={onInsertFix} onJumpToSection={onJumpToSection} />
                 )) : (
                     <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:border-emerald-900/70 dark:bg-emerald-950/20 dark:text-emerald-300">
-                        README has the main sections and no known blocking issues.
+                        Document has the main sections and no known blocking issues.
                     </div>
                 )}
             </div>
@@ -134,7 +134,7 @@ function IssueCard({
     onInsertFix,
     onJumpToSection,
 }: {
-    issue: ProjectReadmeQualityIssue;
+    issue: ProjectDocQualityIssue;
     onInsertFix: (markdown: string) => void;
     onJumpToSection: (issueId: string) => void;
 }) {
