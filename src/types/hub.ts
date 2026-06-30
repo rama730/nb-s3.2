@@ -44,6 +44,7 @@ export interface ProjectFollower {
 // Main Project type - adapted to match schema + extended fields for UI
 export interface Project {
     id: string;
+    key?: string | null;
     title: string;
     description?: string | null;
     shortDescription?: string | null;
