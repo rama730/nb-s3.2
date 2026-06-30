@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import {
@@ -113,14 +114,16 @@ export default function TaskDetailPanel({
     }
   };
 
-  return (
+  if (typeof window === "undefined") return null;
+
+  return createPortal(
     <>
       <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
         transition={reduceMotion ? { duration: 0 } : undefined}
-        className="fixed bottom-0 left-0 right-0 top-[var(--header-height,56px)] z-[200] bg-black/50 backdrop-blur-sm"
+        className="fixed bottom-0 left-0 right-0 top-[var(--header-height,56px)] z-[200] bg-black/50 backdrop-blur-sm transform-gpu"
         onClick={onClose}
       />
 
@@ -346,6 +349,7 @@ export default function TaskDetailPanel({
         variant="destructive"
         onConfirm={confirmDeleteTask}
       />
-    </>
+    </>,
+    document.body
   );
 }
