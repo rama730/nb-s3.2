@@ -214,11 +214,6 @@ function TimelineItem({ item, isLast }: { item: RequestHistoryItem; isLast: bool
             {/* Avatar column */}
             <div className="relative flex-shrink-0">
                 <TimelineAvatar user={user} source={item.source} size={36} />
-                {/* Status dot overlaid on avatar */}
-                <div className={cn(
-                    "absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full border-2 border-white dark:border-zinc-900",
-                    config.dotColor,
-                )} />
             </div>
 
             {/* Content */}
@@ -527,9 +522,13 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
     const { data: jobStatus } = useQuery({
         queryKey: ['bulk-job', pollingJob?.id],
         queryFn: async () => {
-            const res = await fetch(`/api/jobs/connection-bulk?jobId=${pollingJob?.id}`);
+            const res = await fetch(`/api/v1/jobs/connection-bulk?jobId=${pollingJob?.id}`);
             if (!res.ok) throw new Error("Failed");
-            return res.json();
+            const body = await res.json();
+            if (!body?.success || !body?.data) {
+                throw new Error(body?.message ?? "Invalid bulk job status response");
+            }
+            return body.data;
         },
         enabled: !!pollingJob?.id,
         refetchInterval: (query: any) => {
