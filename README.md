@@ -61,7 +61,8 @@ Set `INNGEST_EXECUTION_ROLE=web` for the web app and `INNGEST_EXECUTION_ROLE=wor
 
 ```bash
 npm run typecheck
-npm run test:unit
+npm run test:unit:coverage
+npm run check:db:migration-sources
 npm run check:engineering-standards
 npm run check:page-contract
 npm run check:force-dynamic-allowlist
@@ -82,6 +83,8 @@ npm run run:load-suite -- --base-url=http://127.0.0.1:3000 --auth-cookie="sb-acc
 ## Environment
 
 The minimal local env template is in [.env.local.example](.env.local.example).
+
+Database replay and credentialed E2E runs require disposable targets. Set `DATABASE_URL_FRESH` for migration replay and a distinct `E2E_DATABASE_URL` for E2E fixtures; neither workflow falls back to `DATABASE_URL`.
 
 The new scale-critical settings are:
 
