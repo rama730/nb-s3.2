@@ -9,13 +9,14 @@ import {
 } from "@/lib/auth/account-identity";
 import { isEmailVerified } from "@/lib/auth/email-verification";
 import { buildGithubAccountConnectionState } from "@/lib/github/connection-state";
-import type { AuthConnectionMethod, IntegrationsData, ServiceIntegrationConnection } from "@/lib/types/settingsTypes";
+import type { AuthConnectionMethod, ConnectedProject, IntegrationsData, ServiceIntegrationConnection } from "@/lib/types/settingsTypes";
 
 type BuildIntegrationsDataInput = {
     user: User;
     githubRepoProjectCount: number;
     githubLastSyncAt: string | null;
     passwordLastChangedAt: string | null;
+    githubProjects?: ConnectedProject[];
 };
 
 function normalizeProvider(value: string | null): AccountAuthProvider | null {
@@ -177,8 +178,22 @@ function buildGithubServiceConnection(input: {
     githubLinked: boolean;
     githubRepoProjectCount: number;
     githubLastSyncAt: string | null;
+    githubUsername: string | null;
+    githubAvatarUrl: string | null;
+    githubFullName: string | null;
+    githubProjects: ConnectedProject[];
+    canUnlink: boolean;
 }): ServiceIntegrationConnection {
-    const { githubLinked, githubRepoProjectCount, githubLastSyncAt } = input;
+    const {
+        githubLinked,
+        githubRepoProjectCount,
+        githubLastSyncAt,
+        githubUsername,
+        githubAvatarUrl,
+        githubFullName,
+        githubProjects,
+        canUnlink,
+    } = input;
     if (githubRepoProjectCount > 0) {
         return {
             id: "github",
@@ -190,6 +205,11 @@ function buildGithubServiceConnection(input: {
                 : "Repository import or sync is already configured on your projects.",
             usageCount: githubRepoProjectCount,
             lastUsedAt: githubLastSyncAt,
+            githubUsername,
+            githubAvatarUrl,
+            githubFullName,
+            projects: githubProjects,
+            canUnlink,
         };
     }
 
@@ -202,6 +222,11 @@ function buildGithubServiceConnection(input: {
             detail: "Repository import and sync are available, but no project is connected yet.",
             usageCount: 0,
             lastUsedAt: githubLastSyncAt,
+            githubUsername,
+            githubAvatarUrl,
+            githubFullName,
+            projects: githubProjects,
+            canUnlink,
         };
     }
 
@@ -213,11 +238,16 @@ function buildGithubServiceConnection(input: {
         detail: "No GitHub sign-in method or active repository connection was detected.",
         usageCount: 0,
         lastUsedAt: githubLastSyncAt,
+        githubUsername,
+        githubAvatarUrl,
+        githubFullName,
+        projects: githubProjects,
+        canUnlink,
     };
 }
 
 export function buildIntegrationsData(input: BuildIntegrationsDataInput): IntegrationsData {
-    const { user, githubRepoProjectCount, githubLastSyncAt, passwordLastChangedAt } = input;
+    const { user, githubRepoProjectCount, githubLastSyncAt, passwordLastChangedAt, githubProjects = [] } = input;
     const githubConnection = buildGithubAccountConnectionState(user);
     const emailAddress = typeof user.email === "string" && user.email.trim().length > 0 ? user.email : null;
     const emailVerified = isEmailVerified(user);
@@ -231,6 +261,8 @@ export function buildIntegrationsData(input: BuildIntegrationsDataInput): Integr
     const createdWithLabel = formatAccountProviderLabel(createdWith);
     const additionalLinkedCount = Math.max(effectiveLinkedProviders.length - (createdWith ? 1 : 0), 0);
     const canEnableEmailSignIn = !hasPassword && emailAddress !== null && emailVerified;
+    const canUnlinkGoogle = effectiveLinkedProviders.includes("google") && effectiveLinkedProviders.length > 1;
+    const canUnlinkGithub = effectiveLinkedProviders.includes("github") && effectiveLinkedProviders.length > 1;
 
     const authConnections: AuthConnectionMethod[] = buildAccountProviderStates(user).map((provider) => {
         const resolvedState =
@@ -288,8 +320,8 @@ export function buildIntegrationsData(input: BuildIntegrationsDataInput): Integr
         capabilities: {
             canEnableEmailSignIn,
             canLinkAdditionalProvider: authConnections.some(p => (p.provider === 'google' || p.provider === 'github') && p.state === 'not_linked'),
-            canUnlinkGoogle: false,
-            canUnlinkGithub: false,
+            canUnlinkGoogle,
+            canUnlinkGithub,
         },
         authConnections,
         externalServices: [
@@ -297,6 +329,11 @@ export function buildIntegrationsData(input: BuildIntegrationsDataInput): Integr
                 githubLinked: githubConnection.linked,
                 githubRepoProjectCount,
                 githubLastSyncAt,
+                githubUsername: githubConnection.username,
+                githubAvatarUrl: githubConnection.avatarUrl,
+                githubFullName: githubConnection.fullName,
+                githubProjects,
+                canUnlink: canUnlinkGithub,
             }),
         ],
     };
