@@ -127,7 +127,7 @@ describe("FilesTabSidebar / computeVisibleIdsForSearch — ancestor retention (R
     assert.deepEqual(
       [...visible].sort(),
       ["button", "components", "root", "src"].sort(),
-      "matching file + every ancestor folder remain visible; README stays hidden",
+      "matching file + every ancestor folder remain visible; Doc stays hidden",
     );
     assert.equal(
       visible.has("readme"),
@@ -170,7 +170,7 @@ describe("FilesTabSidebar / computeVisibleIdsForSearch — ancestor retention (R
       makeFile("id1", "ReadMe.MD", "root"),
     ]);
 
-    for (const query of ["readme", "README", "adMe"]) {
+    for (const query of ["readme", "Readme", "adMe"]) {
       const visible = computeVisibleIdsForSearch(nodes, query);
       assert.ok(visible);
       assert.equal(
