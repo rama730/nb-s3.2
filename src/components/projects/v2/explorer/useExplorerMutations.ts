@@ -965,116 +965,132 @@ export function useExplorerMutations({
         .sort()
         .join(",")}`;
       try {
-        const result = await runUniqueMutation(mutationKey, async () => {
-          const supabase = getSupabase();
-          const createdNodes: ProjectNode[] = [];
-          let failed = 0;
-          const uploadPlans = files.map((file) => {
-            const ext = file.name.split(".").pop() || "bin";
-            const fileName = `${Math.random().toString(36).slice(2)}.${ext}`;
-            return {
-              file,
-              filePath: buildProjectFileKey(projectId, fileName),
-              contentType: file.type || "application/octet-stream",
-              sizeBytes: file.size,
-            };
-          });
-
-          const presignedBatch = await getBatchUploadUrls(
-            uploadPlans.map((item) => ({
-              key: item.filePath,
-              contentType: item.contentType,
-              sizeBytes: item.sizeBytes,
+        await runUniqueMutation(mutationKey, async () => {
+          const payloadNodes = files
+            .map((f) => ({
+              path: f.webkitRelativePath || f.name,
+              name: f.name,
+              size: f.size,
+              mimeType: f.type || "application/octet-stream"
             }))
-          );
-          if ("error" in presignedBatch) {
-            throw new Error(presignedBatch.error || "Failed to prepare upload URLs");
-          }
-          const uploadUrlMap = presignedBatch.urls || {};
-          const uploadIntentIdMap = presignedBatch.uploadIntentIds || {};
+            .filter((node) => {
+              if (node.name === ".DS_Store" || node.path.includes("__MACOSX") || node.path.includes("/.git/")) return false;
+              return true;
+            });
 
-          for (const { file, filePath, contentType, sizeBytes } of uploadPlans) {
-            try {
-              const uploadSession =
-                uploadUrlMap[filePath] ||
-                (
-                  await getUploadPresignedUrl(filePath, contentType, sizeBytes)
-                );
+          if (payloadNodes.length === 0) return;
 
-              const resolvedUploadUrl =
-                typeof uploadSession === "string"
-                  ? uploadSession
-                  : "error" in uploadSession
-                    ? null
-                    : uploadSession.url;
-              const resolvedUploadIntentId =
-                typeof uploadSession === "string"
-                  ? uploadIntentIdMap[filePath] ?? null
-                  : "error" in uploadSession
-                    ? null
-                    : uploadSession.uploadIntentId;
-
-              if (!resolvedUploadUrl) {
-                throw new Error("Failed to prepare upload URL");
-              }
-
-              const uploadResponse = await fetch(resolvedUploadUrl, {
-                method: "PUT",
-                headers: { "Content-Type": contentType },
-                body: file,
-              });
-              if (!uploadResponse.ok) {
-                throw new Error(`Upload failed (${uploadResponse.status})`);
-              }
-
-              const node = (await createFileNode(projectId, parentId, {
-                name: file.name,
-                s3Key: filePath,
-                size: file.size,
-                mimeType: contentType,
-                uploadIntentId: resolvedUploadIntentId ?? undefined,
-              })) as ProjectNode;
-              createdNodes.push(node);
-            } catch {
-              await supabase.storage.from("project-files").remove([filePath]).catch(() => null);
-              failed += 1;
+          const mappedFiles: { path: string; fileId: string; s3Key: string; name: string }[] = [];
+          const CHUNK_SIZE = 2000;
+          for (let i = 0; i < payloadNodes.length; i += CHUNK_SIZE) {
+            const chunk = payloadNodes.slice(i, i + CHUNK_SIZE);
+            const mappedChunk = await bulkCreateFolderTree(projectId, parentId, chunk);
+            if (mappedChunk) {
+              mappedFiles.push(...mappedChunk);
             }
           }
+          if (mappedFiles.length === 0) return;
 
-          if (createdNodes.length > 0) {
-            upsertNodes(projectId, createdNodes);
-            const parentKey = filesParentKey(parentId);
-            const currentChildren = childrenByParentId[parentKey] || [];
-            const nextChildren = [...currentChildren];
-            for (const node of createdNodes) {
-              if (!nextChildren.includes(node.id)) nextChildren.push(node.id);
+          const mappingByPath = new Map(mappedFiles.map((entry) => [entry.path, entry]));
+          const uploadNodes = files
+            .map((file) => {
+              const mapping = mappingByPath.get(file.webkitRelativePath || file.name);
+              if (!mapping) return null;
+              return { file, s3Key: mapping.s3Key, fileId: mapping.fileId, path: mapping.path };
+            })
+            .filter((item): item is { file: File; s3Key: string; fileId: string; path: string } => item !== null);
+
+          if (uploadNodes.length === 0) return;
+
+          const presignedUploadUrls: Record<string, string> = {};
+          const PRESIGN_CHUNK_SIZE = 200;
+          for (let i = 0; i < uploadNodes.length; i += PRESIGN_CHUNK_SIZE) {
+            const chunk = uploadNodes.slice(i, i + PRESIGN_CHUNK_SIZE);
+            const batch = await getBatchUploadUrls(
+              chunk.map((entry) => ({
+                key: entry.s3Key,
+                contentType: entry.file.type || "application/octet-stream",
+                sizeBytes: entry.file.size,
+              }))
+            );
+            if ("error" in batch) {
+              throw new Error(batch.error || "Failed to prepare upload URLs");
             }
-            setChildren(projectId, parentId, nextChildren);
-
-            if (parentId) toggleExpanded(projectId, parentId, true);
-            await loadFolderContent(parentId, "refresh");
+            Object.assign(presignedUploadUrls, batch.urls || {});
           }
 
-          return { createdNodes, failed };
-        });
+          const performCleanup = async (w?: Worker) => {
+            if (w) w.terminate();
+            if (mappedFiles.length > 0) {
+              const fileIds = mappedFiles.map((m) => m.fileId);
+              try {
+                await bulkTrashNodes(fileIds, projectId);
+              } catch (cleanupError) {
+                console.warn("Failed to cleanup upload placeholders", cleanupError);
+              }
+            }
+          };
 
-        if (!result) return;
-        const { createdNodes, failed } = result;
-        if (createdNodes.length > 0) {
-          onOpenFile(createdNodes[0]!);
-          const msg =
-            failed > 0
-              ? `Uploaded ${createdNodes.length} file(s), ${failed} failed`
-              : `Uploaded ${createdNodes.length} file(s)`;
-          showToast(msg, failed > 0 ? "info" : "success");
-          recordOperation({
-            label: msg,
-            status: failed > 0 ? "error" : "success",
+          const worker = new Worker(new URL('./upload.worker.ts', import.meta.url));
+          const uploadJobId =
+            typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+              ? crypto.randomUUID()
+              : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+          showToast(`Uploading ${uploadNodes.length} file(s) in background...`, "info");
+
+          worker.postMessage({
+            jobId: uploadJobId,
+            uploadNodes,
+            uploadUrls: presignedUploadUrls,
           });
-        } else {
-          showToast("Upload failed", "error");
-          recordOperation({ label: "Upload failed", status: "error" });
-        }
+
+          worker.onmessage = async (e) => {
+            if (e.data?.jobId && e.data.jobId !== uploadJobId) return;
+
+            if (e.data.type === "error") {
+              await performCleanup(worker);
+              showToast(`Upload failed: ${e.data.message || "Unexpected worker error"}`, "error");
+              recordOperation({ label: "Upload failed (worker error)", status: "error" });
+              return;
+            }
+
+            if (e.data.type === "done") {
+              worker.terminate();
+              const failedFileIds = Array.isArray(e.data.results)
+                ? e.data.results
+                  .filter((result: { fileId?: string; success?: boolean }) => result?.success === false && !!result?.fileId)
+                  .map((result: { fileId: string }) => result.fileId)
+                : [];
+
+              if (failedFileIds.length > 0) {
+                try {
+                  await bulkTrashNodes(failedFileIds, projectId);
+                } catch (cleanupError) {
+                  console.warn("Failed to cleanup failed upload placeholders", cleanupError);
+                }
+              }
+
+              if (e.data.failed > 0) {
+                showToast(`Uploaded with ${e.data.failed} errors.`, "warning");
+                recordOperation({ label: `Partial upload: ${e.data.failed} failed`, status: "error" });
+              } else {
+                showToast(`Successfully uploaded ${e.data.success} file(s).`, "success");
+                recordOperation({ label: `Uploaded ${e.data.success} file(s)`, status: "success" });
+              }
+
+              loadFolderContent(parentId, "refresh").then(() => {
+                if (parentId) toggleExpanded(projectId, parentId, true);
+              });
+            }
+          };
+
+          worker.onerror = () => {
+            void performCleanup(worker);
+            showToast("Fatal upload worker process error", "error");
+            recordOperation({ label: "Upload failed (worker crash)", status: "error" });
+          };
+        });
       } catch (e: unknown) {
         showToast(`Upload failed: ${getErrorMessage(e, "Unknown error")}`, "error");
         recordOperation({ label: "Upload failed", status: "error" });
@@ -1082,17 +1098,12 @@ export function useExplorerMutations({
     },
     [
       canEdit,
-      childrenByParentId,
-      getSupabase,
-      loadFolderContent,
-      onOpenFile,
       projectId,
-      recordOperation,
       runUniqueMutation,
-      setChildren,
       showToast,
+      recordOperation,
+      loadFolderContent,
       toggleExpanded,
-      upsertNodes,
     ]
   );
 
