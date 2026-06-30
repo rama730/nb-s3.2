@@ -2,7 +2,7 @@
 
 import { AlertTriangle, CheckCircle2, FileText, FolderOpen, ListTodo, Timer, Users } from "lucide-react";
 
-import type { ProjectReadmeReferenceOption, ProjectReadmeSmartBlockPreview } from "@/lib/projects/readme-blocks";
+import type { ProjectDocReferenceOption, ProjectDocSmartBlockPreview } from "@/lib/projects/doc-blocks";
 import { cn } from "@/lib/utils";
 
 const KIND_ICON = {
@@ -14,16 +14,16 @@ const KIND_ICON = {
     unknown: AlertTriangle,
 } as const;
 
-function referenceMeta(option: ProjectReadmeReferenceOption) {
+function referenceMeta(option: ProjectDocReferenceOption) {
     return option.context || [option.status, option.meta, option.subtitle].filter(Boolean).join(" · ") || "Project reference";
 }
 
-export function ProjectReadmeReferenceOptionCard({
+export function ProjectDocReferenceOptionCard({
     option,
     selected = false,
     onSelect,
 }: {
-    option: ProjectReadmeReferenceOption;
+    option: ProjectDocReferenceOption;
     selected?: boolean;
     onSelect?: () => void;
 }) {
@@ -81,7 +81,7 @@ export function ProjectReadmeReferenceOptionCard({
     );
 }
 
-export function ProjectReadmeSmartBlockPreviewCard({ preview }: { preview: ProjectReadmeSmartBlockPreview }) {
+export function ProjectDocSmartBlockPreviewCard({ preview }: { preview: ProjectDocSmartBlockPreview }) {
     const Icon = KIND_ICON[preview.kind] ?? FileText;
     return (
         <div
@@ -110,7 +110,7 @@ export function ProjectReadmeSmartBlockPreviewCard({ preview }: { preview: Proje
                     </div>
                     {preview.items.length > 0 ? (
                         <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-                            {preview.items.slice(0, 4).map((item) => <ProjectReadmeReferenceOptionCard key={`${item.kind}-${item.id}`} option={item} />)}
+                            {preview.items.slice(0, 4).map((item) => <ProjectDocReferenceOptionCard key={`${item.kind}-${item.id}`} option={item} />)}
                         </div>
                     ) : null}
                     {preview.unavailableCount > 0 ? (
