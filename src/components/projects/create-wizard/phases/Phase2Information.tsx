@@ -52,9 +52,28 @@ export default function Phase2Information() {
                             {type.label}
                         </option>
                     ))}
+                    <option value="other">Other</option>
                 </select>
                 {errors.project_type && <p className="mt-1 text-sm text-red-500">{errors.project_type.message}</p>}
             </div>
+
+            {watch('project_type') === 'other' && (
+                <div>
+                    <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">
+                        Custom Category Name *
+                    </label>
+                    <input
+                        {...register('custom_project_type', {
+                            required: watch('project_type') === 'other' ? 'Custom category name is required' : false,
+                            minLength: { value: 2, message: 'Custom category name must be at least 2 characters' },
+                            maxLength: { value: 50, message: 'Custom category name must be less than 50 characters' }
+                        })}
+                        className="w-full px-4 py-3 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                        placeholder="e.g. Research, Hardware, Biotech"
+                    />
+                    {errors.custom_project_type && <p className="mt-1 text-sm text-red-500">{errors.custom_project_type.message}</p>}
+                </div>
+            )}
 
             {/* Title */}
             <div>
