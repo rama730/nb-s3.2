@@ -9,7 +9,6 @@ import {
   SPRINT_STATUS_PRESENTATION,
   type SprintListItem,
   type SprintTimelineFilter,
-  type SprintTimelineMode,
 } from "@/lib/projects/sprint-detail";
 import { cn } from "@/lib/utils";
 
@@ -18,7 +17,6 @@ interface SprintLeftRailProps {
   sprints: SprintListItem[];
   selectedSprintId: string | null;
   filter: SprintTimelineFilter;
-  mode: SprintTimelineMode;
   canCreate: boolean;
   onCreate: () => void;
   onSelect: (sprintId: string) => void;
@@ -30,17 +28,18 @@ export function SprintLeftRail({
   sprints,
   selectedSprintId,
   filter,
-  mode,
   canCreate,
   onCreate,
   onSelect,
   onPrefetch,
 }: SprintLeftRailProps) {
   return (
-    <aside className="w-[280px] min-h-0 flex-shrink-0 overflow-y-auto pr-2 app-scroll app-scroll-y app-scroll-gutter">
+    <aside className="w-full min-h-0 overflow-y-auto pr-2 app-scroll app-scroll-y app-scroll-gutter lg:sticky lg:top-[calc(var(--project-tabs-height,0px)+1rem)] lg:max-h-[calc(100dvh-var(--project-tabs-height,0px)-2rem)]">
       <div className="space-y-4">
         <div className="space-y-1">
-          <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Sprint history</h3>
+          <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+            Sprint history
+          </h3>
           <p className="text-xs text-zinc-500 dark:text-zinc-400">
             Move between sprints quickly and keep the work focused in one place.
           </p>
@@ -63,7 +62,9 @@ export function SprintLeftRail({
             return (
               <Link
                 key={sprint.id}
-                href={buildProjectSprintDetailHref(projectSlug, sprint.id, { filter, mode })}
+                href={buildProjectSprintDetailHref(projectSlug, sprint.id, {
+                  filter,
+                })}
                 prefetch={false}
                 onClick={() => onSelect(sprint.id)}
                 onMouseEnter={() => onPrefetch(sprint.id)}
@@ -84,16 +85,24 @@ export function SprintLeftRail({
                         SPRINT_STATUS_PRESENTATION[sprint.status].dotClassName,
                       )}
                     />
-                    <span className="sr-only">{SPRINT_STATUS_PRESENTATION[sprint.status].label}</span>
+                    <span className="sr-only">
+                      {SPRINT_STATUS_PRESENTATION[sprint.status].label}
+                    </span>
                   </div>
                   <div className="min-w-0 flex-1 space-y-1.5">
-                    <p className="truncate text-sm font-semibold text-zinc-900 dark:text-zinc-100">{sprint.name}</p>
-                    <p className="line-clamp-2 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
-                      {sprint.goal?.trim() || "No sprint goal has been set yet."}
+                    <p className="truncate text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+                      {sprint.name}
                     </p>
-                    {(sprint.startDate || sprint.endDate) ? (
+                    <p className="line-clamp-2 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
+                      {sprint.goal?.trim() ||
+                        "No sprint goal has been set yet."}
+                    </p>
+                    {sprint.startDate || sprint.endDate ? (
                       <p className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400">
-                        {formatSprintDateRange(sprint.startDate, sprint.endDate)}
+                        {formatSprintDateRange(
+                          sprint.startDate,
+                          sprint.endDate,
+                        )}
                       </p>
                     ) : null}
                   </div>
