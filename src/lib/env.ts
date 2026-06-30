@@ -17,7 +17,7 @@ const envSchema = z.object({
     GITHUB_WEBHOOK_SECRET: z.string().min(1).optional(),
     PRESENCE_TOKEN_SECRET: z.string().min(1).optional(),
     PRESENCE_EVENT_SECRET: z.string().min(1).optional(),
-    README_COLLABORATION_TOKEN_SECRET: z.string().min(1).optional(),
+    DOC_COLLABORATION_TOKEN_SECRET: z.string().min(1).optional(),
     PRESENCE_WS_URL: z.string().url().optional(),
     NEXT_PUBLIC_PRESENCE_WS_URL: z.string().url().optional(),
     NEXT_PUBLIC_YJS_WEBSOCKET_URL: z.string().url().optional(),
