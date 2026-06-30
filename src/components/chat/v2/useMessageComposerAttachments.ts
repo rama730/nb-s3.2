@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { cancelAttachmentUpload, uploadAttachment } from '@/app/actions/messaging';
 import { compressImage } from '@/lib/messages/image-compression';
+import { readMediaDimensions, type MediaDimensions } from '@/lib/messages/media-metadata';
 import {
     MAX_UPLOAD_RETRIES,
     type PendingAttachment,
@@ -12,12 +13,17 @@ const MAX_ATTACHMENTS = 12;
 const UPLOAD_CONCURRENCY = 3;
 const COMPRESSION_CONCURRENCY = 2;
 
+interface PreparedAttachmentFile {
+    file: File;
+    dimensions: MediaDimensions | null;
+}
+
 interface UseMessageComposerAttachmentsParams {
     conversationId: string;
     onAddFiles?: (register: (files: File[]) => void) => void;
 }
 
-function createPendingAttachment(file: File): PendingAttachment {
+function createPendingAttachment({ file, dimensions }: PreparedAttachmentFile): PendingAttachment {
     return {
         id: typeof crypto !== 'undefined' && 'randomUUID' in crypto
             ? crypto.randomUUID()
@@ -27,6 +33,8 @@ function createPendingAttachment(file: File): PendingAttachment {
         status: 'queued',
         progress: 0,
         attempts: 0,
+        width: dimensions?.width,
+        height: dimensions?.height,
     };
 }
 
@@ -37,14 +45,18 @@ function releaseAttachmentPreview(attachment: Pick<PendingAttachment, 'preview'>
 }
 
 async function compressFilesWithLimit(files: File[], concurrency: number) {
-    const results = new Array<File>(files.length);
+    const results = new Array<PreparedAttachmentFile>(files.length);
     let nextIndex = 0;
 
     async function worker() {
         while (nextIndex < files.length) {
             const index = nextIndex;
             nextIndex += 1;
-            results[index] = await compressImage(files[index]!);
+            const file = await compressImage(files[index]!);
+            results[index] = {
+                file,
+                dimensions: await readMediaDimensions(file),
+            };
         }
     }
 
@@ -91,7 +103,7 @@ export function useMessageComposerAttachments({
     }, []);
 
     const stagePreparedAttachments = useCallback((
-        preparedFiles: File[],
+        preparedFiles: PreparedAttachmentFile[],
         reservedCount: number,
         epoch: number,
     ) => {
@@ -100,7 +112,7 @@ export function useMessageComposerAttachments({
             preparedFiles.length,
             Math.max(0, MAX_ATTACHMENTS - attachmentsRef.current.length),
         );
-        const nextItems = preparedFiles.slice(0, boundedCount).map((file) => createPendingAttachment(file));
+        const nextItems = preparedFiles.slice(0, boundedCount).map(createPendingAttachment);
         releaseAttachmentSlots(reservedCount);
 
         if (nextItems.length === 0) {
@@ -171,11 +183,12 @@ export function useMessageComposerAttachments({
         const epoch = conversationEpochRef.current;
         try {
             const compressedFile = await compressImage(file);
+            const dimensions = await readMediaDimensions(compressedFile);
             if (conversationEpochRef.current !== epoch) {
                 releaseAttachmentSlots(reservedCount);
                 return false;
             }
-            return stagePreparedAttachments([compressedFile], reservedCount, epoch) > 0;
+            return stagePreparedAttachments([{ file: compressedFile, dimensions }], reservedCount, epoch) > 0;
         } catch (error) {
             releaseAttachmentSlots(reservedCount);
             throw error;
@@ -214,6 +227,10 @@ export function useMessageComposerAttachments({
                 formData.append('file', attachment.file);
                 formData.append('clientUploadId', attachment.id);
                 formData.append('conversationId', conversationId);
+                if (attachment.width && attachment.height) {
+                    formData.append('width', String(attachment.width));
+                    formData.append('height', String(attachment.height));
+                }
 
                 setAttachments((prev) =>
                     prev.map((item) =>
