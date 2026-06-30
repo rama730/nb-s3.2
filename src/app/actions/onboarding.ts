@@ -23,7 +23,7 @@ import { onboardingEventInputSchema, type OnboardingEventInput } from '@/lib/onb
 import { onboardingError, type OnboardingError } from '@/lib/onboarding/errors'
 import { UsernamePersistenceError, findUnavailableUsernames, generateDeterministicUsernameCandidates, getUsernameAvailability, mapUsernamePersistenceError } from '@/lib/usernames/service'
 import { consumeRateLimit } from '@/lib/security/rate-limit'
-import { createClient } from '@/lib/supabase/server'
+import { createAdminClient, createClient } from '@/lib/supabase/server'
 import { isEmailVerified } from '@/lib/auth/email-verification'
 import type { OnboardingPayloadInput } from '@/lib/validations/onboarding'
 import { normalizeOnboardingPayload } from '@/lib/validations/onboarding'
@@ -32,6 +32,13 @@ import { and, eq, inArray, isNotNull, sql } from 'drizzle-orm'
 import { headers } from 'next/headers'
 import { getTrustedHeadersIp } from '@/lib/security/request-ip'
 import type { User } from '@supabase/supabase-js'
+import {
+    ONBOARDING_LOCAL_DRAFT_TTL_MS,
+    ONBOARDING_SCHEMA_VERSION,
+    clampCompletedThrough,
+    normalizeOnboardingSection,
+} from '@/lib/onboarding/state'
+import type { OnboardingStep2SectionId } from '@/lib/onboarding/config'
 
 const ONBOARDING_COMPLETE_LIMIT = 10
 const ONBOARDING_COMPLETE_WINDOW_SECONDS = 60
@@ -322,24 +329,33 @@ async function getViewerIdentity() {
 }
 
 async function syncOnboardingClaims(params: {
-    supabase: Awaited<ReturnType<typeof createClient>>
+    userId: string
+    userMetadata?: User['user_metadata']
+    appMetadata?: User['app_metadata']
     username: string
     fullName: string
     avatarUrl?: string
     emailVerified?: boolean
 }): Promise<boolean> {
     const payload = {
-        data: {
+        user_metadata: {
+            ...(params.userMetadata || {}),
             username: params.username,
             onboarded: true,
             full_name: params.fullName,
             avatar_url: params.avatarUrl || null,
             email_verified: params.emailVerified === true,
         },
+        app_metadata: {
+            ...(params.appMetadata || {}),
+            onboarding_complete: true,
+            onboarding_version: ONBOARDING_SCHEMA_VERSION,
+        },
     }
+    const admin = await createAdminClient()
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
-        const { error } = await params.supabase.auth.updateUser(payload)
+        const { error } = await admin.auth.admin.updateUserById(params.userId, payload)
         if (!error) return true
         console.error('Error syncing onboarding claims (attempt):', attempt + 1, error.message)
     }
@@ -619,7 +635,7 @@ export async function completeOnboarding(
             return { success: false, error: details.message, errorDetails: details }
         }
 
-        const { supabase, user, ipAddress, userAgent } = await getViewerIdentity()
+        const { user, ipAddress, userAgent } = await getViewerIdentity()
         if (!user) {
             const error = onboardingError('NOT_AUTHENTICATED', 'Session expired. Please login again.')
             return { success: false, error: error.message, errorDetails: error }
@@ -734,12 +750,18 @@ export async function completeOnboarding(
                 .values({
                     id: user.id,
                     ...profileValues,
+                    onboardingStatus: 'completed',
+                    onboardingCompletedAt: new Date(),
+                    onboardingVersion: ONBOARDING_SCHEMA_VERSION,
                     updatedAt: new Date(),
                 })
                 .onConflictDoUpdate({
                     target: profiles.id,
                     set: {
                         ...profileValues,
+                        onboardingStatus: 'completed',
+                        onboardingCompletedAt: new Date(),
+                        onboardingVersion: ONBOARDING_SCHEMA_VERSION,
                         updatedAt: new Date(),
                     },
                 })
@@ -818,7 +840,9 @@ export async function completeOnboarding(
         })
 
         const metadataSynced = await syncOnboardingClaims({
-            supabase,
+            userId: user.id,
+            userMetadata: user.user_metadata,
+            appMetadata: user.app_metadata,
             username: payload.username,
             fullName: payload.fullName,
             avatarUrl: avatarUrl || undefined,
@@ -880,7 +904,9 @@ export async function repairOnboardingClaims(): Promise<{ success: boolean; erro
         }
 
         const synced = await syncOnboardingClaims({
-            supabase,
+            userId: user.id,
+            userMetadata: user.user_metadata,
+            appMetadata: user.app_metadata,
             username: profile.username,
             fullName: profile.full_name || user.user_metadata?.full_name || user.email || 'User',
             avatarUrl: profile.avatar_url || undefined,
@@ -918,7 +944,10 @@ export async function getOnboardingDraft(): Promise<{
     success: boolean
     draft?: DraftPayload
     step?: number
+    completedThrough?: number
+    activeSection?: OnboardingStep2SectionId
     version?: number
+    schemaVersion?: number
     updatedAt?: string
     error?: string
     errorDetails?: OnboardingError
@@ -933,18 +962,38 @@ export async function getOnboardingDraft(): Promise<{
             where: eq(onboardingDrafts.userId, user.id),
             columns: {
                 step: true,
+                completedThrough: true,
+                activeSection: true,
                 version: true,
+                schemaVersion: true,
                 draft: true,
+                expiresAt: true,
                 updatedAt: true,
             },
         })
 
-        if (!row) return { success: true, step: ONBOARDING_STEP_MIN, version: 0, draft: {} }
+        if (!row || (row.expiresAt && row.expiresAt.getTime() <= Date.now())) {
+            if (row) {
+                await db.delete(onboardingDrafts).where(eq(onboardingDrafts.userId, user.id))
+            }
+            return {
+                success: true,
+                step: ONBOARDING_STEP_MIN,
+                completedThrough: 0,
+                activeSection: normalizeOnboardingSection(null),
+                version: 0,
+                schemaVersion: ONBOARDING_SCHEMA_VERSION,
+                draft: {},
+            }
+        }
 
         return {
             success: true,
             step: clampStep(row.step),
+            completedThrough: clampCompletedThrough(row.completedThrough),
+            activeSection: normalizeOnboardingSection(row.activeSection),
             version: row.version,
+            schemaVersion: row.schemaVersion,
             draft: sanitizeOnboardingDraft(row.draft),
             updatedAt: row.updatedAt.toISOString(),
         }
@@ -958,11 +1007,15 @@ export async function getOnboardingDraft(): Promise<{
 export async function saveOnboardingDraft(input: {
     step: number
     draft: Partial<DraftPayload>
+    activeSection?: OnboardingStep2SectionId
     expectedVersion?: number
 }): Promise<{
     success: boolean
     version?: number
     step?: number
+    completedThrough?: number
+    activeSection?: OnboardingStep2SectionId
+    schemaVersion?: number
     draft?: DraftPayload
     updatedAt?: string
     error?: string
@@ -980,23 +1033,32 @@ export async function saveOnboardingDraft(input: {
         const safeStep = clampStep(input.step)
         const incomingDraftPatch = sanitizeOnboardingDraftPatch(input.draft)
         const fullDraft = sanitizeOnboardingDraft(incomingDraftPatch)
+        const activeSection = normalizeOnboardingSection(input.activeSection)
         const updatedAt = new Date()
+        const expiresAt = new Date(updatedAt.getTime() + ONBOARDING_LOCAL_DRAFT_TTL_MS * 30)
 
         const result = await db
             .insert(onboardingDrafts)
             .values({
                 userId: user.id,
                 step: safeStep,
+                completedThrough: 0,
+                activeSection,
                 version: 1,
+                schemaVersion: ONBOARDING_SCHEMA_VERSION,
                 draft: fullDraft,
+                expiresAt,
                 updatedAt,
             })
             .onConflictDoUpdate({
                 target: onboardingDrafts.userId,
                 set: {
                     step: safeStep,
-                    draft: sql`${onboardingDrafts.draft} || ${incomingDraftPatch}::jsonb`,
+                    activeSection,
+                    draft: sql`${onboardingDrafts.draft} || ${JSON.stringify(incomingDraftPatch)}::jsonb`,
                     version: sql`${onboardingDrafts.version} + 1`,
+                    schemaVersion: ONBOARDING_SCHEMA_VERSION,
+                    expiresAt,
                     updatedAt,
                 },
                 where: typeof input.expectedVersion === 'number'
@@ -1006,6 +1068,9 @@ export async function saveOnboardingDraft(input: {
             .returning({
                 version: onboardingDrafts.version,
                 step: onboardingDrafts.step,
+                completedThrough: onboardingDrafts.completedThrough,
+                activeSection: onboardingDrafts.activeSection,
+                schemaVersion: onboardingDrafts.schemaVersion,
                 draft: onboardingDrafts.draft,
                 updatedAt: onboardingDrafts.updatedAt,
             })
@@ -1015,6 +1080,9 @@ export async function saveOnboardingDraft(input: {
                 success: true,
                 version: result[0]!.version,
                 step: clampStep(result[0]!.step),
+                completedThrough: clampCompletedThrough(result[0]!.completedThrough),
+                activeSection: normalizeOnboardingSection(result[0]!.activeSection),
+                schemaVersion: result[0]!.schemaVersion,
                 draft: sanitizeOnboardingDraft(result[0]!.draft),
                 updatedAt: result[0]!.updatedAt.toISOString(),
             }
@@ -1023,7 +1091,15 @@ export async function saveOnboardingDraft(input: {
         // Conflict: version didn't match
         const latest = await db.query.onboardingDrafts.findFirst({
             where: eq(onboardingDrafts.userId, user.id),
-            columns: { version: true, step: true, draft: true, updatedAt: true },
+            columns: {
+                version: true,
+                step: true,
+                completedThrough: true,
+                activeSection: true,
+                schemaVersion: true,
+                draft: true,
+                updatedAt: true,
+            },
         })
 
         if (!latest) {
@@ -1038,12 +1114,184 @@ export async function saveOnboardingDraft(input: {
             errorDetails: details,
             version: latest.version,
             step: clampStep(latest.step),
+            completedThrough: clampCompletedThrough(latest.completedThrough),
+            activeSection: normalizeOnboardingSection(latest.activeSection),
+            schemaVersion: latest.schemaVersion,
             draft: sanitizeOnboardingDraft(latest.draft),
             updatedAt: latest.updatedAt.toISOString(),
         }
     } catch (error) {
         console.error('Error saving onboarding draft:', error)
         const details = onboardingError('DB_ERROR', 'Unable to save onboarding draft', true)
+        return { success: false, error: details.message, errorDetails: details }
+    }
+}
+
+export async function commitOnboardingStep(input: {
+    step: number
+    draft: DraftPayload
+    activeSection?: OnboardingStep2SectionId
+    expectedVersion: number
+}): Promise<{
+    success: boolean
+    step?: number
+    committedThrough?: number
+    activeSection?: OnboardingStep2SectionId
+    version?: number
+    schemaVersion?: number
+    draft?: DraftPayload
+    error?: string
+    errorDetails?: OnboardingError
+}> {
+    try {
+        const supabase = await createClient()
+        const { data: authData } = await supabase.auth.getUser()
+        const user = authData.user
+        if (!user) {
+            const details = onboardingError('NOT_AUTHENTICATED', 'Session expired. Please sign in again.')
+            return { success: false, error: details.message, errorDetails: details }
+        }
+
+        const profileShell = await ensureOnboardingProfileShell({
+            userId: user.id,
+            userEmail: user.email,
+            metadata: user.user_metadata,
+        })
+        if (!profileShell.success) {
+            return {
+                success: false,
+                error: profileShell.error.message,
+                errorDetails: profileShell.error,
+            }
+        }
+
+        const currentStep = clampStep(input.step)
+        if (currentStep >= ONBOARDING_STEP_MAX) {
+            const details = onboardingError('INVALID_INPUT', 'Complete the final step to finish onboarding.')
+            return { success: false, error: details.message, errorDetails: details }
+        }
+
+        const draft = sanitizeOnboardingDraft(input.draft)
+        if (currentStep === 1) {
+            const username = normalizeUsername(draft.username || '')
+            const usernameValidation = validateUsername(username)
+            if (!usernameValidation.valid || (draft.fullName || '').trim().length < 2) {
+                const details = onboardingError('INVALID_INPUT', usernameValidation.message || 'Name and username are required.')
+                return { success: false, error: details.message, errorDetails: details }
+            }
+            const availability = await ensureUsernameIsAvailable({ username, userId: user.id })
+            if (!availability.ok) {
+                return {
+                    success: false,
+                    error: availability.error.message,
+                    errorDetails: availability.error,
+                }
+            }
+            draft.username = username
+        }
+        if (currentStep === 3 && (!draft.skills || draft.skills.length === 0)) {
+            const details = onboardingError('INVALID_INPUT', 'Select at least one skill to continue.')
+            return { success: false, error: details.message, errorDetails: details }
+        }
+
+        const activeSection = normalizeOnboardingSection(input.activeSection)
+        const nextStep = Math.min(ONBOARDING_STEP_MAX, currentStep + 1)
+        const now = new Date()
+        const expiresAt = new Date(now.getTime() + ONBOARDING_LOCAL_DRAFT_TTL_MS * 30)
+
+        const result = await db.transaction(async (tx) => {
+            const rows = await tx
+                .insert(onboardingDrafts)
+                .values({
+                    userId: user.id,
+                    step: nextStep,
+                    completedThrough: currentStep,
+                    activeSection,
+                    version: 1,
+                    schemaVersion: ONBOARDING_SCHEMA_VERSION,
+                    draft,
+                    expiresAt,
+                    updatedAt: now,
+                })
+                .onConflictDoUpdate({
+                    target: onboardingDrafts.userId,
+                    set: {
+                        step: nextStep,
+                        completedThrough: sql`GREATEST(${onboardingDrafts.completedThrough}, ${currentStep})`,
+                        activeSection,
+                        version: sql`${onboardingDrafts.version} + 1`,
+                        schemaVersion: ONBOARDING_SCHEMA_VERSION,
+                        draft,
+                        expiresAt,
+                        updatedAt: now,
+                    },
+                    where: eq(onboardingDrafts.version, input.expectedVersion),
+                })
+                .returning({
+                    step: onboardingDrafts.step,
+                    completedThrough: onboardingDrafts.completedThrough,
+                    activeSection: onboardingDrafts.activeSection,
+                    version: onboardingDrafts.version,
+                    schemaVersion: onboardingDrafts.schemaVersion,
+                    draft: onboardingDrafts.draft,
+                })
+
+            if (rows.length > 0) {
+                await tx
+                    .update(profiles)
+                    .set({
+                        onboardingStatus: 'in_progress',
+                        onboardingVersion: ONBOARDING_SCHEMA_VERSION,
+                        updatedAt: now,
+                    })
+                    .where(
+                        and(
+                            eq(profiles.id, user.id),
+                            sql`${profiles.onboardingStatus} <> 'completed'`,
+                        ),
+                    )
+            }
+            return rows
+        })
+
+        if (result.length > 0) {
+            return {
+                success: true,
+                step: clampStep(result[0]!.step),
+                committedThrough: clampCompletedThrough(result[0]!.completedThrough),
+                activeSection: normalizeOnboardingSection(result[0]!.activeSection),
+                version: result[0]!.version,
+                schemaVersion: result[0]!.schemaVersion,
+                draft: sanitizeOnboardingDraft(result[0]!.draft),
+            }
+        }
+
+        const latest = await db.query.onboardingDrafts.findFirst({
+            where: eq(onboardingDrafts.userId, user.id),
+            columns: {
+                step: true,
+                completedThrough: true,
+                activeSection: true,
+                version: true,
+                schemaVersion: true,
+                draft: true,
+            },
+        })
+        const details = onboardingError('DRAFT_CONFLICT', 'This onboarding draft changed in another tab. The latest version is ready to review.')
+        return {
+            success: false,
+            error: details.message,
+            errorDetails: details,
+            step: latest ? clampStep(latest.step) : currentStep,
+            committedThrough: latest ? clampCompletedThrough(latest.completedThrough) : undefined,
+            activeSection: latest ? normalizeOnboardingSection(latest.activeSection) : activeSection,
+            version: latest?.version,
+            schemaVersion: latest?.schemaVersion,
+            draft: latest ? sanitizeOnboardingDraft(latest.draft) : undefined,
+        }
+    } catch (error) {
+        console.error('Error committing onboarding step:', error)
+        const details = onboardingError('DB_ERROR', 'Unable to save this step right now. Your entries are still available in this browser.', true)
         return { success: false, error: details.message, errorDetails: details }
     }
 }
