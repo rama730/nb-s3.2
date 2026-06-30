@@ -22,7 +22,7 @@
 //     node in the generated tree or `null` (navigate to project root).
 //
 // Runs: `fc.assert(..., { numRuns: 100 })` per design § Correctness
-// Properties and the README in this folder.
+// Properties and the Doc in this folder.
 //
 // ─── Module-load dance ───────────────────────────────────────────────
 //
