@@ -17,12 +17,6 @@ import {
     X,
 } from "lucide-react";
 import { toast } from "sonner";
-import { createPortal } from "react-dom";
-import { ProjectReadmeReferencePicker } from "@/components/projects/readme/ProjectReadmeReferencePicker";
-import {
-    buildInlineReadmeReference,
-    type ProjectReadmeReferenceKind,
-} from "@/lib/projects/readme-blocks";
 import { MultiAttachmentPicker } from "@/components/projects/v2/files-tab/picker/MultiAttachmentPicker";
 
 import { 
@@ -43,22 +37,21 @@ import {
     normalizeProjectUpdateMediaItems,
     normalizeProjectUpdateReferences,
     projectUpdateDraftStorageKey,
+    projectUpdateExcerpt,
     type ProjectUpdateContextKind,
     type ProjectUpdateContextOption,
     type ProjectUpdateEntityRefs,
     type ProjectUpdateMediaItem,
+    type ProjectUpdateReference,
     type ProjectUpdateVisibility,
 } from "@/lib/projects/updates";
 import { uploadToSupabaseSignedUrl } from "@/lib/upload/supabase-signed-upload-client";
 import { cn } from "@/lib/utils";
+import { normalizeReadmeReferenceLabel } from "@/lib/projects/doc-blocks";
+import { get as idbGet, set as idbSet, del as idbDel } from "idb-keyval";
 
-const ProjectUpdateRichTextEditor = dynamic(
-    () => import("./ProjectUpdateRichTextEditor").then((module) => module.ProjectUpdateRichTextEditor),
-    {
-        ssr: false,
-        loading: () => <div className="min-h-28 animate-pulse rounded-xl bg-zinc-100 dark:bg-zinc-900" />,
-    },
-);
+import { ProjectUpdateMediaFrame, isProjectUpdateVideoMedia } from "./ProjectUpdateMediaFrame";
+import { ProjectUpdateRichTextEditor } from "./ProjectUpdateRichTextEditor";
 
 const EMPTY_REFS: ProjectUpdateEntityRefs = {};
 const EMPTY_CONTEXT_OPTIONS: Record<ProjectUpdateContextKind, ProjectUpdateContextOption[]> = {
@@ -176,6 +169,56 @@ function readImageDimensions(file: File): Promise<{ width: number; height: numbe
     });
 }
 
+function compressImage(file: File): Promise<File> {
+    if (!file.type.startsWith("image/")) return Promise.resolve(file);
+    return new Promise((resolve) => {
+        const img = new globalThis.Image();
+        img.src = URL.createObjectURL(file);
+        img.onload = () => {
+            URL.revokeObjectURL(img.src);
+            const canvas = document.createElement("canvas");
+            const maxDim = 1600;
+            let width = img.naturalWidth;
+            let height = img.naturalHeight;
+            if (width > maxDim || height > maxDim) {
+                if (width > height) {
+                    height = Math.round((height * maxDim) / width);
+                    width = maxDim;
+                } else {
+                    width = Math.round((width * maxDim) / height);
+                    height = maxDim;
+                }
+            }
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext("2d");
+            if (!ctx) {
+                resolve(file);
+                return;
+            }
+            ctx.drawImage(img, 0, 0, width, height);
+            canvas.toBlob((blob) => {
+                if (blob) {
+                    const compressedFile = new File([blob], file.name.replace(/\.[^.]+$/, "") + ".webp", {
+                        type: "image/webp",
+                        lastModified: Date.now()
+                    });
+                    if (compressedFile.size < file.size) {
+                        resolve(compressedFile);
+                    } else {
+                        resolve(file);
+                    }
+                } else {
+                    resolve(file);
+                }
+            }, "image/webp", 0.8);
+        };
+        img.onerror = () => {
+            resolve(file);
+        };
+    });
+}
+
 export function ProjectUpdateComposer({
     projectId,
     projectName,
@@ -214,13 +257,7 @@ export function ProjectUpdateComposer({
     const [pendingMediaUploads, setPendingMediaUploads] = useState<PendingMediaUpload[]>([]);
     const [activePanel, setActivePanel] = useState<ComposerPanel>(null);
     const [filePickerOpen, setFilePickerOpen] = useState(false);
-    const [mentionPickerOpen, setMentionPickerOpen] = useState<ProjectReadmeReferenceKind | "all" | null>(null);
     const editorRef = useRef<{ insertTextAtCursor: (t: string) => void } | null>(null);
-    const [portalTarget, setPortalTarget] = useState<HTMLElement | null>(null);
-    useEffect(() => {
-        setPortalTarget(typeof document !== "undefined" ? document.body : null);
-    }, []);
-
 
     const [contextQuery, setContextQuery] = useState("");
     const debouncedContextQuery = useDebouncedValue(contextQuery, 250);
@@ -233,7 +270,7 @@ export function ProjectUpdateComposer({
     const activeContextKind = isProjectContextPanel(activePanel) ? activePanel : null;
     const remaining = 2_000 - content.length;
     const hasPendingUploads = pendingMediaUploads.some((item) => !item.error);
-    const draftPreview = content.trim();
+    const draftPreview = projectUpdateExcerpt(content, 240);
     const normalizedReferences = useMemo(
         () => normalizeProjectUpdateReferences(entityRefs.references),
         [entityRefs.references],
@@ -306,17 +343,74 @@ export function ProjectUpdateComposer({
     useEffect(() => {
         if (!canCreate || draftInitialized || !draftQuery.isFetched) return;
         
-        const parsed = draftQuery.data;
-        if (parsed && typeof parsed.content === "string") {
-            const draftText = parsed.content.slice(0, 2_200);
-            setContent(draftText);
+        let cancelled = false;
+        async function initDraft() {
+            let parsed = draftQuery.data;
+            try {
+                const localDraft = await idbGet(draftStorageKey);
+                if (localDraft) {
+                    parsed = typeof localDraft === "string" ? JSON.parse(localDraft) : localDraft;
+                }
+            } catch (err) {
+                console.warn("Failed to read draft from IndexedDB:", err);
+            }
+            if (cancelled) return;
+
+            let initialContent = "";
+            let initialVisibility: ProjectUpdateVisibility = "public";
+            let initialEntityRefs: ProjectUpdateEntityRefs = {};
+            let initialMedia: ProjectUpdateMediaItem[] = [];
+            if (parsed && typeof parsed.content === "string") {
+                const draftText = parsed.content.slice(0, 2_200);
+                initialContent = draftText;
+                setContent(draftText);
+            }
+            if (parsed && (parsed.visibility === "members" || parsed.visibility === "public")) {
+                initialVisibility = parsed.visibility as ProjectUpdateVisibility;
+                setVisibility(initialVisibility);
+            }
+            if (parsed?.entityRefs && typeof parsed.entityRefs === "object") {
+                initialEntityRefs = parsed.entityRefs as ProjectUpdateEntityRefs;
+                setEntityRefs(initialEntityRefs);
+            }
+            if (Array.isArray(parsed?.media)) {
+                initialMedia = normalizeProjectUpdateMediaItems(parsed.media);
+                setMedia(initialMedia);
+            }
+            lastSavedDraftRef.current = JSON.stringify({
+                content: initialContent,
+                visibility: initialVisibility,
+                updateType: null,
+                entityRefs: initialEntityRefs,
+                media: initialMedia,
+            });
+
+            setDraftInitialized(true);
         }
-        if (parsed && (parsed.visibility === "members" || parsed.visibility === "public")) setVisibility(parsed.visibility as ProjectUpdateVisibility);
-        if (parsed?.entityRefs && typeof parsed.entityRefs === "object") setEntityRefs(parsed.entityRefs as ProjectUpdateEntityRefs);
-        if (Array.isArray(parsed?.media)) setMedia(normalizeProjectUpdateMediaItems(parsed.media));
-        
-        setDraftInitialized(true);
-    }, [canCreate, draftInitialized, draftQuery.data, draftQuery.isFetched]);
+
+        initDraft();
+        return () => {
+            cancelled = true;
+        };
+    }, [canCreate, draftInitialized, draftQuery.data, draftQuery.isFetched, draftStorageKey]);
+
+    useEffect(() => {
+        if (!canCreate || !draftInitialized) return;
+        const hasDraft = content.trim() || hasEntityReferences(entityRefs) || media.length > 0 || visibility !== "public";
+        const payload = {
+            content: hasDraft ? content : "",
+            visibility: hasDraft ? visibility : "public",
+            updateType: null,
+            entityRefs: hasDraft ? entityRefs : {},
+            media: hasDraft ? media : [],
+        };
+        if (typeof window !== "undefined") {
+            window.localStorage.setItem(draftStorageKey, JSON.stringify(payload));
+            void idbSet(draftStorageKey, payload).catch((err) => {
+                console.warn("Failed to save draft to IndexedDB:", err);
+            });
+        }
+    }, [canCreate, draftInitialized, content, entityRefs, media, visibility, draftStorageKey]);
 
     useEffect(() => {
         if (!canCreate || !draftInitialized) return;
@@ -334,9 +428,41 @@ export function ProjectUpdateComposer({
         const timer = setTimeout(() => {
             lastSavedDraftRef.current = serializedPayload;
             saveDraft(payload);
-        }, 500);
+        }, 8000);
         
         return () => clearTimeout(timer);
+    }, [canCreate, draftInitialized, content, entityRefs, media, saveDraft, visibility]);
+
+    useEffect(() => {
+        if (!canCreate || !draftInitialized) return;
+        const handleSync = () => {
+            const hasDraft = content.trim() || hasEntityReferences(entityRefs) || media.length > 0 || visibility !== "public";
+            const payload = {
+                content: hasDraft ? content : "",
+                visibility: hasDraft ? visibility : "public",
+                updateType: null,
+                entityRefs: hasDraft ? entityRefs : {},
+                media: hasDraft ? media : [],
+            };
+            const serializedPayload = JSON.stringify(payload);
+            if (lastSavedDraftRef.current !== serializedPayload) {
+                lastSavedDraftRef.current = serializedPayload;
+                saveDraft(payload);
+            }
+        };
+
+        window.addEventListener("blur", handleSync);
+        const handleVisibilityChange = () => {
+            if (document.visibilityState === "hidden") {
+                handleSync();
+            }
+        };
+        document.addEventListener("visibilitychange", handleVisibilityChange);
+
+        return () => {
+            window.removeEventListener("blur", handleSync);
+            document.removeEventListener("visibilitychange", handleVisibilityChange);
+        };
     }, [canCreate, draftInitialized, content, entityRefs, media, saveDraft, visibility]);
 
     useEffect(() => {
@@ -374,6 +500,57 @@ export function ProjectUpdateComposer({
         };
     }, []);
 
+    // Parse references from content dynamically to keep entityRefs in sync
+    useEffect(() => {
+        const parseContent = () => {
+            const parsedRefs: ProjectUpdateReference[] = Array.from(content.matchAll(/\{%\s*ref\.([a-z_]+)\s+id="([^"]+)"(?:\s+label="([^"]*)")?\s*%\}/gi)).flatMap((match) => {
+                const pluralKind = match[1]?.toLowerCase();
+                const id = match[2];
+                if (!id) return [];
+                const kind: ProjectUpdateContextKind = pluralKind === "tasks" ? "task" : pluralKind === "sprints" ? "sprint" : "file";
+                return [{ kind, id }];
+            });
+
+            // Unique references
+            const uniqueRefs = parsedRefs.filter(
+                (ref, index, self) => self.findIndex((r) => r.kind === ref.kind && r.id === ref.id) === index
+            );
+
+            const currentRefs = entityRefs.references || [];
+            const isSame = uniqueRefs.length === currentRefs.length &&
+                uniqueRefs.every((ur) => currentRefs.some((cr) => cr.kind === ur.kind && cr.id === ur.id));
+
+            if (!isSame) {
+                setEntityRefs((current) => {
+                    const next: ProjectUpdateEntityRefs = {
+                        ...current,
+                        references: uniqueRefs,
+                    };
+                    // Set legacy context references if any match
+                    const taskRef = uniqueRefs.find((r) => r.kind === "task");
+                    const sprintRef = uniqueRefs.find((r) => r.kind === "sprint");
+                    const fileRef = uniqueRefs.find((r) => r.kind === "file");
+                    next.taskId = taskRef?.id ?? null;
+                    next.sprintId = sprintRef?.id ?? null;
+                    next.fileId = fileRef?.id ?? null;
+                    return next;
+                });
+            }
+        };
+
+        // Throttle parsing to 250ms of idle time
+        const timer = setTimeout(() => {
+            if (typeof window !== "undefined" && "requestIdleCallback" in window) {
+                window.requestIdleCallback(() => parseContent());
+            } else {
+                parseContent();
+            }
+        }, 250);
+
+        return () => clearTimeout(timer);
+    }, [content, entityRefs.references]);
+
+
     if (!canCreate) return null;
 
     const openPanel = (panel: Exclude<ComposerPanel | "media" | "file", null>) => {
@@ -386,29 +563,46 @@ export function ProjectUpdateComposer({
             setFilePickerOpen(true);
             return;
         }
-        if (panel === "task" || panel === "sprint") {
-            setMentionPickerOpen(panel === "task" ? "tasks" : "sprints");
-            return;
-        }
         setContextQuery("");
         setActivePanel((current) => current === panel ? null : panel as ComposerPanel);
     };
 
-    const selectContext = (option: ProjectUpdateContextOption) => {
+    const addContextReference = (
+        kind: ProjectUpdateContextKind,
+        id: string,
+        option?: ProjectUpdateContextOption,
+    ) => {
         setEntityRefs((current) => {
             const references = normalizeProjectUpdateReferences([
                 ...(current.references ?? []),
-                { kind: option.kind, id: option.id },
+                { kind, id },
             ]);
             const next: ProjectUpdateEntityRefs = { ...current, references };
-            assignLegacyContextRef(next, option.kind, option.id);
+            assignLegacyContextRef(next, kind, id);
             return next;
         });
-        setSelectedContextCache((current) => ({ ...current, [referenceKey(option)]: option }));
+        if (option) {
+            setSelectedContextCache((current) => ({ ...current, [referenceKey(option)]: option }));
+        }
+    };
+
+    const selectContext = (option: ProjectUpdateContextOption) => {
+        const pluralKind = option.kind === "task" ? "tasks" : option.kind === "sprint" ? "sprints" : "files";
+        const normalizedLabel = normalizeReadmeReferenceLabel(pluralKind, option.label);
+        const escapedLabel = normalizedLabel.replace(/\\/g, "\\\\").replace(/"/g, "&quot;").replace(/\s+/g, " ").trim();
+        const refText = `{% ref.${pluralKind} id="${option.id}" label="${escapedLabel}" %}`;
+        if (editorRef.current) {
+            editorRef.current.insertTextAtCursor(refText);
+        }
         setActivePanel(null);
     };
 
     const removeContext = (option: ProjectUpdateContextOption) => {
+        const pluralKind = option.kind === "task" ? "tasks" : option.kind === "sprint" ? "sprints" : "files";
+        const regex = new RegExp(`\\{%\\s*ref\\.${pluralKind}\\s+id="${option.id}"(?:\\s+label="[^"]*")?\\s*%\\}`, "gi");
+        const nextContent = content.replace(regex, "").replace(/\s+/g, " ").trim();
+        setContent(nextContent);
+
         setEntityRefs((current) => {
             const references = normalizeProjectUpdateReferences(current.references)
                 .filter((reference) => !(reference.kind === option.kind && reference.id === option.id));
@@ -459,12 +653,12 @@ export function ProjectUpdateComposer({
         });
     };
 
-    const uploadImageFile = async (file: File) => {
-        if (!PROJECT_UPDATE_ALLOWED_IMAGE_MIME_TYPES.has(file.type)) {
+    const uploadImageFile = async (originalFile: File) => {
+        if (!PROJECT_UPDATE_ALLOWED_IMAGE_MIME_TYPES.has(originalFile.type)) {
             toast.error("Use JPG, PNG, WebP, or GIF images.");
             return;
         }
-        if (file.size > PROJECT_UPDATE_MEDIA_MAX_BYTES) {
+        if (originalFile.size > PROJECT_UPDATE_MEDIA_MAX_BYTES) {
             toast.error(`Update images must be ${formatFileSize(PROJECT_UPDATE_MEDIA_MAX_BYTES)} or smaller.`);
             return;
         }
@@ -474,26 +668,41 @@ export function ProjectUpdateComposer({
         }
         setExpanded(true);
         const id = newUploadId();
-        const previewUrl = URL.createObjectURL(file);
-        const altText = defaultAltText(file);
-        const dimensions = await readImageDimensions(file);
+        const previewUrl = URL.createObjectURL(originalFile);
+        const altText = defaultAltText(originalFile);
+
         setPendingMediaUploads((current) => [
             ...current,
             {
                 id,
-                fileName: file.name,
+                fileName: originalFile.name,
                 previewUrl,
                 altText,
-                mimeType: file.type,
-                size: file.size,
-                width: dimensions?.width ?? null,
-                height: dimensions?.height ?? null,
+                mimeType: originalFile.type,
+                size: originalFile.size,
+                width: null,
+                height: null,
                 phase: "preparing",
                 progress: 15,
                 error: null,
             },
         ]);
         try {
+            const file = await compressImage(originalFile);
+            const dimensions = await readImageDimensions(file);
+            updatePendingUpload(id, {
+                fileName: file.name,
+                mimeType: file.type,
+                size: file.size,
+                width: dimensions?.width ?? null,
+                height: dimensions?.height ?? null,
+                progress: 30,
+            });
+
+            if (file.size > PROJECT_UPDATE_MEDIA_MAX_BYTES) {
+                throw new Error(`Compressed image exceeds max size.`);
+            }
+
             const prepared = await createProjectUpdateMediaUploadUrlAction(projectId, {
                 mimeType: file.type,
                 sizeBytes: file.size,
@@ -554,7 +763,12 @@ export function ProjectUpdateComposer({
         setActivePanel(null);
         setMediaUrl("");
         setMediaLabel("");
-        if (typeof window !== "undefined") window.localStorage.removeItem(draftStorageKey);
+        if (typeof window !== "undefined") {
+            window.localStorage.removeItem(draftStorageKey);
+            void idbDel(draftStorageKey).catch((err) => {
+                console.warn("Failed to delete draft from IndexedDB:", err);
+            });
+        }
         if (!canManage) setVisibility("public");
         lastSavedDraftRef.current = JSON.stringify({ content: "", visibility: "public", updateType: null, entityRefs: {}, media: [] });
     };
@@ -707,72 +921,56 @@ export function ProjectUpdateComposer({
                             placeholder={`Share a project update for ${projectName}...`}
                             onChange={setContent}
                             onCommand={openPanel}
-                            onMention={() => setMentionPickerOpen("all")}
+                            onMention={() => openPanel("task")}
                             editorRef={editorRef}
                         />
                     </>
                 )}
 
-                {expanded && (selectedReferences.length > 0 || media.length > 0 || pendingMediaUploads.length > 0) ? (
+                {expanded && (media.length > 0 || pendingMediaUploads.length > 0) ? (
                     <div className="mt-3 space-y-2">
-                        {selectedReferences.length > 0 ? (
-                            <div className="space-y-2">
-                                {selectedReferences.map((option) => (
-                                    <div
-                                        key={referenceKey(option)}
-                                        className="flex min-w-0 items-center gap-3 rounded-xl border border-zinc-200 px-3 py-2 dark:border-zinc-800"
-                                    >
-                                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-50 text-blue-600 dark:bg-blue-950/30 dark:text-blue-300">
-                                            {option.kind === "task" ? <FileText className="h-4 w-4" /> : option.kind === "sprint" ? <Timer className="h-4 w-4" /> : <Paperclip className="h-4 w-4" />}
-                                        </span>
-                                        <span className="min-w-0 flex-1">
-                                            <span className="block truncate text-sm font-semibold text-zinc-900 dark:text-zinc-100">{option.label}</span>
-                                            {option.description ? <span className="block truncate text-xs text-zinc-500">{option.description}</span> : null}
-                                        </span>
-                                        <button type="button" className="rounded-full p-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-900 dark:hover:text-zinc-100" onClick={() => removeContext(option)} aria-label={`Remove ${option.kind} context`}>
+                        {/* We no longer render structured context attachments list below the editor in the composer */}
+                        {(() => { const _unused = selectedReferences; return null; })()}
+                        {pendingMediaUploads.map((item) => (
+                            <ProjectUpdateMediaFrame
+                                key={item.id}
+                                item={{
+                                    type: "image",
+                                    url: item.previewUrl,
+                                    label: item.fileName,
+                                    altText: item.altText,
+                                    mimeType: item.mimeType,
+                                    width: item.width,
+                                    height: item.height,
+                                }}
+                                src={item.previewUrl}
+                                alt={item.altText || item.fileName}
+                                actions={(
+                                    <>
+                                        <button type="button" onClick={() => clearPendingUpload(item.id)} className="absolute right-2 top-2 rounded-full bg-zinc-950/70 p-1 text-white hover:bg-zinc-900" aria-label="Remove image">
                                             <X className="h-4 w-4" />
                                         </button>
-                                    </div>
-                                ))}
-                            </div>
-                        ) : null}
-                        {pendingMediaUploads.map((item) => (
-                            <div key={item.id} className="overflow-hidden rounded-2xl border border-zinc-200 dark:border-zinc-800">
-                                <div className="relative aspect-video bg-zinc-100 dark:bg-zinc-900">
-                                    <img src={item.previewUrl} alt="" className="h-full w-full object-cover" />
-                                    <button type="button" onClick={() => clearPendingUpload(item.id)} className="absolute right-2 top-2 rounded-full bg-zinc-950/70 p-1 text-white hover:bg-zinc-900" aria-label="Remove image">
-                                        <X className="h-4 w-4" />
-                                    </button>
-                                </div>
-                                <div className="flex items-center justify-between gap-3 px-3 py-2">
-                                    <div className="min-w-0">
-                                        <p className="truncate text-sm font-semibold text-zinc-900 dark:text-zinc-100">{item.fileName}</p>
-                                        <p className="text-xs text-zinc-500">
-                                            {item.error || `${item.phase} · ${formatFileSize(item.size)}${item.width && item.height ? ` · ${item.width}×${item.height}` : ""}`}
-                                        </p>
-                                    </div>
-                                    {item.error ? (
-                                        <span className="text-xs font-semibold text-red-500">Failed</span>
-                                    ) : (
-                                        <span className="text-xs font-semibold text-blue-500">{item.progress}%</span>
-                                    )}
-                                </div>
-                            </div>
+                                        <div className="absolute bottom-2 left-2 max-w-[calc(100%-1rem)] rounded-full bg-zinc-950/70 px-3 py-1 text-xs font-semibold text-white shadow-lg">
+                                            {item.error
+                                                ? "Upload failed"
+                                                : `${item.phase} · ${item.progress}%`}
+                                        </div>
+                                    </>
+                                )}
+                            />
                         ))}
-                        {media.map((item, index) => item.type === "image" && item.url ? (
-                            <div key={`${item.url}-${index}`} className="overflow-hidden rounded-2xl border border-zinc-200 dark:border-zinc-800">
-                                <div className="relative aspect-video bg-zinc-100 dark:bg-zinc-900">
-                                    <img src={item.url} alt={item.altText || item.label || "Project update image"} className="h-full w-full object-cover" loading="lazy" />
+                        {media.map((item, index) => item.url && (item.type === "image" || isProjectUpdateVideoMedia(item)) ? (
+                            <ProjectUpdateMediaFrame
+                                key={`${item.url}-${index}`}
+                                item={item}
+                                src={item.url}
+                                alt={item.altText || item.label || "Project update image"}
+                                actions={(
                                     <button type="button" className="absolute right-2 top-2 rounded-full bg-zinc-950/70 p-1 text-white hover:bg-zinc-900" onClick={() => removeMedia(index)} aria-label="Remove image">
                                         <X className="h-4 w-4" />
                                     </button>
-                                </div>
-                                {item.label || item.size ? (
-                                    <div className="px-3 py-2 text-xs text-zinc-500">
-                                        <span className="line-clamp-1">{[item.label, formatFileSize(item.size)].filter(Boolean).join(" · ")}</span>
-                                    </div>
-                                ) : null}
-                            </div>
+                                )}
+                            />
                         ) : (
                             <div key={`${item.url}-${index}`} className="flex min-w-0 items-center gap-3 rounded-xl border border-zinc-200 px-3 py-2 dark:border-zinc-800">
                                 <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-zinc-100 text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300">
@@ -813,6 +1011,14 @@ export function ProjectUpdateComposer({
                                 <span className={cn("text-xs font-medium", remaining < 0 ? "text-red-500" : "text-zinc-400")}>{remaining}</span>
                                 <Button
                                     type="button"
+                                    variant="outline"
+                                    onClick={resetAfterPost}
+                                    className="rounded-full border border-zinc-200 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 dark:border-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-200"
+                                >
+                                    Discard
+                                </Button>
+                                <Button
+                                    type="button"
                                     disabled={disabled}
                                     onClick={() => {
                                         onPost({
@@ -840,36 +1046,27 @@ export function ProjectUpdateComposer({
         </div>
     );
 
-    return (
-        <div
-            ref={containerRef}
-            className={cn(
-                "relative border-b border-zinc-200 px-1 py-4 transition-all duration-200 ease-out dark:border-zinc-800",
-                expanded ? "pb-5" : "pb-4",
-            )}
-        >
+        return (
+            <div
+                ref={containerRef}
+                onDragOver={(event) => {
+                    if (!expanded) return;
+                    event.preventDefault();
+                }}
+                onDrop={(event) => {
+                    if (!expanded) return;
+                    event.preventDefault();
+                    handleImageFiles(event.dataTransfer.files);
+                }}
+                className={cn(
+                    "relative border-b border-zinc-200 px-1 py-4 transition-all duration-200 ease-out dark:border-zinc-800",
+                    expanded ? "pb-5" : "pb-4",
+                )}
+            >
             {composerBody}
             {hiddenImageInput}
 
 
-            {mentionPickerOpen && portalTarget ? createPortal(
-                <div data-composer-portal="true" className="fixed inset-0 z-[100] flex items-center justify-center bg-black/30 p-4" onClick={(e) => {
-                    if (e.target === e.currentTarget) setMentionPickerOpen(null);
-                }}>
-                    <div className="w-full max-w-2xl overflow-hidden rounded-2xl shadow-2xl bg-white dark:bg-zinc-950 p-6">
-                        <ProjectReadmeReferencePicker
-                            projectId={projectId}
-                            initialKind={mentionPickerOpen === "all" ? undefined : mentionPickerOpen}
-                            onInsert={(text) => {
-                                editorRef.current?.insertTextAtCursor(text + " ");
-                                setMentionPickerOpen(null);
-                            }}
-                            onClose={() => setMentionPickerOpen(null)}
-                        />
-                    </div>
-                </div>,
-                portalTarget
-            ) : null}
             <MultiAttachmentPicker
                 projectId={projectId}
                 projectName={projectName}
@@ -877,16 +1074,22 @@ export function ProjectUpdateComposer({
                 onClose={() => setFilePickerOpen(false)}
                 initialAttachments={[]}
                 onConfirm={(nodes) => {
-                    const markdown = nodes.map(node => {
-                        return buildInlineReadmeReference({
+                    nodes.forEach((node) => {
+                        const normalizedLabel = normalizeReadmeReferenceLabel("files", node.name || "Project file");
+                        const escapedLabel = normalizedLabel.replace(/\\/g, "\\\\").replace(/"/g, "&quot;").replace(/\s+/g, " ").trim();
+                        const refText = `{% ref.files id="${node.id}" label="${escapedLabel}" %}`;
+                        if (editorRef.current) {
+                            editorRef.current.insertTextAtCursor(refText);
+                        }
+                        addContextReference("file", node.id, {
+                            kind: "file",
                             id: node.id,
-                            kind: "files",
-                            title: node.name,
+                            label: normalizedLabel,
+                            description: node.path || "",
+                            href: "",
+                            status: node.mimeType || "",
                         });
-                    }).join(" ");
-                    if (markdown) {
-                        editorRef.current?.insertTextAtCursor(markdown + " ");
-                    }
+                    });
                 }}
             />
         </div>
