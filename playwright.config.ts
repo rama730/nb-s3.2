@@ -13,6 +13,9 @@ const devServerMode = (process.env.E2E_DEV_SERVER_MODE || "webpack").toLowerCase
 if (!process.env.E2E_RUN_ID) {
     process.env.E2E_RUN_ID = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
+if (process.env.E2E_DATABASE_URL?.trim()) {
+    process.env.DATABASE_URL = process.env.E2E_DATABASE_URL;
+}
 const retries = 1;
 
 const projects = browserMatrix === "nightly"
@@ -28,6 +31,7 @@ export default defineConfig({
     timeout: 120_000,
     workers,
     retries,
+    reporter: [["line"], ["./tests/e2e/_helpers/strict-gate-reporter.ts"]],
     globalSetup: "./tests/e2e/_helpers/global-setup.ts",
     globalTeardown: "./tests/e2e/_helpers/global-teardown.ts",
     projects,
