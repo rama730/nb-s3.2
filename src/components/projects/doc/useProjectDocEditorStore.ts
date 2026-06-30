@@ -1,6 +1,6 @@
 import { create } from "zustand";
-import type { ProjectReadmeMorePanel } from "@/components/projects/readme/ProjectReadmeMoreMenu";
-import type { ProjectReadmeReferenceKind } from "@/lib/projects/readme-blocks";
+import type { ProjectDocMorePanel } from "@/components/projects/doc/ProjectDocMoreMenu";
+import type { ProjectDocReferenceKind } from "@/lib/projects/doc-blocks";
 
 export type CursorRange = { selectionStart: number; selectionEnd: number };
 export type EditorSelectionTarget = { from: number; to: number; token: number };
@@ -8,11 +8,11 @@ export type PreviewRevealTarget = { targetId: string; token: number };
 export type SourceHighlightTarget = { from: number; to: number; token: number };
 export type LiveReviewSize = "fluid" | "github" | "tablet" | "mobile";
 
-interface ProjectReadmeEditorState {
-    activePanel: ProjectReadmeMorePanel | null;
+interface ProjectDocEditorState {
+    activePanel: ProjectDocMorePanel | null;
     moreOpen: boolean;
     cursorRange: CursorRange | null;
-    referenceKindHint: ProjectReadmeReferenceKind | null;
+    referenceKindHint: ProjectDocReferenceKind | null;
     selectionTarget: EditorSelectionTarget | null;
     previewRevealTarget: PreviewRevealTarget | null;
     sourceHighlightTarget: SourceHighlightTarget | null;
@@ -20,10 +20,10 @@ interface ProjectReadmeEditorState {
     followCursor: boolean;
     editorMode: "code" | "visual";
 
-    setActivePanel: (panel: ProjectReadmeMorePanel | null | ((current: ProjectReadmeMorePanel | null) => ProjectReadmeMorePanel | null)) => void;
+    setActivePanel: (panel: ProjectDocMorePanel | null | ((current: ProjectDocMorePanel | null) => ProjectDocMorePanel | null)) => void;
     setMoreOpen: (open: boolean) => void;
     setCursorRange: (range: CursorRange | null | ((current: CursorRange | null) => CursorRange | null)) => void;
-    setReferenceKindHint: (hint: ProjectReadmeReferenceKind | null) => void;
+    setReferenceKindHint: (hint: ProjectDocReferenceKind | null) => void;
     setSelectionTarget: (target: EditorSelectionTarget | null) => void;
     setPreviewRevealTarget: (target: PreviewRevealTarget | null | ((current: PreviewRevealTarget | null) => PreviewRevealTarget | null)) => void;
     setSourceHighlightTarget: (target: SourceHighlightTarget | null | ((current: SourceHighlightTarget | null) => SourceHighlightTarget | null)) => void;
@@ -32,7 +32,7 @@ interface ProjectReadmeEditorState {
     setEditorMode: (mode: "code" | "visual") => void;
 }
 
-export const useProjectReadmeEditorStore = create<ProjectReadmeEditorState>((set) => ({
+export const useProjectDocEditorStore = create<ProjectDocEditorState>((set) => ({
     activePanel: null,
     moreOpen: false,
     cursorRange: null,
