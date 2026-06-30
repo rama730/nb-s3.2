@@ -1,18 +1,18 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-06-29T22:45:51.888Z",
-  "searchTool": "git-grep",
+  "generatedAt": "2026-06-30T04:18:43.773Z",
+  "searchTool": "rg",
   "repoRoot": "/Users/chrama/Downloads/nb-s3",
   "notes": "Best-effort audit: `unexpected` counts are logged for Task 13 review but do NOT fail the build while `filesTabV3Enabled` is ramping. Task 13.4 / 13.5 must re-run this audit and confirm zero `unexpected` references before any deletion lands.",
   "summary": {
-    "searchTool": "git-grep",
+    "searchTool": "rg",
     "totalTargets": 89,
-    "totalReferences": 426,
+    "totalReferences": 436,
     "counts": {
       "allowed-self": 108,
       "allowed-legacy": 12,
       "allowed-spec": 244,
-      "likely-collision": 58,
+      "likely-collision": 68,
       "unexpected": 4
     }
   },
@@ -29,12 +29,6 @@
           "path": "src/lib/runner/backend.ts",
           "references": [
             {
-              "file": "src/app/actions/execute.ts",
-              "line": 6,
-              "text": "import { runViaBackend } from \"@/lib/runner/backend\";",
-              "classification": "unexpected"
-            },
-            {
               "file": "tests/unit/files-tab/removal-audit.test.ts",
               "line": 130,
               "text": "/** Convert `src/lib/runner/backend.ts` → `@/lib/runner/backend`. */",
@@ -45,6 +39,12 @@
               "line": 568,
               "text": "  // Search the `@/...` alias (e.g. `@/lib/runner/backend`). Consumers almost",
               "classification": "allowed-spec"
+            },
+            {
+              "file": "src/app/actions/execute.ts",
+              "line": 6,
+              "text": "import { runViaBackend } from \"@/lib/runner/backend\";",
+              "classification": "unexpected"
             }
           ],
           "counts": {
@@ -76,16 +76,16 @@
           "path": "src/lib/runner/contracts.ts",
           "references": [
             {
-              "file": "src/app/actions/runner.ts",
-              "line": 25,
-              "text": "} from \"@/lib/runner/contracts\";",
-              "classification": "unexpected"
-            },
-            {
               "file": "src/lib/runner/local-analyzer.ts",
               "line": 4,
               "text": "import type { StartRunInput, StartRunResult } from \"@/lib/runner/contracts\";",
               "classification": "allowed-self"
+            },
+            {
+              "file": "src/app/actions/runner.ts",
+              "line": 25,
+              "text": "} from \"@/lib/runner/contracts\";",
+              "classification": "unexpected"
             }
           ],
           "counts": {
@@ -826,6 +826,30 @@
               "classification": "allowed-legacy"
             },
             {
+              "file": "tests/unit/stores/persist-migration.test.ts",
+              "line": 267,
+              "text": "        setSplitEnabled: (projectId: string, enabled: boolean) => void;",
+              "classification": "allowed-spec"
+            },
+            {
+              "file": "tests/unit/stores/persist-migration.test.ts",
+              "line": 288,
+              "text": "    s.setSplitEnabled(projectId, true);",
+              "classification": "allowed-spec"
+            },
+            {
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 263,
+              "text": "      { kind: \"store-method\", slice: \"workspaceSlice\", name: \"setSplitEnabled\" },",
+              "classification": "allowed-spec"
+            },
+            {
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 592,
+              "text": " * count its own `export function setSplitEnabled(...)` as \"unexpected\").",
+              "classification": "allowed-spec"
+            },
+            {
               "file": "src/stores/files/types.ts",
               "line": 277,
               "text": "  setSplitEnabled: (projectId: string, enabled: boolean) => void;",
@@ -842,30 +866,6 @@
               "line": 42,
               "text": "  setSplitEnabled: (projectId, enabled) =>",
               "classification": "allowed-self"
-            },
-            {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 263,
-              "text": "      { kind: \"store-method\", slice: \"workspaceSlice\", name: \"setSplitEnabled\" },",
-              "classification": "allowed-spec"
-            },
-            {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 592,
-              "text": " * count its own `export function setSplitEnabled(...)` as \"unexpected\").",
-              "classification": "allowed-spec"
-            },
-            {
-              "file": "tests/unit/stores/persist-migration.test.ts",
-              "line": 267,
-              "text": "        setSplitEnabled: (projectId: string, enabled: boolean) => void;",
-              "classification": "allowed-spec"
-            },
-            {
-              "file": "tests/unit/stores/persist-migration.test.ts",
-              "line": 288,
-              "text": "    s.setSplitEnabled(projectId, true);",
-              "classification": "allowed-spec"
             }
           ],
           "counts": {
@@ -907,10 +907,10 @@
               "classification": "allowed-spec"
             },
             {
-              "file": "src/hooks/useWorkspaceShellState.ts",
-              "line": 74,
-              "text": "        setSplitRatio: s.setSplitRatio,",
-              "classification": "allowed-legacy"
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 264,
+              "text": "      { kind: \"store-method\", slice: \"workspaceSlice\", name: \"setSplitRatio\" },",
+              "classification": "allowed-spec"
             },
             {
               "file": "src/stores/files/types.ts",
@@ -931,10 +931,10 @@
               "classification": "allowed-self"
             },
             {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 264,
-              "text": "      { kind: \"store-method\", slice: \"workspaceSlice\", name: \"setSplitRatio\" },",
-              "classification": "allowed-spec"
+              "file": "src/hooks/useWorkspaceShellState.ts",
+              "line": 74,
+              "text": "        setSplitRatio: s.setSplitRatio,",
+              "classification": "allowed-legacy"
             }
           ],
           "counts": {
@@ -951,6 +951,12 @@
           "searchQuery": "pinTab",
           "slice": "workspaceSlice",
           "references": [
+            {
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 265,
+              "text": "      { kind: \"store-method\", slice: \"workspaceSlice\", name: \"pinTab\" },",
+              "classification": "allowed-spec"
+            },
             {
               "file": ".kiro/specs/files-tab-github-redesign/design.md",
               "line": 437,
@@ -998,12 +1004,6 @@
               "line": 93,
               "text": "  pinTab: (projectId, _paneId, nodeId, pinned) =>",
               "classification": "allowed-self"
-            },
-            {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 265,
-              "text": "      { kind: \"store-method\", slice: \"workspaceSlice\", name: \"pinTab\" },",
-              "classification": "allowed-spec"
             }
           ],
           "counts": {
@@ -1020,6 +1020,12 @@
           "searchQuery": "closeOtherTabs",
           "slice": "workspaceSlice",
           "references": [
+            {
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 266,
+              "text": "      { kind: \"store-method\", slice: \"workspaceSlice\", name: \"closeOtherTabs\" },",
+              "classification": "allowed-spec"
+            },
             {
               "file": ".kiro/specs/files-tab-github-redesign/design.md",
               "line": 437,
@@ -1067,12 +1073,6 @@
               "line": 107,
               "text": "  closeOtherTabs: (projectId, paneId, keepNodeId) =>",
               "classification": "allowed-self"
-            },
-            {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 266,
-              "text": "      { kind: \"store-method\", slice: \"workspaceSlice\", name: \"closeOtherTabs\" },",
-              "classification": "allowed-spec"
             }
           ],
           "counts": {
@@ -1114,16 +1114,16 @@
               "classification": "allowed-spec"
             },
             {
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 267,
+              "text": "      { kind: \"store-method\", slice: \"workspaceSlice\", name: \"closeTabsToRight\" },",
+              "classification": "allowed-spec"
+            },
+            {
               "file": "src/hooks/useWorkspaceShellState.ts",
               "line": 72,
               "text": "        closeTabsToRight: s.closeTabsToRight,",
               "classification": "allowed-legacy"
-            },
-            {
-              "file": "src/stores/files/types.ts",
-              "line": 282,
-              "text": "  closeTabsToRight: (projectId: string, paneId: WorkspacePane[\"id\"], fromNodeId: string) => void;",
-              "classification": "allowed-self"
             },
             {
               "file": "src/stores/files/workspaceSlice.ts",
@@ -1138,10 +1138,10 @@
               "classification": "allowed-self"
             },
             {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 267,
-              "text": "      { kind: \"store-method\", slice: \"workspaceSlice\", name: \"closeTabsToRight\" },",
-              "classification": "allowed-spec"
+              "file": "src/stores/files/types.ts",
+              "line": 282,
+              "text": "  closeTabsToRight: (projectId: string, paneId: WorkspacePane[\"id\"], fromNodeId: string) => void;",
+              "classification": "allowed-self"
             }
           ],
           "counts": {
@@ -1158,6 +1158,18 @@
           "searchQuery": "openTab",
           "slice": "workspaceSlice",
           "references": [
+            {
+              "file": ".kiro/specs/task-files-version-control-v3/tasks.md",
+              "line": 269,
+              "text": "    - Remove: `openTab`, `saveCurrentView`, `applySavedView`, `setGitSyncStatus`, `requestScrollTo`, and any other V2-only methods identified in import-graph audit",
+              "classification": "allowed-spec"
+            },
+            {
+              "file": ".kiro/specs/task-files-version-control-v3/requirements.md",
+              "line": 287,
+              "text": "1. THE implementation team SHALL remove the following methods from the workspace store: `openTab`, `saveCurrentView`, `applySavedView`, `setGitSyncStatus`, `requestScrollTo`, and any other methods identified as V2-only during the import-graph audit.",
+              "classification": "allowed-spec"
+            },
             {
               "file": ".kiro/specs/files-tab-github-redesign/design.md",
               "line": 437,
@@ -1183,16 +1195,112 @@
               "classification": "allowed-spec"
             },
             {
-              "file": ".kiro/specs/task-files-version-control-v3/requirements.md",
-              "line": 287,
-              "text": "1. THE implementation team SHALL remove the following methods from the workspace store: `openTab`, `saveCurrentView`, `applySavedView`, `setGitSyncStatus`, `requestScrollTo`, and any other methods identified as V2-only during the import-graph audit.",
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 268,
+              "text": "      { kind: \"store-method\", slice: \"workspaceSlice\", name: \"openTab\" },",
               "classification": "allowed-spec"
             },
             {
-              "file": ".kiro/specs/task-files-version-control-v3/tasks.md",
-              "line": 269,
-              "text": "    - Remove: `openTab`, `saveCurrentView`, `applySavedView`, `setGitSyncStatus`, `requestScrollTo`, and any other V2-only methods identified in import-graph audit",
+              "file": "tests/unit/project-doc.test.ts",
+              "line": 970,
+              "text": "    assert.match(viewer, /const \\[railState, setRailState\\] = useState<ReadmeRailUiState>\\(\\{ openTab: null, selectedActionId: null \\}\\)/, \"viewer should keep right-rail tabs closed by default\");",
               "classification": "allowed-spec"
+            },
+            {
+              "file": "tests/unit/project-doc.test.ts",
+              "line": 972,
+              "text": "    assert.match(viewer, /setRailState\\(\\{ openTab: action\\.railTab, selectedActionId: action\\.id \\}\\)/, \"deep links should open the matching rail tab and row\");",
+              "classification": "allowed-spec"
+            },
+            {
+              "file": "tests/unit/project-doc.test.ts",
+              "line": 1004,
+              "text": "    assert.match(rail, /openTab !== undefined \\? openTab : localRailState\\.openTab/, \"controlled null should keep every rail tab closed instead of falling back to stale local state\");",
+              "classification": "allowed-spec"
+            },
+            {
+              "file": "tests/unit/project-doc.test.ts",
+              "line": 1006,
+              "text": "    assert.match(rail, /openTab:\\s*null/, \"rail tabs should be closed by default\");",
+              "classification": "allowed-spec"
+            },
+            {
+              "file": "tests/unit/project-doc.test.ts",
+              "line": 1007,
+              "text": "    assert.match(rail, /state\\.openTab === action\\.id \\? null : action\\.id/, \"clicking the active tab should close it\");",
+              "classification": "allowed-spec"
+            },
+            {
+              "file": "src/components/projects/doc/ProjectDocViewer.tsx",
+              "line": 125,
+              "text": "    openTab: ProjectDocRailAction[\"railTab\"] | null;",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/doc/ProjectDocViewer.tsx",
+              "line": 192,
+              "text": "    const [railState, setRailState] = useState<ReadmeRailUiState>({ openTab: null, selectedActionId: null });",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/doc/ProjectDocViewer.tsx",
+              "line": 310,
+              "text": "        setRailState({ openTab: action.railTab, selectedActionId: action.id });",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/doc/ProjectDocViewer.tsx",
+              "line": 349,
+              "text": "            const openTab = isDocRailTab(memory.openTab, readmeViewModel.railTabs) ? memory.openTab : null;",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/doc/ProjectDocViewer.tsx",
+              "line": 353,
+              "text": "            if (!openTab && !selectedActionId) return;",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/doc/ProjectDocViewer.tsx",
+              "line": 354,
+              "text": "            setRailState({ openTab, selectedActionId });",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/doc/ProjectDocViewer.tsx",
+              "line": 366,
+              "text": "                openTab: railState.openTab,",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/doc/ProjectDocViewer.tsx",
+              "line": 373,
+              "text": "    }, [hasQuickRail, railState.openTab, railState.selectedActionId, readmeRailMemoryKey, readmeTargetSignature]);",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/doc/ProjectDocViewer.tsx",
+              "line": 428,
+              "text": "                            openTab={railState.openTab}",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/doc/ProjectDocViewer.tsx",
+              "line": 430,
+              "text": "                            onOpenTabChange={(openTab) => setRailState((current) => ({ ...current, openTab }))}",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/doc/ProjectDocViewer.tsx",
+              "line": 475,
+              "text": "                                openTab={railState.openTab}",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/doc/ProjectDocViewer.tsx",
+              "line": 477,
+              "text": "                                onOpenTabChange={(openTab) => setRailState((current) => ({ ...current, openTab }))}",
+              "classification": "likely-collision"
             },
             {
               "file": "src/components/projects/doc/ProjectDocQuickConsole.tsx",
@@ -1301,114 +1409,6 @@
               "line": 1194,
               "text": "                        active={railState.openTab === tab.id}",
               "classification": "likely-collision"
-            },
-            {
-              "file": "src/components/projects/doc/ProjectDocViewer.tsx",
-              "line": 125,
-              "text": "    openTab: ProjectDocRailAction[\"railTab\"] | null;",
-              "classification": "likely-collision"
-            },
-            {
-              "file": "src/components/projects/doc/ProjectDocViewer.tsx",
-              "line": 192,
-              "text": "    const [railState, setRailState] = useState<ReadmeRailUiState>({ openTab: null, selectedActionId: null });",
-              "classification": "likely-collision"
-            },
-            {
-              "file": "src/components/projects/doc/ProjectDocViewer.tsx",
-              "line": 310,
-              "text": "        setRailState({ openTab: action.railTab, selectedActionId: action.id });",
-              "classification": "likely-collision"
-            },
-            {
-              "file": "src/components/projects/doc/ProjectDocViewer.tsx",
-              "line": 349,
-              "text": "            const openTab = isDocRailTab(memory.openTab, readmeViewModel.railTabs) ? memory.openTab : null;",
-              "classification": "likely-collision"
-            },
-            {
-              "file": "src/components/projects/doc/ProjectDocViewer.tsx",
-              "line": 353,
-              "text": "            if (!openTab && !selectedActionId) return;",
-              "classification": "likely-collision"
-            },
-            {
-              "file": "src/components/projects/doc/ProjectDocViewer.tsx",
-              "line": 354,
-              "text": "            setRailState({ openTab, selectedActionId });",
-              "classification": "likely-collision"
-            },
-            {
-              "file": "src/components/projects/doc/ProjectDocViewer.tsx",
-              "line": 366,
-              "text": "                openTab: railState.openTab,",
-              "classification": "likely-collision"
-            },
-            {
-              "file": "src/components/projects/doc/ProjectDocViewer.tsx",
-              "line": 373,
-              "text": "    }, [hasQuickRail, railState.openTab, railState.selectedActionId, readmeRailMemoryKey, readmeTargetSignature]);",
-              "classification": "likely-collision"
-            },
-            {
-              "file": "src/components/projects/doc/ProjectDocViewer.tsx",
-              "line": 428,
-              "text": "                            openTab={railState.openTab}",
-              "classification": "likely-collision"
-            },
-            {
-              "file": "src/components/projects/doc/ProjectDocViewer.tsx",
-              "line": 430,
-              "text": "                            onOpenTabChange={(openTab) => setRailState((current) => ({ ...current, openTab }))}",
-              "classification": "likely-collision"
-            },
-            {
-              "file": "src/components/projects/doc/ProjectDocViewer.tsx",
-              "line": 475,
-              "text": "                                openTab={railState.openTab}",
-              "classification": "likely-collision"
-            },
-            {
-              "file": "src/components/projects/doc/ProjectDocViewer.tsx",
-              "line": 477,
-              "text": "                                onOpenTabChange={(openTab) => setRailState((current) => ({ ...current, openTab }))}",
-              "classification": "likely-collision"
-            },
-            {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 268,
-              "text": "      { kind: \"store-method\", slice: \"workspaceSlice\", name: \"openTab\" },",
-              "classification": "allowed-spec"
-            },
-            {
-              "file": "tests/unit/project-doc.test.ts",
-              "line": 970,
-              "text": "    assert.match(viewer, /const \\[railState, setRailState\\] = useState<ReadmeRailUiState>\\(\\{ openTab: null, selectedActionId: null \\}\\)/, \"viewer should keep right-rail tabs closed by default\");",
-              "classification": "allowed-spec"
-            },
-            {
-              "file": "tests/unit/project-doc.test.ts",
-              "line": 972,
-              "text": "    assert.match(viewer, /setRailState\\(\\{ openTab: action\\.railTab, selectedActionId: action\\.id \\}\\)/, \"deep links should open the matching rail tab and row\");",
-              "classification": "allowed-spec"
-            },
-            {
-              "file": "tests/unit/project-doc.test.ts",
-              "line": 1004,
-              "text": "    assert.match(rail, /openTab !== undefined \\? openTab : localRailState\\.openTab/, \"controlled null should keep every rail tab closed instead of falling back to stale local state\");",
-              "classification": "allowed-spec"
-            },
-            {
-              "file": "tests/unit/project-doc.test.ts",
-              "line": 1006,
-              "text": "    assert.match(rail, /openTab:\\s*null/, \"rail tabs should be closed by default\");",
-              "classification": "allowed-spec"
-            },
-            {
-              "file": "tests/unit/project-doc.test.ts",
-              "line": 1007,
-              "text": "    assert.match(rail, /state\\.openTab === action\\.id \\? null : action\\.id/, \"clicking the active tab should close it\");",
-              "classification": "allowed-spec"
             }
           ],
           "counts": {
@@ -1513,6 +1513,66 @@
           "slice": "workspaceSlice",
           "references": [
             {
+              "file": "scratch/fix_hub_client.py",
+              "line": 6,
+              "text": "old_state = \"\"\"    const [activeTab, setActiveTab] = useState<TabKey>(getInitialTab);",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "scratch/fix_hub_client.py",
+              "line": 9,
+              "text": "            setActiveTab(tabParam as TabKey);",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "scratch/fix_hub_client.py",
+              "line": 11,
+              "text": "            setActiveTab(activeTabOverride);",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "scratch/fix_hub_client.py",
+              "line": 19,
+              "text": "# Need to check if setActiveTab is used anywhere else",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "scratch/fix_hub_client.py",
+              "line": 20,
+              "text": "content = content.replace(\"setActiveTab(\", \"// setActiveTab(\")",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "test_out.log",
+              "line": 341,
+              "text": "      '    const setActiveTab = useMessagesV2UiStore((state) => state.setActiveTab);\\n' +",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "test_out.log",
+              "line": 575,
+              "text": "        const setActiveTab = useMessagesV2UiStore((state) => state.setActiveTab);",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "test_out.log",
+              "line": 1248,
+              "text": "                                            <DropdownMenuItem onClick={() => setActiveTab('chats')}>",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "test_out.log",
+              "line": 1251,
+              "text": "                                            <DropdownMenuItem onClick={() => setActiveTab('applications')}>",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "test_out.log",
+              "line": 1254,
+              "text": "                                            <DropdownMenuItem onClick={() => setActiveTab('projects')}>",
+              "classification": "likely-collision"
+            },
+            {
               "file": ".kiro/specs/files-tab-github-redesign/design.md",
               "line": 437,
               "text": "- `openTab`, `closeTab`, `setActiveTab`, `reorderTabs`, `moveTabToPane`, `pruneGhostTabs`, `pinTab`, `closeOtherTabs`, `closeTabsToRight`",
@@ -1535,198 +1595,6 @@
               "line": 493,
               "text": "- `workspaceSlice`: `setSplitEnabled`, `setSplitRatio`, `pinTab`, `closeOtherTabs`, `closeTabsToRight`, `openTab`, `closeTab`, `setActiveTab`, `reorderTabs`, `moveTabToPane`, `pruneGhostTabs`",
               "classification": "allowed-spec"
-            },
-            {
-              "file": "src/components/chat/v2/MessagesWorkspaceV2.tsx",
-              "line": 101,
-              "text": "    const setActiveTab = useMessagesV2UiStore((state) => state.setActiveTab);",
-              "classification": "likely-collision"
-            },
-            {
-              "file": "src/components/chat/v2/MessagesWorkspaceV2.tsx",
-              "line": 751,
-              "text": "                                        <DropdownMenuItem data-testid=\"messages-tab-chats\" onClick={() => setActiveTab('chats')}>",
-              "classification": "likely-collision"
-            },
-            {
-              "file": "src/components/chat/v2/MessagesWorkspaceV2.tsx",
-              "line": 754,
-              "text": "                                        <DropdownMenuItem data-testid=\"messages-tab-applications\" onClick={() => setActiveTab('applications')}>",
-              "classification": "likely-collision"
-            },
-            {
-              "file": "src/components/chat/v2/MessagesWorkspaceV2.tsx",
-              "line": 757,
-              "text": "                                        <DropdownMenuItem data-testid=\"messages-tab-projects\" onClick={() => setActiveTab('projects')}>",
-              "classification": "likely-collision"
-            },
-            {
-              "file": "src/components/chat/v2/ReactionDetailSheet.tsx",
-              "line": 31,
-              "text": "    const [activeTab, setActiveTab] = useState<string | undefined>(undefined);",
-              "classification": "likely-collision"
-            },
-            {
-              "file": "src/components/chat/v2/ReactionDetailSheet.tsx",
-              "line": 72,
-              "text": "                    onValueChange={setActiveTab}",
-              "classification": "likely-collision"
-            },
-            {
-              "file": "src/components/profile/v2/ProfileV2Client.tsx",
-              "line": 132,
-              "text": "    const [activeTab, setActiveTab] = useState<ProfileTabKey>(urlTab)",
-              "classification": "likely-collision"
-            },
-            {
-              "file": "src/components/profile/v2/ProfileV2Client.tsx",
-              "line": 159,
-              "text": "        setActiveTab(urlTab)",
-              "classification": "likely-collision"
-            },
-            {
-              "file": "src/components/profile/v2/ProfileV2Client.tsx",
-              "line": 276,
-              "text": "            setActiveTab(next)",
-              "classification": "likely-collision"
-            },
-            {
-              "file": "src/components/projects/EditProjectModal.tsx",
-              "line": 112,
-              "text": "    const [activeTab, setActiveTab] = useState(\"essentials\");",
-              "classification": "likely-collision"
-            },
-            {
-              "file": "src/components/projects/EditProjectModal.tsx",
-              "line": 245,
-              "text": "                                        onClick={() => setActiveTab(tab.id)}",
-              "classification": "likely-collision"
-            },
-            {
-              "file": "src/components/projects/dashboard/ProjectDashboardClient.tsx",
-              "line": 198,
-              "text": "    const [activeTab, setActiveTab] = useState(() => resolvedActiveTab);",
-              "classification": "likely-collision"
-            },
-            {
-              "file": "src/components/projects/dashboard/ProjectDashboardClient.tsx",
-              "line": 556,
-              "text": "            setActiveTab(tabId);",
-              "classification": "likely-collision"
-            },
-            {
-              "file": "src/components/projects/dashboard/ProjectDashboardClient.tsx",
-              "line": 651,
-              "text": "        setActiveTab((prev) => (prev === nextTab ? prev : nextTab));",
-              "classification": "likely-collision"
-            },
-            {
-              "file": "src/components/projects/dashboard/ProjectDashboardClient.tsx",
-              "line": 961,
-              "text": "        setActiveTab('dashboard');",
-              "classification": "likely-collision"
-            },
-            {
-              "file": "src/components/projects/dashboard/ProjectPulseCard.tsx",
-              "line": 48,
-              "text": "    const [activeTab, setActiveTab] = useState<\"focus\" | \"stream\" | \"team\">(\"focus\");",
-              "classification": "likely-collision"
-            },
-            {
-              "file": "src/components/projects/dashboard/ProjectPulseCard.tsx",
-              "line": 77,
-              "text": "                            onClick={() => setActiveTab(tab.id as any)}",
-              "classification": "likely-collision"
-            },
-            {
-              "file": "src/components/projects/tabs/AnalyticsTab.tsx",
-              "line": 72,
-              "text": "    const [activeTab, setActiveTab] = useState<ProjectAnalyticsTabId>(() => {",
-              "classification": "likely-collision"
-            },
-            {
-              "file": "src/components/projects/tabs/AnalyticsTab.tsx",
-              "line": 80,
-              "text": "            setActiveTab(currentAnalyticsTabFromUrl);",
-              "classification": "likely-collision"
-            },
-            {
-              "file": "src/components/projects/tabs/AnalyticsTab.tsx",
-              "line": 82,
-              "text": "            setActiveTab(\"overview\");",
-              "classification": "likely-collision"
-            },
-            {
-              "file": "src/components/projects/tabs/AnalyticsTab.tsx",
-              "line": 178,
-              "text": "                                setActiveTab(tab);",
-              "classification": "likely-collision"
-            },
-            {
-              "file": "src/components/projects/v2/tasks/TaskDetailPanel.tsx",
-              "line": 64,
-              "text": "  const [activeTab, setActiveTab] = useState<TaskPanelTab>(initialTab ?? \"details\");",
-              "classification": "likely-collision"
-            },
-            {
-              "file": "src/components/projects/v2/tasks/TaskDetailPanel.tsx",
-              "line": 81,
-              "text": "    setActiveTab(initialTab ?? \"details\");",
-              "classification": "likely-collision"
-            },
-            {
-              "file": "src/components/projects/v2/tasks/TaskDetailPanel.tsx",
-              "line": 195,
-              "text": "                onClick={() => setActiveTab(tab.id)}",
-              "classification": "likely-collision"
-            },
-            {
-              "file": "src/components/workspace/WorkspaceTaskDetailView.tsx",
-              "line": 28,
-              "text": "    const [activeTab, setActiveTab] = useState<TaskPanelTab>(\"details\");",
-              "classification": "likely-collision"
-            },
-            {
-              "file": "src/components/workspace/WorkspaceTaskDetailView.tsx",
-              "line": 100,
-              "text": "                        onClick={() => setActiveTab(tab.id)}",
-              "classification": "likely-collision"
-            },
-            {
-              "file": "src/stores/files/index.ts",
-              "line": 140,
-              "text": "      setActiveTab: s.setActiveTab,",
-              "classification": "allowed-self"
-            },
-            {
-              "file": "src/stores/files/types.ts",
-              "line": 283,
-              "text": "  setActiveTab: (projectId: string, paneId: WorkspacePane[\"id\"], nodeId: string | null) => void;",
-              "classification": "allowed-self"
-            },
-            {
-              "file": "src/stores/files/workspaceSlice.ts",
-              "line": 25,
-              "text": "  setActiveTab: (projectId: string, paneId: WorkspacePane[\"id\"], nodeId: string | null) => void;",
-              "classification": "allowed-self"
-            },
-            {
-              "file": "src/stores/files/workspaceSlice.ts",
-              "line": 173,
-              "text": "  setActiveTab: (projectId, paneId, nodeId) =>",
-              "classification": "allowed-self"
-            },
-            {
-              "file": "src/stores/messagesV2UiStore.ts",
-              "line": 24,
-              "text": "    setActiveTab: (tab: InboxTab) => void;",
-              "classification": "likely-collision"
-            },
-            {
-              "file": "src/stores/messagesV2UiStore.ts",
-              "line": 50,
-              "text": "            setActiveTab: (activeTab) => set({ activeTab }),",
-              "classification": "likely-collision"
             },
             {
               "file": "tests/unit/files-tab/removal-audit.test.ts",
@@ -1769,13 +1637,205 @@
               "line": 606,
               "text": "  // `setActiveTab` still hit unrelated local React `useState` setters; those",
               "classification": "allowed-spec"
+            },
+            {
+              "file": "src/components/profile/v2/ProfileV2Client.tsx",
+              "line": 132,
+              "text": "    const [activeTab, setActiveTab] = useState<ProfileTabKey>(urlTab)",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/profile/v2/ProfileV2Client.tsx",
+              "line": 159,
+              "text": "        setActiveTab(urlTab)",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/profile/v2/ProfileV2Client.tsx",
+              "line": 276,
+              "text": "            setActiveTab(next)",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/dashboard/ProjectPulseCard.tsx",
+              "line": 48,
+              "text": "    const [activeTab, setActiveTab] = useState<\"focus\" | \"stream\" | \"team\">(\"focus\");",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/dashboard/ProjectPulseCard.tsx",
+              "line": 77,
+              "text": "                            onClick={() => setActiveTab(tab.id as any)}",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/dashboard/ProjectDashboardClient.tsx",
+              "line": 198,
+              "text": "    const [activeTab, setActiveTab] = useState(() => resolvedActiveTab);",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/dashboard/ProjectDashboardClient.tsx",
+              "line": 556,
+              "text": "            setActiveTab(tabId);",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/dashboard/ProjectDashboardClient.tsx",
+              "line": 651,
+              "text": "        setActiveTab((prev) => (prev === nextTab ? prev : nextTab));",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/dashboard/ProjectDashboardClient.tsx",
+              "line": 961,
+              "text": "        setActiveTab('dashboard');",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/workspace/WorkspaceTaskDetailView.tsx",
+              "line": 28,
+              "text": "    const [activeTab, setActiveTab] = useState<TaskPanelTab>(\"details\");",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/workspace/WorkspaceTaskDetailView.tsx",
+              "line": 100,
+              "text": "                        onClick={() => setActiveTab(tab.id)}",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/v2/tasks/TaskDetailPanel.tsx",
+              "line": 64,
+              "text": "  const [activeTab, setActiveTab] = useState<TaskPanelTab>(initialTab ?? \"details\");",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/v2/tasks/TaskDetailPanel.tsx",
+              "line": 81,
+              "text": "    setActiveTab(initialTab ?? \"details\");",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/v2/tasks/TaskDetailPanel.tsx",
+              "line": 195,
+              "text": "                onClick={() => setActiveTab(tab.id)}",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/EditProjectModal.tsx",
+              "line": 112,
+              "text": "    const [activeTab, setActiveTab] = useState(\"essentials\");",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/EditProjectModal.tsx",
+              "line": 245,
+              "text": "                                        onClick={() => setActiveTab(tab.id)}",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/tabs/AnalyticsTab.tsx",
+              "line": 72,
+              "text": "    const [activeTab, setActiveTab] = useState<ProjectAnalyticsTabId>(() => {",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/tabs/AnalyticsTab.tsx",
+              "line": 80,
+              "text": "            setActiveTab(currentAnalyticsTabFromUrl);",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/tabs/AnalyticsTab.tsx",
+              "line": 82,
+              "text": "            setActiveTab(\"overview\");",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/tabs/AnalyticsTab.tsx",
+              "line": 178,
+              "text": "                                setActiveTab(tab);",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/chat/v2/ReactionDetailSheet.tsx",
+              "line": 31,
+              "text": "    const [activeTab, setActiveTab] = useState<string | undefined>(undefined);",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/chat/v2/ReactionDetailSheet.tsx",
+              "line": 72,
+              "text": "                    onValueChange={setActiveTab}",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/chat/v2/MessagesWorkspaceV2.tsx",
+              "line": 101,
+              "text": "    const setActiveTab = useMessagesV2UiStore((state) => state.setActiveTab);",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/chat/v2/MessagesWorkspaceV2.tsx",
+              "line": 751,
+              "text": "                                        <DropdownMenuItem data-testid=\"messages-tab-chats\" onClick={() => setActiveTab('chats')}>",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/chat/v2/MessagesWorkspaceV2.tsx",
+              "line": 754,
+              "text": "                                        <DropdownMenuItem data-testid=\"messages-tab-applications\" onClick={() => setActiveTab('applications')}>",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/chat/v2/MessagesWorkspaceV2.tsx",
+              "line": 757,
+              "text": "                                        <DropdownMenuItem data-testid=\"messages-tab-projects\" onClick={() => setActiveTab('projects')}>",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/stores/files/index.ts",
+              "line": 140,
+              "text": "      setActiveTab: s.setActiveTab,",
+              "classification": "allowed-self"
+            },
+            {
+              "file": "src/stores/files/types.ts",
+              "line": 283,
+              "text": "  setActiveTab: (projectId: string, paneId: WorkspacePane[\"id\"], nodeId: string | null) => void;",
+              "classification": "allowed-self"
+            },
+            {
+              "file": "src/stores/files/workspaceSlice.ts",
+              "line": 25,
+              "text": "  setActiveTab: (projectId: string, paneId: WorkspacePane[\"id\"], nodeId: string | null) => void;",
+              "classification": "allowed-self"
+            },
+            {
+              "file": "src/stores/files/workspaceSlice.ts",
+              "line": 173,
+              "text": "  setActiveTab: (projectId, paneId, nodeId) =>",
+              "classification": "allowed-self"
+            },
+            {
+              "file": "src/stores/messagesV2UiStore.ts",
+              "line": 24,
+              "text": "    setActiveTab: (tab: InboxTab) => void;",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/stores/messagesV2UiStore.ts",
+              "line": 50,
+              "text": "            setActiveTab: (activeTab) => set({ activeTab }),",
+              "classification": "likely-collision"
             }
           ],
           "counts": {
             "allowed-self": 4,
             "allowed-legacy": 0,
             "allowed-spec": 11,
-            "likely-collision": 28,
+            "likely-collision": 38,
             "unexpected": 0
           }
         },
@@ -1810,6 +1870,12 @@
               "classification": "allowed-spec"
             },
             {
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 271,
+              "text": "      { kind: \"store-method\", slice: \"workspaceSlice\", name: \"reorderTabs\" },",
+              "classification": "allowed-spec"
+            },
+            {
               "file": "src/stores/files/types.ts",
               "line": 284,
               "text": "  reorderTabs: (projectId: string, paneId: WorkspacePane[\"id\"], order: string[]) => void;",
@@ -1826,12 +1892,6 @@
               "line": 189,
               "text": "  reorderTabs: (projectId, paneId, order) =>",
               "classification": "allowed-self"
-            },
-            {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 271,
-              "text": "      { kind: \"store-method\", slice: \"workspaceSlice\", name: \"reorderTabs\" },",
-              "classification": "allowed-spec"
             }
           ],
           "counts": {
@@ -1848,6 +1908,12 @@
           "searchQuery": "moveTabToPane",
           "slice": "workspaceSlice",
           "references": [
+            {
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 272,
+              "text": "      { kind: \"store-method\", slice: \"workspaceSlice\", name: \"moveTabToPane\" },",
+              "classification": "allowed-spec"
+            },
             {
               "file": ".kiro/specs/files-tab-github-redesign/design.md",
               "line": 437,
@@ -1889,12 +1955,6 @@
               "line": 205,
               "text": "  moveTabToPane: (projectId, fromPaneId, toPaneId, nodeId, index) =>",
               "classification": "allowed-self"
-            },
-            {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 272,
-              "text": "      { kind: \"store-method\", slice: \"workspaceSlice\", name: \"moveTabToPane\" },",
-              "classification": "allowed-spec"
             }
           ],
           "counts": {
@@ -1936,10 +1996,10 @@
               "classification": "allowed-spec"
             },
             {
-              "file": "src/stores/files/types.ts",
-              "line": 287,
-              "text": "  pruneGhostTabs: (projectId: string) => void;",
-              "classification": "allowed-self"
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 273,
+              "text": "      { kind: \"store-method\", slice: \"workspaceSlice\", name: \"pruneGhostTabs\" },",
+              "classification": "allowed-spec"
             },
             {
               "file": "src/stores/files/workspaceSlice.ts",
@@ -1954,10 +2014,10 @@
               "classification": "allowed-self"
             },
             {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 273,
-              "text": "      { kind: \"store-method\", slice: \"workspaceSlice\", name: \"pruneGhostTabs\" },",
-              "classification": "allowed-spec"
+              "file": "src/stores/files/types.ts",
+              "line": 287,
+              "text": "  pruneGhostTabs: (projectId: string) => void;",
+              "classification": "allowed-self"
             }
           ],
           "counts": {
@@ -2005,10 +2065,10 @@
               "classification": "allowed-legacy"
             },
             {
-              "file": "src/stores/files/types.ts",
-              "line": 330,
-              "text": "  toggleBottomPanel: (projectId: string) => void;",
-              "classification": "allowed-self"
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 276,
+              "text": "      { kind: \"store-method\", slice: \"uiSlice\", name: \"toggleBottomPanel\" },",
+              "classification": "allowed-spec"
             },
             {
               "file": "src/stores/files/uiSlice.ts",
@@ -2023,10 +2083,10 @@
               "classification": "allowed-self"
             },
             {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 276,
-              "text": "      { kind: \"store-method\", slice: \"uiSlice\", name: \"toggleBottomPanel\" },",
-              "classification": "allowed-spec"
+              "file": "src/stores/files/types.ts",
+              "line": 330,
+              "text": "  toggleBottomPanel: (projectId: string) => void;",
+              "classification": "allowed-self"
             }
           ],
           "counts": {
@@ -2074,10 +2134,22 @@
               "classification": "allowed-legacy"
             },
             {
-              "file": "src/stores/files/types.ts",
-              "line": 326,
-              "text": "  setBottomPanelTab: (projectId: string, tab: UiState[\"bottomPanelTab\"]) => void;",
-              "classification": "allowed-self"
+              "file": "tests/unit/stores/persist-migration.test.ts",
+              "line": 269,
+              "text": "        setBottomPanelTab: (projectId: string, tab: \"run\" | \"output\" | \"problems\") => void;",
+              "classification": "allowed-spec"
+            },
+            {
+              "file": "tests/unit/stores/persist-migration.test.ts",
+              "line": 290,
+              "text": "    s.setBottomPanelTab(projectId, \"problems\");",
+              "classification": "allowed-spec"
+            },
+            {
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 277,
+              "text": "      { kind: \"store-method\", slice: \"uiSlice\", name: \"setBottomPanelTab\" },",
+              "classification": "allowed-spec"
             },
             {
               "file": "src/stores/files/uiSlice.ts",
@@ -2092,22 +2164,10 @@
               "classification": "allowed-self"
             },
             {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 277,
-              "text": "      { kind: \"store-method\", slice: \"uiSlice\", name: \"setBottomPanelTab\" },",
-              "classification": "allowed-spec"
-            },
-            {
-              "file": "tests/unit/stores/persist-migration.test.ts",
-              "line": 269,
-              "text": "        setBottomPanelTab: (projectId: string, tab: \"run\" | \"output\" | \"problems\") => void;",
-              "classification": "allowed-spec"
-            },
-            {
-              "file": "tests/unit/stores/persist-migration.test.ts",
-              "line": 290,
-              "text": "    s.setBottomPanelTab(projectId, \"problems\");",
-              "classification": "allowed-spec"
+              "file": "src/stores/files/types.ts",
+              "line": 326,
+              "text": "  setBottomPanelTab: (projectId: string, tab: UiState[\"bottomPanelTab\"]) => void;",
+              "classification": "allowed-self"
             }
           ],
           "counts": {
@@ -2149,10 +2209,10 @@
               "classification": "allowed-spec"
             },
             {
-              "file": "src/stores/files/types.ts",
-              "line": 329,
-              "text": "  setBottomPanelHeight: (projectId: string, height: number) => void;",
-              "classification": "allowed-self"
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 278,
+              "text": "      { kind: \"store-method\", slice: \"uiSlice\", name: \"setBottomPanelHeight\" },",
+              "classification": "allowed-spec"
             },
             {
               "file": "src/stores/files/uiSlice.ts",
@@ -2167,10 +2227,10 @@
               "classification": "allowed-self"
             },
             {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 278,
-              "text": "      { kind: \"store-method\", slice: \"uiSlice\", name: \"setBottomPanelHeight\" },",
-              "classification": "allowed-spec"
+              "file": "src/stores/files/types.ts",
+              "line": 329,
+              "text": "  setBottomPanelHeight: (projectId: string, height: number) => void;",
+              "classification": "allowed-self"
             }
           ],
           "counts": {
@@ -2212,16 +2272,16 @@
               "classification": "allowed-spec"
             },
             {
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 279,
+              "text": "      { kind: \"store-method\", slice: \"uiSlice\", name: \"setLastExecutionOutput\" },",
+              "classification": "allowed-spec"
+            },
+            {
               "file": "src/hooks/useWorkspaceShellState.ts",
               "line": 83,
               "text": "        setLastExecutionOutput: s.setLastExecutionOutput,",
               "classification": "allowed-legacy"
-            },
-            {
-              "file": "src/stores/files/types.ts",
-              "line": 327,
-              "text": "  setLastExecutionOutput: (projectId: string, lines: string[]) => void;",
-              "classification": "allowed-self"
             },
             {
               "file": "src/stores/files/uiSlice.ts",
@@ -2236,10 +2296,10 @@
               "classification": "allowed-self"
             },
             {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 279,
-              "text": "      { kind: \"store-method\", slice: \"uiSlice\", name: \"setLastExecutionOutput\" },",
-              "classification": "allowed-spec"
+              "file": "src/stores/files/types.ts",
+              "line": 327,
+              "text": "  setLastExecutionOutput: (projectId: string, lines: string[]) => void;",
+              "classification": "allowed-self"
             }
           ],
           "counts": {
@@ -2287,10 +2347,10 @@
               "classification": "allowed-legacy"
             },
             {
-              "file": "src/stores/files/types.ts",
-              "line": 328,
-              "text": "  setLastExecutionSettingsHref: (projectId: string, href: string | null) => void;",
-              "classification": "allowed-self"
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 280,
+              "text": "      { kind: \"store-method\", slice: \"uiSlice\", name: \"setLastExecutionSettingsHref\" },",
+              "classification": "allowed-spec"
             },
             {
               "file": "src/stores/files/uiSlice.ts",
@@ -2305,10 +2365,10 @@
               "classification": "allowed-self"
             },
             {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 280,
-              "text": "      { kind: \"store-method\", slice: \"uiSlice\", name: \"setLastExecutionSettingsHref\" },",
-              "classification": "allowed-spec"
+              "file": "src/stores/files/types.ts",
+              "line": 328,
+              "text": "  setLastExecutionSettingsHref: (projectId: string, href: string | null) => void;",
+              "classification": "allowed-self"
             }
           ],
           "counts": {
@@ -2350,10 +2410,22 @@
               "classification": "allowed-spec"
             },
             {
-              "file": "src/stores/files/types.ts",
-              "line": 334,
-              "text": "  setStdinInputText: (projectId: string, text: string) => void;",
-              "classification": "allowed-self"
+              "file": "tests/unit/stores/persist-migration.test.ts",
+              "line": 270,
+              "text": "        setStdinInputText: (projectId: string, text: string) => void;",
+              "classification": "allowed-spec"
+            },
+            {
+              "file": "tests/unit/stores/persist-migration.test.ts",
+              "line": 291,
+              "text": "    s.setStdinInputText(projectId, \"should-not-persist\");",
+              "classification": "allowed-spec"
+            },
+            {
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 281,
+              "text": "      { kind: \"store-method\", slice: \"uiSlice\", name: \"setStdinInputText\" },",
+              "classification": "allowed-spec"
             },
             {
               "file": "src/stores/files/uiSlice.ts",
@@ -2368,22 +2440,10 @@
               "classification": "allowed-self"
             },
             {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 281,
-              "text": "      { kind: \"store-method\", slice: \"uiSlice\", name: \"setStdinInputText\" },",
-              "classification": "allowed-spec"
-            },
-            {
-              "file": "tests/unit/stores/persist-migration.test.ts",
-              "line": 270,
-              "text": "        setStdinInputText: (projectId: string, text: string) => void;",
-              "classification": "allowed-spec"
-            },
-            {
-              "file": "tests/unit/stores/persist-migration.test.ts",
-              "line": 291,
-              "text": "    s.setStdinInputText(projectId, \"should-not-persist\");",
-              "classification": "allowed-spec"
+              "file": "src/stores/files/types.ts",
+              "line": 334,
+              "text": "  setStdinInputText: (projectId: string, text: string) => void;",
+              "classification": "allowed-self"
             }
           ],
           "counts": {
@@ -2425,10 +2485,10 @@
               "classification": "allowed-spec"
             },
             {
-              "file": "src/stores/files/types.ts",
-              "line": 335,
-              "text": "  setProblems: (projectId: string, problems: Problem[]) => void;",
-              "classification": "allowed-self"
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 282,
+              "text": "      { kind: \"store-method\", slice: \"uiSlice\", name: \"setProblems\" },",
+              "classification": "allowed-spec"
             },
             {
               "file": "src/stores/files/uiSlice.ts",
@@ -2443,10 +2503,10 @@
               "classification": "allowed-self"
             },
             {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 282,
-              "text": "      { kind: \"store-method\", slice: \"uiSlice\", name: \"setProblems\" },",
-              "classification": "allowed-spec"
+              "file": "src/stores/files/types.ts",
+              "line": 335,
+              "text": "  setProblems: (projectId: string, problems: Problem[]) => void;",
+              "classification": "allowed-self"
             }
           ],
           "counts": {
@@ -2488,10 +2548,10 @@
               "classification": "allowed-spec"
             },
             {
-              "file": "src/stores/files/types.ts",
-              "line": 336,
-              "text": "  clearProblems: (projectId: string) => void;",
-              "classification": "allowed-self"
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 283,
+              "text": "      { kind: \"store-method\", slice: \"uiSlice\", name: \"clearProblems\" },",
+              "classification": "allowed-spec"
             },
             {
               "file": "src/stores/files/uiSlice.ts",
@@ -2506,10 +2566,10 @@
               "classification": "allowed-self"
             },
             {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 283,
-              "text": "      { kind: \"store-method\", slice: \"uiSlice\", name: \"clearProblems\" },",
-              "classification": "allowed-spec"
+              "file": "src/stores/files/types.ts",
+              "line": 336,
+              "text": "  clearProblems: (projectId: string) => void;",
+              "classification": "allowed-self"
             }
           ],
           "counts": {
@@ -2551,10 +2611,10 @@
               "classification": "allowed-spec"
             },
             {
-              "file": "src/stores/files/types.ts",
-              "line": 337,
-              "text": "  applyQuickFix: (projectId: string, problemId: string) => void;",
-              "classification": "allowed-self"
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 284,
+              "text": "      { kind: \"store-method\", slice: \"uiSlice\", name: \"applyQuickFix\" },",
+              "classification": "allowed-spec"
             },
             {
               "file": "src/stores/files/uiSlice.ts",
@@ -2569,10 +2629,10 @@
               "classification": "allowed-self"
             },
             {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 284,
-              "text": "      { kind: \"store-method\", slice: \"uiSlice\", name: \"applyQuickFix\" },",
-              "classification": "allowed-spec"
+              "file": "src/stores/files/types.ts",
+              "line": 337,
+              "text": "  applyQuickFix: (projectId: string, problemId: string) => void;",
+              "classification": "allowed-self"
             }
           ],
           "counts": {
@@ -2614,10 +2674,10 @@
               "classification": "allowed-spec"
             },
             {
-              "file": "src/stores/files/types.ts",
-              "line": 338,
-              "text": "  pushCommandToHistory: (projectId: string, command: string) => void;",
-              "classification": "allowed-self"
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 285,
+              "text": "      { kind: \"store-method\", slice: \"uiSlice\", name: \"pushCommandToHistory\" },",
+              "classification": "allowed-spec"
             },
             {
               "file": "src/stores/files/uiSlice.ts",
@@ -2632,10 +2692,10 @@
               "classification": "allowed-self"
             },
             {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 285,
-              "text": "      { kind: \"store-method\", slice: \"uiSlice\", name: \"pushCommandToHistory\" },",
-              "classification": "allowed-spec"
+              "file": "src/stores/files/types.ts",
+              "line": 338,
+              "text": "  pushCommandToHistory: (projectId: string, command: string) => void;",
+              "classification": "allowed-self"
             }
           ],
           "counts": {
@@ -2677,18 +2737,6 @@
               "classification": "allowed-spec"
             },
             {
-              "file": "src/hooks/useWorkspaceShellState.ts",
-              "line": 85,
-              "text": "        setSidebarWidth: s.setSidebarWidth,",
-              "classification": "allowed-legacy"
-            },
-            {
-              "file": "src/stores/files/types.ts",
-              "line": 339,
-              "text": "  setSidebarWidth: (projectId: string, width: number) => void;",
-              "classification": "allowed-self"
-            },
-            {
               "file": "src/stores/files/uiSlice.ts",
               "line": 21,
               "text": "  setSidebarWidth: (projectId: string, width: number) => void;",
@@ -2701,10 +2749,10 @@
               "classification": "allowed-self"
             },
             {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 286,
-              "text": "      { kind: \"store-method\", slice: \"uiSlice\", name: \"setSidebarWidth\" },",
-              "classification": "allowed-spec"
+              "file": "src/stores/files/types.ts",
+              "line": 339,
+              "text": "  setSidebarWidth: (projectId: string, width: number) => void;",
+              "classification": "allowed-self"
             },
             {
               "file": "tests/unit/files-tab/sidebar.test.ts",
@@ -2716,6 +2764,18 @@
               "file": "tests/unit/files-tab/sidebar.test.ts",
               "line": 285,
               "text": "      \"the v3 sidebar must not call setSidebarWidth (Req 15.14)\",",
+              "classification": "allowed-spec"
+            },
+            {
+              "file": "src/hooks/useWorkspaceShellState.ts",
+              "line": 85,
+              "text": "        setSidebarWidth: s.setSidebarWidth,",
+              "classification": "allowed-legacy"
+            },
+            {
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 286,
+              "text": "      { kind: \"store-method\", slice: \"uiSlice\", name: \"setSidebarWidth\" },",
               "classification": "allowed-spec"
             }
           ],
@@ -2758,16 +2818,16 @@
               "classification": "allowed-spec"
             },
             {
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 287,
+              "text": "      { kind: \"store-method\", slice: \"uiSlice\", name: \"toggleZenMode\" },",
+              "classification": "allowed-spec"
+            },
+            {
               "file": "src/hooks/useWorkspaceShellState.ts",
               "line": 87,
               "text": "        toggleZenMode: s.toggleZenMode,",
               "classification": "allowed-legacy"
-            },
-            {
-              "file": "src/stores/files/types.ts",
-              "line": 341,
-              "text": "  toggleZenMode: (projectId: string) => void;",
-              "classification": "allowed-self"
             },
             {
               "file": "src/stores/files/uiSlice.ts",
@@ -2782,10 +2842,10 @@
               "classification": "allowed-self"
             },
             {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 287,
-              "text": "      { kind: \"store-method\", slice: \"uiSlice\", name: \"toggleZenMode\" },",
-              "classification": "allowed-spec"
+              "file": "src/stores/files/types.ts",
+              "line": 341,
+              "text": "  toggleZenMode: (projectId: string) => void;",
+              "classification": "allowed-self"
             }
           ],
           "counts": {
@@ -2827,10 +2887,10 @@
               "classification": "allowed-spec"
             },
             {
-              "file": "src/stores/files/types.ts",
-              "line": 331,
-              "text": "  setSearchReplaceOpen: (projectId: string, open: boolean) => void;",
-              "classification": "allowed-self"
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 288,
+              "text": "      { kind: \"store-method\", slice: \"uiSlice\", name: \"setSearchReplaceOpen\" },",
+              "classification": "allowed-spec"
             },
             {
               "file": "src/stores/files/uiSlice.ts",
@@ -2845,10 +2905,10 @@
               "classification": "allowed-self"
             },
             {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 288,
-              "text": "      { kind: \"store-method\", slice: \"uiSlice\", name: \"setSearchReplaceOpen\" },",
-              "classification": "allowed-spec"
+              "file": "src/stores/files/types.ts",
+              "line": 331,
+              "text": "  setSearchReplaceOpen: (projectId: string, open: boolean) => void;",
+              "classification": "allowed-self"
             }
           ],
           "counts": {
@@ -2890,10 +2950,10 @@
               "classification": "allowed-spec"
             },
             {
-              "file": "src/stores/files/types.ts",
-              "line": 332,
-              "text": "  setCommandPaletteOpen: (projectId: string, open: boolean) => void;",
-              "classification": "allowed-self"
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 289,
+              "text": "      { kind: \"store-method\", slice: \"uiSlice\", name: \"setCommandPaletteOpen\" },",
+              "classification": "allowed-spec"
             },
             {
               "file": "src/stores/files/uiSlice.ts",
@@ -2908,10 +2968,10 @@
               "classification": "allowed-self"
             },
             {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 289,
-              "text": "      { kind: \"store-method\", slice: \"uiSlice\", name: \"setCommandPaletteOpen\" },",
-              "classification": "allowed-spec"
+              "file": "src/stores/files/types.ts",
+              "line": 332,
+              "text": "  setCommandPaletteOpen: (projectId: string, open: boolean) => void;",
+              "classification": "allowed-self"
             }
           ],
           "counts": {
@@ -2953,12 +3013,6 @@
               "classification": "allowed-spec"
             },
             {
-              "file": "src/stores/files/types.ts",
-              "line": 342,
-              "text": "  setOutputFilterMode: (projectId: string, mode: \"all\" | \"out\" | \"err\") => void;",
-              "classification": "allowed-self"
-            },
-            {
               "file": "src/stores/files/uiSlice.ts",
               "line": 24,
               "text": "  setOutputFilterMode: (projectId: string, mode: \"all\" | \"out\" | \"err\") => void;",
@@ -2968,6 +3022,12 @@
               "file": "src/stores/files/uiSlice.ts",
               "line": 332,
               "text": "  setOutputFilterMode: (projectId, mode) =>",
+              "classification": "allowed-self"
+            },
+            {
+              "file": "src/stores/files/types.ts",
+              "line": 342,
+              "text": "  setOutputFilterMode: (projectId: string, mode: \"all\" | \"out\" | \"err\") => void;",
               "classification": "allowed-self"
             },
             {
@@ -2992,6 +3052,18 @@
           "slice": "explorerSlice",
           "references": [
             {
+              "file": ".kiro/specs/task-files-version-control-v3/tasks.md",
+              "line": 269,
+              "text": "    - Remove: `openTab`, `saveCurrentView`, `applySavedView`, `setGitSyncStatus`, `requestScrollTo`, and any other V2-only methods identified in import-graph audit",
+              "classification": "allowed-spec"
+            },
+            {
+              "file": ".kiro/specs/task-files-version-control-v3/requirements.md",
+              "line": 287,
+              "text": "1. THE implementation team SHALL remove the following methods from the workspace store: `openTab`, `saveCurrentView`, `applySavedView`, `setGitSyncStatus`, `requestScrollTo`, and any other methods identified as V2-only during the import-graph audit.",
+              "classification": "allowed-spec"
+            },
+            {
               "file": ".kiro/specs/files-tab-github-redesign/design.md",
               "line": 442,
               "text": "- `saveCurrentView`, `applySavedView`, `deleteSavedView`",
@@ -3001,12 +3073,6 @@
               "file": ".kiro/specs/files-tab-github-redesign/design.md",
               "line": 636,
               "text": "- `explorerSlice.ts`: `saveCurrentView`, `applySavedView`, `deleteSavedView`",
-              "classification": "allowed-spec"
-            },
-            {
-              "file": ".kiro/specs/files-tab-github-redesign/requirements.md",
-              "line": 267,
-              "text": "18. THE Files_Tab SHALL NOT render a Saved Views UI, and SHALL NOT invoke `applySavedView`, `saveCurrentView`, or `deleteSavedView` on the files workspace store.",
               "classification": "allowed-spec"
             },
             {
@@ -3022,21 +3088,9 @@
               "classification": "allowed-spec"
             },
             {
-              "file": ".kiro/specs/task-files-version-control-v3/requirements.md",
-              "line": 287,
-              "text": "1. THE implementation team SHALL remove the following methods from the workspace store: `openTab`, `saveCurrentView`, `applySavedView`, `setGitSyncStatus`, `requestScrollTo`, and any other methods identified as V2-only during the import-graph audit.",
-              "classification": "allowed-spec"
-            },
-            {
-              "file": ".kiro/specs/task-files-version-control-v3/tasks.md",
-              "line": 269,
-              "text": "    - Remove: `openTab`, `saveCurrentView`, `applySavedView`, `setGitSyncStatus`, `requestScrollTo`, and any other V2-only methods identified in import-graph audit",
-              "classification": "allowed-spec"
-            },
-            {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 293,
-              "text": "      { kind: \"store-method\", slice: \"explorerSlice\", name: \"saveCurrentView\" },",
+              "file": ".kiro/specs/files-tab-github-redesign/requirements.md",
+              "line": 267,
+              "text": "18. THE Files_Tab SHALL NOT render a Saved Views UI, and SHALL NOT invoke `applySavedView`, `saveCurrentView`, or `deleteSavedView` on the files workspace store.",
               "classification": "allowed-spec"
             },
             {
@@ -3049,6 +3103,12 @@
               "file": "tests/unit/stores/tasks-tab-public-api.test.ts",
               "line": 44,
               "text": "//                     setSort, addRecent, toggleFavorite, saveCurrentView,",
+              "classification": "allowed-spec"
+            },
+            {
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 293,
+              "text": "      { kind: \"store-method\", slice: \"explorerSlice\", name: \"saveCurrentView\" },",
               "classification": "allowed-spec"
             }
           ],
@@ -3067,6 +3127,18 @@
           "slice": "explorerSlice",
           "references": [
             {
+              "file": ".kiro/specs/task-files-version-control-v3/tasks.md",
+              "line": 269,
+              "text": "    - Remove: `openTab`, `saveCurrentView`, `applySavedView`, `setGitSyncStatus`, `requestScrollTo`, and any other V2-only methods identified in import-graph audit",
+              "classification": "allowed-spec"
+            },
+            {
+              "file": ".kiro/specs/task-files-version-control-v3/requirements.md",
+              "line": 287,
+              "text": "1. THE implementation team SHALL remove the following methods from the workspace store: `openTab`, `saveCurrentView`, `applySavedView`, `setGitSyncStatus`, `requestScrollTo`, and any other methods identified as V2-only during the import-graph audit.",
+              "classification": "allowed-spec"
+            },
+            {
               "file": ".kiro/specs/files-tab-github-redesign/design.md",
               "line": 442,
               "text": "- `saveCurrentView`, `applySavedView`, `deleteSavedView`",
@@ -3076,12 +3148,6 @@
               "file": ".kiro/specs/files-tab-github-redesign/design.md",
               "line": 636,
               "text": "- `explorerSlice.ts`: `saveCurrentView`, `applySavedView`, `deleteSavedView`",
-              "classification": "allowed-spec"
-            },
-            {
-              "file": ".kiro/specs/files-tab-github-redesign/requirements.md",
-              "line": 267,
-              "text": "18. THE Files_Tab SHALL NOT render a Saved Views UI, and SHALL NOT invoke `applySavedView`, `saveCurrentView`, or `deleteSavedView` on the files workspace store.",
               "classification": "allowed-spec"
             },
             {
@@ -3097,21 +3163,9 @@
               "classification": "allowed-spec"
             },
             {
-              "file": ".kiro/specs/task-files-version-control-v3/requirements.md",
-              "line": 287,
-              "text": "1. THE implementation team SHALL remove the following methods from the workspace store: `openTab`, `saveCurrentView`, `applySavedView`, `setGitSyncStatus`, `requestScrollTo`, and any other methods identified as V2-only during the import-graph audit.",
-              "classification": "allowed-spec"
-            },
-            {
-              "file": ".kiro/specs/task-files-version-control-v3/tasks.md",
-              "line": 269,
-              "text": "    - Remove: `openTab`, `saveCurrentView`, `applySavedView`, `setGitSyncStatus`, `requestScrollTo`, and any other V2-only methods identified in import-graph audit",
-              "classification": "allowed-spec"
-            },
-            {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 294,
-              "text": "      { kind: \"store-method\", slice: \"explorerSlice\", name: \"applySavedView\" },",
+              "file": ".kiro/specs/files-tab-github-redesign/requirements.md",
+              "line": 267,
+              "text": "18. THE Files_Tab SHALL NOT render a Saved Views UI, and SHALL NOT invoke `applySavedView`, `saveCurrentView`, or `deleteSavedView` on the files workspace store.",
               "classification": "allowed-spec"
             },
             {
@@ -3124,6 +3178,12 @@
               "file": "tests/unit/stores/tasks-tab-public-api.test.ts",
               "line": 45,
               "text": "//                     applySavedView, deleteSavedView, setExplorerMode,",
+              "classification": "allowed-spec"
+            },
+            {
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 294,
+              "text": "      { kind: \"store-method\", slice: \"explorerSlice\", name: \"applySavedView\" },",
               "classification": "allowed-spec"
             }
           ],
@@ -3154,12 +3214,6 @@
               "classification": "allowed-spec"
             },
             {
-              "file": ".kiro/specs/files-tab-github-redesign/requirements.md",
-              "line": 267,
-              "text": "18. THE Files_Tab SHALL NOT render a Saved Views UI, and SHALL NOT invoke `applySavedView`, `saveCurrentView`, or `deleteSavedView` on the files workspace store.",
-              "classification": "allowed-spec"
-            },
-            {
               "file": ".kiro/specs/files-tab-github-redesign/tasks.md",
               "line": 445,
               "text": "    - `explorerSlice.ts`: remove `saveCurrentView`, `applySavedView`, `deleteSavedView`",
@@ -3169,6 +3223,30 @@
               "file": ".kiro/specs/files-tab-github-redesign/tasks.md",
               "line": 495,
               "text": "- `explorerSlice`: `saveCurrentView`, `applySavedView`, `deleteSavedView`",
+              "classification": "allowed-spec"
+            },
+            {
+              "file": ".kiro/specs/files-tab-github-redesign/requirements.md",
+              "line": 267,
+              "text": "18. THE Files_Tab SHALL NOT render a Saved Views UI, and SHALL NOT invoke `applySavedView`, `saveCurrentView`, or `deleteSavedView` on the files workspace store.",
+              "classification": "allowed-spec"
+            },
+            {
+              "file": "tests/unit/files-tab/sidebar.test.ts",
+              "line": 335,
+              "text": "      \"deleteSavedView\",",
+              "classification": "allowed-spec"
+            },
+            {
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 295,
+              "text": "      { kind: \"store-method\", slice: \"explorerSlice\", name: \"deleteSavedView\" },",
+              "classification": "allowed-spec"
+            },
+            {
+              "file": "tests/unit/stores/tasks-tab-public-api.test.ts",
+              "line": 45,
+              "text": "//                     applySavedView, deleteSavedView, setExplorerMode,",
               "classification": "allowed-spec"
             },
             {
@@ -3188,24 +3266,6 @@
               "line": 233,
               "text": "  deleteSavedView: (projectId: string, viewId: string) => void;",
               "classification": "allowed-self"
-            },
-            {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 295,
-              "text": "      { kind: \"store-method\", slice: \"explorerSlice\", name: \"deleteSavedView\" },",
-              "classification": "allowed-spec"
-            },
-            {
-              "file": "tests/unit/files-tab/sidebar.test.ts",
-              "line": 335,
-              "text": "      \"deleteSavedView\",",
-              "classification": "allowed-spec"
-            },
-            {
-              "file": "tests/unit/stores/tasks-tab-public-api.test.ts",
-              "line": 45,
-              "text": "//                     applySavedView, deleteSavedView, setExplorerMode,",
-              "classification": "allowed-spec"
             }
           ],
           "counts": {
@@ -3247,6 +3307,12 @@
               "classification": "allowed-spec"
             },
             {
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 298,
+              "text": "      { kind: \"store-method\", slice: \"editorSlice\", name: \"setFileState\" },",
+              "classification": "allowed-spec"
+            },
+            {
               "file": "src/hooks/useWorkspaceShellState.ts",
               "line": 80,
               "text": "        setFileState: s.setFileState,",
@@ -3269,12 +3335,6 @@
               "line": 274,
               "text": "  setFileState: (projectId: string, nodeId: string, state: Partial<FileState>) => void;",
               "classification": "allowed-self"
-            },
-            {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 298,
-              "text": "      { kind: \"store-method\", slice: \"editorSlice\", name: \"setFileState\" },",
-              "classification": "allowed-spec"
             }
           ],
           "counts": {
@@ -3316,6 +3376,18 @@
               "classification": "allowed-spec"
             },
             {
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 299,
+              "text": "      { kind: \"store-method\", slice: \"editorSlice\", name: \"setActiveFileSymbols\" },",
+              "classification": "allowed-spec"
+            },
+            {
+              "file": "src/stores/files/types.ts",
+              "line": 306,
+              "text": "  setActiveFileSymbols: (projectId: string, symbols: EditorSymbol[]) => void;",
+              "classification": "allowed-self"
+            },
+            {
               "file": "src/stores/files/editorSlice.ts",
               "line": 8,
               "text": "  setActiveFileSymbols: (projectId: string, symbols: EditorSymbol[]) => void;",
@@ -3326,18 +3398,6 @@
               "line": 39,
               "text": "  setActiveFileSymbols: (projectId, symbols) =>",
               "classification": "allowed-self"
-            },
-            {
-              "file": "src/stores/files/types.ts",
-              "line": 306,
-              "text": "  setActiveFileSymbols: (projectId: string, symbols: EditorSymbol[]) => void;",
-              "classification": "allowed-self"
-            },
-            {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 299,
-              "text": "      { kind: \"store-method\", slice: \"editorSlice\", name: \"setActiveFileSymbols\" },",
-              "classification": "allowed-spec"
             }
           ],
           "counts": {
@@ -3354,6 +3414,24 @@
           "searchQuery": "requestScrollTo",
           "slice": "editorSlice",
           "references": [
+            {
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 300,
+              "text": "      { kind: \"store-method\", slice: \"editorSlice\", name: \"requestScrollTo\" },",
+              "classification": "allowed-spec"
+            },
+            {
+              "file": ".kiro/specs/task-files-version-control-v3/tasks.md",
+              "line": 269,
+              "text": "    - Remove: `openTab`, `saveCurrentView`, `applySavedView`, `setGitSyncStatus`, `requestScrollTo`, and any other V2-only methods identified in import-graph audit",
+              "classification": "allowed-spec"
+            },
+            {
+              "file": ".kiro/specs/task-files-version-control-v3/requirements.md",
+              "line": 287,
+              "text": "1. THE implementation team SHALL remove the following methods from the workspace store: `openTab`, `saveCurrentView`, `applySavedView`, `setGitSyncStatus`, `requestScrollTo`, and any other methods identified as V2-only during the import-graph audit.",
+              "classification": "allowed-spec"
+            },
             {
               "file": ".kiro/specs/files-tab-github-redesign/design.md",
               "line": 438,
@@ -3376,24 +3454,6 @@
               "file": ".kiro/specs/files-tab-github-redesign/tasks.md",
               "line": 496,
               "text": "- `editorSlice`: `setFileState`, `setActiveFileSymbols`, `requestScrollTo`, `clearScrollRequest`",
-              "classification": "allowed-spec"
-            },
-            {
-              "file": ".kiro/specs/task-files-version-control-v3/requirements.md",
-              "line": 287,
-              "text": "1. THE implementation team SHALL remove the following methods from the workspace store: `openTab`, `saveCurrentView`, `applySavedView`, `setGitSyncStatus`, `requestScrollTo`, and any other methods identified as V2-only during the import-graph audit.",
-              "classification": "allowed-spec"
-            },
-            {
-              "file": ".kiro/specs/task-files-version-control-v3/tasks.md",
-              "line": 269,
-              "text": "    - Remove: `openTab`, `saveCurrentView`, `applySavedView`, `setGitSyncStatus`, `requestScrollTo`, and any other V2-only methods identified in import-graph audit",
-              "classification": "allowed-spec"
-            },
-            {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 300,
-              "text": "      { kind: \"store-method\", slice: \"editorSlice\", name: \"requestScrollTo\" },",
               "classification": "allowed-spec"
             }
           ],
@@ -3412,6 +3472,30 @@
           "slice": "editorSlice",
           "references": [
             {
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 301,
+              "text": "      { kind: \"store-method\", slice: \"editorSlice\", name: \"clearScrollRequest\" },",
+              "classification": "allowed-spec"
+            },
+            {
+              "file": "src/stores/files/types.ts",
+              "line": 307,
+              "text": "  clearScrollRequest: (projectId: string) => void;",
+              "classification": "allowed-self"
+            },
+            {
+              "file": "src/stores/files/editorSlice.ts",
+              "line": 9,
+              "text": "  clearScrollRequest: (projectId: string) => void;",
+              "classification": "allowed-self"
+            },
+            {
+              "file": "src/stores/files/editorSlice.ts",
+              "line": 53,
+              "text": "  clearScrollRequest: (projectId) =>",
+              "classification": "allowed-self"
+            },
+            {
               "file": ".kiro/specs/files-tab-github-redesign/design.md",
               "line": 438,
               "text": "- `setFileState`, `setActiveFileSymbols`, `requestScrollTo`, `clearScrollRequest`",
@@ -3433,30 +3517,6 @@
               "file": ".kiro/specs/files-tab-github-redesign/tasks.md",
               "line": 496,
               "text": "- `editorSlice`: `setFileState`, `setActiveFileSymbols`, `requestScrollTo`, `clearScrollRequest`",
-              "classification": "allowed-spec"
-            },
-            {
-              "file": "src/stores/files/editorSlice.ts",
-              "line": 9,
-              "text": "  clearScrollRequest: (projectId: string) => void;",
-              "classification": "allowed-self"
-            },
-            {
-              "file": "src/stores/files/editorSlice.ts",
-              "line": 53,
-              "text": "  clearScrollRequest: (projectId) =>",
-              "classification": "allowed-self"
-            },
-            {
-              "file": "src/stores/files/types.ts",
-              "line": 307,
-              "text": "  clearScrollRequest: (projectId: string) => void;",
-              "classification": "allowed-self"
-            },
-            {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 301,
-              "text": "      { kind: \"store-method\", slice: \"editorSlice\", name: \"clearScrollRequest\" },",
               "classification": "allowed-spec"
             }
           ],
@@ -3499,6 +3559,18 @@
               "classification": "allowed-spec"
             },
             {
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 304,
+              "text": "      { kind: \"store-method\", slice: \"locksSlice\", name: \"setLock\" },",
+              "classification": "allowed-spec"
+            },
+            {
+              "file": "src/stores/files/types.ts",
+              "line": 310,
+              "text": "  setLock: (projectId: string, lock: SoftLock) => void;",
+              "classification": "allowed-self"
+            },
+            {
               "file": "src/stores/files/locksSlice.ts",
               "line": 6,
               "text": "  setLock: (projectId: string, lock: SoftLock) => void;",
@@ -3509,18 +3581,6 @@
               "line": 33,
               "text": "  setLock: (projectId, lock) =>",
               "classification": "allowed-self"
-            },
-            {
-              "file": "src/stores/files/types.ts",
-              "line": 310,
-              "text": "  setLock: (projectId: string, lock: SoftLock) => void;",
-              "classification": "allowed-self"
-            },
-            {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 304,
-              "text": "      { kind: \"store-method\", slice: \"locksSlice\", name: \"setLock\" },",
-              "classification": "allowed-spec"
             }
           ],
           "counts": {
@@ -3538,15 +3598,9 @@
           "slice": "locksSlice",
           "references": [
             {
-              "file": ".kiro/specs/files-tab-github-redesign/design.md",
-              "line": 446,
-              "text": "- `setLock`, `clearLock`, `setLastNodeEventSummary`, `clearLastNodeEventSummary` — lock acquisition was tied to the editor; kept only as read-only selectors (remove the *write* actions if unused outside Files tab)",
-              "classification": "allowed-spec"
-            },
-            {
-              "file": ".kiro/specs/files-tab-github-redesign/design.md",
-              "line": 638,
-              "text": "- `locksSlice.ts`: keep read-only state; drop `setLock` / `clearLock` writes — audit first",
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 305,
+              "text": "      { kind: \"store-method\", slice: \"locksSlice\", name: \"clearLock\" },",
               "classification": "allowed-spec"
             },
             {
@@ -3562,6 +3616,24 @@
               "classification": "allowed-spec"
             },
             {
+              "file": ".kiro/specs/files-tab-github-redesign/design.md",
+              "line": 446,
+              "text": "- `setLock`, `clearLock`, `setLastNodeEventSummary`, `clearLastNodeEventSummary` — lock acquisition was tied to the editor; kept only as read-only selectors (remove the *write* actions if unused outside Files tab)",
+              "classification": "allowed-spec"
+            },
+            {
+              "file": ".kiro/specs/files-tab-github-redesign/design.md",
+              "line": 638,
+              "text": "- `locksSlice.ts`: keep read-only state; drop `setLock` / `clearLock` writes — audit first",
+              "classification": "allowed-spec"
+            },
+            {
+              "file": "src/stores/files/types.ts",
+              "line": 311,
+              "text": "  clearLock: (projectId: string, nodeId: string) => void;",
+              "classification": "allowed-self"
+            },
+            {
               "file": "src/stores/files/locksSlice.ts",
               "line": 8,
               "text": "  clearLock: (projectId: string, nodeId: string) => void;",
@@ -3572,18 +3644,6 @@
               "line": 87,
               "text": "  clearLock: (projectId, nodeId) =>",
               "classification": "allowed-self"
-            },
-            {
-              "file": "src/stores/files/types.ts",
-              "line": 311,
-              "text": "  clearLock: (projectId: string, nodeId: string) => void;",
-              "classification": "allowed-self"
-            },
-            {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 305,
-              "text": "      { kind: \"store-method\", slice: \"locksSlice\", name: \"clearLock\" },",
-              "classification": "allowed-spec"
             }
           ],
           "counts": {
@@ -3600,6 +3660,12 @@
           "searchQuery": "setGitSyncStatus",
           "slice": "gitSlice",
           "references": [
+            {
+              "file": ".kiro/specs/task-files-version-control-v3/tasks.md",
+              "line": 269,
+              "text": "    - Remove: `openTab`, `saveCurrentView`, `applySavedView`, `setGitSyncStatus`, `requestScrollTo`, and any other V2-only methods identified in import-graph audit",
+              "classification": "allowed-spec"
+            },
             {
               "file": ".kiro/specs/files-tab-github-redesign/design.md",
               "line": 447,
@@ -3628,12 +3694,6 @@
               "file": ".kiro/specs/task-files-version-control-v3/requirements.md",
               "line": 287,
               "text": "1. THE implementation team SHALL remove the following methods from the workspace store: `openTab`, `saveCurrentView`, `applySavedView`, `setGitSyncStatus`, `requestScrollTo`, and any other methods identified as V2-only during the import-graph audit.",
-              "classification": "allowed-spec"
-            },
-            {
-              "file": ".kiro/specs/task-files-version-control-v3/tasks.md",
-              "line": 269,
-              "text": "    - Remove: `openTab`, `saveCurrentView`, `applySavedView`, `setGitSyncStatus`, `requestScrollTo`, and any other V2-only methods identified in import-graph audit",
               "classification": "allowed-spec"
             },
             {
@@ -3682,6 +3742,12 @@
               "classification": "allowed-spec"
             },
             {
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 309,
+              "text": "      { kind: \"store-method\", slice: \"gitSlice\", name: \"setGitCommitMessage\" },",
+              "classification": "allowed-spec"
+            },
+            {
               "file": "src/stores/files/gitSlice.ts",
               "line": 9,
               "text": "  setGitCommitMessage: (projectId: string, message: string) => void;",
@@ -3698,12 +3764,6 @@
               "line": 319,
               "text": "  setGitCommitMessage: (projectId: string, message: string) => void;",
               "classification": "allowed-self"
-            },
-            {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 309,
-              "text": "      { kind: \"store-method\", slice: \"gitSlice\", name: \"setGitCommitMessage\" },",
-              "classification": "allowed-spec"
             }
           ],
           "counts": {
@@ -3745,6 +3805,12 @@
               "classification": "allowed-spec"
             },
             {
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 310,
+              "text": "      { kind: \"store-method\", slice: \"gitSlice\", name: \"setGitBranches\" },",
+              "classification": "allowed-spec"
+            },
+            {
               "file": "src/stores/files/gitSlice.ts",
               "line": 10,
               "text": "  setGitBranches: (projectId: string, branches: string[]) => void;",
@@ -3761,12 +3827,6 @@
               "line": 320,
               "text": "  setGitBranches: (projectId: string, branches: string[]) => void;",
               "classification": "allowed-self"
-            },
-            {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 310,
-              "text": "      { kind: \"store-method\", slice: \"gitSlice\", name: \"setGitBranches\" },",
-              "classification": "allowed-spec"
             }
           ],
           "counts": {
@@ -3783,6 +3843,12 @@
           "searchQuery": "setGitLastSync",
           "slice": "gitSlice",
           "references": [
+            {
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 311,
+              "text": "      { kind: \"store-method\", slice: \"gitSlice\", name: \"setGitLastSync\" },",
+              "classification": "allowed-spec"
+            },
             {
               "file": ".kiro/specs/files-tab-github-redesign/design.md",
               "line": 447,
@@ -3824,12 +3890,6 @@
               "line": 321,
               "text": "  setGitLastSync: (projectId: string, syncAt: string, commitSha: string) => void;",
               "classification": "allowed-self"
-            },
-            {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 311,
-              "text": "      { kind: \"store-method\", slice: \"gitSlice\", name: \"setGitLastSync\" },",
-              "classification": "allowed-spec"
             }
           ],
           "counts": {
@@ -3865,6 +3925,12 @@
               "classification": "allowed-spec"
             },
             {
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 312,
+              "text": "      { kind: \"store-method\", slice: \"gitSlice\", name: \"clearGitState\" },",
+              "classification": "allowed-spec"
+            },
+            {
               "file": "src/stores/files/gitSlice.ts",
               "line": 13,
               "text": "  clearGitState: (projectId: string) => void;",
@@ -3881,12 +3947,6 @@
               "line": 323,
               "text": "  clearGitState: (projectId: string) => void;",
               "classification": "allowed-self"
-            },
-            {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 312,
-              "text": "      { kind: \"store-method\", slice: \"gitSlice\", name: \"clearGitState\" },",
-              "classification": "allowed-spec"
             }
           ],
           "counts": {
