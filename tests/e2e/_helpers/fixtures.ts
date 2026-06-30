@@ -29,7 +29,10 @@ export function cleanupE2EFixtures(): void {
       stdio: "inherit",
     });
   } catch (error) {
-    // Cleanup is best effort to avoid masking test outcomes.
+    if (process.env.E2E_SCOPE === "critical") {
+      throw error;
+    }
+    // Ad-hoc suites keep cleanup best-effort so the primary failure remains visible.
     console.warn("[e2e] cleanup failed", error);
   }
 }
