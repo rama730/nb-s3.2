@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Users, UserPlus, Plus, LayoutGrid, List } from "lucide-react";
+import { Users, UserPlus, Plus } from "lucide-react";
 import dynamic from "next/dynamic";
 import { cn } from "@/lib/utils";
 import { AnimatePresence } from "framer-motion";
@@ -25,7 +25,6 @@ const CreateTaskModal = dynamic(() => import("@/components/projects/v2/tasks/Cre
 const TaskDetailPanel = dynamic(() => import("@/components/projects/v2/tasks/TaskDetailPanel"), { ssr: false });
 const TaskFilters = dynamic(() => import("@/components/projects/v2/tasks/TaskFilters"), { ssr: false });
 const KanbanBoard = dynamic(() => import("@/components/projects/v2/tasks/KanbanBoard"), { ssr: false });
-const TasksTable = dynamic(() => import("@/components/projects/v2/tasks/TasksTable"), { ssr: false });
 const FocusStrip = dynamic(() => import("./tasks/components/FocusStrip"), { ssr: false });
 
 interface TasksTabProps {
@@ -89,7 +88,6 @@ export default function TasksTab({
             .filter(Boolean),
     ), [members]);
     // Local State
-    const [viewMode, setViewMode] = useState<'board' | 'list'>('board');
     const [scope, setScope] = useState<'all' | 'backlog' | 'sprint'>('all');
 
     const [showCreateModal, setShowCreateModal] = useState(false);
@@ -98,6 +96,14 @@ export default function TasksTab({
     const [createTaskError, setCreateTaskError] = useState<string | null>(null);
     const [initialTaskLoadError, setInitialTaskLoadError] = useState<string | null>(null);
     const handledInitialOpenTaskRef = useRef<string | null>(null);
+    const loadingInitialOpenTaskRef = useRef<string | null>(null);
+
+    useEffect(() => {
+        if (!initialOpenTaskId) {
+            handledInitialOpenTaskRef.current = null;
+            loadingInitialOpenTaskRef.current = null;
+        }
+    }, [initialOpenTaskId]);
     const queryScope: ProjectTaskScope = useMemo(() => {
         if (scope === "backlog") return "backlog";
         if (scope === "sprint") return "sprint";
@@ -173,13 +179,42 @@ export default function TasksTab({
     }, [sprintById]);
 
     const openTask = useCallback((task: TaskSurfaceRecord | any, panelTab: TaskPanelTab | null = null) => {
-        setEditingTask(withSprintContext(normalizeTaskSurfaceRecord(task)));
+        const normalized = withSprintContext(normalizeTaskSurfaceRecord(task));
+        setEditingTask(normalized);
         setEditingInitialTab(panelTab);
+
+        if (typeof window !== "undefined") {
+            const taskCode = normalized.projectKey && normalized.taskNumber
+                ? `${normalized.projectKey}-${normalized.taskNumber}`
+                : normalized.id;
+            const nextParams = new URLSearchParams(window.location.search);
+            nextParams.set('tab', 'tasks');
+            nextParams.set('drawerType', 'task');
+            nextParams.set('drawerId', taskCode);
+            if (panelTab) {
+                nextParams.set('panelTab', panelTab);
+            } else {
+                nextParams.delete('panelTab');
+            }
+            const nextQuery = nextParams.toString();
+            const nextUrl = nextQuery ? `${window.location.pathname}?${nextQuery}` : window.location.pathname;
+            window.history.replaceState(null, "", nextUrl);
+        }
     }, [withSprintContext]);
 
     const closeTaskPanel = useCallback(() => {
         setEditingTask(null);
         setEditingInitialTab(null);
+
+        if (typeof window !== "undefined") {
+            const nextParams = new URLSearchParams(window.location.search);
+            nextParams.delete('drawerType');
+            nextParams.delete('drawerId');
+            nextParams.delete('panelTab');
+            const nextQuery = nextParams.toString();
+            const nextUrl = nextQuery ? `${window.location.pathname}?${nextQuery}` : window.location.pathname;
+            window.history.replaceState(null, "", nextUrl);
+        }
     }, []);
 
     // Optimized Filters Hook
@@ -195,16 +230,31 @@ export default function TasksTab({
 
     useEffect(() => {
         if (!initialOpenTaskId || handledInitialOpenTaskRef.current === initialOpenTaskId) return;
+        if (loadingInitialOpenTaskRef.current === initialOpenTaskId) return;
 
-        handledInitialOpenTaskRef.current = initialOpenTaskId;
-        const localTask = sprintAwareTasks.find((task) => task.id === initialOpenTaskId);
+        const matchesInitialTask = (task: any) => {
+            if (!task || !initialOpenTaskId) return false;
+            if (task.id === initialOpenTaskId) return true;
+            if (initialOpenTaskId.includes("-")) {
+                const dashIndex = initialOpenTaskId.lastIndexOf("-");
+                const taskNum = parseInt(initialOpenTaskId.slice(dashIndex + 1), 10);
+                if (!isNaN(taskNum) && task.taskNumber === taskNum) return true;
+            }
+            return false;
+        };
+
+        if (matchesInitialTask(editingTask)) return;
+
+        const localTask = sprintAwareTasks.find(matchesInitialTask);
         if (localTask) {
             setInitialTaskLoadError(null);
+            handledInitialOpenTaskRef.current = initialOpenTaskId;
             openTask(localTask, initialPanelTab);
             return;
         }
 
         let cancelled = false;
+        loadingInitialOpenTaskRef.current = initialOpenTaskId;
         const reportInitialTaskLoadFailure = (reason: unknown) => {
             const detail = reason instanceof Error
                 ? reason.message
@@ -230,10 +280,15 @@ export default function TasksTab({
             const normalizedTask = withSprintContext(normalizeTaskSurfaceRecord(result.task));
             patchProjectTaskCaches(queryClient, projectId, normalizedTask);
             setInitialTaskLoadError(null);
+            handledInitialOpenTaskRef.current = initialOpenTaskId;
             openTask(normalizedTask, initialPanelTab);
         }).catch((error) => {
             if (cancelled) return;
             reportInitialTaskLoadFailure(error);
+        }).finally(() => {
+            if (loadingInitialOpenTaskRef.current === initialOpenTaskId) {
+                loadingInitialOpenTaskRef.current = null;
+            }
         });
 
         return () => {
@@ -242,6 +297,7 @@ export default function TasksTab({
     }, [
         initialOpenTaskId,
         initialPanelTab,
+        editingTask,
         openTask,
         projectId,
         queryClient,
@@ -320,7 +376,7 @@ export default function TasksTab({
     return (
         <div className="space-y-4 relative">
             {/* Sticky Header — matches Hub page header style */}
-            <div className="sticky top-0 z-40 bg-white/95 dark:bg-zinc-900/95 backdrop-blur-sm rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm px-5 py-4">
+            <div className="sticky top-0 z-40 bg-white/95 dark:bg-zinc-900/95 backdrop-blur-sm rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm px-5 py-4 transform-gpu">
                 <div className="flex items-center justify-between gap-4">
                     <div className="flex-1">
                         <h2 className="text-xl font-bold text-zinc-900 dark:text-zinc-100">Task Board</h2>
@@ -331,50 +387,22 @@ export default function TasksTab({
                     </div>
 
                     <div className="flex items-center gap-2">
-                        {/* View Mode Toggle — Hub-style pill group */}
-                        <div className="flex items-center bg-zinc-100 dark:bg-zinc-800 rounded-lg p-1">
-                            <button
-                                onClick={() => setViewMode('board')}
-                                className={cn(
-                                    "p-2 rounded-md transition-colors",
-                                    viewMode === 'board'
-                                        ? "bg-white dark:bg-zinc-700 shadow-sm text-primary"
-                                        : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
-                                )}
-                                title="Board view"
-                            >
-                                <LayoutGrid className="w-4 h-4" />
-                            </button>
-                            <button
-                                onClick={() => setViewMode('list')}
-                                className={cn(
-                                    "p-2 rounded-md transition-colors",
-                                    viewMode === 'list'
-                                        ? "bg-white dark:bg-zinc-700 shadow-sm text-primary"
-                                        : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
-                                )}
-                                title="List view"
-                            >
-                                <List className="w-4 h-4" />
-                            </button>
-                        </div>
-
                         {/* Filter — kept from TaskFilters */}
                         <TaskFilters
-                            viewMode={viewMode}
-                            setViewMode={setViewMode}
                             scope={scope}
                             setScope={setScope}
                         />
 
                         {/* New Task — Hub-style indigo rounded-xl */}
-                        <button
-                            onClick={() => setShowCreateModal(true)}
-                            className="flex items-center gap-2 px-4 py-2 app-accent-solid hover:bg-primary/90 rounded-xl font-medium transition-[background-color,box-shadow]"
-                        >
-                            <Plus className="w-4 h-4" />
-                            <span className="hidden sm:inline">New Task</span>
-                        </button>
+                        {isOwnerOrMember ? (
+                            <button
+                                onClick={() => setShowCreateModal(true)}
+                                className="flex items-center gap-2 px-4 py-2 app-accent-solid hover:bg-primary/90 rounded-xl font-medium transition-[background-color,box-shadow]"
+                            >
+                                <Plus className="w-4 h-4" />
+                                <span className="hidden sm:inline">New Task</span>
+                            </button>
+                        ) : null}
                     </div>
                 </div>
             </div>
@@ -416,25 +444,14 @@ export default function TasksTab({
             ) : null}
 
             {/* Main Content */}
-            {viewMode === 'board' ? (
-                <KanbanBoard
-                    tasks={filteredTasks}
-                    onTaskClick={openTask}
-                    fetchNextPage={fetchNextPage}
-                    hasNextPage={hasNextPage}
-                    isFetchingNextPage={isFetchingNextPage}
-                    activeAssignableMemberIds={activeAssignableMemberIds}
-                />
-            ) : (
-                <TasksTable
-                    tasks={filteredTasks}
-                    onTaskClick={openTask}
-                    fetchNextPage={fetchNextPage}
-                    hasNextPage={hasNextPage}
-                    isFetchingNextPage={isFetchingNextPage}
-                    activeAssignableMemberIds={activeAssignableMemberIds}
-                />
-            )}
+            <KanbanBoard
+                tasks={filteredTasks}
+                onTaskClick={openTask}
+                fetchNextPage={fetchNextPage}
+                hasNextPage={hasNextPage}
+                isFetchingNextPage={isFetchingNextPage}
+                activeAssignableMemberIds={activeAssignableMemberIds}
+            />
 
             {/* Modals & Drawers */}
             {showCreateModal ? (
