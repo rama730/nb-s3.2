@@ -1,6 +1,6 @@
 # Security Checklist
 
-Last updated: 2026-03-12
+Last updated: 2026-06-19
 
 ## 1. Identity and Auth
 
@@ -34,7 +34,7 @@ Last updated: 2026-03-12
 - [x] Removed unused `rxdb` stack (`rxdb`, `rxjs`, `tus-js-client`) and deleted dead local RxDB modules.
 - [x] Upgraded `typescript-eslint` chain to `8.57.0`, removing vulnerable `minimatch@9.x`.
 - [x] Migrated `drizzle-kit` to `1.0.0-beta.6-7419dcb` to remove legacy `@esbuild-kit/*` + vulnerable `esbuild` transitive path.
-- [x] Current `npm audit` baseline: `0` vulnerabilities (prod + dev).
+- [x] Current `npm audit --omit=dev --audit-level=moderate` baseline: `0` vulnerabilities.
 
 ## 5. API Route Security
 
@@ -55,8 +55,8 @@ Last updated: 2026-03-12
 - [x] Structured metrics exist for auth lookup/callback failures.
 - [x] Route-level logging includes status/action/duration and request IDs.
 - [x] Canary gate thresholds and rollback triggers are documented (`docs/operations/auth-canary-gates.md`).
-- [ ] Add alert thresholds for auth callback failures, middleware degraded-mode spikes, and webhook signature failures.
-- [ ] Add runbook section for credential rotation and rollback process.
+- [x] Alert thresholds for auth callback failures, middleware degraded-mode spikes, and webhook signature failures are documented (`docs/operations/production-alert-thresholds.md`).
+- [x] Credential rotation and rollback process is documented (`docs/operations/credential-rotation-and-rollback.md`).
 
 ## 8. Secure SDLC Gates
 
