@@ -20,10 +20,7 @@ import {
 } from '@/lib/github/import-client';
 import type { GithubImportRepoItem } from '@/lib/github/import-types';
 import { areSealedImportTokensEqual, getSealedImportTokenFingerprint } from '@/lib/github/import-token-state';
-import {
-    findBestReadmeCandidate,
-    type ProjectReadmeCreationMode,
-} from '@/lib/projects/readme-create-intent';
+
 
 type SourceType = 'scratch' | 'github' | 'upload';
 
@@ -792,64 +789,11 @@ export default function Phase1SourceSelection({
         { files: 0, folders: 0, ignored: 0, tooLarge: 0 }
     );
 
-    const uploadReadmeCandidate = useMemo(() => {
-        const files = uploadFiles
-            ? Array.from(uploadFiles).map((file) => ({
-                name: file.name,
-                path: file.webkitRelativePath || file.name,
-                type: 'file' as const,
-                size: file.size,
-            }))
-            : [];
-        return findBestReadmeCandidate(files);
-    }, [uploadFiles]);
 
-    const githubReadmeCandidate = useMemo(() => {
-        const entries = allLoadedEntries.length > 0 ? allLoadedEntries : rootEntries;
-        return findBestReadmeCandidate(entries.map((entry) => ({
-            name: entry.name,
-            path: entry.path,
-            type: entry.type,
-            size: entry.size,
-        })));
-    }, [allLoadedEntries, rootEntries]);
-
-    const activeReadmeSource = activeSourceView ?? importSourceType ?? 'scratch';
-    const activeReadmeCandidate =
-        activeReadmeSource === 'github' ? githubReadmeCandidate :
-            activeReadmeSource === 'upload' ? uploadReadmeCandidate :
-                null;
-
-    const setReadmeIntent = useCallback((mode: ProjectReadmeCreationMode, sourcePath?: string | null) => {
-        setValue('readme', {
-            mode,
-            sourcePath: sourcePath ?? null,
-            publishOnCreate: false,
-            includeRoles: true,
-        }, { shouldDirty: true, shouldValidate: true });
-    }, [setValue]);
 
     useEffect(() => {
-        if (!activeReadmeSource) return;
-
-        const sourcePath = activeReadmeCandidate?.path || null;
-        const signature = `${activeReadmeSource}:${sourcePath || 'none'}:${readmeMode || 'unset'}`;
-        if (readmeAutoSignatureRef.current === signature) return;
-
-        if (activeReadmeSource === 'scratch') {
-            if (!readmeMode || readmeMode === 'detected') {
-                setReadmeIntent('starter', null);
-            }
-        } else if (sourcePath) {
-            if (readmeMode !== 'skip') {
-                setReadmeIntent('detected', sourcePath);
-            }
-        } else if (!readmeMode || readmeMode === 'detected') {
-            setReadmeIntent('starter', null);
-        }
-
-        readmeAutoSignatureRef.current = signature;
-    }, [activeReadmeCandidate?.path, activeReadmeSource, readmeMode, setReadmeIntent]);
+        // Disabled: Project Doc creation is skipped during project creation wizard.
+    }, []);
 
     const toggleFolder = useCallback(async (folderPath: string, isDisabled: boolean) => {
         if (isDisabled) return;
@@ -1013,107 +957,7 @@ export default function Phase1SourceSelection({
     );
 
     const renderReadmeSetupCard = () => {
-        const candidatePath = activeReadmeCandidate?.path || activeReadmeCandidate?.name || null;
-        const currentMode = readmeMode || 'starter';
-        const optionClass = (active: boolean) => [
-            'flex min-h-[8.5rem] w-full flex-col rounded-2xl border p-4 text-left transition-all',
-            active
-                ? 'border-primary/50 bg-primary/5 ring-2 ring-primary/10 dark:border-primary/40 dark:bg-primary/10'
-                : 'border-zinc-200 bg-white hover:border-zinc-300 hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950/40 dark:hover:border-zinc-700 dark:hover:bg-zinc-900/70',
-        ].join(' ');
-
-        return (
-            <div
-                data-testid="create-project-readme-setup"
-                className="rounded-3xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-900"
-            >
-                <div className="flex items-start gap-4">
-                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary">
-                        <BookOpen className="h-6 w-6" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-start justify-between gap-3">
-                            <div>
-                                <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
-                                    Project README
-                                </h3>
-                                <p className="mt-1 max-w-2xl text-sm leading-6 text-zinc-500 dark:text-zinc-400">
-                                    Prepare one private README draft during creation. You can edit and publish it from the README tab later.
-                                </p>
-                            </div>
-                            <span className="rounded-full border border-zinc-200 px-3 py-1 text-xs font-semibold text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
-                                {currentMode === 'skip' ? 'Optional' : 'Draft only'}
-                            </span>
-                        </div>
-
-                        <div className="mt-5 grid gap-3 lg:grid-cols-3">
-                            {candidatePath ? (
-                                <button
-                                    type="button"
-                                    onClick={() => setReadmeIntent('detected', candidatePath)}
-                                    className={optionClass(currentMode === 'detected')}
-                                >
-                                    <div className="flex items-center gap-2 text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-                                        <FileText className="h-4 w-4 text-primary" />
-                                        Use detected README
-                                    </div>
-                                    <p className="mt-2 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
-                                        Import <span className="font-medium text-zinc-700 dark:text-zinc-200">{candidatePath}</span> as the first draft.
-                                    </p>
-                                    <span className="mt-auto pt-3 text-xs font-semibold text-primary">
-                                        Best when your repo already documents the project
-                                    </span>
-                                </button>
-                            ) : (
-                                <div className="flex min-h-[8.5rem] flex-col rounded-2xl border border-dashed border-zinc-200 bg-zinc-50/70 p-4 text-left dark:border-zinc-800 dark:bg-zinc-950/30">
-                                    <div className="flex items-center gap-2 text-sm font-semibold text-zinc-600 dark:text-zinc-300">
-                                        <FileText className="h-4 w-4" />
-                                        No README detected
-                                    </div>
-                                    <p className="mt-2 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
-                                        If a README-like Markdown file appears later, you can import it from the README tab.
-                                    </p>
-                                </div>
-                            )}
-
-                            <button
-                                type="button"
-                                onClick={() => setReadmeIntent('starter', null)}
-                                className={optionClass(currentMode === 'starter')}
-                            >
-                                <div className="flex items-center gap-2 text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-                                    <BookOpen className="h-4 w-4 text-primary" />
-                                    Create starter draft
-                                </div>
-                                <p className="mt-2 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
-                                    Start with a simple README based on the project name, focus, stack, and open roles.
-                                </p>
-                                <span className="mt-auto pt-3 text-xs font-semibold text-primary">
-                                    Recommended for new projects
-                                </span>
-                            </button>
-
-                            <button
-                                type="button"
-                                onClick={() => setReadmeIntent('skip', null)}
-                                className={optionClass(currentMode === 'skip')}
-                            >
-                                <div className="flex items-center gap-2 text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-                                    <CircleHelp className="h-4 w-4 text-zinc-400" />
-                                    Skip for now
-                                </div>
-                                <p className="mt-2 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
-                                    Keep the README empty. Project leaders can create or import it later.
-                                </p>
-                                <span className="mt-auto pt-3 text-xs font-semibold text-zinc-500 dark:text-zinc-400">
-                                    No draft will be created
-                                </span>
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        );
+        return null;
     };
 
     const renderScratchView = () => (
