@@ -3,6 +3,7 @@
 import { and, eq, isNull } from "drizzle-orm";
 
 import { db } from "@/lib/db";
+import { isTransientDbError, readDbErrorCode, withDbRetry } from "@/lib/db/retry";
 import { profiles, userNotifications } from "@/lib/db/schema";
 import {
     countUnreadNotifications,
@@ -276,17 +277,31 @@ export async function readNotificationPreferencesAction() {
             return { success: false as const, error: "Unauthorized", preferences: DEFAULT_NOTIFICATION_PREFERENCES };
         }
 
-        const [row] = await db
-            .select({ notificationPreferences: profiles.notificationPreferences })
-            .from(profiles)
-            .where(eq(profiles.id, user.id))
-            .limit(1);
+        const [row] = await withDbRetry("notifications.preferences.read", async () => {
+            return db
+                .select({ notificationPreferences: profiles.notificationPreferences })
+                .from(profiles)
+                .where(eq(profiles.id, user.id))
+                .limit(1);
+        }, { module: "notifications" });
 
         return {
             success: true as const,
             preferences: normalizeNotificationPreferences(row?.notificationPreferences),
         };
     } catch (error: any) {
+        if (isTransientDbError(error)) {
+            logger.warn("notifications.preferences_read_transient_fallback", {
+                module: "notifications",
+                errorCode: readDbErrorCode(error),
+                error: error?.message || String(error),
+            });
+            return {
+                success: true as const,
+                preferences: DEFAULT_NOTIFICATION_PREFERENCES,
+            };
+        }
+
         logger.error("notifications.preferences_read_failed", {
             module: "notifications",
             error: error?.message || String(error),
