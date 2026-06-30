@@ -3,6 +3,7 @@
 import React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchWorkspaceSprintsAction } from "@/app/actions/workspace";
+import { queryKeys } from "@/lib/query-keys";
 import { useUIStore } from "@/lib/stores/ui-store";
 import { Loader2, Inbox, Calendar, Folder, Target } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -16,7 +17,7 @@ export default function WorkspaceSprintsTab({ isActive = true }: WorkspaceSprint
 
     // Fetch active sprints, enabled ONLY when drawer is open and tab is active
     const { data, isLoading, error } = useQuery({
-        queryKey: ["workspace", "sprints"],
+        queryKey: queryKeys.workspace.sprints(),
         queryFn: () => fetchWorkspaceSprintsAction(),
         enabled: isWorkspaceOpen && isActive,
         staleTime: 30_000,
