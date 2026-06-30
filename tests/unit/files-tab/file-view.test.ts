@@ -68,7 +68,7 @@ describe("FileView / isMarkdownNode (Req 5.5, Req 13.5)", () => {
   });
 
   it("is case-insensitive on the extension", () => {
-    assert.equal(isMarkdownNode({ name: "README.MD" }), true);
+    assert.equal(isMarkdownNode({ name: "Doc.MD" }), true);
     assert.equal(isMarkdownNode({ name: "NOTES.Markdown" }), true);
   });
 
@@ -78,7 +78,7 @@ describe("FileView / isMarkdownNode (Req 5.5, Req 13.5)", () => {
   });
 
   it("rejects files without an extension", () => {
-    assert.equal(isMarkdownNode({ name: "README" }), false);
+    assert.equal(isMarkdownNode({ name: "Doc" }), false);
   });
 });
 
