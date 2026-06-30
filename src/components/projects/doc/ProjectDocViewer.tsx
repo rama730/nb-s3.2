@@ -4,20 +4,22 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { Pencil } from "lucide-react";
 
-import { useProjectReadmeSmartBlockPreviews } from "@/hooks/hub/useProjectReadmeData";
-import type { ProjectReadmePublishedPayload } from "@/lib/projects/readme";
-import type { ProjectReadmeSmartBlockPreview } from "@/lib/projects/readme-blocks";
-import { decodeReadmeHashTarget } from "@/lib/projects/readme-navigation";
-import { buildProjectReadmeViewModel, type ProjectReadmeRailAction } from "@/lib/projects/readme-view-model";
+import { 
+    useProjectDocSmartBlockPreviews,
+} from "@/hooks/hub/useProjectDocData";
+import { normalizeProjectDocSlug, type ProjectDocPublishedPayload } from "@/lib/projects/doc";
+import type { ProjectDocSmartBlockPreview } from "@/lib/projects/doc-blocks";
+import { decodeReadmeHashTarget } from "@/lib/projects/doc-navigation";
+import { buildProjectDocViewModel, type ProjectDocRailAction } from "@/lib/projects/doc-view-model";
 import type { Project } from "@/types/hub";
 
-const ProjectReadmeQuickConsole = dynamic(
-    () => import("@/components/projects/readme/ProjectReadmeQuickConsole").then((mod) => mod.ProjectReadmeQuickConsole),
+const ProjectDocQuickConsole = dynamic(
+    () => import("@/components/projects/doc/ProjectDocQuickConsole").then((mod) => mod.ProjectDocQuickConsole),
     { loading: () => null, ssr: false },
 );
 
-const ProjectReadmeRenderer = dynamic(
-    () => import("@/components/projects/readme/ProjectReadmeRenderer").then((mod) => mod.ProjectReadmeRenderer),
+const ProjectDocRenderer = dynamic(
+    () => import("@/components/projects/doc/ProjectDocRenderer").then((mod) => mod.ProjectDocRenderer),
     { loading: () => null, ssr: false },
 );
 
@@ -63,7 +65,7 @@ function readmeRevealRatioForTarget(target: HTMLElement) {
         : README_TARGET_CENTER_RATIO;
 }
 
-function getReadmeVisibleMetrics(routeRoot: HTMLElement | null) {
+function getDocVisibleMetrics(routeRoot: HTMLElement | null) {
     const stickyOffset = getStickyProjectOffset(routeRoot);
     const rootRect = routeRoot?.getBoundingClientRect() ?? {
         top: 0,
@@ -85,7 +87,7 @@ function getReadmeVisibleMetrics(routeRoot: HTMLElement | null) {
 }
 
 function getCenteredReadmeScrollTop(target: HTMLElement, revealElement: HTMLElement, routeRoot: HTMLElement | null) {
-    const metrics = getReadmeVisibleMetrics(routeRoot);
+    const metrics = getDocVisibleMetrics(routeRoot);
     const elementRect = revealElement.getBoundingClientRect();
     const elementTop = metrics.currentScrollTop + elementRect.top - metrics.rootTop;
     const ratio = readmeRevealRatioForTarget(target);
@@ -120,7 +122,7 @@ type ReadmeTargetFlash = {
 };
 
 type ReadmeRailUiState = {
-    openTab: ProjectReadmeRailAction["railTab"] | null;
+    openTab: ProjectDocRailAction["railTab"] | null;
     selectedActionId: string | null;
 };
 
@@ -129,24 +131,28 @@ type ReadmeRailMemory = ReadmeRailUiState & {
     targetSignature: string;
 };
 
-function isReadmeRailTab(value: unknown, railTabs: ProjectReadmeRailAction["railTab"][]): value is ProjectReadmeRailAction["railTab"] {
-    return typeof value === "string" && railTabs.includes(value as ProjectReadmeRailAction["railTab"]);
+function isDocRailTab(value: unknown, railTabs: ProjectDocRailAction["railTab"][]): value is ProjectDocRailAction["railTab"] {
+    return typeof value === "string" && railTabs.includes(value as ProjectDocRailAction["railTab"]);
 }
 
-export function ProjectReadmeViewer({
+export function ProjectDocViewer({
     project,
     payload,
+    docSlug = "readme",
     onEdit,
 }: {
     project: Project;
-    payload: ProjectReadmePublishedPayload;
+    payload: ProjectDocPublishedPayload;
+    docSlug?: string;
     onEdit: () => void;
 }) {
+    const normalizedDocSlug = useMemo(() => normalizeProjectDocSlug(docSlug), [docSlug]);
+    
     const version = payload.version;
     const readmeContent = version?.content ?? "";
     const storedReadmeHeadings = version?.headings;
     const readmeExcerpt = version?.excerpt ?? null;
-    const readmeViewModel = useMemo(() => buildProjectReadmeViewModel({
+    const readmeViewModel = useMemo(() => buildProjectDocViewModel({
         content: readmeContent,
         contentHash: version?.contentHash,
         excerpt: readmeExcerpt,
@@ -155,13 +161,13 @@ export function ProjectReadmeViewer({
     const previewBlocks = payload.settings.projectBlocks
         ? readmeViewModel.previewBlocks
         : readmeViewModel.referencePreviewBlocks;
-    const readmePreviewsQuery = useProjectReadmeSmartBlockPreviews(
+    const readmePreviewsQuery = useProjectDocSmartBlockPreviews(
         project.id,
         previewBlocks,
         previewBlocks.length > 0,
     );
     const previewByKey = useMemo(() => {
-        const map = new Map<string, ProjectReadmeSmartBlockPreview>();
+        const map = new Map<string, ProjectDocSmartBlockPreview>();
         for (const preview of readmePreviewsQuery.data ?? []) map.set(preview.key, preview);
         return map;
     }, [readmePreviewsQuery.data]);
@@ -175,7 +181,7 @@ export function ProjectReadmeViewer({
             previewOption: option,
             previewLoading: readmePreviewsQuery.isLoading,
             previewError: readmePreviewsQuery.isError,
-        } satisfies ProjectReadmeRailAction;
+        } satisfies ProjectDocRailAction;
     }), [previewByKey, readmePreviewsQuery.isError, readmePreviewsQuery.isLoading, readmeViewModel.railActions]);
     const recommendedAction = useMemo(() => {
         if (!readmeViewModel.recommendedAction) return null;
@@ -195,11 +201,11 @@ export function ProjectReadmeViewer({
     const readmeTargetIds = readmeViewModel.targetIds;
     const readmeTargetSignature = readmeViewModel.targetSignature;
     const readmeRailMemoryKey = useMemo(() => (
-        `project-readme-rail:${project.id}:${version?.contentHash ?? version?.id ?? "draft"}`
-    ), [project.id, version?.contentHash, version?.id]);
+        `project-readme-rail:${project.id}:${normalizedDocSlug}:${version?.contentHash ?? version?.id ?? "draft"}`
+    ), [normalizedDocSlug, project.id, version?.contentHash, version?.id]);
     const railActionIdSet = useMemo(() => new Set(railActions.map((action) => action.id)), [railActions]);
     const actionByTargetId = useMemo(() => {
-        const map = new Map<string, ProjectReadmeRailAction>();
+        const map = new Map<string, ProjectDocRailAction>();
         railActions.forEach((action) => {
             if (!map.has(action.targetId)) map.set(action.targetId, action);
         });
@@ -232,7 +238,15 @@ export function ProjectReadmeViewer({
     }) => {
         const targetId = decodeReadmeHashTarget(rawTargetId) ?? rawTargetId;
         const revealTarget = (attemptsRemaining: number): boolean => {
-            const element = document.getElementById(targetId);
+            let element = document.getElementById(targetId);
+            let resolvedTargetId = targetId;
+            if (!element && targetId.startsWith("line-")) {
+                const lineNum = targetId.split("-")[1];
+                element = document.querySelector(`[data-readme-source-line="${lineNum}"]`);
+                if (element) {
+                    resolvedTargetId = element.getAttribute("data-readme-editor-target-id") || element.id || targetId;
+                }
+            }
             if (!element) {
                 if (options?.retry !== false && attemptsRemaining > 0) {
                     if (targetRetryTimerRef.current) window.clearTimeout(targetRetryTimerRef.current);
@@ -247,12 +261,12 @@ export function ProjectReadmeViewer({
             }
             const behavior = options?.behavior ?? (shouldReduceMotion() ? "auto" : "smooth");
             scrollReadmeTargetIntoView(element, behavior);
-            lastRevealTargetIdRef.current = targetId;
+            lastRevealTargetIdRef.current = resolvedTargetId;
             if (typeof element.focus === "function") {
                 element.focus({ preventScroll: true });
             }
-            if (options?.highlight !== false) flashTarget(targetId);
-            if (options?.updateHash !== false) updateHash(targetId);
+            if (options?.highlight !== false) flashTarget(resolvedTargetId);
+            if (options?.updateHash !== false) updateHash(resolvedTargetId);
             return true;
         };
 
@@ -286,7 +300,7 @@ export function ProjectReadmeViewer({
         });
     }, [highlightedTarget?.targetId, scrollToTarget]);
 
-    const handleRailAction = useCallback((action: ProjectReadmeRailAction) => {
+    const handleRailAction = useCallback((action: ProjectDocRailAction) => {
         scrollToTarget(action.targetId, { defer: true, highlight: true, updateHash: true });
     }, [scrollToTarget]);
 
@@ -332,7 +346,7 @@ export function ProjectReadmeViewer({
             if (!rawMemory) return;
             const memory = JSON.parse(rawMemory) as Partial<ReadmeRailMemory>;
             if (memory.version !== README_RAIL_MEMORY_VERSION || memory.targetSignature !== readmeTargetSignature) return;
-            const openTab = isReadmeRailTab(memory.openTab, readmeViewModel.railTabs) ? memory.openTab : null;
+            const openTab = isDocRailTab(memory.openTab, readmeViewModel.railTabs) ? memory.openTab : null;
             const selectedActionId = typeof memory.selectedActionId === "string" && railActionIdSet.has(memory.selectedActionId)
                 ? memory.selectedActionId
                 : null;
@@ -381,20 +395,26 @@ export function ProjectReadmeViewer({
     return (
         <div className="relative mx-auto w-full max-w-[1480px] px-4 py-0 sm:px-6 lg:px-8">
             {payload.canEdit ? (
-                <button
-                    type="button"
-                    onClick={onEdit}
-                    className="absolute right-4 top-0 z-10 inline-flex items-center gap-2 rounded-full border border-zinc-200 bg-white/80 px-3 py-1.5 text-sm font-semibold text-zinc-700 backdrop-blur transition hover:border-blue-300 hover:text-blue-600 dark:border-zinc-800 dark:bg-zinc-950/80 dark:text-zinc-200 sm:right-6 lg:right-8"
-                >
-                    <Pencil className="h-4 w-4" />
-                    Edit
-                </button>
+                <div className="absolute right-4 top-0 z-10 flex items-center gap-2 sm:right-6 lg:right-8">
+                    {!hasQuickRail && (
+                        <button
+                            type="button"
+                            onClick={onEdit}
+                            className="inline-flex items-center gap-2 rounded-full border border-zinc-200 bg-white/80 px-3 py-1.5 text-sm font-semibold text-zinc-700 backdrop-blur transition hover:border-blue-300 hover:text-blue-600 dark:border-zinc-800 dark:bg-zinc-950/80 dark:text-zinc-200"
+                        >
+                            <Pencil className="h-4 w-4" />
+                            Edit
+                        </button>
+                    )}
+                </div>
             ) : null}
 
             <div className={hasQuickRail && isWideRail ? "grid gap-8 xl:grid-cols-[minmax(0,1fr)_300px]" : ""}>
                 <div className="min-w-0">
                     {hasQuickRail && !isWideRail ? (
-                        <ProjectReadmeQuickConsole
+                        <ProjectDocQuickConsole
+                            projectId={project.id}
+                            docSlug={normalizedDocSlug}
                             excerpt={readmeExcerpt}
                             headings={readmeViewModel.headings}
                             commands={readmeViewModel.commands}
@@ -416,11 +436,14 @@ export function ProjectReadmeViewer({
                             selectedActionId={railState.selectedActionId}
                             variant="compact"
                             className="mb-5"
+                            canEdit={payload.canEdit}
+                            onEdit={onEdit}
                         />
                     ) : null}
-                    <ProjectReadmeRenderer
+                    <ProjectDocRenderer
                         content={version.content}
                         project={project}
+                        docSlug={normalizedDocSlug}
                         allowExternalImages={payload.settings.externalImages}
                         allowSmartBlocks={payload.settings.projectBlocks}
                         className="mx-auto max-w-none"
@@ -436,7 +459,9 @@ export function ProjectReadmeViewer({
                 {hasQuickRail && isWideRail ? (
                     <aside>
                         <div className="sticky top-24">
-                            <ProjectReadmeQuickConsole
+                            <ProjectDocQuickConsole
+                                projectId={project.id}
+                                docSlug={normalizedDocSlug}
                                 excerpt={readmeExcerpt}
                                 headings={readmeViewModel.headings}
                                 commands={readmeViewModel.commands}
@@ -456,6 +481,8 @@ export function ProjectReadmeViewer({
                                 referencesError={readmePreviewsQuery.isError}
                                 referencesLoading={readmePreviewsQuery.isLoading}
                                 selectedActionId={railState.selectedActionId}
+                                canEdit={payload.canEdit}
+                                onEdit={onEdit}
                             />
                         </div>
                     </aside>
