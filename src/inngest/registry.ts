@@ -10,6 +10,9 @@ export const WORKER_ONLY_FUNCTION_IDS = [
   "lock-cleanup",
   "onboarding-claims-repair",
   "flush-project-views",
+  "flush-project-likes",
+  "project-update-cleanup",
+  "project-docs-cleanup",
   "project-files-reconciliation",
   "project-files-key-migration",
   "project-import-stale-reconcile",
@@ -25,12 +28,16 @@ export const WORKER_ONLY_FUNCTION_IDS = [
   "notification-fanout",
   "notification-delivery-refresh",
   "data-archival-cron",
+  "upload-intent-cleanup",
 ] as const;
 
 function getWorkerOnlyFunctions() {
   const loadModule = createRequire(import.meta.url);
   const { flushProjectViews } = loadModule("./functions/flush-views");
-  const { gitPull, gitPush, lockCleanup } = loadModule("./functions/git-sync");
+  const { flushUpdateLikes } = loadModule("./functions/flush-likes");
+  const { cleanupProjectUpdate } = loadModule("./functions/cleanup-update");
+  const { cleanupProjectDocs } = loadModule("./functions/cleanup-docs");
+  const { gitPull, gitPush, lockCleanup, uploadIntentCleanup } = loadModule("./functions/git-sync");
   const { migrateProjectFileLegacyKeys } = loadModule("./functions/project-files-key-migration");
   const { reconcileProjectFiles } = loadModule("./functions/project-files-reconciliation");
   const { onboardingClaimsRepair } = loadModule("./functions/onboarding-claims-repair");
@@ -55,8 +62,12 @@ function getWorkerOnlyFunctions() {
     gitPush,
     gitPull,
     lockCleanup,
+    uploadIntentCleanup,
     onboardingClaimsRepair,
     flushProjectViews,
+    flushUpdateLikes,
+    cleanupProjectUpdate,
+    cleanupProjectDocs,
     reconcileProjectFiles,
     migrateProjectFileLegacyKeys,
     projectImportStaleReconcile,
