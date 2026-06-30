@@ -1,6 +1,7 @@
 "use server";
 
 import { randomUUID } from "node:crypto";
+import { alias } from "drizzle-orm/pg-core";
 import {
     and,
     asc,
@@ -15,6 +16,7 @@ import {
     sql,
 } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { after } from "next/server";
 
 import { db } from "@/lib/db";
 import {
@@ -141,6 +143,8 @@ export type ProjectUpdateCommentView = {
     deletedAt: string | null;
     createdAt: string;
     updatedAt: string;
+    targetUserId: string | null;
+    targetUsername: string | null;
 };
 
 export type ProjectUpdateMovementSummary = {
@@ -170,6 +174,7 @@ type ProjectUpdateAccess = {
         visibility: string | null;
         status: string | null;
         publicTabVisibility: unknown;
+        memberUpdatesEnabled: boolean;
     } | null;
     viewerId: string | null;
     isOwner: boolean;
@@ -420,9 +425,150 @@ function projectTaskHref(project: { id: string; slug: string | null }, taskId: s
     return `${projectBaseHref(project)}?tab=tasks&drawerType=task&drawerId=${encodeURIComponent(taskId)}`;
 }
 
-function projectFileHref(project: { id: string; slug: string | null }, row: { path: string; name: string }) {
-    const pathOrName = row.path && row.path !== "/" ? row.path : row.name;
-    return `${projectBaseHref(project)}?tab=files&path=${encodeURIComponent(pathOrName)}`;
+function projectSprintHref(project: { id: string; slug: string | null }, sprintId: string) {
+    return `${projectBaseHref(project)}/sprints/${encodeURIComponent(sprintId)}`;
+}
+
+function encodeProjectNodePath(row: { path: string | null; name: string }) {
+    const pathParts = row.path && row.path !== "/"
+        ? row.path.split("/").filter(Boolean)
+        : [row.name];
+    return pathParts.map((part) => encodeURIComponent(part)).join("/");
+}
+
+function projectFileHref(project: { id: string; slug: string | null }, row: { id: string; path: string | null; name: string }) {
+    const encodedPath = encodeProjectNodePath(row);
+    const fileId = encodeURIComponent(row.id);
+    return encodedPath
+        ? `${projectBaseHref(project)}?tab=files&fileId=${fileId}&path=${encodedPath}`
+        : `${projectBaseHref(project)}?tab=files&fileId=${fileId}`;
+}
+
+function normalizeProjectUpdateMentionKind(kind: unknown): ProjectUpdateContextKind | null {
+    if (kind === "task" || kind === "tasks") return "task";
+    if (kind === "sprint" || kind === "sprints") return "sprint";
+    if (kind === "file" || kind === "files") return "file";
+    return null;
+}
+
+function projectUpdateTargetUnavailableMessage(kind: ProjectUpdateContextKind) {
+    if (kind === "task") return "This task is not available or you do not have access.";
+    if (kind === "sprint") return "This sprint is not available or you do not have access.";
+    return "This file is not available or you do not have access.";
+}
+
+function canReadProjectUpdateTargetTab(access: ProjectUpdateAccess, kind: ProjectUpdateContextKind) {
+    if (!access.project) return false;
+    return isProjectTabVisibleToViewer({
+        tabId: kind === "task" ? "tasks" : kind === "sprint" ? "sprints" : "files",
+        isOwnerOrMember: access.isOwner || access.isMember,
+        canManageSettings: access.isOwner,
+        publicTabVisibility: access.project.publicTabVisibility,
+    });
+}
+
+export async function resolveProjectUpdateMentionTargetAction(projectId: string, input: {
+    kind?: string | null;
+    id?: string | null;
+}) {
+    try {
+        const kind = normalizeProjectUpdateMentionKind(input.kind);
+        const id = typeof input.id === "string" ? input.id.trim() : "";
+        if (!kind || !id) {
+            return { success: false as const, error: "This mention is not available." };
+        }
+
+        const viewer = await getViewerAuthContext();
+        const access = await resolveProjectUpdateAccess(projectId, viewer.userId);
+        if (!access.project || !access.canRead || !canReadProjectUpdateTargetTab(access, kind)) {
+            return { success: false as const, error: projectUpdateTargetUnavailableMessage(kind) };
+        }
+
+        if (kind === "task") {
+            const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+            let taskQuery;
+            if (isUuid) {
+                taskQuery = db
+                    .select({
+                        id: tasks.id,
+                        taskNumber: tasks.taskNumber,
+                        projectKey: projects.key,
+                    })
+                    .from(tasks)
+                    .innerJoin(projects, eq(tasks.projectId, projects.id))
+                    .where(and(eq(tasks.projectId, projectId), eq(tasks.id, id), isNull(tasks.deletedAt)))
+                    .limit(1);
+            } else {
+                const dashIndex = id.lastIndexOf("-");
+                if (dashIndex !== -1) {
+                    const projectKey = id.slice(0, dashIndex);
+                    const taskNum = parseInt(id.slice(dashIndex + 1), 10);
+                    if (projectKey && !isNaN(taskNum)) {
+                        taskQuery = db
+                            .select({
+                                id: tasks.id,
+                                taskNumber: tasks.taskNumber,
+                                projectKey: projects.key,
+                            })
+                            .from(tasks)
+                            .innerJoin(projects, eq(tasks.projectId, projects.id))
+                            .where(
+                                and(
+                                    eq(projects.key, projectKey),
+                                    eq(tasks.taskNumber, taskNum),
+                                    eq(tasks.projectId, projectId),
+                                    isNull(tasks.deletedAt)
+                                )
+                            )
+                            .limit(1);
+                    }
+                }
+            }
+
+            const [task] = taskQuery ? await taskQuery : [];
+            if (!task) return { success: false as const, error: projectUpdateTargetUnavailableMessage(kind) };
+            const taskCode = task.projectKey && task.taskNumber ? `${task.projectKey}-${task.taskNumber}` : task.id;
+            return { success: true as const, href: projectTaskHref(access.project, taskCode), kind };
+        }
+
+        if (kind === "sprint") {
+            const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+            if (!isUuid) return { success: false as const, error: projectUpdateTargetUnavailableMessage(kind) };
+
+            const [sprint] = await db
+                .select({ id: projectSprints.id })
+                .from(projectSprints)
+                .where(and(eq(projectSprints.projectId, projectId), eq(projectSprints.id, id)))
+                .limit(1);
+            if (!sprint) return { success: false as const, error: projectUpdateTargetUnavailableMessage(kind) };
+            return { success: true as const, href: projectSprintHref(access.project, sprint.id), kind };
+        }
+
+        const isNodeUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+        if (!isNodeUuid) return { success: false as const, error: projectUpdateTargetUnavailableMessage(kind) };
+
+        const [node] = await db
+            .select({
+                id: projectNodes.id,
+                name: projectNodes.name,
+                path: projectNodes.path,
+            })
+            .from(projectNodes)
+            .where(and(eq(projectNodes.projectId, projectId), eq(projectNodes.id, id), isNull(projectNodes.deletedAt)))
+            .limit(1);
+        if (!node) return { success: false as const, error: projectUpdateTargetUnavailableMessage(kind) };
+        return { success: true as const, href: projectFileHref(access.project, node), kind };
+    } catch (error) {
+        logger.warn("project_updates.mention_target_resolve_failed", {
+            module: "projects",
+            projectId,
+            kind: input.kind,
+            targetId: input.id,
+            error: error instanceof Error ? error.message : String(error),
+        });
+        const kind = normalizeProjectUpdateMentionKind(input.kind);
+        return { success: false as const, error: kind ? projectUpdateTargetUnavailableMessage(kind) : "This mention is not available." };
+    }
 }
 
 function taskContextOption(row: {
@@ -452,7 +598,7 @@ function sprintContextOption(row: {
         id: row.id,
         label: row.name,
         description: row.goal || row.status,
-        href: `${projectBaseHref(project)}?tab=sprints`,
+        href: projectSprintHref(project, row.id),
         status: row.status,
     };
 }
@@ -477,8 +623,12 @@ function isModerator(access: Pick<ProjectUpdateAccess, "isOwner" | "memberRole">
     return access.isOwner || access.memberRole === "admin";
 }
 
-function canCreateForRole(access: Pick<ProjectUpdateAccess, "isOwner" | "memberRole">) {
-    return access.isOwner || access.memberRole === "admin" || access.memberRole === "member";
+function canCreateForRole(access: Pick<ProjectUpdateAccess, "isOwner" | "memberRole"> & { memberUpdatesEnabled: boolean }) {
+    if (access.isOwner || access.memberRole === "admin") return true;
+    if (access.memberRole === "member") {
+        return access.memberUpdatesEnabled;
+    }
+    return false;
 }
 
 async function resolveProjectUpdateAccess(projectId: string, viewerId: string | null): Promise<ProjectUpdateAccess> {
@@ -491,6 +641,7 @@ async function resolveProjectUpdateAccess(projectId: string, viewerId: string | 
             visibility: projects.visibility,
             status: projects.status,
             publicTabVisibility: projects.publicTabVisibility,
+            memberUpdatesEnabled: projects.memberUpdatesEnabled,
         })
         .from(projects)
         .where(and(eq(projects.id, projectId), isNull(projects.deletedAt)))
@@ -529,7 +680,7 @@ async function resolveProjectUpdateAccess(projectId: string, viewerId: string | 
         isMember: access.isMember,
         memberRole,
         canRead,
-        canCreate: canRead && canCreateForRole({ isOwner: access.isOwner, memberRole }),
+        canCreate: canRead && canCreateForRole({ isOwner: access.isOwner, memberRole, memberUpdatesEnabled: project.memberUpdatesEnabled }),
         canManage: canRead && isModerator({ isOwner: access.isOwner, memberRole }),
     };
     return effectiveAccess;
@@ -610,6 +761,40 @@ function normalizeUpdate(row: UpdateRow, params: {
         createdAt: toIsoString(row.createdAt) ?? new Date().toISOString(),
         updatedAt: toIsoString(row.updatedAt) ?? new Date().toISOString(),
     };
+}
+
+function projectUpdateContextFallbackLabel(
+    context: ProjectUpdateContextSummary | null | undefined,
+    media: ProjectUpdateMediaItem[] | null | undefined,
+) {
+    const references = context?.references?.length
+        ? context.references
+        : [
+            context?.task ?? null,
+            context?.sprint ?? null,
+            context?.file ?? null,
+        ].filter((item): item is ProjectUpdateContextOption => Boolean(item));
+    if (references.length > 0) {
+        return references.slice(0, 3).map((item) => item.label).join(", ");
+    }
+    const mediaItems = normalizeMedia(media);
+    if (mediaItems.length > 0) {
+        const namedMedia = mediaItems
+            .map((item) => item.label || item.altText || null)
+            .filter((item): item is string => Boolean(item));
+        return namedMedia.length > 0 ? namedMedia.slice(0, 3).join(", ") : "Attached project media";
+    }
+    return "Project update";
+}
+
+function projectUpdateNotificationBody(input: {
+    content: string;
+    context?: ProjectUpdateContextSummary | null;
+    media?: ProjectUpdateMediaItem[] | null;
+    maxLength?: number;
+}) {
+    const body = projectUpdateExcerpt(input.content, input.maxLength ?? 180);
+    return body || projectUpdateContextFallbackLabel(input.context, input.media);
 }
 
 async function readUpdateRowsByIds(updateIds: string[], access: ProjectUpdateAccess) {
@@ -755,92 +940,6 @@ async function contextSummariesForRows(rows: Array<Pick<UpdateRow, "id" | "entit
     return summaries;
 }
 
-async function readProjectUpdateMovementSummary(access: ProjectUpdateAccess): Promise<ProjectUpdateMovementSummary | null> {
-    if (!access.project || !access.canRead) return null;
-    const projectId = access.project.id;
-    const visibilityCondition = access.isOwner || access.isMember ? undefined : eq(projectUpdates.visibility, "public");
-    const baseWhere = and(
-        eq(projectUpdates.projectId, projectId),
-        isNull(projectUpdates.deletedAt),
-        visibilityCondition,
-    );
-    const hasTask = sql`(
-        NULLIF(${projectUpdates.entityRefs}->>'taskId', '') IS NOT NULL
-        OR COALESCE(${projectUpdates.entityRefs}->'references', '[]'::jsonb) @> '[{"kind":"task"}]'::jsonb
-    )`;
-    const hasSprint = sql`(
-        NULLIF(${projectUpdates.entityRefs}->>'sprintId', '') IS NOT NULL
-        OR COALESCE(${projectUpdates.entityRefs}->'references', '[]'::jsonb) @> '[{"kind":"sprint"}]'::jsonb
-    )`;
-    const hasFile = sql`(
-        NULLIF(${projectUpdates.entityRefs}->>'fileId', '') IS NOT NULL
-        OR COALESCE(${projectUpdates.entityRefs}->'references', '[]'::jsonb) @> '[{"kind":"file"}]'::jsonb
-    )`;
-    const hasMedia = sql`COALESCE(jsonb_array_length(${projectUpdates.media}), 0) > 0`;
-    const hasLinkedWork = sql`(${hasTask} OR ${hasSprint} OR ${hasFile} OR ${hasMedia})`;
-    const notificationSignal = sql`(
-        char_length(${projectUpdates.content}) >= 80
-        OR (char_length(${projectUpdates.content}) >= 40 AND ${projectUpdates.content} ~ ${"[.!?]\\s*$"})
-        OR ${hasLinkedWork}
-    )`;
-
-    const [aggregateRows, latestRows, pinnedRows] = await Promise.all([
-        db
-            .select({
-                totalUpdates: sql<number>`COUNT(*)::int`,
-                totalContributors: sql<number>`COUNT(DISTINCT ${projectUpdates.authorId})::int`,
-                publicUpdates: sql<number>`COUNT(*) FILTER (WHERE ${projectUpdates.visibility} = 'public')::int`,
-                notificationReadyUpdates: sql<number>`COUNT(*) FILTER (WHERE ${projectUpdates.visibility} = 'public' AND ${notificationSignal})::int`,
-                latestMovementAt: sql<Date | null>`MAX(${projectUpdates.createdAt})`,
-                taskUpdates: sql<number>`COUNT(*) FILTER (WHERE ${hasTask})::int`,
-                sprintUpdates: sql<number>`COUNT(*) FILTER (WHERE ${hasSprint})::int`,
-                fileUpdates: sql<number>`COUNT(*) FILTER (WHERE ${hasFile})::int`,
-                mediaUpdates: sql<number>`COUNT(*) FILTER (WHERE ${hasMedia})::int`,
-                generalUpdates: sql<number>`COUNT(*) FILTER (WHERE NOT ${hasLinkedWork})::int`,
-                todayUpdates: sql<number>`COUNT(*) FILTER (WHERE ${projectUpdates.createdAt} >= now() - interval '1 day')::int`,
-                thisWeekUpdates: sql<number>`COUNT(*) FILTER (WHERE ${projectUpdates.createdAt} < now() - interval '1 day' AND ${projectUpdates.createdAt} >= now() - interval '7 days')::int`,
-                earlierUpdates: sql<number>`COUNT(*) FILTER (WHERE ${projectUpdates.createdAt} < now() - interval '7 days')::int`,
-            })
-            .from(projectUpdates)
-            .where(baseWhere),
-        db
-            .select({ id: projectUpdates.id })
-            .from(projectUpdates)
-            .where(baseWhere)
-            .orderBy(desc(projectUpdates.createdAt), desc(projectUpdates.id))
-            .limit(1),
-        db
-            .select({ id: projectUpdates.id })
-            .from(projectUpdates)
-            .where(and(baseWhere, eq(projectUpdates.isPinned, true)))
-            .orderBy(desc(projectUpdates.createdAt), desc(projectUpdates.id))
-            .limit(1),
-    ]);
-
-    const aggregate = aggregateRows[0];
-    return {
-        totalUpdates: Number(aggregate?.totalUpdates ?? 0),
-        totalContributors: Number(aggregate?.totalContributors ?? 0),
-        publicUpdates: Number(aggregate?.publicUpdates ?? 0),
-        notificationReadyUpdates: Number(aggregate?.notificationReadyUpdates ?? 0),
-        latestUpdateId: latestRows[0]?.id ?? null,
-        pinnedUpdateId: pinnedRows[0]?.id ?? null,
-        latestMovementAt: toIsoString(aggregate?.latestMovementAt) ?? null,
-        linkedWork: {
-            task: Number(aggregate?.taskUpdates ?? 0),
-            sprint: Number(aggregate?.sprintUpdates ?? 0),
-            file: Number(aggregate?.fileUpdates ?? 0),
-            media: Number(aggregate?.mediaUpdates ?? 0),
-            general: Number(aggregate?.generalUpdates ?? 0),
-        },
-        timeline: [
-            { label: "Today", count: Number(aggregate?.todayUpdates ?? 0) },
-            { label: "This week", count: Number(aggregate?.thisWeekUpdates ?? 0) },
-            { label: "Earlier", count: Number(aggregate?.earlierUpdates ?? 0) },
-        ],
-    };
-}
-
 function updateCursorCondition(cursor: ProjectUpdateCursor | null) {
     if (!cursor) return undefined;
     const cursorDate = new Date(cursor.createdAt);
@@ -905,6 +1004,7 @@ export async function readProjectUpdatesAction(projectId: string, params?: {
             ))
             .where(and(
                 eq(projectUpdates.projectId, projectId),
+                isNull(projectUpdates.deletedAt),
                 access.isOwner || access.isMember ? undefined : eq(projectUpdates.visibility, "public"),
                 filter === "all" ? undefined : eq(projectUpdates.updateType, filter),
                 updateCursorCondition(cursor),
@@ -915,10 +1015,9 @@ export async function readProjectUpdatesAction(projectId: string, params?: {
         const rows = await hydrateUpdateRowsWithRoleTitles(projectId, rawRows);
         const pageRows = rows.slice(0, UPDATES_PAGE_SIZE);
         const updateIds = pageRows.map((row) => row.id);
-        const [likedIds, contextByUpdateId, movementSummary] = await Promise.all([
+        const [likedIds, contextByUpdateId] = await Promise.all([
             likedUpdateIds(updateIds, viewer.userId),
             contextSummariesForRows(pageRows, access),
-            !cursor && filter === "all" ? readProjectUpdateMovementSummary(access) : Promise.resolve(null),
         ]);
         const updates = pageRows.map((row) => normalizeUpdate(row, { access, likedIds, contextByUpdateId }));
         const last = pageRows[pageRows.length - 1] ?? null;
@@ -946,7 +1045,7 @@ export async function readProjectUpdatesAction(projectId: string, params?: {
                 updates,
                 nextCursor: rows.length > UPDATES_PAGE_SIZE && last ? encodeUpdateCursor(last) : null,
                 hasMore: rows.length > UPDATES_PAGE_SIZE,
-                movementSummary,
+                movementSummary: null,
                 capabilities: {
                     canCreate: access.canCreate,
                     canManage: access.canManage,
@@ -1107,7 +1206,7 @@ export async function createProjectUpdateMediaUploadUrlAction(projectId: string,
             projectId,
             bucket: PROJECT_UPDATE_MEDIA_BUCKET,
             storageKey,
-            scope: "project_file",
+            scope: "project_update_media",
             kind: "file",
             expectedMimeType: mimeType,
             expectedSize: sizeBytes,
@@ -1161,7 +1260,7 @@ export async function finalizeProjectUpdateMediaUploadAction(projectId: string, 
             bucket: PROJECT_UPDATE_MEDIA_BUCKET,
             userId: viewer.userId,
             projectId,
-            expectedScope: "project_file",
+            expectedScope: "project_update_media",
             expectedKind: "file",
         });
         const media: ProjectUpdateMediaItem = {
@@ -1251,6 +1350,11 @@ export async function createProjectUpdateAction(projectId: string, input: {
         if (shouldNotifyFollowers) {
             try {
                 const actorName = viewer.profile?.fullName ?? viewer.profile?.username ?? null;
+                const notificationBody = projectUpdateNotificationBody({
+                    content,
+                    context: update?.context ?? null,
+                    media,
+                });
                 await enqueueProjectNotificationEvent({
                     projectId,
                     actorUserId: viewer.userId,
@@ -1258,7 +1362,7 @@ export async function createProjectUpdateAction(projectId: string, input: {
                     actorAvatarUrl: viewer.profile?.avatarUrl ?? null,
                     eventKey: "updates.published",
                     title: `${actorName || "Someone"} posted an update in ${access.project.title || "Project"}`,
-                    body: projectUpdateExcerpt(content),
+                    body: notificationBody,
                     href: projectHref(access.project, inserted.id),
                     entityRefs: {
                         projectId,
@@ -1271,7 +1375,7 @@ export async function createProjectUpdateAction(projectId: string, input: {
                         actorAvatarUrl: viewer.profile?.avatarUrl ?? null,
                         contextLabel: access.project.title ?? "Project update",
                         contextKind: "project",
-                        secondaryText: projectUpdateExcerpt(content, 100),
+                        secondaryText: null,
                     },
                     sourceEventId: inserted.id,
                     maxRecipients: PROJECT_UPDATE_PERFORMANCE_BUDGETS.fanoutSyncRecipients,
@@ -1375,7 +1479,12 @@ export async function deleteProjectUpdateAction(projectId: string, updateId: str
         const access = await resolveProjectUpdateAccess(projectId, viewer.userId);
         if (!access.canRead || !access.project) return { success: false as const, error: "Project update unavailable." };
         const [existing] = await db
-            .select({ id: projectUpdates.id, authorId: projectUpdates.authorId, deletedAt: projectUpdates.deletedAt })
+            .select({
+                id: projectUpdates.id,
+                authorId: projectUpdates.authorId,
+                deletedAt: projectUpdates.deletedAt,
+                media: projectUpdates.media,
+            })
             .from(projectUpdates)
             .where(and(eq(projectUpdates.id, updateId), eq(projectUpdates.projectId, projectId)))
             .limit(1);
@@ -1397,6 +1506,22 @@ export async function deleteProjectUpdateAction(projectId: string, updateId: str
                 updatedAt: now,
             })
             .where(eq(projectUpdates.id, updateId));
+
+        // Asynchronously clean up storage assets and comments via Inngest background job
+        try {
+            const { inngest } = await import("@/inngest/client");
+            await inngest.send({
+                name: "project/updates.cleanup",
+                data: {
+                    projectId,
+                    updateId,
+                    media: normalizeMedia(existing.media).filter((item) => item.storageKey),
+                },
+            });
+        } catch (inngestErr) {
+            console.error("Failed to send project/updates.cleanup event:", inngestErr);
+        }
+
         const rows = await readUpdateRowsByIds([updateId], access);
         const [likedIds, contextByUpdateId] = await Promise.all([
             likedUpdateIds([updateId], viewer.userId),
@@ -1459,17 +1584,18 @@ export async function toggleProjectUpdateLikeAction(projectId: string, updateId:
             .limit(1);
         if (!update) return { success: false as const, error: "Project update not found." };
 
-        const liked = await db.transaction(async (tx) => {
+        const result = await db.transaction(async (tx) => {
             const deletedRows = await tx
                 .delete(projectUpdateLikes)
                 .where(and(eq(projectUpdateLikes.updateId, updateId), eq(projectUpdateLikes.userId, viewer.userId!)))
                 .returning({ id: projectUpdateLikes.id });
             if (deletedRows.length > 0) {
-                await tx
+                const [countRow] = await tx
                     .update(projectUpdates)
                     .set({ likeCount: sql`GREATEST(${projectUpdates.likeCount} - 1, 0)`, updatedAt: new Date() })
-                    .where(eq(projectUpdates.id, updateId));
-                return false;
+                    .where(eq(projectUpdates.id, updateId))
+                    .returning({ likeCount: projectUpdates.likeCount });
+                return { liked: false, likeCount: Math.max(0, countRow?.likeCount ?? 0) };
             }
             const insertedRows = await tx
                 .insert(projectUpdateLikes)
@@ -1479,16 +1605,23 @@ export async function toggleProjectUpdateLikeAction(projectId: string, updateId:
                 })
                 .returning({ id: projectUpdateLikes.id });
             if (insertedRows.length > 0) {
-                await tx
+                const [countRow] = await tx
                     .update(projectUpdates)
                     .set({ likeCount: sql`${projectUpdates.likeCount} + 1`, updatedAt: new Date() })
-                    .where(eq(projectUpdates.id, updateId));
+                    .where(eq(projectUpdates.id, updateId))
+                    .returning({ likeCount: projectUpdates.likeCount });
+                return { liked: true, likeCount: Math.max(0, countRow?.likeCount ?? 0) };
             }
-            return true;
+
+            const [countRow] = await tx
+                .select({ likeCount: projectUpdates.likeCount })
+                .from(projectUpdates)
+                .where(eq(projectUpdates.id, updateId))
+                .limit(1);
+            return { liked: true, likeCount: Math.max(0, countRow?.likeCount ?? 0) };
         });
-        const [countRow] = await db.select({ likeCount: projectUpdates.likeCount }).from(projectUpdates).where(eq(projectUpdates.id, updateId)).limit(1);
         revalidatePath(projectHref(access.project, updateId));
-        return { success: true as const, liked, likeCount: Math.max(0, countRow?.likeCount ?? 0) };
+        return { success: true as const, liked: result.liked, likeCount: result.likeCount };
     } catch (error) {
         console.error("Failed to toggle project update like:", error);
         return { success: false as const, error: "Failed to update like." };
@@ -1501,6 +1634,7 @@ type CommentRow = typeof projectUpdateComments.$inferSelect & {
     authorAvatarUrl: string | null;
     authorMembershipRole: string | null;
     authorProjectRoleTitle: string | null;
+    targetUsername: string | null;
 };
 
 function normalizeComment(row: CommentRow, access: ProjectUpdateAccess): ProjectUpdateCommentView {
@@ -1526,6 +1660,8 @@ function normalizeComment(row: CommentRow, access: ProjectUpdateAccess): Project
         deletedAt: toIsoString(row.deletedAt),
         createdAt: toIsoString(row.createdAt) ?? new Date().toISOString(),
         updatedAt: toIsoString(row.updatedAt) ?? new Date().toISOString(),
+        targetUserId: row.targetUserId,
+        targetUsername: row.targetUsername,
     };
 }
 
@@ -1569,6 +1705,7 @@ export async function readProjectUpdateCommentsAction(projectId: string, updateI
         const update = await assertReadableUpdate(projectId, updateId, access);
         if (!update) return { success: false as const, error: "Project update unavailable.", data: { comments: [], nextCursor: null, hasMore: false } };
         const parsedCursor = decodeCommentCursor(cursor);
+        const targetProfiles = alias(profiles, "target_profiles");
         const rawRows = await db
             .select({
                 id: projectUpdateComments.id,
@@ -1576,6 +1713,7 @@ export async function readProjectUpdateCommentsAction(projectId: string, updateI
                 projectId: projectUpdateComments.projectId,
                 parentId: projectUpdateComments.parentId,
                 userId: projectUpdateComments.userId,
+                targetUserId: projectUpdateComments.targetUserId,
                 content: projectUpdateComments.content,
                 deletedBy: projectUpdateComments.deletedBy,
                 deletedAt: projectUpdateComments.deletedAt,
@@ -1585,6 +1723,7 @@ export async function readProjectUpdateCommentsAction(projectId: string, updateI
                 authorUsername: profiles.username,
                 authorAvatarUrl: profiles.avatarUrl,
                 authorMembershipRole: projectMembers.role,
+                targetUsername: targetProfiles.username,
             })
             .from(projectUpdateComments)
             .leftJoin(profiles, eq(profiles.id, projectUpdateComments.userId))
@@ -1592,6 +1731,7 @@ export async function readProjectUpdateCommentsAction(projectId: string, updateI
                 eq(projectMembers.projectId, projectUpdateComments.projectId),
                 eq(projectMembers.userId, projectUpdateComments.userId),
             ))
+            .leftJoin(targetProfiles, eq(targetProfiles.id, projectUpdateComments.targetUserId))
             .where(and(
                 eq(projectUpdateComments.updateId, updateId),
                 eq(projectUpdateComments.projectId, projectId),
@@ -1646,12 +1786,26 @@ export async function createProjectUpdateCommentAction(projectId: string, update
         const access = await resolveProjectUpdateAccess(projectId, viewer.userId);
         const update = await assertReadableUpdate(projectId, updateId, access);
         if (!update || !access.project) return { success: false as const, error: "Project update unavailable." };
+        const project = access.project;
         if (update.replyPolicy === "members" && !access.isOwner && !access.isMember) {
             return { success: false as const, error: "Only project members can comment on this update." };
         }
         const content = sanitizeProjectUpdateContent(contentInput, 1_000);
         if (!content) return { success: false as const, error: "Comment cannot be empty." };
         const createdAt = new Date();
+
+        let targetUserId: string | null = null;
+        if (parentId) {
+            const [parentComment] = await db
+                .select({ userId: projectUpdateComments.userId })
+                .from(projectUpdateComments)
+                .where(eq(projectUpdateComments.id, parentId))
+                .limit(1);
+            if (parentComment) {
+                targetUserId = parentComment.userId;
+            }
+        }
+
         const [inserted] = await db.transaction(async (tx) => {
             const insertedRows = await tx
                 .insert(projectUpdateComments)
@@ -1660,6 +1814,7 @@ export async function createProjectUpdateCommentAction(projectId: string, update
                     updateId,
                     parentId: parentId || null,
                     userId: viewer.userId,
+                    targetUserId,
                     content,
                     createdAt,
                     updatedAt: createdAt,
@@ -1673,46 +1828,92 @@ export async function createProjectUpdateCommentAction(projectId: string, update
         });
         if (!inserted?.id) return { success: false as const, error: "Failed to post comment." };
 
-        if (update.authorId && update.authorId !== viewer.userId) {
-            try {
-                const actorName = viewer.profile?.fullName ?? viewer.profile?.username ?? null;
-                await enqueueProjectNotificationEvent({
-                    projectId,
-                    actorUserId: viewer.userId,
-                    actorName,
-                    actorAvatarUrl: viewer.profile?.avatarUrl ?? null,
-                    eventKey: "updates.comment",
-                    affectedMemberId: update.authorId,
-                    title: `${actorName || "Someone"} commented on your project update`,
-                    body: projectUpdateExcerpt(content, 160),
-                    href: `${projectHref(access.project, updateId)}&commentId=${encodeURIComponent(inserted.id)}`,
-                    entityRefs: {
+        const actorName = viewer.profile?.fullName ?? viewer.profile?.username ?? null;
+        const actorAvatarUrl = viewer.profile?.avatarUrl ?? null;
+
+        after(async () => {
+            // 1. Notify target comment author if it's a reply
+            if (targetUserId && targetUserId !== viewer.userId) {
+                try {
+                    await enqueueProjectNotificationEvent({
                         projectId,
-                        projectSlug: access.project.slug ?? null,
+                        actorUserId: viewer.userId,
+                        actorName,
+                        actorAvatarUrl,
+                        eventKey: "updates.comment",
+                        affectedMemberId: targetUserId,
+                        title: `${actorName || "Someone"} replied to your comment`,
+                        body: projectUpdateExcerpt(content, 160),
+                        href: `${projectHref(project, updateId)}&commentId=${encodeURIComponent(inserted.id)}`,
+                        entityRefs: {
+                            projectId,
+                            projectSlug: project.slug ?? null,
+                            updateId,
+                            commentId: inserted.id,
+                            createdAt: createdAt.toISOString(),
+                        },
+                        preview: {
+                            actorName,
+                            actorAvatarUrl,
+                            contextLabel: project.title ?? "Project update",
+                            contextKind: "project",
+                            secondaryText: null,
+                        },
+                        sourceEventId: inserted.id,
+                    });
+                } catch (notifyError) {
+                    logger.warn("project_updates.comment_reply_notification_failed", {
+                        module: "notifications",
+                        projectId,
                         updateId,
                         commentId: inserted.id,
-                        createdAt: createdAt.toISOString(),
-                    },
-                    preview: {
-                        actorName,
-                        actorAvatarUrl: viewer.profile?.avatarUrl ?? null,
-                        contextLabel: access.project.title ?? "Project update",
-                        contextKind: "project",
-                        secondaryText: projectUpdateExcerpt(content, 100),
-                    },
-                    sourceEventId: inserted.id,
-                });
-            } catch (notifyError) {
-                logger.warn("project_updates.comment_notification_failed", {
-                    module: "notifications",
-                    projectId,
-                    updateId,
-                    commentId: inserted.id,
-                    error: notifyError instanceof Error ? notifyError.message : String(notifyError),
-                });
+                        error: notifyError instanceof Error ? notifyError.message : String(notifyError),
+                    });
+                }
             }
-        }
 
+            // 2. Notify original update author
+            if (update.authorId && update.authorId !== viewer.userId && update.authorId !== targetUserId) {
+                try {
+                    await enqueueProjectNotificationEvent({
+                        projectId,
+                        actorUserId: viewer.userId,
+                        actorName,
+                        actorAvatarUrl,
+                        eventKey: "updates.comment",
+                        affectedMemberId: update.authorId,
+                        title: `${actorName || "Someone"} commented on your project update`,
+                        body: projectUpdateExcerpt(content, 160),
+                        href: `${projectHref(project, updateId)}&commentId=${encodeURIComponent(inserted.id)}`,
+                        entityRefs: {
+                            projectId,
+                            projectSlug: project.slug ?? null,
+                            updateId,
+                            commentId: inserted.id,
+                            createdAt: createdAt.toISOString(),
+                        },
+                        preview: {
+                            actorName,
+                            actorAvatarUrl,
+                            contextLabel: project.title ?? "Project update",
+                            contextKind: "project",
+                            secondaryText: null,
+                        },
+                        sourceEventId: inserted.id,
+                    });
+                } catch (notifyError) {
+                    logger.warn("project_updates.comment_notification_failed", {
+                        module: "notifications",
+                        projectId,
+                        updateId,
+                        commentId: inserted.id,
+                        error: notifyError instanceof Error ? notifyError.message : String(notifyError),
+                    });
+                }
+            }
+        });
+
+        const targetProfiles = alias(profiles, "target_profiles");
         const rawCommentRows = await db
             .select({
                 id: projectUpdateComments.id,
@@ -1720,6 +1921,7 @@ export async function createProjectUpdateCommentAction(projectId: string, update
                 projectId: projectUpdateComments.projectId,
                 parentId: projectUpdateComments.parentId,
                 userId: projectUpdateComments.userId,
+                targetUserId: projectUpdateComments.targetUserId,
                 content: projectUpdateComments.content,
                 deletedBy: projectUpdateComments.deletedBy,
                 deletedAt: projectUpdateComments.deletedAt,
@@ -1729,6 +1931,7 @@ export async function createProjectUpdateCommentAction(projectId: string, update
                 authorUsername: profiles.username,
                 authorAvatarUrl: profiles.avatarUrl,
                 authorMembershipRole: projectMembers.role,
+                targetUsername: targetProfiles.username,
             })
             .from(projectUpdateComments)
             .leftJoin(profiles, eq(profiles.id, projectUpdateComments.userId))
@@ -1736,6 +1939,7 @@ export async function createProjectUpdateCommentAction(projectId: string, update
                 eq(projectMembers.projectId, projectUpdateComments.projectId),
                 eq(projectMembers.userId, projectUpdateComments.userId),
             ))
+            .leftJoin(targetProfiles, eq(targetProfiles.id, projectUpdateComments.targetUserId))
             .where(eq(projectUpdateComments.id, inserted.id))
             .limit(1);
         const [row] = await hydrateCommentRowsWithRoleTitles(projectId, rawCommentRows);
@@ -1757,7 +1961,7 @@ export async function createProjectUpdateCommentAction(projectId: string, update
                 durationMs,
             });
         }
-        revalidatePath(projectHref(access.project, updateId));
+        revalidatePath(projectHref(project, updateId));
         return { success: true as const, data: row ? normalizeComment(row, access) : null };
     } catch (error) {
         console.error("Failed to create project update comment:", error);
