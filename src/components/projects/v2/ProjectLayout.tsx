@@ -15,7 +15,7 @@ const TABS = [
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
     { id: "sprints", label: "Sprints", icon: Timer },
     { id: "tasks", label: "Tasks", icon: ListTodo },
-    { id: "analytics", label: "Analytics", icon: BarChart3 },
+    { id: "analytics", label: "Project Analytics", icon: BarChart3 },
     { id: "files", label: "Files", icon: FolderOpen },
     { id: "settings", label: "Settings", icon: Settings, ownerOnly: true },
 ];
@@ -130,20 +130,6 @@ export default function ProjectLayout({
 
                         {/* Right: Actions */}
                         <div className="flex items-center gap-2">
-                            {/* Edit (Owner) */}
-                            {isOwner && onEdit && (
-                                <button
-                                    type="button"
-                                    onClick={onEdit}
-                                    className="hidden sm:flex items-center gap-1.5 px-3 py-2 rounded-md app-accent-solid hover:bg-primary/90 transition-[background-color,box-shadow] text-sm font-medium shadow-sm"
-                                    title="Edit Project"
-                                    aria-label="Edit project"
-                                >
-                                    <Edit className="w-4 h-4" />
-                                    Edit
-                                </button>
-                            )}
-
                             {/* Follow */}
                             <button
                                 type="button"
