@@ -451,24 +451,6 @@ export function MessageComposerV2({
                 ref={composerShellRef}
                 className="relative flex-1"
             >
-                <ComposerSlashMenu
-                    slashMenuOpen={slashMenuOpen}
-                    hasStructuredDraft={hasStructuredDraft}
-                    activeStructuredOption={activeStructuredOption}
-                    structuredDraft={structuredDraft}
-                    structuredCatalog={catalogData}
-                    structuredCatalogLoading={structuredCatalog.isLoading}
-                    slashItems={slashItems}
-                    slashSelectedIndex={slashSelectedIndex}
-                    canSendStructured={canSendStructured}
-                    structuredSubmitLabel={structuredSubmitLabel}
-                    setStructuredDraft={setStructuredDraft}
-                    setSlashSelectedIndex={setSlashSelectedIndex}
-                    onClose={closeSlashMenu}
-                    onReturnToList={returnToSlashList}
-                    onSelectItem={handleSlashItemSelect}
-                    onSendStructured={() => void handleSendStructured()}
-                />
 
                 {mentionQuery !== null && participants && participants.length > 0 ? (
                     <MentionDropdown
@@ -487,43 +469,15 @@ export function MessageComposerV2({
                         className="hidden"
                         onChange={attachments.handleFileSelect}
                     />
-                    <div
-                        className={cn(
-                            "flex items-center gap-2 overflow-hidden transition-[max-width,opacity,transform] duration-150 ease-out",
-                            draft.length === 0
-                                ? "max-w-[6rem] opacity-100 scale-100"
-                                : "pointer-events-none max-w-0 opacity-0 scale-95",
-                        )}
-                        aria-hidden={draft.length > 0}
+                    <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={!canSend}
+                        className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-zinc-100/80 text-zinc-500 transition-colors hover:bg-zinc-200 hover:text-zinc-900 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-800/80 dark:hover:bg-zinc-700 dark:hover:text-zinc-100 mb-0.5"
+                        aria-label="Add attachment"
                     >
-                                <button
-                                    type="button"
-                                    tabIndex={draft.length === 0 ? 0 : -1}
-                                    onClick={() => {
-                                        if (slashMenuOpen) {
-                                            closeSlashMenu();
-                                        } else {
-                                            openSlashMenu();
-                                            inputRef.current?.focus();
-                                        }
-                                    }}
-                                    disabled={!structuredActionsEnabled || !canSend}
-                                    className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-zinc-100/80 text-sm font-semibold lowercase text-zinc-500 transition-colors hover:bg-zinc-200 hover:text-zinc-900 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-800/80 dark:hover:bg-zinc-700 dark:hover:text-zinc-100"
-                                    aria-label="Open message actions"
-                                >
-                                    /
-                                </button>
-                                <button
-                                    type="button"
-                                    tabIndex={draft.length === 0 ? 0 : -1}
-                                    onClick={() => fileInputRef.current?.click()}
-                                    disabled={!canSend}
-                                    className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-zinc-100/80 text-zinc-500 transition-colors hover:bg-zinc-200 hover:text-zinc-900 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-800/80 dark:hover:bg-zinc-700 dark:hover:text-zinc-100"
-                                    aria-label="Add attachment"
-                                >
-                                    <Paperclip className="h-4 w-4" />
-                                </button>
-                    </div>
+                        <Paperclip className="h-4 w-4" />
+                    </button>
                     <textarea
                         ref={inputRef}
                         value={draft}
