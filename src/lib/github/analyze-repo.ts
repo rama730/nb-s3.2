@@ -2,7 +2,7 @@
 
 /**
  * Lightweight GitHub repo analyzer.
- * Fetches package.json and README to auto-detect tech stack.
+ * Fetches package.json and Doc to auto-detect tech stack.
  * Pure optimization: Single fetch per file, client-side parsing.
  */
 
@@ -74,7 +74,7 @@ export async function analyzeGitHubRepo(repoUrl: string, token?: string, signal?
         ...(token && { 'Authorization': `Bearer ${token}` }),
     };
 
-    // Parallel fetch: package.json AND README simultaneously
+    // Parallel fetch: package.json AND Doc simultaneously
     // Use raw content headers to avoid base64 overhead and string limits
     // Optimization: Pass AbortSignal to cancel if user navigates away
     const [pkgResult, readmeResult] = await Promise.allSettled([
@@ -112,7 +112,7 @@ export async function analyzeGitHubRepo(repoUrl: string, token?: string, signal?
         } catch { /* Silent */ }
     }
 
-    // Process README (Raw text - skip atob memory spike)
+    // Process Doc (Raw text - skip atob memory spike)
     if (!result.description && readmeResult.status === 'fulfilled' && readmeResult.value.ok) {
         try {
             const content = await readmeResult.value.text();
