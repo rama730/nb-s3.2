@@ -202,7 +202,24 @@ export function useFilesTabUrlSync(
     const onPopState = () => {
       void handlePopState({
         win,
-        navigateTo: (nodeId) => navigateRef.current(nodeId),
+        navigateTo: async (nodeId) => {
+          if (nodeId) {
+            const currentNodes = useFilesWorkspaceStore.getState().byProjectId[projectId]?.nodesById || {};
+            if (!currentNodes[nodeId]) {
+              try {
+                const { getNodeMetadataBatch } = await import("@/app/actions/files/nodes");
+                const batchResult = await getNodeMetadataBatch(projectId, [nodeId], { includeBreadcrumbs: true });
+                if (batchResult.success && batchResult.data.nodes.length > 0) {
+                  const upsertNodes = useFilesWorkspaceStore.getState().upsertNodes;
+                  upsertNodes(projectId, batchResult.data.nodes);
+                }
+              } catch (e) {
+                console.warn("[files-tab] popstate metadata prefetch failed", e);
+              }
+            }
+          }
+          navigateRef.current(nodeId);
+        },
         onError: (failure) => errorRef.current?.(failure),
         projectId,
         findNodeByPathAny: defaultFindNodeByPathAny,
