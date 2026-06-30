@@ -49,31 +49,68 @@ self.onmessage = async (e: MessageEvent<DownloadWorkerPayload>) => {
 
         // Concurrent Download Pool (Throttle at 5 to prevent Chrome socket saturation)
         const CONCURRENCY = 5;
-        for (let i = 0; i < flatFiles.length; i += CONCURRENCY) {
-            const chunk = flatFiles.slice(i, i + CONCURRENCY);
+        let cursor = 0;
 
-            await Promise.all(chunk.map(async (file) => {
-                try {
-                    const url = signedUrls[file.id];
-                    if (!url) throw new Error(`Missing signed URL for ${file.name}`);
+        const downloadNext = async (): Promise<void> => {
+            if (cursor >= flatFiles.length) return;
+            const idx = cursor++;
+            if (idx >= flatFiles.length) return;
+            const file = flatFiles[idx];
+            if (!file) return downloadNext();
 
-                    const response = await fetch(url);
-                    if (!response.ok) throw new Error(`HTTP ${response.status} - ${response.statusText}`);
+            let attempt = 0;
+            const maxAttempts = 3;
+            let downloadSuccess = false;
+            let lastError: unknown = null;
+            let arrayBuffer: ArrayBuffer | null = null;
 
-                    const arrayBuffer = await response.arrayBuffer();
-                    zipData[file.name] = new Uint8Array(arrayBuffer);
+            try {
+                const url = signedUrls[file.id];
+                if (!url) throw new Error(`Missing signed URL for ${file.name}`);
 
-                    loadedFiles++;
-                    self.postMessage({ jobId, progress: { loaded: loadedFiles, total: totalFiles, filename: file.name } } as DownloadWorkerResult);
-                } catch (fetchErr) {
-                    console.warn("Failed to download file", { fileName: file.name, error: fetchErr });
-                    const safeName = file.name.replace(/\//g, '_');
-                    zipData[`_failed_${safeName}.txt`] = strToU8(`Failed to download: ${file.name}\nError: ${fetchErr}`);
-                    loadedFiles++;
-                    self.postMessage({ jobId, progress: { loaded: loadedFiles, total: totalFiles, filename: `(failed) ${file.name}` } } as DownloadWorkerResult);
+                while (attempt < maxAttempts) {
+                    try {
+                        const response = await fetch(url);
+                        if (!response.ok) throw new Error(`HTTP ${response.status} - ${response.statusText}`);
+
+                        arrayBuffer = await response.arrayBuffer();
+                        downloadSuccess = true;
+                        break;
+                    } catch (error: unknown) {
+                        attempt++;
+                        lastError = error;
+                        if (attempt < maxAttempts) {
+                            const delay = Math.pow(2, attempt) * 500;
+                            await new Promise((resolve) => setTimeout(resolve, delay));
+                        }
+                    }
                 }
-            }));
-        }
+
+                if (!downloadSuccess) {
+                    throw lastError || new Error("Failed to download file after retries");
+                }
+
+                if (arrayBuffer) {
+                    zipData[file.name] = new Uint8Array(arrayBuffer);
+                }
+                loadedFiles++;
+                self.postMessage({ jobId, progress: { loaded: loadedFiles, total: totalFiles, filename: file.name } } as DownloadWorkerResult);
+            } catch (fetchErr) {
+                console.warn("Failed to download file", { fileName: file.name, error: fetchErr });
+                const safeName = file.name.replace(/\//g, '_');
+                zipData[`_failed_${safeName}.txt`] = strToU8(`Failed to download: ${file.name}\nError: ${fetchErr}`);
+                loadedFiles++;
+                self.postMessage({ jobId, progress: { loaded: loadedFiles, total: totalFiles, filename: `(failed) ${file.name}` } } as DownloadWorkerResult);
+            }
+
+            return downloadNext();
+        };
+
+        const workers = Array.from(
+            { length: Math.min(CONCURRENCY, flatFiles.length) },
+            () => downloadNext()
+        );
+        await Promise.all(workers);
 
         // Pure WASM Zip Compression on Local CPU
         self.postMessage({ jobId, progress: { loaded: totalFiles, total: totalFiles, filename: "Zipping..." } } as DownloadWorkerResult);
