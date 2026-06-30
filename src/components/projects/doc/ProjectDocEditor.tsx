@@ -5,71 +5,79 @@ import { RangeSetBuilder, type Extension } from "@codemirror/state";
 import { Decoration, EditorView, keymap, ViewPlugin, type DecorationSet, type ViewUpdate, WidgetType } from "@codemirror/view";
 import dynamic from "next/dynamic";
 import { AlertTriangle, ArrowLeft, CheckCircle2, Eye, Github, Keyboard, Link, Loader2, Monitor, Save, Send, ShieldAlert, Smartphone, Tablet, X } from "lucide-react";
-import { ProjectReadmeQualityPanel } from "./ProjectReadmeQualityPanel";
-import { ProjectReadmeConflictResolver } from "./ProjectReadmeConflictResolver";
-import { evaluateProjectReadmeQuality } from "@/lib/projects/readme-quality";
+import { ProjectDocQualityPanel } from "./ProjectDocQualityPanel";
+import { ProjectDocConflictResolver } from "./ProjectDocConflictResolver";
+import { evaluateProjectDocQuality } from "@/lib/projects/doc-quality";
 
-import { registerReadmeContributorAction } from "@/app/actions/project/readme";
-import { ProjectReadmeMoreMenu, type ProjectReadmeMorePanel, PROJECT_README_INSERT_ACTIONS } from "@/components/projects/readme/ProjectReadmeMoreMenu";
+import { registerReadmeContributorAction } from "@/app/actions/project/doc";
+import { ProjectDocMoreMenu, type ProjectDocMorePanel, PROJECT_DOC_INSERT_ACTIONS } from "@/components/projects/doc/ProjectDocMoreMenu";
 
-import { useReadmeCollaboration } from "@/components/projects/readme/useReadmeCollaboration";
-import type { ProjectReadmeDraftPayload } from "@/lib/projects/readme";
-import { extractProjectReadmeHeadings, type ProjectReadmeHeading } from "@/lib/projects/readme";
+import { useDocCollaboration } from "@/components/projects/doc/useDocCollaboration";
+import type { ProjectDocDraftPayload } from "@/lib/projects/doc";
+import {
+    extractProjectDocHeadings,
+    resolveProjectDocCollaborationContent,
+    normalizeProjectDocContent,
+    normalizeProjectDocSlug,
+    type ProjectDocHeading,
+} from "@/lib/projects/doc";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import Button from "@/components/ui-custom/Button";
+import CodeEditor from "@/components/projects/v2/editor/CodeEditor";
+import { ProjectDocWysiwygEditor } from "@/components/projects/doc/ProjectDocWysiwygEditor";
 import {
     normalizeReadmeReferenceLabel,
     unescapeReadmeReferenceLabel,
-    type ProjectReadmeReferenceKind,
-} from "@/lib/projects/readme-blocks";
+    type ProjectDocReferenceKind,
+} from "@/lib/projects/doc-blocks";
 import {
-    useProjectReadmeDraftEditor,
-    type ProjectReadmeEditorSaveResult,
-} from "@/components/projects/readme/useProjectReadmeDraftEditor";
+    useProjectDocDraftEditor,
+    type ProjectDocEditorSaveResult,
+} from "@/components/projects/doc/useProjectDocDraftEditor";
 import {
-    useProjectReadmeEditorStore,
+    useProjectDocEditorStore,
     type LiveReviewSize,
     type CursorRange,
     type PreviewRevealTarget,
     type SourceHighlightTarget,
-} from "@/components/projects/readme/useProjectReadmeEditorStore";
+} from "@/components/projects/doc/useProjectDocEditorStore";
 import type { Project } from "@/types/hub";
 import {
-    buildProjectReadmeEditorSourceTargets,
-    findProjectReadmeEditorSourceTarget,
-    getReadmeLineStartOffset,
-    type ProjectReadmeEditorSourcePosition,
-} from "@/lib/projects/readme-editor-source-map";
-import { uploadProjectReadmeAsset } from "@/lib/projects/readme-upload-util";
+    buildProjectDocEditorSourceTargets,
+    findProjectDocEditorSourceTarget,
+    getDocLineStartOffset,
+    type ProjectDocEditorSourcePosition,
+} from "@/lib/projects/doc-editor-source-map";
+import { uploadProjectDocAsset } from "@/lib/projects/doc-upload-util";
 import { cn } from "@/lib/utils";
 import { useCompletion } from '@ai-sdk/react';
 import type * as Y from "yjs";
-import { useProjectReadmeVersions } from "@/hooks/hub/useProjectReadmeData";
+import { useProjectDocVersions } from "@/hooks/hub/useProjectDocData";
 
 const EditorSkeleton = () => <div className="h-full min-h-[500px] w-full animate-pulse bg-zinc-100 dark:bg-zinc-900 rounded-xl" />;
 const PanelSkeleton = () => <div className="h-64 w-full animate-pulse bg-zinc-100 dark:bg-zinc-900 rounded-xl" />;
 
-const CodeEditor = dynamic(() => import("@/components/projects/v2/editor/CodeEditor"), { ssr: false, loading: EditorSkeleton });
-const ProjectReadmeWysiwygEditor = dynamic(() => import("@/components/projects/readme/ProjectReadmeWysiwygEditor").then(mod => ({ default: mod.ProjectReadmeWysiwygEditor })), { ssr: false, loading: EditorSkeleton });
-const ProjectReadmeAssetManager = dynamic(() => import("@/components/projects/readme/ProjectReadmeAssetManager").then(mod => ({ default: mod.ProjectReadmeAssetManager })), { ssr: false, loading: PanelSkeleton });
-const ProjectReadmeCalloutBuilder = dynamic(() => import("@/components/projects/readme/ProjectReadmeCalloutBuilder").then(mod => ({ default: mod.ProjectReadmeCalloutBuilder })), { ssr: false, loading: PanelSkeleton });
-const ProjectReadmeCommandBuilder = dynamic(() => import("@/components/projects/readme/ProjectReadmeCommandBuilder").then(mod => ({ default: mod.ProjectReadmeCommandBuilder })), { ssr: false, loading: PanelSkeleton });
-const ProjectReadmeHistory = dynamic(() => import("@/components/projects/readme/ProjectReadmeHistory").then(mod => ({ default: mod.ProjectReadmeHistory })), { ssr: false, loading: PanelSkeleton });
-const ProjectReadmePublishModal = dynamic(() => import("@/components/projects/readme/ProjectReadmePublishModal").then(mod => ({ default: mod.ProjectReadmePublishModal })), { ssr: false, loading: () => null });
-const ProjectReadmeInsertCommandCenter = dynamic(() => import("@/components/projects/readme/ProjectReadmeInsertCommandCenter").then(mod => ({ default: mod.ProjectReadmeInsertCommandCenter })), { ssr: false, loading: PanelSkeleton });
-const ProjectReadmeLinkBuilder = dynamic(() => import("@/components/projects/readme/ProjectReadmeLinkBuilder").then(mod => ({ default: mod.ProjectReadmeLinkBuilder })), { ssr: false, loading: PanelSkeleton });
-const ProjectReadmeReferencePicker = dynamic(() => import("@/components/projects/readme/ProjectReadmeReferencePicker").then(mod => ({ default: mod.ProjectReadmeReferencePicker })), { ssr: false, loading: PanelSkeleton });
-const ProjectReadmeRenderer = dynamic(() => import("@/components/projects/readme/ProjectReadmeRenderer").then(mod => ({ default: mod.ProjectReadmeRenderer })), { ssr: false, loading: EditorSkeleton });
-const ProjectReadmeStyleBuilder = dynamic(() => import("@/components/projects/readme/ProjectReadmeStyleBuilder").then(mod => ({ default: mod.ProjectReadmeStyleBuilder })), { ssr: false, loading: PanelSkeleton });
-const ProjectReadmeTableBuilder = dynamic(() => import("@/components/projects/readme/ProjectReadmeTableBuilder").then(mod => ({ default: mod.ProjectReadmeTableBuilder })), { ssr: false, loading: PanelSkeleton });
+const ProjectDocAssetManager = dynamic(() => import("@/components/projects/doc/ProjectDocAssetManager").then(mod => ({ default: mod.ProjectDocAssetManager })), { ssr: false, loading: PanelSkeleton });
+const ProjectDocCalloutBuilder = dynamic(() => import("@/components/projects/doc/ProjectDocCalloutBuilder").then(mod => ({ default: mod.ProjectDocCalloutBuilder })), { ssr: false, loading: PanelSkeleton });
+const ProjectDocCommandBuilder = dynamic(() => import("@/components/projects/doc/ProjectDocCommandBuilder").then(mod => ({ default: mod.ProjectDocCommandBuilder })), { ssr: false, loading: PanelSkeleton });
+const ProjectDocHistory = dynamic(() => import("@/components/projects/doc/ProjectDocHistory").then(mod => ({ default: mod.ProjectDocHistory })), { ssr: false, loading: PanelSkeleton });
+const ProjectDocPublishModal = dynamic(() => import("@/components/projects/doc/ProjectDocPublishModal").then(mod => ({ default: mod.ProjectDocPublishModal })), { ssr: false, loading: () => null });
+const ProjectDocInsertCommandCenter = dynamic(() => import("@/components/projects/doc/ProjectDocInsertCommandCenter").then(mod => ({ default: mod.ProjectDocInsertCommandCenter })), { ssr: false, loading: PanelSkeleton });
+const ProjectDocLinkBuilder = dynamic(() => import("@/components/projects/doc/ProjectDocLinkBuilder").then(mod => ({ default: mod.ProjectDocLinkBuilder })), { ssr: false, loading: PanelSkeleton });
+const ProjectDocReferencePicker = dynamic(() => import("@/components/projects/doc/ProjectDocReferencePicker").then(mod => ({ default: mod.ProjectDocReferencePicker })), { ssr: false, loading: PanelSkeleton });
+const ProjectDocRenderer = dynamic(() => import("@/components/projects/doc/ProjectDocRenderer").then(mod => ({ default: mod.ProjectDocRenderer })), { ssr: false, loading: EditorSkeleton });
+const ProjectDocStyleBuilder = dynamic(() => import("@/components/projects/doc/ProjectDocStyleBuilder").then(mod => ({ default: mod.ProjectDocStyleBuilder })), { ssr: false, loading: PanelSkeleton });
+const ProjectDocTableBuilder = dynamic(() => import("@/components/projects/doc/ProjectDocTableBuilder").then(mod => ({ default: mod.ProjectDocTableBuilder })), { ssr: false, loading: PanelSkeleton });
 
-type ReadmeHeadingTarget = ProjectReadmeHeading & { offset: number; line: number };
+type ReadmeHeadingTarget = ProjectDocHeading & { offset: number; line: number };
 
 const README_EDIT_SELECTION_HIGHLIGHT_MS = 1400;
 const README_LARGE_DOC_PREVIEW_DEBOUNCE_MS = 1200;
 const README_LARGE_DOC_BYTES = 80 * 1024;
 const README_QUALITY_DEBOUNCE_MS = 800;
 
-const QUICK_INSERT_PANELS: ProjectReadmeMorePanel[] = ["style", "command", "reference", "assets", "table"];
-const QUICK_INSERT_LABELS: Partial<Record<ProjectReadmeMorePanel, string>> = {
+const QUICK_INSERT_PANELS: ProjectDocMorePanel[] = ["style", "command", "reference", "assets", "table"];
+const QUICK_INSERT_LABELS: Partial<Record<ProjectDocMorePanel, string>> = {
     style: "Style",
     command: "Cmd",
     reference: "Mention",
@@ -90,11 +98,11 @@ const LIVE_REVIEW_SIZE_OPTIONS: Array<{
 ];
 
 const INLINE_REFERENCE_DECORATION_REGEX = /\{%\s*ref\.([a-z_]+)\s+id="([^"]+)"(?:\s+label="([^"]*)")?\s*%\}/gi;
-const README_REFERENCE_KINDS = new Set<ProjectReadmeReferenceKind>(["roles", "contributors", "files", "tasks", "sprints"]);
+const README_REFERENCE_KINDS = new Set<ProjectDocReferenceKind>(["roles", "contributors", "files", "tasks", "sprints"]);
 
-function toReadmeReferenceKind(value: string | undefined): ProjectReadmeReferenceKind | null {
+function toDocReferenceKind(value: string | undefined): ProjectDocReferenceKind | null {
     if (!value) return null;
-    return README_REFERENCE_KINDS.has(value as ProjectReadmeReferenceKind) ? value as ProjectReadmeReferenceKind : null;
+    return README_REFERENCE_KINDS.has(value as ProjectDocReferenceKind) ? value as ProjectDocReferenceKind : null;
 }
 
 class ReadmeReferenceWidget extends WidgetType {
@@ -128,7 +136,7 @@ function buildReadmeReferenceDecorations(view: EditorView): DecorationSet {
             const to = from + match[0].length;
             if (to < range.from || from > range.to || seen.has(from)) continue;
             seen.add(from);
-            const kind = toReadmeReferenceKind(match[1]);
+            const kind = toDocReferenceKind(match[1]);
             const label = kind
                 ? normalizeReadmeReferenceLabel(kind, match[3] || "Reference")
                 : unescapeReadmeReferenceLabel(match[3] || "Reference");
@@ -161,7 +169,68 @@ function createReadmeReferenceDecorationExtension(): Extension[] {
             }
         }, {
             decorations: (plugin) => plugin.decorations,
+            provide: (plugin) => EditorView.atomicRanges.of(view => {
+                return view.plugin(plugin)?.decorations || Decoration.none;
+            })
         }),
+        keymap.of([
+            {
+                key: "Backspace",
+                run: (view: EditorView): boolean => {
+                    const ranges = view.state.selection.ranges;
+                    if (ranges.length !== 1) return false;
+                    const range = ranges[0];
+                    if (!range || !range.empty) return false;
+
+                    const pos = range.head;
+                    const line = view.state.doc.lineAt(pos);
+                    const lineText = line.text;
+
+                    const regex = new RegExp(INLINE_REFERENCE_DECORATION_REGEX.source, INLINE_REFERENCE_DECORATION_REGEX.flags);
+                    let match;
+                    while ((match = regex.exec(lineText)) !== null) {
+                        const matchStart = line.from + match.index;
+                        const matchEnd = matchStart + match[0].length;
+                        if (pos > matchStart && pos <= matchEnd) {
+                            view.dispatch({
+                                changes: { from: matchStart, to: matchEnd },
+                                selection: { anchor: matchStart }
+                            });
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+            },
+            {
+                key: "Delete",
+                run: (view: EditorView): boolean => {
+                    const ranges = view.state.selection.ranges;
+                    if (ranges.length !== 1) return false;
+                    const range = ranges[0];
+                    if (!range || !range.empty) return false;
+
+                    const pos = range.head;
+                    const line = view.state.doc.lineAt(pos);
+                    const lineText = line.text;
+
+                    const regex = new RegExp(INLINE_REFERENCE_DECORATION_REGEX.source, INLINE_REFERENCE_DECORATION_REGEX.flags);
+                    let match;
+                    while ((match = regex.exec(lineText)) !== null) {
+                        const matchStart = line.from + match.index;
+                        const matchEnd = matchStart + match[0].length;
+                        if (pos >= matchStart && pos < matchEnd) {
+                            view.dispatch({
+                                changes: { from: matchStart, to: matchEnd },
+                                selection: { anchor: matchStart }
+                            });
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+            }
+        ]),
         EditorView.theme({
             ".cm-readme-reference-chip": {
                 display: "inline-flex",
@@ -213,7 +282,7 @@ function createReadmeReferenceDecorationExtension(): Extension[] {
     ];
 }
 
-function inferReferenceKindFromText(value: string): ProjectReadmeReferenceKind | null {
+function inferReferenceKindFromText(value: string): ProjectDocReferenceKind | null {
     const text = value.toLowerCase();
     if (/\b(tasks?|work|todo|issue|assignment)\b/.test(text)) return "tasks";
     if (/\b(sprints?|milestone|cycle)\b/.test(text)) return "sprints";
@@ -223,11 +292,11 @@ function inferReferenceKindFromText(value: string): ProjectReadmeReferenceKind |
     return null;
 }
 
-function suggestedPanelsForContext(content: string, cursorRange: CursorRange | null): ProjectReadmeMorePanel[] {
+function suggestedPanelsForContext(content: string, cursorRange: CursorRange | null): ProjectDocMorePanel[] {
     const cursor = cursorRange ? Math.max(0, Math.min(cursorRange.selectionStart, content.length)) : content.length;
     const context = content.slice(Math.max(0, cursor - 180), cursor).toLowerCase();
-    const suggestions: ProjectReadmeMorePanel[] = [];
-    const add = (panel: ProjectReadmeMorePanel) => {
+    const suggestions: ProjectDocMorePanel[] = [];
+    const add = (panel: ProjectDocMorePanel) => {
         if (!suggestions.includes(panel)) suggestions.push(panel);
     };
 
@@ -274,7 +343,7 @@ const QUALITY_ISSUE_SECTION_PATTERNS: Record<string, RegExp> = {
 };
 
 function extractReadmeHeadingTargets(content: string): ReadmeHeadingTarget[] {
-    const headings = extractProjectReadmeHeadings(content);
+    const headings = extractProjectDocHeadings(content);
     if (!headings.length) return [];
 
     let headingIndex = 0;
@@ -377,12 +446,14 @@ function syncYTextContent(ydoc: Y.Doc, ytext: Y.Text, nextContent: string, origi
     }, origin);
 }
 
-export function ProjectReadmeEditor({
+export function ProjectDocEditor({
     project,
     draft,
     saving,
     publishing,
+    currentUserId,
     currentUserName,
+    docSlug = "readme",
     onSave,
     onPublish,
     onRestore,
@@ -392,39 +463,46 @@ export function ProjectReadmeEditor({
     onExit,
 }: {
     project: Project;
-    draft: ProjectReadmeDraftPayload;
+    draft: ProjectDocDraftPayload;
     saving: boolean;
     publishing: boolean;
+    currentUserId?: string | null;
     currentUserName?: string;
-    onSave: (content: string, expectedDraftUpdatedAt: string | null) => Promise<ProjectReadmeEditorSaveResult | null>;
+    docSlug?: string;
+    onSave: (content: string, expectedDraftUpdatedAt: string | null) => Promise<ProjectDocEditorSaveResult | null>;
     onPublish: (content: string, expectedDraftUpdatedAt: string | null, changeSummary: string, syncToFilesTab: boolean) => Promise<boolean>;
-    onRestore: (versionId: string) => Promise<ProjectReadmeEditorSaveResult | null>;
-    onDeleteVersion: (versionId: string) => Promise<ProjectReadmeEditorSaveResult | null>;
-    onSetCurrentVersion: (versionId: string) => Promise<ProjectReadmeEditorSaveResult | null>;
-    onDiscardDraft: () => Promise<ProjectReadmeEditorSaveResult | null>;
+    onRestore: (versionId: string) => Promise<ProjectDocEditorSaveResult | null>;
+    onDeleteVersion: (versionId: string) => Promise<ProjectDocEditorSaveResult | null>;
+    onSetCurrentVersion: (versionId: string) => Promise<ProjectDocEditorSaveResult | null>;
+    onDiscardDraft: () => Promise<ProjectDocEditorSaveResult | null>;
     onExit: () => void;
 }) {
-    const activePanel = useProjectReadmeEditorStore((s) => s.activePanel);
-    const setActivePanel = useProjectReadmeEditorStore((s) => s.setActivePanel);
-    const moreOpen = useProjectReadmeEditorStore((s) => s.moreOpen);
-    const setMoreOpen = useProjectReadmeEditorStore((s) => s.setMoreOpen);
-    const cursorRange = useProjectReadmeEditorStore((s) => s.cursorRange);
-    const setCursorRange = useProjectReadmeEditorStore((s) => s.setCursorRange);
-    const referenceKindHint = useProjectReadmeEditorStore((s) => s.referenceKindHint);
-    const setReferenceKindHint = useProjectReadmeEditorStore((s) => s.setReferenceKindHint);
-    const selectionTarget = useProjectReadmeEditorStore((s) => s.selectionTarget);
-    const setSelectionTarget = useProjectReadmeEditorStore((s) => s.setSelectionTarget);
-    const previewRevealTarget = useProjectReadmeEditorStore((s) => s.previewRevealTarget);
-    const setPreviewRevealTarget = useProjectReadmeEditorStore((s) => s.setPreviewRevealTarget);
-    const sourceHighlightTarget = useProjectReadmeEditorStore((s) => s.sourceHighlightTarget);
-    const setSourceHighlightTarget = useProjectReadmeEditorStore((s) => s.setSourceHighlightTarget);
-    const liveReviewSize = useProjectReadmeEditorStore((s) => s.liveReviewSize);
-    const setLiveReviewSize = useProjectReadmeEditorStore((s) => s.setLiveReviewSize);
+    const activePanel = useProjectDocEditorStore((s) => s.activePanel);
+    const setActivePanel = useProjectDocEditorStore((s) => s.setActivePanel);
+    const moreOpen = useProjectDocEditorStore((s) => s.moreOpen);
+    const setMoreOpen = useProjectDocEditorStore((s) => s.setMoreOpen);
+    const cursorRange = useProjectDocEditorStore((s) => s.cursorRange);
+    const setCursorRange = useProjectDocEditorStore((s) => s.setCursorRange);
+    const referenceKindHint = useProjectDocEditorStore((s) => s.referenceKindHint);
+    const setReferenceKindHint = useProjectDocEditorStore((s) => s.setReferenceKindHint);
+    const selectionTarget = useProjectDocEditorStore((s) => s.selectionTarget);
+    const setSelectionTarget = useProjectDocEditorStore((s) => s.setSelectionTarget);
+    const previewRevealTarget = useProjectDocEditorStore((s) => s.previewRevealTarget);
+    const setPreviewRevealTarget = useProjectDocEditorStore((s) => s.setPreviewRevealTarget);
+    const sourceHighlightTarget = useProjectDocEditorStore((s) => s.sourceHighlightTarget);
+    const setSourceHighlightTarget = useProjectDocEditorStore((s) => s.setSourceHighlightTarget);
+    const liveReviewSize = useProjectDocEditorStore((s) => s.liveReviewSize);
+    const setLiveReviewSize = useProjectDocEditorStore((s) => s.setLiveReviewSize);
     const [followCursor, setFollowCursor] = useState(true);
-    const editorMode = useProjectReadmeEditorStore((s) => s.editorMode);
-    const setEditorMode = useProjectReadmeEditorStore((s) => s.setEditorMode);
+    const editorMode = useProjectDocEditorStore((s) => s.editorMode);
+    const setEditorMode = useProjectDocEditorStore((s) => s.setEditorMode);
     const [nowTick, setNowTick] = useState(0);
     const toolbarRef = useRef<HTMLDivElement | null>(null);
+
+    const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
+    const [discarding, setDiscarding] = useState(false);
+    const initialContentRef = useRef(normalizeProjectDocContent(draft.draftContent || ""));
+    const normalizedDocSlug = useMemo(() => normalizeProjectDocSlug(docSlug), [docSlug]);
 
 
     const previewPaneRef = useRef<HTMLDivElement | null>(null);
@@ -439,12 +517,68 @@ export function ProjectReadmeEditor({
     const initialEditorTargetHandledRef = useRef(false);
     const hasInitializedRef = useRef(false);
 
-    const versionsQuery = useProjectReadmeVersions(project.id, activePanel === "history");
+    const versionsQuery = useProjectDocVersions(project.id, normalizedDocSlug, activePanel === "history");
 
     // Yjs CRDT collaboration is configured and active during editing mode.
     const collaborationConfigured = Boolean(process.env.NEXT_PUBLIC_YJS_WEBSOCKET_URL?.trim());
     const collaborationEnabled = collaborationConfigured;
-    const { ydoc, provider, status: yjsStatus, synced, roomFull } = useReadmeCollaboration(project.id, currentUserName, collaborationEnabled);
+    const { ydoc, provider, status: yjsStatus, synced, roomFull: initialRoomFull } = useDocCollaboration(project.id, normalizedDocSlug, currentUserId, currentUserName, collaborationEnabled);
+    const [roomFull, setRoomFull] = useState(false);
+    const [pendingPromotionActive, setPendingPromotionActive] = useState(false);
+    const [promotionCountdown, setPromotionCountdown] = useState(10);
+
+    useEffect(() => {
+        if (!provider || !currentUserId) return;
+        const collabState = ydoc.getMap('collaborationState');
+        const observer = () => {
+            const activeEditors = (collabState.get('activeEditors') as any[]) || [];
+            const isActive = activeEditors.some((e: any) => e.userId === currentUserId);
+            
+            if (activeEditors.length > 0) {
+                setRoomFull(!isActive);
+            } else {
+                setRoomFull(false);
+            }
+
+            const pending = collabState.get('pendingPromotion') as { userId: string; promotedAt: number } | null;
+            if (pending && pending.userId === currentUserId) {
+                setPendingPromotionActive(true);
+                const elapsed = Math.floor((Date.now() - pending.promotedAt) / 1000);
+                setPromotionCountdown(Math.max(0, 10 - elapsed));
+            } else {
+                setPendingPromotionActive(false);
+            }
+
+            if (isActive && provider.awareness) {
+                provider.awareness.setLocalStateField('acceptPromotion', null);
+            }
+        };
+        collabState.observe(observer);
+        observer();
+        return () => collabState.unobserve(observer);
+    }, [provider, ydoc, currentUserId]);
+
+    useEffect(() => {
+        if (!pendingPromotionActive) return;
+        const interval = setInterval(() => {
+            setPromotionCountdown((prev) => {
+                if (prev <= 1) {
+                    clearInterval(interval);
+                    return 0;
+                }
+                return prev - 1;
+            });
+        }, 1000);
+        return () => clearInterval(interval);
+    }, [pendingPromotionActive]);
+
+    const handleAcceptPromotion = useCallback(() => {
+        if (provider && provider.awareness) {
+            provider.awareness.setLocalStateField('acceptPromotion', true);
+            setPendingPromotionActive(false);
+        }
+    }, [provider]);
+
     const visualEditorAvailable = collaborationConfigured;
     const effectiveEditorMode = editorMode === "visual" && visualEditorAvailable ? "visual" : "code";
 
@@ -453,6 +587,37 @@ export function ProjectReadmeEditor({
             provider.awareness.setLocalStateField("editorMode", effectiveEditorMode);
         }
     }, [provider, effectiveEditorMode]);
+
+    useEffect(() => {
+        if (!provider || !provider.awareness) return;
+
+        const handleActivity = () => {
+            if (provider.awareness) {
+                provider.awareness.setLocalStateField("lastActiveAt", Date.now());
+            }
+        };
+
+        handleActivity();
+
+        window.addEventListener("keydown", handleActivity, { passive: true });
+        window.addEventListener("mousemove", handleActivity, { passive: true });
+        window.addEventListener("pointerdown", handleActivity, { passive: true });
+
+        const heartbeatInterval = setInterval(() => {
+            if (provider.awareness) {
+                provider.awareness.setLocalStateField("heartbeat", Date.now());
+            }
+        }, 15000);
+
+        provider.awareness.setLocalStateField("heartbeat", Date.now());
+
+        return () => {
+            window.removeEventListener("keydown", handleActivity);
+            window.removeEventListener("mousemove", handleActivity);
+            window.removeEventListener("pointerdown", handleActivity);
+            clearInterval(heartbeatInterval);
+        };
+    }, [provider]);
 
     useEffect(() => {
         if (typeof window === "undefined") return;
@@ -555,13 +720,44 @@ export function ProjectReadmeEditor({
         acknowledgePublished,
         clearLocalBackup,
         dirty,
-    } = useProjectReadmeDraftEditor({
+    } = useProjectDocDraftEditor({
         projectId: project.id,
+        docSlug: normalizedDocSlug,
         initialContent: draft.draftContent || "",
         initialDraftUpdatedAt: draft.draftUpdatedAt,
         initialQualityReport: draft.qualityReport,
         onSave,
     });
+
+    const hasSessionChanges = useMemo(() => {
+        return normalizeProjectDocContent(content) !== initialContentRef.current || dirty;
+    }, [content, dirty]);
+
+    const handleBackClick = useCallback(() => {
+        if (hasSessionChanges) {
+            setShowDiscardConfirm(true);
+        } else {
+            onExit();
+        }
+    }, [hasSessionChanges, onExit]);
+
+    const handleDiscardConfirm = useCallback(async () => {
+        setDiscarding(true);
+        try {
+            const result = await onDiscardDraft();
+            if (result && provider) {
+                const ytext = ydoc.getText('markdown');
+                syncYTextContent(ydoc, ytext, result.serverDraftContent ?? "", 'local-discard-sync');
+            }
+            clearLocalBackup();
+            onExit();
+        } catch (error) {
+            console.error("Failed to discard draft:", error);
+        } finally {
+            setDiscarding(false);
+            setShowDiscardConfirm(false);
+        }
+    }, [onDiscardDraft, provider, ydoc, clearLocalBackup, onExit]);
 
     const focusEditorRange = useCallback((from: number, to = from) => {
         selectionTokenRef.current += 1;
@@ -666,6 +862,27 @@ export function ProjectReadmeEditor({
     useEffect(() => {
         if (!collaborationEnabled) return;
         const ytext = ydoc.getText('markdown');
+        const repairCollaborativeContent = (collaborativeContent: string) => {
+            const resolution = resolveProjectDocCollaborationContent({
+                canonicalContent: contentRef.current,
+                collaborativeContent,
+            });
+            if (!resolution.repaired) return resolution.content;
+
+            ydoc.transact(() => {
+                ytext.delete(0, ytext.length);
+                if (resolution.content) ytext.insert(0, resolution.content);
+                const metaMap = ydoc.getMap('metadata');
+                if (expectedDraftUpdatedAt) {
+                    metaMap.set('draftUpdatedAt', expectedDraftUpdatedAt);
+                }
+                metaMap.set('lastRepairReason', resolution.reason);
+                metaMap.set('lastRepairRepeatCount', resolution.repeatCount);
+                metaMap.set('lastRepairAt', new Date().toISOString());
+            }, 'local-collaboration-repair');
+
+            return resolution.content;
+        };
         // Only initialize if the network has synced and the document is genuinely empty.
         // Doing this before sync causes massive duplication when multiple users join.
         if (synced && !hasInitializedRef.current) {
@@ -679,22 +896,29 @@ export function ProjectReadmeEditor({
                         if (!systemMap.has('initialized')) {
                             ydoc.transact(() => {
                                 systemMap.set('initialized', true);
+                                const metaMap = ydoc.getMap('metadata');
+                                if (expectedDraftUpdatedAt) {
+                                    metaMap.set('draftUpdatedAt', expectedDraftUpdatedAt);
+                                }
+                                metaMap.set('draftLength', contentRef.current.length);
                                 ydoc.getText('markdown').insert(0, contentRef.current);
                             }, 'local-init');
                         }
                     }
                 }, 500 + Math.random() * 2000);
             } else if (ytextContent !== contentRef.current) {
-                setContent(ytextContent, { isRemote: true });
+                setContent(repairCollaborativeContent(ytextContent), { isRemote: true });
             }
         }
         const observer = (event: any, transaction: any) => {
+            if (transaction?.origin === 'local-collaboration-repair') return;
             const isLocal = transaction?.local ?? true;
-            setContent(ytext.toString(), { isKeystroke: isLocal, isRemote: !isLocal });
+            const nextContent = repairCollaborativeContent(ytext.toString());
+            setContent(nextContent, { isKeystroke: isLocal, isRemote: !isLocal });
         };
         ytext.observe(observer);
         return () => ytext.unobserve(observer);
-    }, [collaborationEnabled, contentRef, ydoc, setContent, synced, provider]);
+    }, [collaborationEnabled, contentRef, ydoc, setContent, synced, provider, expectedDraftUpdatedAt]);
 
     const handleSetEditorMode = useCallback((mode: "code" | "visual") => {
         setEditorMode(mode);
@@ -720,7 +944,7 @@ export function ProjectReadmeEditor({
     }, [deferredContent]);
 
     const qualityReport = useMemo(() => {
-        return evaluateProjectReadmeQuality(qualityContent);
+        return evaluateProjectDocQuality(qualityContent);
     }, [qualityContent]);
 
     // Register contributor telemetry
@@ -736,7 +960,7 @@ export function ProjectReadmeEditor({
     const referenceDecorations = useMemo(() => createReadmeReferenceDecorationExtension(), []);
     const emptyPreviewByKey = useMemo(() => new Map(), []);
     const headingTargets = useMemo(() => extractReadmeHeadingTargets(content), [content]);
-    const previewSourceTargets = useMemo(() => buildProjectReadmeEditorSourceTargets(content), [content]);
+    const previewSourceTargets = useMemo(() => buildProjectDocEditorSourceTargets(content), [content]);
     const activePreviewTargetId = previewRevealTarget?.targetId ?? null;
     const deferredCursorRange = useDeferredValue(cursorRange);
     const contextSuggestedPanels = useMemo(
@@ -751,8 +975,8 @@ export function ProjectReadmeEditor({
     }, [content, cursorRange]);
     const quickInsertActions = useMemo(() => (
         QUICK_INSERT_PANELS
-            .map((panel) => PROJECT_README_INSERT_ACTIONS.find((action) => action.id === panel))
-            .filter((action): action is (typeof PROJECT_README_INSERT_ACTIONS)[number] => Boolean(action))
+            .map((panel) => PROJECT_DOC_INSERT_ACTIONS.find((action) => action.id === panel))
+            .filter((action): action is (typeof PROJECT_DOC_INSERT_ACTIONS)[number] => Boolean(action))
     ), []);
 
     const handleCursorActivity = useCallback((position: { selectionStart: number; selectionEnd: number }) => {
@@ -781,14 +1005,14 @@ export function ProjectReadmeEditor({
             }
 
             if (!followCursor) return;
-            const target = findProjectReadmeEditorSourceTarget(previewSourceTargets, position.selectionStart);
+            const target = findProjectDocEditorSourceTarget(previewSourceTargets, position.selectionStart);
             if (!target) return;
             cursorRevealTokenRef.current += 1;
             setPreviewRevealTarget({ targetId: target.id, token: cursorRevealTokenRef.current });
         }, 150);
     }, [followCursor, previewSourceTargets, setCursorRange, setPreviewRevealTarget]);
 
-    const openInsertPanel = useCallback((panel: ProjectReadmeMorePanel) => {
+    const openInsertPanel = useCallback((panel: ProjectDocMorePanel) => {
         setMoreOpen(true);
         setLocalNotice(null);
 
@@ -801,7 +1025,7 @@ export function ProjectReadmeEditor({
         setActivePanel(panel);
     }, [content, cursorRange, setActivePanel, setLocalNotice, setMoreOpen, setReferenceKindHint]);
 
-    const defaultInsertPanel = useMemo<ProjectReadmeMorePanel>(
+    const defaultInsertPanel = useMemo<ProjectDocMorePanel>(
         () => contextSuggestedPanels[0] ?? "reference",
         [contextSuggestedPanels],
     );
@@ -869,13 +1093,13 @@ export function ProjectReadmeEditor({
         [referenceDecorations, slashCommandExtension, triggerCompletion],
     );
 
-    const handlePreviewSourcePosition = useCallback((position: ProjectReadmeEditorSourcePosition) => {
+    const handlePreviewSourcePosition = useCallback((position: ProjectDocEditorSourcePosition) => {
         const offset = typeof position.offset === "number" && Number.isFinite(position.offset)
             ? Math.max(0, Math.min(position.offset, content.length))
-            : getReadmeLineStartOffset(content, position.line ?? null);
+            : getDocLineStartOffset(content, position.line ?? null);
         const target = position.targetId
-            ? previewSourceTargets.find((item) => item.id === position.targetId) ?? findProjectReadmeEditorSourceTarget(previewSourceTargets, offset)
-            : findProjectReadmeEditorSourceTarget(previewSourceTargets, offset);
+            ? previewSourceTargets.find((item) => item.id === position.targetId) ?? findProjectDocEditorSourceTarget(previewSourceTargets, offset)
+            : findProjectDocEditorSourceTarget(previewSourceTargets, offset);
         const targetId = position.targetId || target?.id;
         const editorOffset = target ? Math.max(target.startOffset, Math.min(offset, target.endOffset)) : offset;
 
@@ -931,7 +1155,7 @@ export function ProjectReadmeEditor({
         if (gatedIssue) {
             setMoreOpen(true);
             setActivePanel("quality");
-            setLocalNotice("Review README quality before publishing");
+            setLocalNotice("Review document quality before publishing");
             return;
         }
         setPublishModalOpen(true);
@@ -947,7 +1171,7 @@ export function ProjectReadmeEditor({
     }, [applyDraftResult, onRestore, updateDocumentContent, setActivePanel]);
 
     const handleSetCurrentVersion = useCallback(async (versionId: string) => {
-        if (!window.confirm("Set this version as the current published README? Your draft will switch to this content.")) return;
+        if (!window.confirm("Set this version as the current published document? Your draft will switch to this content.")) return;
         const result = await onSetCurrentVersion(versionId);
         if (result) {
             updateDocumentContent(result.serverDraftContent ?? "");
@@ -957,7 +1181,7 @@ export function ProjectReadmeEditor({
     }, [applyDraftResult, onSetCurrentVersion, updateDocumentContent, setActivePanel]);
 
     const handleDeleteVersion = useCallback(async (versionId: string) => {
-        if (!window.confirm("Delete this README version from visible history? If it is current, the newest remaining version becomes current and the draft follows it.")) return;
+        if (!window.confirm("Delete this document version from visible history? If it is current, the newest remaining version becomes current and the draft follows it.")) return;
         const result = await onDeleteVersion(versionId);
         if (result?.serverDraftContent != null) {
             updateDocumentContent(result.serverDraftContent);
@@ -968,7 +1192,7 @@ export function ProjectReadmeEditor({
     }, [applyDraftResult, onDeleteVersion, updateDocumentContent, setLocalNotice]);
 
     const handleDiscardDraft = useCallback(async () => {
-        if (!window.confirm("Discard the current README draft? Unpublished edits will be removed.")) return;
+        if (!window.confirm("Discard the current document draft? Unpublished edits will be removed.")) return;
         const result = await onDiscardDraft();
         if (result) {
             updateDocumentContent(result.serverDraftContent ?? "");
@@ -987,7 +1211,7 @@ export function ProjectReadmeEditor({
         setLocalNotice(`Uploading ${files.length} file${files.length > 1 ? "s" : ""}...`);
         for (const file of files) {
             try {
-                const markdown = await uploadProjectReadmeAsset({
+                const markdown = await uploadProjectDocAsset({
                     projectId: project.id,
                     file,
                     altText: file.name.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ").trim(),
@@ -1039,7 +1263,7 @@ export function ProjectReadmeEditor({
         focusEditorRange(heading.offset);
         cursorRevealTokenRef.current += 1;
         setPreviewRevealTarget({ targetId: heading.id, token: cursorRevealTokenRef.current });
-        setLocalNotice("Opened README at selected section");
+        setLocalNotice("Opened document at selected section");
     }, [content, focusEditorRange, headingTargets, setLocalNotice]);
 
     useEffect(() => {
@@ -1103,7 +1327,7 @@ export function ProjectReadmeEditor({
                 : { label: formatSavedAt(lastSavedAt, nowTick), className: "text-emerald-600 dark:text-emerald-300" };
 
     const panelCopy = activePanel === "style"
-        ? { title: "Choose style", description: "Start from a portable README structure that matches the project type." }
+        ? { title: "Choose style", description: "Start from a portable document structure that matches the project type." }
         : activePanel === "table"
         ? { title: "Insert table", description: "Build comparisons, metrics, roadmaps, and summaries as normal Markdown tables." }
         : activePanel === "command"
@@ -1115,9 +1339,9 @@ export function ProjectReadmeEditor({
                     : activePanel === "reference"
                         ? { title: "Insert project mention", description: "Search exact project records and insert compact inline mentions." }
                         : activePanel === "assets"
-                            ? { title: "Insert image", description: "Upload managed README media and place it at your cursor." }
+                            ? { title: "Insert image", description: "Upload managed document media and place it at your cursor." }
                             : activePanel === "quality"
-                                ? { title: "README quality", description: "Review missing guidance, media issues, unsafe links, and publish blockers." }
+                                ? { title: "Doc quality", description: "Review missing guidance, media issues, unsafe links, and publish blockers." }
                                 : activePanel === "history"
                                     ? { title: "Version history", description: "Restore, publish, delete versions, or discard the current draft." }
                                     : null;
@@ -1125,48 +1349,48 @@ export function ProjectReadmeEditor({
     const overlay = (
         <>
             <div className={activePanel === "style" ? "block" : "hidden"}>
-                <ProjectReadmeStyleBuilder projectName={project.title} onInsert={insertAtCursor} onClose={closePanel} />
+                <ProjectDocStyleBuilder projectName={project.title} onInsert={insertAtCursor} onClose={closePanel} />
             </div>
             <div className={activePanel === "table" ? "block" : "hidden"}>
-                <ProjectReadmeTableBuilder onInsert={insertAtCursor} onClose={closePanel} />
+                <ProjectDocTableBuilder onInsert={insertAtCursor} onClose={closePanel} />
             </div>
             {activePanel === "command" && (
                 <div className="block">
-                    <ProjectReadmeCommandBuilder selectedMarkdown={selectedMarkdown} onInsert={insertAtCursor} onClose={closePanel} />
+                    <ProjectDocCommandBuilder selectedMarkdown={selectedMarkdown} onInsert={insertAtCursor} onClose={closePanel} />
                 </div>
             )}
             {activePanel === "callout" && (
                 <div className="block">
-                    <ProjectReadmeCalloutBuilder onInsert={insertAtCursor} onClose={closePanel} />
+                    <ProjectDocCalloutBuilder onInsert={insertAtCursor} onClose={closePanel} />
                 </div>
             )}
             {activePanel === "link" && (
                 <div className="block">
-                    <ProjectReadmeLinkBuilder onInsert={insertAtCursor} onClose={closePanel} />
+                    <ProjectDocLinkBuilder onInsert={insertAtCursor} onClose={closePanel} />
                 </div>
             )}
             {activePanel === "reference" && (
                 <div className="block">
-                    <ProjectReadmeReferencePicker projectId={project.id} initialKind={referenceKindHint ?? undefined} onInsert={insertAtCursor} onClose={closePanel} />
+                    <ProjectDocReferencePicker projectId={project.id} initialKind={referenceKindHint ?? undefined} onInsert={insertAtCursor} onClose={closePanel} />
                 </div>
             )}
             {activePanel === "assets" && (
                 <div className="block">
-                    <ProjectReadmeAssetManager projectId={project.id} projectVisibility={project.visibility} selectedMarkdown={selectedMarkdown} onInserted={(markdown) => {
+                    <ProjectDocAssetManager projectId={project.id} projectVisibility={project.visibility} selectedMarkdown={selectedMarkdown} onInserted={(markdown) => {
                         insertAtCursor(markdown);
                         closePanel();
                     }} />
                 </div>
             )}
             <div className={activePanel === "quality" ? "block" : "hidden"}>
-                <ProjectReadmeQualityPanel
+                <ProjectDocQualityPanel
                     report={qualityReport}
                     onInsertFix={insertAtCursor}
                     onJumpToSection={handleQualityJumpToSection}
                 />
             </div>
             <div className={activePanel === "history" ? "block" : "hidden"}>
-                <ProjectReadmeHistory
+                <ProjectDocHistory
                     versions={versionsQuery.data ?? []}
                     loading={versionsQuery.isLoading}
                     currentVersionId={draft.publishedVersion?.id ?? null}
@@ -1191,7 +1415,7 @@ export function ProjectReadmeEditor({
             data-readme-layout-owned-workspace="true"
             data-readme-route-height-measured="true"
         >
-            <ProjectReadmeInsertCommandCenter
+            <ProjectDocInsertCommandCenter
                 open={moreOpen}
                 activePanel={activePanel}
                 panelTitle={panelCopy?.title ?? ""}
@@ -1201,9 +1425,9 @@ export function ProjectReadmeEditor({
                 projectName={project.title}
             >
                 {overlay}
-            </ProjectReadmeInsertCommandCenter>
+            </ProjectDocInsertCommandCenter>
 
-            <ProjectReadmePublishModal
+            <ProjectDocPublishModal
                 projectId={project.id}
                 open={publishModalOpen}
                 onOpenChange={setPublishModalOpen}
@@ -1213,7 +1437,7 @@ export function ProjectReadmeEditor({
             />
 
             {conflict && (
-                <ProjectReadmeConflictResolver
+                <ProjectDocConflictResolver
                     localContent={content}
                     serverContent={conflict.serverDraftContent}
                     onKeepLocal={keepLocalDraft}
@@ -1233,7 +1457,7 @@ export function ProjectReadmeEditor({
                     <div className="flex min-w-0 shrink-0 items-center gap-4">
                         <button
                             type="button"
-                            onClick={onExit}
+                            onClick={handleBackClick}
                             className="inline-flex h-8 items-center gap-2 rounded-full px-2 text-sm font-medium text-zinc-600 transition hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
                             title="Go back"
                         >
@@ -1242,51 +1466,17 @@ export function ProjectReadmeEditor({
                         </button>
                         <div className="hidden sm:block h-4 w-px bg-zinc-200 dark:bg-zinc-800" />
                         <div className="flex items-center gap-3 min-w-0">
-                            <p className="truncate text-sm font-semibold text-zinc-950 dark:text-zinc-50">README.md</p>
-                            {draft.linkedNode && (
-                                <span className="inline-flex items-center gap-1 rounded-full border border-green-600/30 bg-green-500/15 px-2 py-0.5 text-[10px] font-medium text-green-700 dark:border-green-500/20 dark:bg-green-500/20 dark:text-green-400">
-                                    <Link className="h-3 w-3" />
-                                    Powered by {draft.linkedNode.name}
-                                </span>
+                            {draft.linkedNode ? (
+                                <div className="flex items-center gap-1.5 text-xs sm:text-sm font-medium text-zinc-500 dark:text-zinc-400">
+                                    <Link className="h-3.5 w-3.5 text-zinc-400 dark:text-zinc-500" />
+                                    <span>Linked by file: <span className="font-semibold text-zinc-900 dark:text-zinc-100">{draft.linkedNode.name}</span></span>
+                                </div>
+                            ) : (
+                                <p className="truncate text-sm font-semibold text-zinc-950 dark:text-zinc-50">
+                                    {docSlug === "readme" ? "README.md" : docSlug}
+                                </p>
                             )}
                             
-                            {/* Unified Sleek Status Indicator */}
-                            {(() => {
-                                const unifiedStatus = (() => {
-                                    if (roomFull) {
-                                        return { label: "Room Full", color: "bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.6)]", textColor: "text-rose-600 dark:text-rose-400" };
-                                    }
-                                    if (saveState === "conflict") {
-                                        return { label: "Conflict", color: "bg-rose-500 shadow-[0_0_8px_rgba(239,68,68,0.6)]", textColor: "text-rose-600 dark:text-rose-400" };
-                                    }
-                                    if (saveState === "saving" || saving || isPending) {
-                                        return { label: "Saving...", color: "bg-amber-500 animate-pulse", textColor: "text-amber-600 dark:text-amber-400" };
-                                    }
-                                    if (saveState === "dirty") {
-                                        return { label: "Unsaved", color: "bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.6)]", textColor: "text-blue-600 dark:text-blue-400" };
-                                    }
-                                    if (yjsStatus === "connected") {
-                                        return { label: "Live", color: "bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)]", textColor: "text-emerald-600 dark:text-emerald-400" };
-                                    }
-                                    if (yjsStatus === "connecting") {
-                                        return { label: "Connecting...", color: "bg-amber-500 animate-pulse", textColor: "text-amber-600 dark:text-amber-400" };
-                                    }
-                                    if (yjsStatus === "disconnected") {
-                                        return { label: "Disconnected", color: "bg-rose-500", textColor: "text-rose-600 dark:text-rose-400" };
-                                    }
-                                    return { label: formatSavedAt(lastSavedAt, nowTick), color: "bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.4)]", textColor: "text-emerald-600 dark:text-emerald-400" };
-                                })();
-
-                                return (
-                                    <div className="flex items-center gap-2 select-none border-l border-zinc-200 pl-3 dark:border-zinc-800">
-                                        <span className={cn("h-1.5 w-1.5 rounded-full", unifiedStatus.color)} />
-                                        <span className={cn("text-[11px] font-semibold uppercase tracking-wider", unifiedStatus.textColor)}>
-                                            {unifiedStatus.label}
-                                        </span>
-                                    </div>
-                                );
-                            })()}
-
                             <button 
                                 type="button" 
                                 className="hidden md:inline-flex text-zinc-400 hover:text-zinc-600 dark:text-zinc-600 dark:hover:text-zinc-400 transition" 
@@ -1294,12 +1484,6 @@ export function ProjectReadmeEditor({
                             >
                                 <Keyboard className="h-4 w-4" />
                             </button>
-
-                            {localNotice ? (
-                                <span className="hidden lg:inline max-w-52 truncate text-xs text-zinc-400" role="status" aria-live="polite">
-                                    · {localNotice}
-                                </span>
-                            ) : null}
                         </div>
                     </div>
                     <div className="flex min-w-0 items-center gap-4 overflow-x-auto lg:justify-center" data-readme-quick-insert-toolbar="true">
@@ -1318,7 +1502,7 @@ export function ProjectReadmeEditor({
                                 type="button"
                                 onClick={() => handleSetEditorMode("visual")}
                                 disabled={!visualEditorAvailable}
-                                title={visualEditorAvailable ? "Visual editor" : "Visual editor requires README collaboration to be configured"}
+                                title={visualEditorAvailable ? "Visual editor" : "Visual editor requires document collaboration to be configured"}
                                 className={cn(
                                     "px-3 py-1 rounded-md text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50",
                                     effectiveEditorMode === "visual" ? "bg-white shadow-sm text-blue-600 dark:bg-zinc-800 dark:text-blue-400" : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
@@ -1362,7 +1546,7 @@ export function ProjectReadmeEditor({
                             <Eye className="h-4 w-4" />
                             <span className="hidden md:inline">Follow</span>
                         </button>
-                        <ProjectReadmeMoreMenu
+                        <ProjectDocMoreMenu
                             open={moreOpen}
                             onOpenChange={handleInsertOpenChange}
                             onOpenPanel={openInsertPanel}
@@ -1384,7 +1568,7 @@ export function ProjectReadmeEditor({
                             onClick={handlePublishClick}
                             disabled={publishing}
                             className="inline-flex h-9 min-w-[112px] shrink-0 items-center justify-center gap-2 rounded-full bg-zinc-900 px-5 text-sm font-semibold text-white transition hover:bg-zinc-800 disabled:opacity-60 dark:bg-white dark:text-zinc-950 dark:hover:bg-zinc-200"
-                            title="Publish README"
+                            title="Publish Document"
                         >
                             {publishing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                             <span>Publish</span>
@@ -1393,7 +1577,7 @@ export function ProjectReadmeEditor({
                 </div>
 
                 {/* Collaboration Room Limit Alert Banner */}
-                {roomFull && (
+                {roomFull && !pendingPromotionActive && (
                     <div className="z-20 flex items-center justify-between gap-3 bg-rose-50 px-6 py-3 text-xs font-medium text-rose-700 border-b border-rose-100 dark:bg-rose-950/20 dark:text-rose-300 dark:border-rose-900/30 animate-in slide-in-from-top duration-300">
                         <div className="flex items-center gap-2">
                             <ShieldAlert className="h-4 w-4 shrink-0 text-rose-500" />
@@ -1402,34 +1586,97 @@ export function ProjectReadmeEditor({
                     </div>
                 )}
 
+                {/* Collaboration Promotion Alert Banner */}
+                {pendingPromotionActive && (
+                    <div className="z-20 flex items-center justify-between gap-3 bg-blue-50 px-6 py-3 text-xs font-medium text-blue-700 border-b border-blue-100 dark:bg-blue-950/20 dark:text-blue-300 dark:border-blue-900/30 animate-in slide-in-from-top duration-300">
+                        <div className="flex items-center gap-2">
+                            <ShieldAlert className="h-4 w-4 shrink-0 text-blue-500 animate-pulse" />
+                            <span>An editing slot has opened up! You have {promotionCountdown} seconds to claim your editor slot.</span>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={handleAcceptPromotion}
+                            className="inline-flex h-7 items-center justify-center rounded-full bg-blue-600 px-4 text-xs font-semibold text-white transition hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-400"
+                        >
+                            Accept Promotion
+                        </button>
+                    </div>
+                )}
+
 
 
                 <div className="grid min-h-0 min-w-0 flex-1 lg:grid-cols-2" data-readme-split-editor="true" data-readme-equal-split="50-50" data-readme-parallel-sync="scroll-and-cursor-heading" data-readme-split-fills-remaining-viewport="true">
-                    <section className="flex min-h-0 min-w-0 flex-col border-b border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950 lg:border-b-0 lg:border-r" aria-label="README Markdown editor">
+                    <section className="flex min-h-0 min-w-0 flex-col border-b border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950 lg:border-b-0 lg:border-r" aria-label="Document Markdown editor">
                         <div className="flex h-11 shrink-0 items-center justify-between border-b border-zinc-200 px-4 dark:border-zinc-800" data-readme-write-pane-title="true">
-                            <p className="truncate text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Write</p>
+                            <div className="flex items-center gap-3 min-w-0">
+                                <p className="truncate text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Write</p>
+
+                                {/* Unified Sleek Status Indicator */}
+                                {(() => {
+                                    const unifiedStatus = (() => {
+                                        if (roomFull) {
+                                            return { label: "Room Full", color: "bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.6)]", textColor: "text-rose-600 dark:text-rose-400" };
+                                        }
+                                        if (saveState === "conflict") {
+                                            return { label: "Conflict", color: "bg-rose-500 shadow-[0_0_8px_rgba(239,68,68,0.6)]", textColor: "text-rose-600 dark:text-rose-400" };
+                                        }
+                                        if (saveState === "saving" || saving || isPending) {
+                                            return { label: "Saving...", color: "bg-amber-500 animate-pulse", textColor: "text-amber-600 dark:text-amber-400" };
+                                        }
+                                        if (saveState === "dirty") {
+                                            return { label: "Unsaved", color: "bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.6)]", textColor: "text-blue-600 dark:text-blue-400" };
+                                        }
+                                        if (yjsStatus === "connected") {
+                                            return { label: "Live", color: "bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)]", textColor: "text-emerald-600 dark:text-emerald-400" };
+                                        }
+                                        if (yjsStatus === "connecting") {
+                                            return { label: "Connecting...", color: "bg-amber-500 animate-pulse", textColor: "text-amber-600 dark:text-amber-400" };
+                                        }
+                                        if (yjsStatus === "disconnected") {
+                                            return { label: "Disconnected", color: "bg-rose-500", textColor: "text-rose-600 dark:text-rose-400" };
+                                        }
+                                        return { label: formatSavedAt(lastSavedAt, nowTick), color: "bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.4)]", textColor: "text-emerald-600 dark:text-emerald-400" };
+                                    })();
+
+                                    return (
+                                        <div className="flex items-center gap-2 select-none border-l border-zinc-200 pl-3 dark:border-zinc-800">
+                                            <span className={cn("h-1.5 w-1.5 rounded-full", unifiedStatus.color)} />
+                                            <span className={cn("text-[11px] font-semibold uppercase tracking-wider", unifiedStatus.textColor)}>
+                                                {unifiedStatus.label}
+                                            </span>
+                                        </div>
+                                    );
+                                })()}
+
+                                {localNotice ? (
+                                    <span className="hidden sm:inline max-w-52 truncate text-xs text-zinc-400" role="status" aria-live="polite">
+                                        · {localNotice}
+                                    </span>
+                                ) : null}
+                            </div>
                             <span className="text-xs text-zinc-500">Markdown</span>
                         </div>
                         <div className="min-h-0 flex-1 overflow-hidden" data-readme-editor-code-surface="true" data-readme-bottom-gap-guard="true">
                             {effectiveEditorMode === "visual" ? (
                                 provider ? (
-                                    <ProjectReadmeWysiwygEditor
+                                    <ProjectDocWysiwygEditor
                                         ydoc={ydoc}
                                         provider={provider}
                                         synced={synced}
                                         initialContent={content}
                                         currentUserName={currentUserName}
                                         onContentChange={handleVisualContentChange}
+                                        readOnly={roomFull}
                                     />
                                 ) : (
                                     <EditorSkeleton />
                                 )
                             ) : (
                                 <CodeEditor
-                                    filename="README.md"
+                                    filename={normalizedDocSlug === "readme" ? "README.md" : `${normalizedDocSlug.toUpperCase()}.md`}
                                     value={content}
                                     onChange={(nextValue) => {
-                                        if (!provider) {
+                                        if (!provider && !roomFull) {
                                             setContent(nextValue, { isKeystroke: true });
                                         }
                                     }}
@@ -1442,12 +1689,13 @@ export function ProjectReadmeEditor({
                                     isCollaborative={Boolean(provider)}
                                     ydoc={ydoc}
                                     provider={provider}
+                                    readOnly={roomFull}
                                 />
                             )}
                         </div>
                     </section>
 
-                    <aside className="flex min-h-0 min-w-0 flex-col bg-zinc-50/40 dark:bg-zinc-950" aria-label="README Live Review" data-readme-live-review-pane="true">
+                    <aside className="flex min-h-0 min-w-0 flex-col bg-zinc-50/40 dark:bg-zinc-950" aria-label="Document Live Review" data-readme-live-review-pane="true">
                         <div className="flex h-11 shrink-0 items-center justify-between gap-3 border-b border-zinc-200 px-4 dark:border-zinc-800">
                             <p className="truncate text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500" data-readme-live-review-title="true">Live Review</p>
                             <div className="flex shrink-0 items-center gap-1 rounded-full border border-zinc-200 bg-white p-0.5 dark:border-zinc-800 dark:bg-zinc-900/70" data-readme-live-review-size-controls="true">
@@ -1481,7 +1729,7 @@ export function ProjectReadmeEditor({
                             data-readme-bottom-gap-guard="true"
                         >
                             <div className={cn("mx-auto min-h-full w-full transition-[max-width]", LIVE_REVIEW_SIZE_OPTIONS.find((option) => option.id === liveReviewSize)?.className ?? "max-w-none")}>
-                                <ProjectReadmeRenderer
+                                <ProjectDocRenderer
                                     content={previewContent}
                                     project={project}
                                     allowExternalImages={draft.settings.externalImages}
@@ -1493,12 +1741,32 @@ export function ProjectReadmeEditor({
                                     onRequestSourcePosition={handlePreviewSourcePosition}
                                     previewByKey={emptyPreviewByKey}
                                     previewsLoading={false}
+                                    docSlug={normalizedDocSlug}
                                 />
                             </div>
                         </div>
                     </aside>
                 </div>
             </div>
+
+            <Dialog open={showDiscardConfirm} onOpenChange={setShowDiscardConfirm}>
+                <DialogContent className="sm:max-w-md bg-zinc-50 dark:bg-zinc-950 border-zinc-200 dark:border-zinc-800 rounded-2xl">
+                    <DialogHeader>
+                        <DialogTitle>Discard unsaved changes?</DialogTitle>
+                        <DialogDescription>
+                            You have unsaved changes in your document. If you leave now, these changes will be discarded.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <DialogFooter className="flex justify-end gap-2 mt-4">
+                        <Button type="button" variant="ghost" onClick={() => setShowDiscardConfirm(false)} disabled={discarding}>
+                            Keep Editing
+                        </Button>
+                        <Button type="button" variant="danger" onClick={handleDiscardConfirm} disabled={discarding}>
+                            Discard
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
         </div>
     );
 }
