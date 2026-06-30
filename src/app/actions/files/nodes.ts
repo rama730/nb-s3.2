@@ -28,9 +28,74 @@ import {
 import { getTaskLinkCounts } from "./links";
 
 export type GetProjectNodesResult = {
-    nodes: ProjectNode[];
+    nodes: ProjectNodeWithAttribution[];
     nextCursor: string | null;
 };
+
+export type ProjectNodeWithAttribution = ProjectNode & {
+    updatedById?: string | null;
+    updatedByName?: string | null;
+    updatedByUsername?: string | null;
+    updatedByAvatarUrl?: string | null;
+    versionUpdatedAt?: Date | string | null;
+};
+
+type LatestVersionAttributionRow = {
+    node_id: string;
+    uploaded_by: string | null;
+    uploaded_at: Date | string | null;
+    full_name: string | null;
+    username: string | null;
+    avatar_url: string | null;
+};
+
+const VERSION_ATTRIBUTION_BATCH_SIZE = 1_000;
+
+async function enrichNodesWithLatestVersionAttribution(
+    nodes: ProjectNode[],
+): Promise<ProjectNodeWithAttribution[]> {
+    const fileIds = nodes
+        .filter((node) => node.type === "file")
+        .map((node) => node.id);
+
+    if (fileIds.length === 0) return nodes;
+
+    const latestByNodeId = new Map<string, LatestVersionAttributionRow>();
+    for (let i = 0; i < fileIds.length; i += VERSION_ATTRIBUTION_BATCH_SIZE) {
+        const chunk = fileIds.slice(i, i + VERSION_ATTRIBUTION_BATCH_SIZE);
+        const rows = await db.execute<LatestVersionAttributionRow>(sql`
+            SELECT DISTINCT ON (fv.node_id)
+                fv.node_id,
+                fv.uploaded_by,
+                fv.uploaded_at,
+                p.full_name,
+                p.username,
+                p.avatar_url
+            FROM file_versions fv
+            LEFT JOIN profiles p ON p.id = fv.uploaded_by
+            WHERE fv.node_id IN (${sql.join(chunk.map((id) => sql`${id}`), sql`, `)})
+            ORDER BY fv.node_id, fv.version DESC
+        `);
+
+        for (const row of Array.from(rows)) {
+            latestByNodeId.set(row.node_id, row);
+        }
+    }
+
+    return nodes.map((node) => {
+        if (node.type !== "file") return node;
+        const latest = latestByNodeId.get(node.id);
+        if (!latest) return node;
+        return {
+            ...node,
+            updatedById: latest.uploaded_by,
+            updatedByName: latest.full_name,
+            updatedByUsername: latest.username,
+            updatedByAvatarUrl: latest.avatar_url,
+            versionUpdatedAt: latest.uploaded_at ?? node.updatedAt,
+        };
+    });
+}
 
 export async function getProjectNodes(
     projectId: string,
@@ -38,7 +103,7 @@ export async function getProjectNodes(
     query?: string,
     limit: number = 100,
     cursor?: string // we'll use base64 encoded "{type}:{name}:{id}" as cursor for stable sort
-): Promise<GetProjectNodesResult | ProjectNode[]> {
+): Promise<GetProjectNodesResult | ProjectNodeWithAttribution[]> {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
 
@@ -48,7 +113,7 @@ export async function getProjectNodes(
         return { nodes: [], nextCursor: null };
     }
 
-    const access = await assertProjectFileReadAccess(projectId, user?.id ?? null);
+    await assertProjectFileReadAccess(projectId, user?.id ?? null);
 
     // --- Search Mode (Flat) ---
     const normalizedQuery = normalizeSearchQuery(query);
@@ -65,7 +130,7 @@ export async function getProjectNodes(
             orderBy: (nodes, { asc }) => [asc(nodes.type), asc(nodes.name)],
             limit: 100 // Hard limit for search for now
         });
-        return nodes; // Return plain array for search (backward compat for now)
+        return await enrichNodesWithLatestVersionAttribution(nodes); // Return plain array for search (backward compat for now)
     }
 
     // --- Directory Listing Mode (Cursor Paginated) ---
@@ -80,7 +145,7 @@ export async function getProjectNodes(
         try {
             const decoded = Buffer.from(cursor, 'base64').toString('utf-8');
             const [cType, cName, cId] = decoded.split(':::'); // use ::: separator
-            if (cType && cName && cId) {
+            if ((cType === "file" || cType === "folder") && cName && cId && UUID_RE.test(cId)) {
                 // We want: (type > cType) OR (type = cType AND name > cName) OR (type = cType AND name = cName AND id > cId)
                 // Drizzle DSL:
                 whereConditions.push(
@@ -88,9 +153,9 @@ export async function getProjectNodes(
                         (${projectNodes.type} = ${cType} AND ${projectNodes.name} > ${cName}) OR
                         (${projectNodes.type} = ${cType} AND ${projectNodes.name} = ${cName} AND ${projectNodes.id} > ${cId}))`
                 );
-            }
+            } else throw new Error("Invalid project nodes cursor");
         } catch {
-            // ignore invalid cursor
+            throw new Error("Invalid project nodes cursor");
         }
     }
 
@@ -112,42 +177,45 @@ export async function getProjectNodes(
         }
     }
 
-    // Auto-create default root folder if project is empty at root
-    // IMPORTANT: Do NOT create system roots for imported projects (GitHub/Upload),
-    // otherwise you end up with a confusing extra folder beside the imported tree.
+    return { nodes: await enrichNodesWithLatestVersionAttribution(nodes), nextCursor };
+}
+
+/**
+ * Explicit, idempotent workspace provisioning command.
+ * Reads remain side-effect free; callers invoke this only when an editable,
+ * scratch-style project needs its initial system root.
+ */
+export async function initializeProjectWorkspaceRoot(projectId: string) {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error("Unauthorized");
+
+    const access = await assertProjectFileReadAccess(projectId, user.id);
     const importType = access.project.importSource?.type;
-    const isScratchLike = !importType || importType === 'scratch';
-    const isReady = access.project.syncStatus === 'ready';
-    const canCreateWorkspaceRoot = !!user && (
-        access.project.ownerId === user.id ||
-        ("member" in access && !!access.member && canProjectMemberUploadFiles({
+    const isScratchLike = !importType || importType === "scratch";
+    const isReady = access.project.syncStatus === "ready";
+    const canCreateWorkspaceRoot =
+        access.project.ownerId === user.id
+        || ("member" in access && !!access.member && canProjectMemberUploadFiles({
             role: access.member.role,
             fileUploadEnabled: access.member.fileUploadEnabled,
-        }))
-    );
+        }));
 
-    if (canCreateWorkspaceRoot && !parentId && nodes.length === 0 && !cursor && isScratchLike && isReady) {
-        try {
-            // Race-safe: only one request per project can create/read the system root in this transaction.
-            const [project] = await db
-                .select({ title: projects.title })
-                .from(projects)
-                .where(eq(projects.id, projectId))
-                .limit(1);
-            const rootNode = await ensureSystemRootFolder(projectId, user.id, project?.title || "Project");
-            if (rootNode) return { nodes: [rootNode], nextCursor: null };
-        } catch (err) {
-            console.error("Failed to auto-create root folder", err);
-        }
-    }
+    if (!canCreateWorkspaceRoot || !isScratchLike || !isReady) return null;
 
-    return { nodes, nextCursor };
+    const [project] = await db
+        .select({ title: projects.title })
+        .from(projects)
+        .where(eq(projects.id, projectId))
+        .limit(1);
+
+    return ensureSystemRootFolder(projectId, user.id, project?.title || "Project");
 }
 
 export async function getProjectTreeFlat(
     projectId: string,
     options?: { maxNodes?: number },
-): Promise<{ nodes: ProjectNode[], isComplete: boolean }> {
+): Promise<{ nodes: ProjectNodeWithAttribution[], isComplete: boolean }> {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
 
@@ -178,7 +246,7 @@ export async function getProjectTreeFlat(
             return { nodes: [], isComplete: false };
         }
 
-        return { nodes, isComplete: true };
+        return { nodes: await enrichNodesWithLatestVersionAttribution(nodes), isComplete: true };
     });
 }
 
@@ -188,7 +256,7 @@ export async function getProjectNodesSafe(
     query?: string,
     limit: number = 100,
     cursor?: string
-): Promise<FilesActionResult<GetProjectNodesResult | ProjectNode[]>> {
+): Promise<FilesActionResult<GetProjectNodesResult | ProjectNodeWithAttribution[]>> {
     try {
         const data = await getProjectNodes(projectId, parentId, query, limit, cursor);
         return { success: true, data };
@@ -260,13 +328,13 @@ export async function getProjectBatchNodes(projectId: string, parentIds: (string
                             fetchedRows: out.length,
                             cap: MAX_BATCH_FETCH_TOTAL,
                         });
-                        return out;
+                        return await enrichNodesWithLatestVersionAttribution(out);
                     }
                 }
             }
         }
 
-        return out;
+        return await enrichNodesWithLatestVersionAttribution(out);
     });
 }
 
@@ -281,9 +349,10 @@ export async function getNodesByIds(projectId: string, nodeIds: string[]) {
 
     return await runInFlightDeduped(`files:nodes-by-ids:${projectId}:${idsKey}:${actorId ?? "anon"}`, async () => {
         await assertProjectFileReadAccess(projectId, actorId);
-        return await db.query.projectNodes.findMany({
-            where: and(eq(projectNodes.projectId, projectId), inArray(projectNodes.id, unique)),
+        const nodes = await db.query.projectNodes.findMany({
+            where: and(eq(projectNodes.projectId, projectId), isNull(projectNodes.deletedAt), inArray(projectNodes.id, unique)),
         });
+        return await enrichNodesWithLatestVersionAttribution(nodes);
     });
 }
 
@@ -291,7 +360,7 @@ export async function getNodeMetadataBatch(
     projectId: string,
     nodeIds: string[],
     options?: { includeBreadcrumbs?: boolean }
-): Promise<FilesActionResult<{ nodes: ProjectNode[]; breadcrumbsByNodeId?: Record<string, Array<{ id: string; name: string }>> }>> {
+): Promise<FilesActionResult<{ nodes: ProjectNodeWithAttribution[]; breadcrumbsByNodeId?: Record<string, Array<{ id: string; name: string }>> }>> {
     try {
         const nodes = await getNodesByIds(projectId, nodeIds);
         if (!options?.includeBreadcrumbs) {
@@ -485,7 +554,7 @@ export async function getProjectNodesWithCounts(
     query?: string,
     limit: number = 100,
     cursor?: string
-): Promise<FilesActionResult<{ nodes: ProjectNode[]; nextCursor: string | null; taskLinkCounts: Record<string, number> }>> {
+): Promise<FilesActionResult<{ nodes: ProjectNodeWithAttribution[]; nextCursor: string | null; taskLinkCounts: Record<string, number> }>> {
     try {
         const result = await getProjectNodes(projectId, parentId, query, limit, cursor);
         const normalized = Array.isArray(result) ? { nodes: result, nextCursor: null } : result;
@@ -508,7 +577,7 @@ export async function getProjectNodesWithCounts(
     }
 }
 
-export async function getProjectRecentNodes(projectId: string, limit: number = 5): Promise<ProjectNode[]> {
+export async function getProjectRecentNodes(projectId: string, limit: number = 5): Promise<ProjectNodeWithAttribution[]> {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) throw new Error("Unauthorized");
@@ -527,6 +596,6 @@ export async function getProjectRecentNodes(projectId: string, limit: number = 5
             limit: safeLimit,
         });
 
-        return nodes;
+        return await enrichNodesWithLatestVersionAttribution(nodes);
     });
 }
