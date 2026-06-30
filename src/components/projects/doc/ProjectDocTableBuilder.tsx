@@ -85,7 +85,7 @@ const TABLE_PRESETS: Array<{
             alignments: ["left", "left", "left"],
             rows: [
                 ["Sprint 1", "Core workflow", "Completed"],
-                ["Sprint 2", "README polish", "In progress"],
+                ["Sprint 2", "Doc polish", "In progress"],
             ],
         },
     },
@@ -143,7 +143,7 @@ function buildMarkdownTable(draft: TableDraft) {
     ].join("\n");
 }
 
-export function ProjectReadmeTableBuilder({
+export function ProjectDocTableBuilder({
     onInsert,
     onClose,
 }: {
@@ -255,7 +255,7 @@ export function ProjectReadmeTableBuilder({
                     <div>
                         <p className="text-sm font-semibold text-zinc-950 dark:text-zinc-50">Choose a table type</p>
                         <p className="mt-1 text-xs leading-5 text-zinc-500">
-                            Start with a structure that matches the README section you are writing.
+                            Start with a structure that matches the Doc section you are writing.
                         </p>
                     </div>
 
@@ -401,7 +401,7 @@ export function ProjectReadmeTableBuilder({
                         <div>
                             <p className="text-sm font-semibold text-zinc-950 dark:text-zinc-50">Review Markdown</p>
                             <p className="mt-1 text-xs leading-5 text-zinc-500">
-                                This is the exact Markdown that will be inserted into the README.
+                                This is the exact Markdown that will be inserted into the Doc.
                             </p>
                         </div>
                         <button
