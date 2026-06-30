@@ -62,7 +62,8 @@ export type ProjectMemberCapability =
     | "assign_tasks"
     | "create_tasks"
     | "upload_files"
-    | "comment";
+    | "comment"
+    | "merge_task";
 
 export type ProjectMemberEligibility = "mention" | "assign" | "review";
 
@@ -163,6 +164,7 @@ export const PROJECT_MEMBER_ROLE_CAPABILITIES: Record<ProjectMemberRole, Project
         "create_tasks",
         "upload_files",
         "comment",
+        "merge_task",
     ],
     admin: [
         "manage_public_tabs",
@@ -176,6 +178,7 @@ export const PROJECT_MEMBER_ROLE_CAPABILITIES: Record<ProjectMemberRole, Project
         "create_tasks",
         "upload_files",
         "comment",
+        "merge_task",
     ],
     member: ["assign_tasks", "create_tasks", "upload_files", "comment"],
     viewer: ["comment"],
@@ -193,7 +196,7 @@ export const DEFAULT_PROJECT_PUBLIC_TAB_VISIBILITY: ProjectPublicTabVisibility =
 
 export const PROJECT_PUBLIC_TAB_LABELS: Record<ProjectPublicTabId, string> = {
     dashboard: "Dashboard",
-    readme: "README",
+    readme: "Doc",
     updates: "Updates",
     files: "Files",
     sprints: "Sprints",
@@ -231,6 +234,10 @@ export function canProjectMemberUploadFiles(input: { role?: unknown; fileUploadE
     if (role === "viewer") return false;
     if (role !== "member") return false;
     return input.fileUploadEnabled !== false;
+}
+
+export function canProjectMemberMergeTasks(role: unknown) {
+    return projectMemberCan(role, "merge_task");
 }
 
 export function normalizeProjectPublicTabVisibility(value: unknown): ProjectPublicTabVisibility {
@@ -436,7 +443,7 @@ export const PROJECT_SETTINGS_SECTIONS: ProjectSettingsSectionDefinition[] = [
     },
     {
         id: "readme",
-        label: "README",
+        label: "Doc",
         description: "Documentation publishing rules, media policy, and smart blocks.",
         available: true,
     },
@@ -493,13 +500,13 @@ export function buildProjectAccessPolicy(project: { visibility?: unknown } | nul
             "Project cards, Hub discovery, search, and public profile references can show the project",
             "Shared links can show the project title, description, and project image preview",
             "Followers may receive public project updates when an update creates attention",
-            "README, Updates, Files, and Applications inherit their own public/member-safe access checks",
+            "Doc, Updates, Files, and Applications inherit their own public/member-safe access checks",
         ],
         private: [
             "Only the owner and approved project members can open project detail surfaces",
             "Hub discovery, public search, public profile cards, and anonymous metadata hide the project",
             "Shared links resolve only for members; outsiders get a safe unavailable response",
-            "Files, tasks, README, Updates, applications, and notifications use member-only access",
+            "Files, tasks, Doc, Updates, applications, and notifications use member-only access",
         ],
     };
 
@@ -563,7 +570,7 @@ export function buildProjectAccessImpact(input: ProjectAccessImpactInput | null 
             "Return safe unavailable metadata for anonymous shared links.",
             "Keep owner and approved member access unchanged.",
             "Keep pending applicant context limited to their own application or conversation.",
-            "Keep files, tasks, README, Updates, and notifications behind member-safe access checks.",
+            "Keep files, tasks, Doc, Updates, and notifications behind member-safe access checks.",
         ]
         : [
             "Restore Hub discovery, public search, and public profile project cards.",
