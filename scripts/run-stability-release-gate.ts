@@ -21,10 +21,13 @@ function main() {
         { label: 'typecheck', command: npmExecutable(), args: ['run', 'typecheck'] },
         { label: 'test:unit', command: npmExecutable(), args: ['run', 'test:unit'] },
         { label: 'check:db:migration-journal', command: npmExecutable(), args: ['run', 'check:db:migration-journal'] },
+        { label: 'check:db:migration-sources', command: npmExecutable(), args: ['run', 'check:db:migration-sources'] },
         { label: 'check:page-contract', command: npmExecutable(), args: ['run', 'check:page-contract'] },
         { label: 'check:force-dynamic-allowlist', command: npmExecutable(), args: ['run', 'check:force-dynamic-allowlist'] },
         { label: 'check:runtime-boundaries', command: npmExecutable(), args: ['run', 'check:runtime-boundaries'] },
         { label: 'check:hub-canonical-contract', command: npmExecutable(), args: ['run', 'check:hub-canonical-contract'] },
+        { label: 'build', command: npmExecutable(), args: ['run', 'build'] },
+        { label: 'check:build-rendering-contract', command: npmExecutable(), args: ['run', 'check:build-rendering-contract'] },
     ]
 
     if (target === 'production') {
