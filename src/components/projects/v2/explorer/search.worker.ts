@@ -58,13 +58,21 @@ self.addEventListener("message", (e: MessageEvent<SearchWorkerRequest>) => {
             // O(1) dedup Set to avoid O(N) includes() inside the loop
             const seen = new Set(orderedIds);
 
-            // 2. Pure O(1) Tri-gram Local Intersection
             const normalizedQuery = query.toLowerCase().replace(/[^a-z0-9]/g, '');
             if (normalizedQuery.length >= 2) {
                 let localMatches: Set<string> | null = null;
 
                 if (queryCache.has(normalizedQuery)) {
                     localMatches = queryCache.get(normalizedQuery)!;
+                } else if (normalizedQuery.length < 3) {
+                    const matched = new Set<string>();
+                    for (const [id, doc] of Object.entries(documentMap)) {
+                        if (doc.name.toLowerCase().replace(/[^a-z0-9]/g, '').includes(normalizedQuery)) {
+                            matched.add(id);
+                        }
+                    }
+                    localMatches = matched;
+                    queryCache.set(normalizedQuery, localMatches);
                 } else {
                     const queryGrams = generateTriGrams(normalizedQuery);
                     for (const gram of queryGrams) {
