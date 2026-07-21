@@ -45,11 +45,6 @@ const SPECIAL_ROUTES: SpecialRouteDescriptor[] = [
     },
     {
         routeClass: 'user_shell',
-        protected: false,
-        matches: (pathname) => /^\/projects\/[^/]+\/sprints\/[^/]+(?:\/|$)/.test(pathname),
-    },
-    {
-        routeClass: 'user_shell',
         protected: true,
         matches: (pathname) => pathname === '/admin/notifications' || pathname.startsWith('/admin/notifications/'),
     },
