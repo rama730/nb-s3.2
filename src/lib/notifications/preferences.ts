@@ -16,7 +16,6 @@ const DEFAULT_QUIET_HOURS: NotificationQuietHours = {
 const DEFAULT_DELIVERY: NotificationDeliveryPreferences = {
     browser: false,
     push: false,
-    emailDigest: true,
 };
 
 function normalizeDelivery(value: unknown): NotificationDeliveryPreferences {
@@ -25,7 +24,6 @@ function normalizeDelivery(value: unknown): NotificationDeliveryPreferences {
     return {
         browser: typeof candidate.browser === "boolean" ? candidate.browser : DEFAULT_DELIVERY.browser,
         push: typeof candidate.push === "boolean" ? candidate.push : DEFAULT_DELIVERY.push,
-        emailDigest: typeof candidate.emailDigest === "boolean" ? candidate.emailDigest : DEFAULT_DELIVERY.emailDigest,
     };
 }
 
@@ -48,14 +46,14 @@ function normalizeQuietHours(value: unknown): NotificationQuietHours {
 }
 
 export const NOTIFICATION_PREFERENCE_CATEGORIES = [
-    "messages",
-    "mentions",
-    "workflows",
-    "projects",
-    "tasks",
-    "applications",
-    "connections",
-] as const satisfies NotificationPreferenceCategory[];
+    { key: "messages", title: "Message bursts", description: "Grouped unread conversation activity instead of one row per message." },
+    { key: "mentions", title: "Mentions", description: "Direct task discussion mentions that need your attention." },
+    { key: "workflows", title: "Workflow requests", description: "Invites, approvals, feedback requests, availability checks, and follow-ups." },
+    { key: "projects", title: "Project activity", description: "Project-level updates that are important but not noisy." },
+    { key: "tasks", title: "Task updates", description: "Assignments and attention states on work tied to you." },
+    { key: "applications", title: "Applications", description: "Incoming applications and decisions on applications you submitted." },
+    { key: "connections", title: "Connections", description: "Incoming and accepted connection requests." },
+] as const satisfies ReadonlyArray<{ key: NotificationPreferenceCategory; title: string; description: string }>;
 
 const NOTIFICATION_MUTE_SCOPE_KINDS = [
     "notification_type",
