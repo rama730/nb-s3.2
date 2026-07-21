@@ -16,15 +16,13 @@ const requiredFiles = [
   "src/components/layout/Sidebar.tsx",
   "src/components/layout/MobileNav.tsx",
   "src/components/hub/HubHeader.tsx",
-  "src/components/chat/ChatPopup.tsx",
-  "src/components/chat/MessageButton.tsx",
-  "src/components/chat/MessageInput.tsx",
+  "src/components/chat/v2/ChatPopupV2.tsx",
+  "src/components/chat/v2/MessageComposerV2.tsx",
+  "src/components/chat/v2/MessagesWorkspaceV2.tsx",
   "src/components/settings/AppearanceSettings.tsx",
   "src/components/projects/dashboard/ProjectLayout.tsx",
-  "src/components/projects/v2/ProjectLayout.tsx",
   "src/components/projects/dashboard/ProjectOverviewCard.tsx",
   "src/components/projects/v2/TasksTab.tsx",
-  "src/components/profile/ProfileHeader.tsx",
   "src/components/profile/v2/ProfileHeader.tsx",
 ];
 
