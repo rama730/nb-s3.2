@@ -5,7 +5,7 @@ import Image from 'next/image';
 import { formatDistanceToNow } from 'date-fns';
 import { ArrowLeft, ArrowRight, Briefcase, Filter, Search, SortAsc } from 'lucide-react';
 import { Virtuoso } from 'react-virtuoso';
-import type { getApplicationsInboxPageV2 } from '@/app/actions/messaging/v2';
+import type { getInboxApplicationsAction } from '@/app/actions/applications';
 import { cn } from '@/lib/utils';
 import { useApplicationsInbox } from '@/hooks/useMessagesV2';
 import { InboxListSkeletonV2 } from './MessagesSurfaceSkeletons';
@@ -16,7 +16,7 @@ interface ApplicationsListV2Props {
 }
 
 type ApplicationsInboxItem = NonNullable<
-    Awaited<ReturnType<typeof getApplicationsInboxPageV2>>['applications']
+    Awaited<ReturnType<typeof getInboxApplicationsAction>>['applications']
 >[number];
 
 function StatusBadge({ status }: { status: string | null | undefined }) {
