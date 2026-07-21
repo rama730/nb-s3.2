@@ -1,16 +1,14 @@
 "use client";
 
-import { logger } from "@/lib/logger";
-import { resolvePresenceWebSocketUrl } from "@/lib/realtime/presence-config";
 import {
-  advancePresenceCircuitState,
-  computePresenceReconnectDelayMs,
-  INITIAL_PRESENCE_CIRCUIT_STATE,
-  isPresenceCircuitOpen,
-  type PresenceCircuitState,
-} from "@/lib/realtime/presence-health";
+  REALTIME_SUBSCRIBE_STATES,
+  type RealtimeChannel,
+} from "@supabase/supabase-js";
+
+import { createClient } from "@/lib/supabase/client";
 import type {
   PresenceClientEvent,
+  PresenceMemberState,
   PresenceRoomRole,
   PresenceRoomType,
   PresenceServerEvent,
@@ -21,135 +19,62 @@ type PresenceListener = (event: PresenceServerEvent) => void;
 type PresenceStatusListener = (status: PresenceStatus) => void;
 type PresenceHealthListener = () => void;
 
-type TokenResponse = {
-  ok?: boolean;
-  error?: string;
-  data?: {
-    token?: string | null;
-    wsUrl?: string | null;
-    disabled?: boolean;
-  };
-};
-
-type PresenceRoomEntry = {
-  roomType: PresenceRoomType;
-  roomId: string;
-  role: PresenceRoomRole;
-  socket: WebSocket | null;
-  listeners: Set<PresenceListener>;
-  statusListeners: Set<PresenceStatusListener>;
-  reconnectAttempts: number;
-  reconnectTimer: ReturnType<typeof setTimeout> | null;
-  heartbeatTimer: ReturnType<typeof setInterval> | null;
-  releaseTimer: ReturnType<typeof setTimeout> | null;
-  connectPromise: Promise<void> | null;
-  tokenRequestController: AbortController | null;
-  pendingEvents: PresenceClientEvent[];
-  latestWsUrl: string | null;
-  authenticated: boolean;
-  status: PresenceStatus;
-  latestStateEvent: Extract<PresenceServerEvent, { type: "presence.state" }> | null;
-};
-
 export type PresenceHealthSnapshot = {
   status: "healthy" | "degraded" | "unavailable";
   degraded: boolean;
   activeRoomCount: number;
   connectedRoomCount: number;
   disconnectedRoomCount: number;
-  circuitOpenUntilMs: number | null;
+  circuitOpenUntilMs: null;
   lastError: string | null;
 };
 
-class PresenceConnectError extends Error {
-  retryable: boolean;
+type PresenceRoomEntry = {
+  roomType: PresenceRoomType;
+  roomId: string;
+  role: PresenceRoomRole;
+  connectionId: string;
+  channel: RealtimeChannel;
+  listeners: Set<PresenceListener>;
+  statusListeners: Set<PresenceStatusListener>;
+  releaseTimer: ReturnType<typeof setTimeout> | null;
+  status: PresenceStatus;
+  latestStateEvent: Extract<PresenceServerEvent, { type: "presence.state" }> | null;
+  lastTrackedUserId: string | null;
+};
 
-  constructor(message: string, retryable: boolean) {
-    super(message);
-    this.name = "PresenceConnectError";
-    this.retryable = retryable;
-  }
-}
+type SupabasePresenceMeta = Partial<PresenceMemberState> & {
+  presence_ref?: string;
+  phx_ref?: string;
+};
+type SupabasePresenceJoinPayload = {
+  key: string;
+  newPresences: SupabasePresenceMeta[];
+};
+type SupabasePresenceLeavePayload = {
+  key: string;
+  leftPresences: SupabasePresenceMeta[];
+};
+type RealtimeSubscribeStatus =
+  (typeof REALTIME_SUBSCRIBE_STATES)[keyof typeof REALTIME_SUBSCRIBE_STATES];
 
-const HEARTBEAT_INTERVAL_MS = 20_000;
 const ENTRY_RELEASE_GRACE_MS = 1_500;
 const presenceEntries = new Map<string, PresenceRoomEntry>();
 const presenceHealthListeners = new Set<PresenceHealthListener>();
-const utf8Decoder = new TextDecoder();
-let presenceCircuitState: PresenceCircuitState = INITIAL_PRESENCE_CIRCUIT_STATE;
-let presenceUnavailableReason: string | null = null;
-let presenceHealthSnapshot: PresenceHealthSnapshot = {
-  status: "healthy",
-  degraded: false,
-  activeRoomCount: 0,
-  connectedRoomCount: 0,
-  disconnectedRoomCount: 0,
-  circuitOpenUntilMs: null,
-  lastError: null,
-};
 
-export function isPresenceTokenRequestRetryable(status: number, message?: string | null) {
-  const normalizedMessage = (message || "").toLowerCase();
-  if (
-    normalizedMessage.includes("not configured")
-    || normalizedMessage.includes("required to issue presence room tokens")
-  ) {
-    return false;
+function createConnectionId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
   }
-
-  return status === 429 || status >= 500;
-}
-
-export function enqueuePendingPresenceEvent(
-  queue: PresenceClientEvent[],
-  event: PresenceClientEvent,
-  limit = 4,
-) {
-  if (event.type === "heartbeat") {
-    return queue;
-  }
-
-  if (event.type === "typing" || event.type === "cursor") {
-    const nextQueue = queue.filter((queuedEvent) => queuedEvent.type !== event.type);
-    nextQueue.push(event);
-    if (nextQueue.length > limit) {
-      nextQueue.splice(0, nextQueue.length - limit);
-    }
-    return nextQueue;
-  }
-
-  // Wave 2 Step 11: delivered/read events carry batched messageIds. If we
-  // have a pending queued event of the same type, merge IDs into it rather
-  // than stacking two separate sends. This keeps the queue compact even when
-  // flushing while the socket is reconnecting.
-  if (event.type === "delivered" || event.type === "read") {
-    const existingIndex = queue.findIndex((queuedEvent) => queuedEvent.type === event.type);
-    if (existingIndex >= 0) {
-      const existing = queue[existingIndex] as typeof event;
-      const merged = {
-        ...existing,
-        messageIds: Array.from(new Set([...existing.messageIds, ...event.messageIds])),
-      };
-      const nextQueue = [...queue];
-      nextQueue[existingIndex] = merged;
-      return nextQueue;
-    }
-    const nextQueue = [...queue, event];
-    if (nextQueue.length > limit) {
-      nextQueue.splice(0, nextQueue.length - limit);
-    }
-    return nextQueue;
-  }
-
-  const nextQueue = [...queue, event];
-  if (nextQueue.length > limit) {
-    nextQueue.splice(0, nextQueue.length - limit);
-  }
-  return nextQueue;
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 function getRoomKey(roomType: PresenceRoomType, roomId: string) {
   return `${roomType}:${roomId}`;
+}
+
+function getRoomTopic(roomType: PresenceRoomType, roomId: string) {
+  return `presence:${roomType}:${roomId}`;
 }
 
 function computePresenceHealthSnapshot(): PresenceHealthSnapshot {
@@ -157,426 +82,207 @@ function computePresenceHealthSnapshot(): PresenceHealthSnapshot {
     (entry) => entry.listeners.size > 0 || entry.statusListeners.size > 0,
   );
   const connectedRoomCount = activeEntries.filter((entry) => entry.status === "connected").length;
-  const disconnectedRoomCount = activeEntries.filter(
-    (entry) => entry.status === "disconnected" || entry.status === "error",
-  ).length;
-  const circuitOpenUntilMs = isPresenceCircuitOpen(presenceCircuitState)
-    ? presenceCircuitState.openUntilMs
-    : null;
-  const lastError = presenceUnavailableReason ?? presenceCircuitState.lastError;
-  const status: PresenceHealthSnapshot["status"] = presenceUnavailableReason
-    ? "unavailable"
-    : (disconnectedRoomCount > 0 || Boolean(circuitOpenUntilMs))
-      ? "degraded"
-      : "healthy";
-
+  const disconnectedRoomCount = activeEntries.filter((entry) => entry.status !== "connected").length;
+  const degraded = activeEntries.length > 0 && disconnectedRoomCount > 0;
   return {
-    status,
-    degraded: status !== "healthy",
+    status: activeEntries.length === 0 || connectedRoomCount > 0 ? "healthy" : "unavailable",
+    degraded,
     activeRoomCount: activeEntries.length,
     connectedRoomCount,
     disconnectedRoomCount,
-    circuitOpenUntilMs,
-    lastError,
+    circuitOpenUntilMs: null,
+    lastError: degraded ? "Supabase Realtime presence channel disconnected" : null,
   };
 }
 
-function emitPresenceHealth() {
+let presenceHealthSnapshot = computePresenceHealthSnapshot();
+
+function emitHealthSnapshot() {
   const nextSnapshot = computePresenceHealthSnapshot();
-  const currentSnapshot = presenceHealthSnapshot;
   if (
-    currentSnapshot.status === nextSnapshot.status
-    && currentSnapshot.degraded === nextSnapshot.degraded
-    && currentSnapshot.activeRoomCount === nextSnapshot.activeRoomCount
-    && currentSnapshot.connectedRoomCount === nextSnapshot.connectedRoomCount
-    && currentSnapshot.disconnectedRoomCount === nextSnapshot.disconnectedRoomCount
-    && currentSnapshot.circuitOpenUntilMs === nextSnapshot.circuitOpenUntilMs
-    && currentSnapshot.lastError === nextSnapshot.lastError
+    nextSnapshot.status === presenceHealthSnapshot.status &&
+    nextSnapshot.degraded === presenceHealthSnapshot.degraded &&
+    nextSnapshot.activeRoomCount === presenceHealthSnapshot.activeRoomCount &&
+    nextSnapshot.connectedRoomCount === presenceHealthSnapshot.connectedRoomCount &&
+    nextSnapshot.disconnectedRoomCount === presenceHealthSnapshot.disconnectedRoomCount &&
+    nextSnapshot.lastError === presenceHealthSnapshot.lastError
   ) {
     return;
   }
 
   presenceHealthSnapshot = nextSnapshot;
   for (const listener of Array.from(presenceHealthListeners)) {
-    try {
-      listener();
-    } catch (error) {
-      logger.warn("presence.health.listener_failed", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
+    listener();
   }
 }
 
-function markPresenceUnavailable(reason: string | null) {
-  presenceUnavailableReason = reason;
-  emitPresenceHealth();
-}
-
-function markPresenceConnectSuccess() {
-  presenceUnavailableReason = null;
-  presenceCircuitState = advancePresenceCircuitState(presenceCircuitState, { type: "success" });
-  emitPresenceHealth();
-}
-
-function markPresenceConnectFailure(message: string | null, retryable: boolean) {
-  presenceUnavailableReason = retryable ? null : (message ?? "Presence is unavailable.");
-  presenceCircuitState = advancePresenceCircuitState(presenceCircuitState, {
-    type: "failure",
-    nowMs: Date.now(),
-    retryable,
-    errorMessage: message,
-  });
-  emitPresenceHealth();
-}
-
-function notifyStatus(entry: PresenceRoomEntry, status: PresenceStatus) {
+function updateStatus(entry: PresenceRoomEntry, status: PresenceStatus) {
+  if (entry.status === status) return;
   entry.status = status;
-  emitPresenceHealth();
   for (const listener of Array.from(entry.statusListeners)) {
-    try {
-      listener(status);
-    } catch (error) {
-      logger.warn("presence.room.status_listener_failed", {
-        roomType: entry.roomType,
-        roomId: entry.roomId,
-        status,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
+    listener(status);
   }
+  emitHealthSnapshot();
 }
 
-function broadcastEvent(entry: PresenceRoomEntry, event: PresenceServerEvent) {
-  if (event.type === "presence.state") {
-    entry.latestStateEvent = event;
-  } else if (event.type === "presence.delta" && entry.latestStateEvent) {
-    const nextMembers = [...entry.latestStateEvent.members];
-    const memberIndex = nextMembers.findIndex(
-      (member) => member.connectionId === event.member.connectionId,
-    );
-    if (event.action === "leave") {
-      if (memberIndex >= 0) {
-        nextMembers.splice(memberIndex, 1);
-      }
-    } else if (memberIndex >= 0) {
-      nextMembers[memberIndex] = event.member;
-    } else {
-      nextMembers.push(event.member);
-    }
-
-    entry.latestStateEvent = {
-      ...entry.latestStateEvent,
-      roomType: event.roomType,
-      roomId: event.roomId,
-      members: nextMembers,
-    };
-  }
-
-  for (const listener of Array.from(entry.listeners)) {
-    try {
-      listener(event);
-    } catch (error) {
-      logger.warn("presence.room.event_listener_failed", {
-        roomType: entry.roomType,
-        roomId: entry.roomId,
-        eventType: event.type,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-}
-
-function resolvePresenceWsUrl(preferredUrl?: string | null) {
-  return resolvePresenceWebSocketUrl({
-    preferredUrl,
-    hostname: typeof window !== "undefined" ? window.location.hostname : null,
-  });
-}
-
-async function decodePresenceMessageData(data: unknown) {
-  if (typeof data === "string") {
-    return data;
-  }
-
-  if (typeof Blob !== "undefined" && data instanceof Blob) {
-    return data.text();
-  }
-
-  if (data instanceof ArrayBuffer) {
-    return utf8Decoder.decode(new Uint8Array(data));
-  }
-
-  if (ArrayBuffer.isView(data)) {
-    return utf8Decoder.decode(data);
-  }
-
-  throw new Error(`Unsupported presence message data type: ${Object.prototype.toString.call(data)}`);
-}
-
-async function fetchPresenceToken(entry: PresenceRoomEntry, signal?: AbortSignal) {
-  const response = await fetch("/api/realtime/presence-token", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-    },
-    credentials: "same-origin",
-    signal,
-    body: JSON.stringify({
-      roomType: entry.roomType,
-      roomId: entry.roomId,
-      role: entry.role,
-    }),
-  });
-
-  const body = await response.json().catch(() => null) as TokenResponse | null;
-  if (body?.ok && body.data?.disabled) {
-    entry.latestWsUrl = null;
-    markPresenceUnavailable("Presence service is disabled for this environment.");
-    return null;
-  }
-
-  if (!response.ok || !body?.ok || !body.data?.token) {
-    const message = body?.error || `Presence token request failed (${response.status})`;
-    const retryable = isPresenceTokenRequestRetryable(response.status, message);
-    throw new PresenceConnectError(message, retryable);
-  }
-
-  const wsUrl = resolvePresenceWsUrl(body.data.wsUrl ?? null);
-  if (!wsUrl) {
-    throw new PresenceConnectError("Presence service URL is not configured for this environment.", false);
-  }
-
-  entry.latestWsUrl = wsUrl;
-  return body.data.token;
-}
-
-function cleanupEntry(roomKey: string) {
-  const entry = presenceEntries.get(roomKey);
-  if (!entry) return;
-
-  if (entry.releaseTimer) {
-    clearTimeout(entry.releaseTimer);
-    entry.releaseTimer = null;
-  }
-  if (entry.reconnectTimer) {
-    clearTimeout(entry.reconnectTimer);
-    entry.reconnectTimer = null;
-  }
-  if (entry.heartbeatTimer) {
-    clearInterval(entry.heartbeatTimer);
-    entry.heartbeatTimer = null;
-  }
-  if (entry.tokenRequestController) {
-    entry.tokenRequestController.abort();
-    entry.tokenRequestController = null;
-  }
-  if (entry.socket) {
-    entry.socket.close();
-    entry.socket = null;
-  }
-
-  presenceEntries.delete(roomKey);
-  emitPresenceHealth();
-}
-
-function sendPresenceEvent(entry: PresenceRoomEntry, event: PresenceClientEvent) {
-  if (entry.socket?.readyState === WebSocket.OPEN && entry.authenticated) {
-    entry.socket.send(JSON.stringify(event));
-    return;
-  }
-
-  entry.pendingEvents = enqueuePendingPresenceEvent(entry.pendingEvents, event);
-}
-
-function flushPendingEvents(entry: PresenceRoomEntry) {
-  if (!entry.socket || entry.socket.readyState !== WebSocket.OPEN || entry.pendingEvents.length === 0) {
-    return;
-  }
-
-  const pending = [...entry.pendingEvents];
-  entry.pendingEvents.length = 0;
-  for (const event of pending) {
-    entry.socket.send(JSON.stringify(event));
-  }
-}
-
-function scheduleReconnect(entry: PresenceRoomEntry, retryable = true) {
-  if (entry.reconnectTimer || entry.listeners.size === 0) {
-    return;
-  }
-
-  if (!retryable) {
-    notifyStatus(entry, "error");
-    return;
-  }
-
-  notifyStatus(entry, "disconnected");
-  const delayMs = computePresenceReconnectDelayMs({
-    attempt: entry.reconnectAttempts,
-    nowMs: Date.now(),
-    circuitOpenUntilMs: presenceCircuitState.openUntilMs,
-    jitterMs: Math.floor(Math.random() * 250),
-  });
-  entry.reconnectTimer = setTimeout(() => {
-    entry.reconnectTimer = null;
-    if (entry.listeners.size === 0 && entry.statusListeners.size === 0) {
-      return;
-    }
-    entry.reconnectAttempts += 1;
-    void openPresenceRoom(entry);
-  }, delayMs);
-
-  logger.metric("presence.room.reconnect", {
+function toPresenceMember(
+  entry: PresenceRoomEntry,
+  raw: SupabasePresenceMeta,
+  fallbackKey: string,
+): PresenceMemberState {
+  return {
+    connectionId: String(raw.connectionId ?? raw.presence_ref ?? raw.phx_ref ?? fallbackKey),
+    userId: String(raw.userId ?? fallbackKey),
     roomType: entry.roomType,
     roomId: entry.roomId,
-    value: 1,
-    attempt: entry.reconnectAttempts + 1,
+    role: (raw.role as PresenceRoomRole | undefined) ?? entry.role,
+    lastSeenAt: typeof raw.lastSeenAt === "number" ? raw.lastSeenAt : Date.now(),
+    cursorFrame: typeof raw.cursorFrame === "string" ? raw.cursorFrame : null,
+    typing: Boolean(raw.typing),
+    typingContext: raw.typingContext ?? null,
+    userName: typeof raw.userName === "string" ? raw.userName : null,
+    profile: raw.profile ?? null,
+  };
+}
+
+function flattenPresenceState(entry: PresenceRoomEntry): PresenceMemberState[] {
+  const state = entry.channel.presenceState() as Record<string, SupabasePresenceMeta[]>;
+  const members: PresenceMemberState[] = [];
+  for (const [key, metas] of Object.entries(state)) {
+    for (const meta of metas) {
+      members.push(toPresenceMember(entry, meta, key));
+    }
+  }
+  return members;
+}
+
+function emitPresenceState(entry: PresenceRoomEntry) {
+  const stateEvent: Extract<PresenceServerEvent, { type: "presence.state" }> = {
+    type: "presence.state",
+    roomType: entry.roomType,
+    roomId: entry.roomId,
+    members: flattenPresenceState(entry),
+  };
+  entry.latestStateEvent = stateEvent;
+  for (const listener of Array.from(entry.listeners)) {
+    listener(stateEvent);
+  }
+}
+
+function emitPresenceDelta(
+  entry: PresenceRoomEntry,
+  action: "upsert" | "leave",
+  key: string,
+  presences: SupabasePresenceMeta[],
+) {
+  for (const presence of presences) {
+    const event: Extract<PresenceServerEvent, { type: "presence.delta" }> = {
+      type: "presence.delta",
+      action,
+      roomType: entry.roomType,
+      roomId: entry.roomId,
+      member: toPresenceMember(entry, presence, key),
+    };
+    for (const listener of Array.from(entry.listeners)) {
+      listener(event);
+    }
+  }
+}
+
+async function resolveCurrentUserId(entry: PresenceRoomEntry, event?: PresenceClientEvent) {
+  if (event?.type === "typing" && event.userId) return event.userId;
+  if (entry.roomType === "user" && entry.role === "editor") return entry.roomId;
+  if (entry.lastTrackedUserId) return entry.lastTrackedUserId;
+
+  const { data } = await createClient().auth.getUser();
+  return data.user?.id ?? null;
+}
+
+async function trackPresence(entry: PresenceRoomEntry, event?: PresenceClientEvent) {
+  if (!entry.channel || entry.status !== "connected") return;
+  const userId = await resolveCurrentUserId(entry, event);
+  if (!userId) return;
+
+  entry.lastTrackedUserId = userId;
+  const typingEvent = event?.type === "typing" ? event : null;
+  await entry.channel.track({
+    connectionId: entry.connectionId,
+    userId,
+    roomType: entry.roomType,
+    roomId: entry.roomId,
+    role: entry.role,
+    lastSeenAt: Date.now(),
+    cursorFrame: event?.type === "cursor" ? event.frame : null,
+    typing: typingEvent?.isTyping ?? false,
+    typingContext: typingEvent?.context ?? null,
+    userName: event?.type === "cursor" ? event.userName ?? null : null,
+    profile: typingEvent?.profile ?? null,
   });
 }
 
-async function openPresenceRoom(entry: PresenceRoomEntry) {
-  if (typeof window === "undefined") {
-    return;
-  }
+function createEntry(roomType: PresenceRoomType, roomId: string, role: PresenceRoomRole) {
+  const supabase = createClient();
+  const connectionId = createConnectionId();
+  const channel = supabase
+    .channel(getRoomTopic(roomType, roomId), {
+      config: { presence: { key: connectionId } },
+    })
+    .on("presence", { event: "sync" }, () => {
+      const entry = presenceEntries.get(getRoomKey(roomType, roomId));
+      if (!entry) return;
+      emitPresenceState(entry);
+    })
+    .on("presence", { event: "join" }, ({ key, newPresences }: SupabasePresenceJoinPayload) => {
+      const entry = presenceEntries.get(getRoomKey(roomType, roomId));
+      if (!entry) return;
+      emitPresenceDelta(entry, "upsert", String(key), newPresences);
+    })
+    .on("presence", { event: "leave" }, ({ key, leftPresences }: SupabasePresenceLeavePayload) => {
+      const entry = presenceEntries.get(getRoomKey(roomType, roomId));
+      if (!entry) return;
+      emitPresenceDelta(entry, "leave", String(key), leftPresences);
+    });
 
-  if (entry.releaseTimer) {
-    clearTimeout(entry.releaseTimer);
-    entry.releaseTimer = null;
-  }
+  const entry: PresenceRoomEntry = {
+    roomType,
+    roomId,
+    role,
+    connectionId,
+    channel,
+    listeners: new Set(),
+    statusListeners: new Set(),
+    releaseTimer: null,
+    status: "connecting",
+    latestStateEvent: null,
+    lastTrackedUserId: null,
+  };
 
-  if (
-    entry.socket?.readyState === WebSocket.OPEN ||
-    entry.socket?.readyState === WebSocket.CONNECTING
-  ) {
-    return;
-  }
+  presenceEntries.set(getRoomKey(roomType, roomId), entry);
+  emitHealthSnapshot();
 
-  if (entry.connectPromise) {
-    return entry.connectPromise;
-  }
-
-  entry.connectPromise = (async () => {
-    if (entry.socket) {
-      entry.socket.close();
-      entry.socket = null;
+  channel.subscribe((status: RealtimeSubscribeStatus) => {
+    if (status === REALTIME_SUBSCRIBE_STATES.SUBSCRIBED) {
+      updateStatus(entry, "connected");
+      if (role === "editor" || roomType === "user") {
+        void trackPresence(entry);
+      }
+      return;
     }
-    entry.authenticated = false;
 
-    if (entry.heartbeatTimer) {
-      clearInterval(entry.heartbeatTimer);
-      entry.heartbeatTimer = null;
+    if (
+      status === REALTIME_SUBSCRIBE_STATES.CHANNEL_ERROR ||
+      status === REALTIME_SUBSCRIBE_STATES.TIMED_OUT
+    ) {
+      updateStatus(entry, "error");
+      return;
     }
 
-    notifyStatus(entry, "connecting");
-
-    try {
-      const configuredWsUrl = resolvePresenceWsUrl();
-      if (!configuredWsUrl) {
-        markPresenceUnavailable("Presence service URL is not configured for this environment.");
-        notifyStatus(entry, "disconnected");
-        logger.metric("presence.room.disabled", {
-          roomType: entry.roomType,
-          roomId: entry.roomId,
-          value: 1,
-        });
-        return;
-      }
-
-      if (isPresenceCircuitOpen(presenceCircuitState)) {
-        throw new PresenceConnectError("Presence reconnect cooldown is active.", true);
-      }
-
-      const tokenRequestController = new AbortController();
-      entry.tokenRequestController = tokenRequestController;
-      const token = await fetchPresenceToken(entry, tokenRequestController.signal);
-      if (!token) {
-        notifyStatus(entry, "disconnected");
-        return;
-      }
-      const baseWsUrl = entry.latestWsUrl;
-      if (!baseWsUrl) {
-        throw new PresenceConnectError("Presence service URL is unavailable.", false);
-      }
-      const socket = new WebSocket(baseWsUrl);
-      entry.socket = socket;
-
-      socket.onopen = () => {
-        socket.send(JSON.stringify({ type: "auth", token }));
-      };
-
-      socket.onmessage = async (message) => {
-        try {
-          const raw = await decodePresenceMessageData(message.data);
-          const parsed = JSON.parse(raw) as PresenceServerEvent;
-          if (parsed.type === "ack" && parsed.ackType === "auth" && !entry.authenticated) {
-            entry.authenticated = true;
-            entry.reconnectAttempts = 0;
-            markPresenceConnectSuccess();
-            notifyStatus(entry, "connected");
-            sendPresenceEvent(entry, { type: "heartbeat" });
-            flushPendingEvents(entry);
-            if (entry.heartbeatTimer) {
-              clearInterval(entry.heartbeatTimer);
-            }
-            entry.heartbeatTimer = setInterval(() => {
-              sendPresenceEvent(entry, { type: "heartbeat" });
-            }, HEARTBEAT_INTERVAL_MS);
-            logger.metric("presence.room.connected", {
-              roomType: entry.roomType,
-              roomId: entry.roomId,
-              value: 1,
-            });
-          }
-          broadcastEvent(entry, parsed);
-        } catch (error) {
-          logger.warn("presence.room.message_parse_failed", {
-            roomType: entry.roomType,
-            roomId: entry.roomId,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-      };
-
-      socket.onerror = () => {
-        notifyStatus(entry, "error");
-      };
-
-      const activeSocket = socket;
-      socket.onclose = () => {
-        if (entry.socket !== activeSocket) {
-          return;
-        }
-        if (entry.heartbeatTimer) {
-          clearInterval(entry.heartbeatTimer);
-          entry.heartbeatTimer = null;
-        }
-        entry.authenticated = false;
-        entry.socket = null;
-        scheduleReconnect(entry, true);
-      };
-    } catch (error) {
-      const aborted = error instanceof DOMException && error.name === "AbortError";
-      if (aborted) {
-        return;
-      }
-      const message = error instanceof Error ? error.message : String(error);
-      const retryable = !(error instanceof PresenceConnectError) || error.retryable;
-      markPresenceConnectFailure(message, retryable);
-      notifyStatus(entry, "error");
-      logger.warn("presence.room.connect_failed", {
-        roomType: entry.roomType,
-        roomId: entry.roomId,
-        error: message,
-      });
-      scheduleReconnect(entry, retryable);
-    } finally {
-      entry.tokenRequestController = null;
-      entry.connectPromise = null;
+    if (status === REALTIME_SUBSCRIBE_STATES.CLOSED) {
+      updateStatus(entry, "disconnected");
     }
-  })();
+  });
 
-  return entry.connectPromise;
+  return entry;
 }
 
 function ensureEntry(roomType: PresenceRoomType, roomId: string, role: PresenceRoomRole) {
@@ -587,38 +293,20 @@ function ensureEntry(roomType: PresenceRoomType, roomId: string, role: PresenceR
       clearTimeout(existing.releaseTimer);
       existing.releaseTimer = null;
     }
-    if (role === "editor") {
-      existing.role = "editor";
-    }
-    if (!existing.socket && !existing.connectPromise && !existing.reconnectTimer) {
-      void openPresenceRoom(existing);
-    }
     return existing;
   }
+  return createEntry(roomType, roomId, role);
+}
 
-  const entry: PresenceRoomEntry = {
-    roomType,
-    roomId,
-    role,
-    socket: null,
-    listeners: new Set(),
-    statusListeners: new Set(),
-    reconnectAttempts: 0,
-    reconnectTimer: null,
-    heartbeatTimer: null,
-    releaseTimer: null,
-    connectPromise: null,
-    tokenRequestController: null,
-    pendingEvents: [],
-    latestWsUrl: null,
-    authenticated: false,
-    status: "connecting",
-    latestStateEvent: null,
-  };
-  presenceEntries.set(roomKey, entry);
-  emitPresenceHealth();
-  void openPresenceRoom(entry);
-  return entry;
+function cleanupEntry(roomKey: string) {
+  const entry = presenceEntries.get(roomKey);
+  if (!entry) return;
+  if (entry.releaseTimer) {
+    clearTimeout(entry.releaseTimer);
+  }
+  presenceEntries.delete(roomKey);
+  createClient().removeChannel(entry.channel);
+  emitHealthSnapshot();
 }
 
 export function subscribePresenceRoom(params: {
@@ -636,16 +324,16 @@ export function subscribePresenceRoom(params: {
     entry.statusListeners.add(params.onStatus);
   }
 
-  if (params.onStatus) {
-    params.onStatus(entry.status);
-  }
+  params.onStatus?.(entry.status);
   if (params.onEvent && entry.latestStateEvent) {
     params.onEvent(entry.latestStateEvent);
   }
 
   return {
     send(event: PresenceClientEvent) {
-      sendPresenceEvent(entry, event);
+      if (event.type === "typing" || event.type === "cursor") {
+        void trackPresence(entry, event);
+      }
     },
     unsubscribe() {
       if (params.onEvent) {
@@ -655,24 +343,9 @@ export function subscribePresenceRoom(params: {
         entry.statusListeners.delete(params.onStatus);
       }
       if (entry.listeners.size === 0 && entry.statusListeners.size === 0) {
-        if (entry.reconnectTimer) {
-          clearTimeout(entry.reconnectTimer);
-          entry.reconnectTimer = null;
-        }
-        if (entry.tokenRequestController) {
-          entry.tokenRequestController.abort();
-          entry.tokenRequestController = null;
-        }
+        if (entry.releaseTimer) clearTimeout(entry.releaseTimer);
         const roomKey = getRoomKey(entry.roomType, entry.roomId);
-        if (entry.releaseTimer) {
-          clearTimeout(entry.releaseTimer);
-        }
-        entry.releaseTimer = setTimeout(() => {
-          entry.releaseTimer = null;
-          if (entry.listeners.size === 0 && entry.statusListeners.size === 0) {
-            cleanupEntry(roomKey);
-          }
-        }, ENTRY_RELEASE_GRACE_MS);
+        entry.releaseTimer = setTimeout(() => cleanupEntry(roomKey), ENTRY_RELEASE_GRACE_MS);
       }
     },
   };
@@ -697,8 +370,6 @@ export function resetPresenceClientForTests() {
   for (const roomKey of Array.from(presenceEntries.keys())) {
     cleanupEntry(roomKey);
   }
-  presenceCircuitState = INITIAL_PRESENCE_CIRCUIT_STATE;
-  presenceUnavailableReason = null;
   presenceHealthSnapshot = computePresenceHealthSnapshot();
   presenceHealthListeners.clear();
 }
