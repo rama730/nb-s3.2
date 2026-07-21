@@ -139,7 +139,7 @@ export function OnboardingSidebar({
       <div className="mt-auto pt-6">
         <a
           href="mailto:support@nbworkspace.com?subject=Onboarding%20help"
-          className="text-[12px] text-muted-foreground hover:text-foreground transition-colors rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+          className="text-[12px] text-muted-foreground hover:text-foreground transition-colors rounded focus-visible:outline-none   "
         >
           Need help?
         </a>
