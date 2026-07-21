@@ -79,7 +79,13 @@ export async function GET(request: Request) {
     }
 
     try {
-        const snapshot = readAppearanceSnapshotFromMetadata(auth.user);
+        // Fetch fresh user data from the Supabase Auth server to bypass cached JWT metadata
+        const client = auth.supabase as any;
+        const getUserFromAuthServer = client.__getUserFromAuthServer ?? client.auth.getUser.bind(client.auth);
+        const { data: { user: freshUser } } = await getUserFromAuthServer();
+        const userToUse = freshUser ?? auth.user;
+
+        const snapshot = readAppearanceSnapshotFromMetadata(userToUse);
         logApiRoute(request, {
             requestId,
             action: "appearance.get",
@@ -201,89 +207,5 @@ export async function PUT(request: Request) {
         });
         // SEC-L6: do not leak raw exception messages to the client.
         return jsonError("Failed to update appearance settings", 500, "INTERNAL_ERROR");
-    }
-}
-
-export async function DELETE(request: Request) {
-    const startedAt = Date.now();
-    const requestId = getRequestId(request);
-    const csrfError = validateCsrf(request);
-    if (csrfError) return csrfError;
-    const limitResponse = await enforceRouteLimit(request, "api:v1:appearance:delete", 20, 60);
-    if (limitResponse) {
-        return limitResponse;
-    }
-
-    const auth = await requireAuthenticatedUser();
-    if (auth.response || !auth.user) {
-        return auth.response ?? jsonError("Not authenticated", 401, "UNAUTHORIZED");
-    }
-
-    try {
-        const snapshot = createAppearanceSnapshot(DEFAULT_APPEARANCE_SNAPSHOT);
-        const metadata = readUserMetadata(auth.user);
-        const updateResult = await withAppearanceTimeout(
-            auth.supabase.auth.updateUser({
-                data: {
-                    ...metadata,
-                    app_appearance: snapshot,
-                },
-            }),
-            "Appearance reset",
-        ).catch((error) => {
-            logger.error("[api/v1/appearance] reset degraded", { module: 'api', error: error instanceof Error ? error.message : String(error) });
-            return null;
-        });
-
-        if (!updateResult) {
-            logApiRoute(request, {
-                requestId,
-                action: "appearance.delete.degraded",
-                userId: auth.user.id,
-                startedAt,
-                success: true,
-                status: 202,
-            });
-            return appearanceSyncDegradedSuccess(auth.user.id, snapshot, "Appearance reset locally; account sync is delayed");
-        }
-
-        if (updateResult.error) {
-            logger.error("[api/v1/appearance] reset failed", { module: 'api', error: updateResult.error instanceof Error ? updateResult.error.message : String(updateResult.error) });
-            logApiRoute(request, {
-                requestId,
-                action: "appearance.delete.degraded",
-                userId: auth.user.id,
-                startedAt,
-                success: true,
-                status: 202,
-            });
-            return appearanceSyncDegradedSuccess(auth.user.id, snapshot, "Appearance reset locally; account sync is delayed");
-        }
-
-        logApiRoute(request, {
-            requestId,
-            action: "appearance.delete",
-            userId: auth.user.id,
-            startedAt,
-            success: true,
-            status: 200,
-        });
-        return jsonSuccess({
-            userId: auth.user.id,
-            snapshot,
-        });
-    } catch (error) {
-        logger.error("[api/v1/appearance] failed to reset settings", { module: 'api', error: error instanceof Error ? error.message : String(error) });
-        logApiRoute(request, {
-            requestId,
-            action: "appearance.delete",
-            userId: auth.user.id,
-            startedAt,
-            success: false,
-            status: 500,
-            errorCode: "INTERNAL_ERROR",
-        });
-        // SEC-L6: do not leak raw exception messages to the client.
-        return jsonError("Failed to reset appearance settings", 500, "INTERNAL_ERROR");
     }
 }
