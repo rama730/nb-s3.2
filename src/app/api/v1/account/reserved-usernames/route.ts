@@ -1,11 +1,10 @@
 import { db } from '@/lib/db'
 import { reservedUsernames } from '@/lib/db/schema'
-import { getRequestId, jsonError, jsonSuccess, logApiRoute, enforceRouteLimit } from '@/app/api/v1/_shared'
+import { getRequestId, jsonError, jsonSuccess, logApiRoute, enforceRouteLimit, requireAuthenticatedUser } from '@/app/api/v1/_shared'
 import { logger } from '@/lib/logger'
 import { consumeRateLimit } from '@/lib/security/rate-limit'
 import { isAdminUser } from '@/lib/security/admin'
 import { validateCsrf } from '@/lib/security/csrf'
-import { createClient } from '@/lib/supabase/server'
 import { CORE_RESERVED_USERNAMES, normalizeUsername } from '@/lib/validations/username'
 import { asc, eq } from 'drizzle-orm'
 import { z } from 'zod'
@@ -14,9 +13,8 @@ const USERNAME_PATTERN = /^[a-z0-9_]{3,20}$/
 const CORE_RESERVED_SET = new Set<string>(CORE_RESERVED_USERNAMES)
 
 async function requireAdmin() {
-    const supabase = await createClient()
-    const { data: authData } = await supabase.auth.getUser()
-    const user = authData.user
+    const auth = await requireAuthenticatedUser()
+    const user = auth.user
     if (!user) return { ok: false as const, status: 401 as const, errorCode: 'UNAUTHORIZED' as const, message: 'Not authenticated' }
     if (!isAdminUser(user)) return { ok: false as const, status: 403 as const, errorCode: 'FORBIDDEN' as const, message: 'Forbidden' }
     return { ok: true as const, user }
