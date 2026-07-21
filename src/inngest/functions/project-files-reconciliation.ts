@@ -38,13 +38,19 @@ export const reconcileProjectFiles = inngest.createFunction(
             .orderBy(asc(projectNodes.projectId), asc(projectNodes.id))
             .limit(MAX_PROJECTS_PER_RUN * MAX_KEYS_PER_PROJECT);
 
-        const activeFiles = rows
-            .filter((row) => !!row.s3Key)
-            .map((row) => ({
-                nodeId: row.nodeId,
-                projectId: row.projectId,
-                s3Key: row.s3Key!,
-            })) as ActiveFileRow[];
+        const activeFilesByKey = new Map<string, ActiveFileRow>();
+        for (const row of rows) {
+            if (!row.s3Key) continue;
+            const key = `${row.projectId}:${row.s3Key}`;
+            if (!activeFilesByKey.has(key)) {
+                activeFilesByKey.set(key, {
+                    nodeId: row.nodeId,
+                    projectId: row.projectId,
+                    s3Key: row.s3Key,
+                });
+            }
+        }
+        const activeFiles = Array.from(activeFilesByKey.values());
 
         if (activeFiles.length === 0) {
             return {
