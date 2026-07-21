@@ -7,7 +7,6 @@ import { Loader2, Mail } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import TurnstileWidget, { hasTurnstileSiteKey } from "@/components/auth/TurnstileWidget";
 import { buildOAuthRedirectTo, resolveAuthBaseUrl } from "@/lib/auth/redirects";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
@@ -88,7 +87,7 @@ export default function ForgotPasswordPage() {
                                 ) : null}
 
                                 <div className="space-y-2">
-                                    <Label htmlFor="email">Email</Label>
+                                    <label htmlFor="email" className="text-sm font-medium leading-none">Email</label>
                                     <div className="relative">
                                         <Mail className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                                         <Input
