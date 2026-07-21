@@ -48,7 +48,7 @@ export function StepFooter({
           disabled={isLoading}
           className={cn(
             "text-muted-foreground min-h-[44px]",
-            "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+            "  ",
             "max-[359px]:w-full max-[359px]:order-2"
           )}
           type="button"
@@ -67,7 +67,7 @@ export function StepFooter({
           "h-[var(--ui-control-height)] min-h-[44px] min-w-[120px] px-5",
           "rounded-md text-[14px] font-medium text-white",
           "transition-colors",
-          "outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+          "outline-none   ",
           isFinalStep ? "app-accent-gradient" : "bg-primary hover:bg-primary/95 active:bg-primary/90",
           (!canProceed || isLoading) && "opacity-50 pointer-events-none",
           // Below 360px: full width, ordered first
