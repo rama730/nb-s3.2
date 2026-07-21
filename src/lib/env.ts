@@ -15,11 +15,7 @@ const envSchema = z.object({
     GITHUB_IMPORT_TOKEN_ENCRYPTION_KEY: z.string().min(1).optional(),
     JOB_REQUEST_SECRET: z.string().min(1).optional(),
     GITHUB_WEBHOOK_SECRET: z.string().min(1).optional(),
-    PRESENCE_TOKEN_SECRET: z.string().min(1).optional(),
-    PRESENCE_EVENT_SECRET: z.string().min(1).optional(),
     DOC_COLLABORATION_TOKEN_SECRET: z.string().min(1).optional(),
-    PRESENCE_WS_URL: z.string().url().optional(),
-    NEXT_PUBLIC_PRESENCE_WS_URL: z.string().url().optional(),
     NEXT_PUBLIC_YJS_WEBSOCKET_URL: z.string().url().optional(),
     INNGEST_SIGNING_KEY: z.string().min(1).optional(),
     E2E_AUTH_FALLBACK: z.string().optional(),
@@ -60,8 +56,7 @@ function assertProductionSecurityEnv(env: Env) {
         ['GITHUB_IMPORT_TOKEN_ENCRYPTION_KEY', env.GITHUB_IMPORT_TOKEN_ENCRYPTION_KEY],
         ['JOB_REQUEST_SECRET', env.JOB_REQUEST_SECRET],
         ['GITHUB_WEBHOOK_SECRET', env.GITHUB_WEBHOOK_SECRET],
-        ['PRESENCE_TOKEN_SECRET', env.PRESENCE_TOKEN_SECRET],
-        ['PRESENCE_EVENT_SECRET', env.PRESENCE_EVENT_SECRET],
+        ['DOC_COLLABORATION_TOKEN_SECRET', env.DOC_COLLABORATION_TOKEN_SECRET],
         ['INNGEST_EVENT_KEY', env.INNGEST_EVENT_KEY],
         ['INNGEST_SIGNING_KEY', env.INNGEST_SIGNING_KEY],
     ] as const
@@ -72,15 +67,6 @@ function assertProductionSecurityEnv(env: Env) {
 
     if (missing.length > 0) {
         throw new Error(`Production security environment is missing required values: ${missing.join(', ')}`)
-    }
-
-    const presenceWsUrl = env.NEXT_PUBLIC_PRESENCE_WS_URL?.trim() || env.PRESENCE_WS_URL?.trim() || ''
-    if (!presenceWsUrl) {
-        throw new Error('Production security environment requires NEXT_PUBLIC_PRESENCE_WS_URL or PRESENCE_WS_URL')
-    }
-    const isLocalhost = presenceWsUrl.includes('://127.0.0.1') || presenceWsUrl.includes('://localhost') || presenceWsUrl.includes('://::1');
-    if (!presenceWsUrl.startsWith('wss://') && !isLocalhost) {
-        throw new Error('Production presence websocket URL must use wss://')
     }
 
     if (isTruthyEnvFlag(env.E2E_AUTH_FALLBACK) || isTruthyEnvFlag(env.NEXT_PUBLIC_E2E_AUTH_FALLBACK)) {
