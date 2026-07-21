@@ -12,21 +12,19 @@
 //
 //   • Edit mode — Req 5.8 + Open Question 6: thinned CodeMirror setup.
 //     Explicitly no lint plugin (Req 15.4), no cursor-presence / cursor
-//     protocol wiring (Req 15.13), no conflict-resolution dialog, and no
-//     client-side lock acquisition. The editor is loaded via `next/dynamic`
+//     protocol wiring (Req 15.13) or conflict-resolution dialog. FileView
+//     acquires the session-scoped editing lease before mounting Edit mode.
+//     The editor is loaded via `next/dynamic`
 //     so CodeMirror does not ship in the Files-tab initial chunk — this is
 //     required for the Req 16 performance budget (no editor code loads
 //     until the user actually enters Edit mode).
 //
-//   • Save — an explicit `<button>Save</button>`. No autosave, no
-//     conflict-merge UI. On click we upload the current buffer straight to
-//     object storage and call `updateProjectFileStats` to refresh the DB
-//     row; `upsertNodes` then propagates the new `size` / `updatedAt` to
-//     every other files-tab surface (breadcrumb, folder list, metadata
-//     strip). The server action still enforces write access
-//     (`assertProjectWriteAccess`) and lock-conflict checks
-//     (`assertNodeNotLockedByAnotherUser`) server-side, so skipping
-//     *client* lock acquisition does not weaken authorization.
+//   • Save — an explicit `<button>Save</button>`. No autosave. The revision
+//     modal chooses between an append-only new revision and replacing the
+//     active revision. Both choices upload to a fresh object key and use the
+//     same transactional server mutation; `upsertNodes` then propagates the
+//     new metadata to every files-tab surface. Authorization, optimistic
+//     base-version checks, and collaborator locks are enforced server-side.
 //
 //   • Dirty state — reported through the optional `onDirtyChange` callback
 //     so the parent (`FileView`) can thread it into `MetadataStrip` per
@@ -40,11 +38,12 @@
 
 "use client";
 
+import { toast } from "sonner";
+
 import * as React from "react";
 import dynamic from "next/dynamic";
 
 import { Button } from "@/components/ui/button";
-import { useToast } from "@/components/ui-custom/Toast";
 import { useTheme } from "@/components/providers/theme-provider";
 import type { ProjectNode } from "@/lib/db/schema";
 import { createClient as createSupabaseBrowserClient } from "@/lib/supabase/client";
@@ -52,7 +51,9 @@ import { cn } from "@/lib/utils";
 
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 import { RevisionControlModal } from "@/components/ui/RevisionControlModal";
-import { saveFileAsNewVersion } from "@/hooks/useFileVersions";
+import { saveFileRevision } from "@/hooks/useFileVersions";
+import type { BrowserFileLease, FileLeaseView } from "@/lib/files/file-lease-client";
+import type { FileLeaseStatus } from "../hooks/useFileLease";
 
 // Dynamic import keeps `@uiw/react-codemirror` (and its `@codemirror/*`
 // transitive tree) out of the Files-tab initial chunk. The import only
@@ -93,13 +94,15 @@ export interface TextViewerProps {
    * indicator required by Open Question 2.
    */
   onDirtyChange?: (dirty: boolean) => void;
+  lease?: BrowserFileLease | null;
+  leaseStatus?: FileLeaseStatus;
+  leaseConflict?: FileLeaseView | null;
+  onCancel?: () => void;
 }
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
-
-const UTF8_ENCODER = new TextEncoder();
 
 // ---------------------------------------------------------------------------
 // Component
@@ -112,8 +115,11 @@ export function TextViewer({
   mode,
   onSaved,
   onDirtyChange,
+  lease = null,
+  leaseStatus = "idle",
+  leaseConflict = null,
+  onCancel,
 }: TextViewerProps): React.JSX.Element {
-  const { showToast } = useToast();
   const { resolvedTheme } = useTheme();
   const upsertNodes = useFilesWorkspaceStore((s) => s.upsertNodes);
 
@@ -125,6 +131,7 @@ export function TextViewer({
   // re-converge after a successful Save.
   const [savedContent, setSavedContent] = React.useState<string>("");
   const [content, setContent] = React.useState<string>("");
+  const [baseHash, setBaseHash] = React.useState<string | null>(null);
   const [isSaving, setIsSaving] = React.useState(false);
   const [isModalOpen, setIsModalOpen] = React.useState(false);
 
@@ -161,14 +168,24 @@ export function TextViewer({
     setLoadError(null);
     setContent("");
     setSavedContent("");
+    setBaseHash(null);
 
     void (async () => {
       try {
-        const { getProjectFileContent } = await import("@/app/actions/files/content");
-        const text = await getProjectFileContent(projectId, node.id);
+        const [{ getProjectFileContent }, { listFileVersions }] = await Promise.all([
+          import("@/app/actions/files/content"),
+          import("@/app/actions/files/versions"),
+        ]);
+        const [text, versions] = await Promise.all([
+          getProjectFileContent(projectId, node.id),
+          mode === "edit" ? listFileVersions(projectId, node.id) : Promise.resolve([]),
+        ]);
         if (cancelled) return;
         setSavedContent(text);
         setContent(text);
+        setBaseHash(
+          versions.find((version) => version.version === (node.currentVersion ?? 1))?.contentHash ?? null,
+        );
         setStatus("ready");
       } catch (err) {
         if (cancelled) return;
@@ -181,7 +198,7 @@ export function TextViewer({
     return () => {
       cancelled = true;
     };
-  }, [projectId, node.id]);
+  }, [projectId, node.id, mode, node.currentVersion]);
 
   // ── Dirty state ────────────────────────────────────────────────────
   // Only meaningful in Edit mode; Raw always renders `savedContent`, so
@@ -191,6 +208,16 @@ export function TextViewer({
   React.useEffect(() => {
     onDirtyChange?.(isDirty);
   }, [isDirty, onDirtyChange]);
+
+  React.useEffect(() => {
+    if (!isDirty) return;
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [isDirty]);
 
   // When leaving Edit mode, discard the in-memory buffer back to the last
   // saved snapshot. Users must save to persist — this matches the explicit
@@ -205,14 +232,18 @@ export function TextViewer({
   // ── Save ───────────────────────────────────────────────────────────
   const handleSaveClick = React.useCallback(() => {
     if (!canEdit) return;
+    if (!lease) {
+      toast.error("Editing lease was lost. Your text is preserved; reacquire the file before saving.");
+      return;
+    }
     if (isSaving) return;
     if (!isDirty) return;
     if (!node.s3Key) {
-      showToast("Cannot save: file has no storage key.", "error");
+      toast.error("Cannot save: file has no storage key.");
       return;
     }
     setIsModalOpen(true);
-  }, [canEdit, isSaving, isDirty, node.s3Key, showToast]);
+  }, [canEdit, isSaving, isDirty, node.s3Key]);
 
   const handleRevisionOptionSelected = React.useCallback(
     async (choice: { option: "overwrite" | "commit"; comment?: string }) => {
@@ -221,64 +252,40 @@ export function TextViewer({
 
       try {
         const supabase = createSupabaseBrowserClient();
-        const size = UTF8_ENCODER.encode(content).length;
+        const file = new File([content], node.name, {
+          type: node.mimeType || "text/plain",
+        });
+        const result = await saveFileRevision({
+          projectId,
+          nodeId: node.id,
+          file,
+          mode: choice.option === "commit" ? "new_revision" : "active_revision",
+          comment: choice.comment || (choice.option === "commit" ? "Updated via Editor" : null),
+          baseVersion: node.currentVersion,
+          baseHash,
+          lease,
+          supabase,
+        });
 
-        if (choice.option === "commit") {
-          // Option B: Commit as New Revision
-          const file = new File([content], node.name, {
-            type: node.mimeType || "text/plain",
-          });
-          const result = await saveFileAsNewVersion({
-            projectId,
-            nodeId: node.id,
-            file,
-            comment: choice.comment || "Updated via Editor",
-            supabase,
-          });
-
-          if (result.success) {
-            setSavedContent(content);
-            upsertNodes(projectId, [result.node]);
-            onSaved?.();
-            showToast("New revision committed successfully", "success");
-          } else {
-            showToast(result.error || "Failed to commit revision", "error");
-          }
+        if (result.success) {
+          setSavedContent(content);
+          setBaseHash(result.version.contentHash ?? null);
+          upsertNodes(projectId, [result.node]);
+          onSaved?.();
+          toast.success(choice.option === "commit"
+              ? "New revision committed successfully"
+              : "Active revision updated successfully");
         } else {
-          // Option A: Apply to Active Revision
-          const blob = new Blob([content], {
-            type: node.mimeType || "text/plain",
-          });
-          const { error: uploadError } = await supabase.storage
-            .from("project-files")
-            .update(node.s3Key, blob, { upsert: true });
-
-          if (uploadError) throw uploadError;
-
-          const { updateProjectFileStats } = await import("@/app/actions/files/content");
-          const updatedNode = (await updateProjectFileStats(
-            projectId,
-            node.id,
-            size,
-          )) as ProjectNode | null;
-
-          if (updatedNode) {
-            setSavedContent(content);
-            upsertNodes(projectId, [updatedNode]);
-            onSaved?.();
-            showToast("Active revision updated in-place", "success");
-          } else {
-            throw new Error("Failed to update database record stats.");
-          }
+          toast.error(result.error || "Failed to save revision");
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : "Unknown error";
-        showToast(`Failed to save: ${message}`, "error");
+        toast.error(`Failed to save: ${message}`);
       } finally {
         setIsSaving(false);
       }
     },
-    [canEdit, content, isSaving, node.id, node.name, node.mimeType, node.s3Key, onSaved, projectId, showToast, upsertNodes]
+    [baseHash, canEdit, content, isSaving, lease, node.currentVersion, node.id, node.name, node.mimeType, node.s3Key, onSaved, projectId,upsertNodes]
   );
 
   // ── Render ─────────────────────────────────────────────────────────
@@ -367,8 +374,9 @@ export function TextViewer({
   }
 
   // Edit mode: thinned CodeMirror. No lint (Req 15.4), no cursor-presence
-  // (Req 15.13), no conflict resolution, no lock acquisition (Q6). The
-  // explicit Save button is the only persistence channel.
+  // (Req 15.13), and no merge dialog. The parent already owns the exclusive
+  // editing lease; losing it makes this editor read-only without dropping the
+  // dirty buffer. The explicit Save button is the only persistence channel.
   return (
     <div
       data-testid="files-tab-text-viewer-edit"
@@ -387,16 +395,41 @@ export function TextViewer({
             <span data-testid="files-tab-text-viewer-clean">Saved</span>
           )}
         </div>
-        <Button
-          type="button"
-          size="sm"
-          onClick={handleSaveClick}
-          disabled={!canEdit || !isDirty || isSaving}
-          data-testid="files-tab-text-viewer-save"
-        >
-          {isSaving ? "Saving…" : "Save"}
-        </Button>
+        <div className="flex items-center gap-2">
+          {onCancel && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={onCancel}
+              disabled={isSaving}
+              data-testid="files-tab-text-viewer-cancel"
+            >
+              Cancel
+            </Button>
+          )}
+          <Button
+            type="button"
+            size="sm"
+            onClick={handleSaveClick}
+            disabled={!canEdit || !isDirty || isSaving}
+            data-testid="files-tab-text-viewer-save"
+          >
+            {isSaving ? "Saving…" : "Save"}
+          </Button>
+        </div>
       </div>
+      {leaseStatus === "lost" || leaseStatus === "conflict" ? (
+        <div
+          role="alert"
+          data-testid="files-tab-text-viewer-lease-lost"
+          className="border-b border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200"
+        >
+          {leaseConflict
+            ? `${leaseConflict.lockedByName || "Another collaborator"} is editing this file${leaseConflict.clientKind === "vscode" ? " in VS Code" : ""}.`
+            : "The editing lease was lost. Your unsaved buffer is preserved, but saving is blocked until you reopen Edit."}
+        </div>
+      ) : null}
       <div className="min-h-0 flex-1">
         <CodeMirrorEditor
           value={content}
