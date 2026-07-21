@@ -2,16 +2,23 @@
 
 import { db } from "@/lib/db";
 import { projectNodes, projects } from "@/lib/db/schema";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { createClient } from "@/lib/supabase/server";
 import { getProjectAccessById } from "@/lib/data/project-access";
 import { fetchGithubTree } from "@/lib/github/tree-api";
+import {
+  GITHUB_ACCOUNT_UNAVAILABLE_MESSAGE,
+  GITHUB_CONNECTION_REQUIRED_MESSAGE,
+  resolveGithubExternalAccountHealth,
+} from "@/lib/github/account-health";
+import { resolveGithubRepoAccess } from "@/lib/github/auth-resolver";
+import { buildGithubAccountConnectionState } from "@/lib/github/connection-state";
+import {
+  compareGithubSyncTrees,
+  type GithubSyncConflictItem,
+} from "@/lib/github/sync-preview-comparison";
 
-export interface SyncConflictItem {
-  path: string;
-  name: string;
-  localModifiedAt: string | null;
-}
+export type SyncConflictItem = GithubSyncConflictItem;
 
 export interface SyncPreviewResult {
   success: boolean;
@@ -20,6 +27,7 @@ export interface SyncPreviewResult {
   conflicts?: SyncConflictItem[];
   incomingUpdatesCount?: number;
   newCommitSha?: string;
+  syncedAt?: string;
 }
 
 export async function getSyncPreviewAction(projectId: string): Promise<SyncPreviewResult> {
@@ -45,6 +53,7 @@ export async function getSyncPreviewAction(projectId: string): Promise<SyncPrevi
       .select({
         id: projects.id,
         importSource: projects.importSource,
+        githubLastCommitSha: projects.githubLastCommitSha,
       })
       .from(projects)
       .where(eq(projects.id, projectId))
@@ -62,9 +71,43 @@ export async function getSyncPreviewAction(projectId: string): Promise<SyncPrevi
     const githubToken = session?.provider_token || null;
     const repoUrl = src.repoUrl;
     const branch = src.branch || "main";
+    const githubConnection = buildGithubAccountConnectionState(user);
+    const [githubAccountHealth, githubAccess] = await Promise.all([
+      resolveGithubExternalAccountHealth({
+        linked: githubConnection.linked,
+        username: githubConnection.username,
+      }),
+      resolveGithubRepoAccess({
+        repoUrl,
+        oauthToken: githubToken,
+        preferredInstallationId: src?.metadata?.githubInstallationId ?? null,
+        sealedImportToken: src?.metadata?.importAuth,
+      }),
+    ]);
+
+    const accountCannotAuthorize =
+      githubAccess.source !== "app" &&
+      (githubAccountHealth.state === "unavailable" || !githubConnection.linked);
 
     // 1. Fetch remote tree from GitHub
-    const treeData = await fetchGithubTree(repoUrl, branch, githubToken || undefined);
+    let treeData;
+    try {
+      treeData = await fetchGithubTree(
+        repoUrl,
+        branch,
+        accountCannotAuthorize ? undefined : githubAccess.token || undefined,
+      );
+    } catch (error) {
+      if (accountCannotAuthorize) {
+        return {
+          success: false,
+          error: githubAccountHealth.state === "unavailable"
+            ? GITHUB_ACCOUNT_UNAVAILABLE_MESSAGE
+            : GITHUB_CONNECTION_REQUIRED_MESSAGE,
+        };
+      }
+      throw error;
+    }
     const remoteNodes = treeData.nodes.filter((n) => n.type === "file");
 
     // 2. Fetch local active nodes from DB
@@ -85,52 +128,45 @@ export async function getSyncPreviewAction(projectId: string): Promise<SyncPrevi
         )
       );
 
-    const localMap = new Map(localNodes.map((n) => [n.path, n]));
+    const { conflicts, incomingUpdatesCount } = compareGithubSyncTrees(
+      remoteNodes,
+      localNodes,
+    );
 
-    const conflicts: SyncConflictItem[] = [];
-    let incomingUpdatesCount = 0;
+    // A successful zero-diff check is a completed sync operation. Reconcile a
+    // stale failure here while the remote tree and local state are both still
+    // authoritative. In-flight workers are protected by the status predicate.
+    let syncedAt: string | undefined;
+    if (conflicts.length === 0 && incomingUpdatesCount === 0) {
+      const syncedAtDate = new Date();
+      syncedAt = syncedAtDate.toISOString();
+      const metadata =
+        src.metadata && typeof src.metadata === "object" ? src.metadata : {};
 
-    // 3. Perform three-way comparison
-    for (const remote of remoteNodes) {
-      const normalizedRemotePath = `/${remote.path.replace(/^\//, "")}`;
-      const local = localMap.get(normalizedRemotePath);
-
-      if (local) {
-        const isLocallyModified = local.s3Key !== null;
-        const isRemoteModified = local.gitHash !== remote.sha;
-
-        if (isRemoteModified) {
-          if (isLocallyModified) {
-            // Both remote and local are modified -> CONFLICT
-            conflicts.push({
-              path: remote.path,
-              name: remote.name,
-              localModifiedAt: local.updatedAt ? local.updatedAt.toISOString() : null,
-            });
-          } else {
-            // Only remote is modified -> Safe Update
-            incomingUpdatesCount++;
-          }
-        }
-      } else {
-        // Path absent locally -> Safe New File
-        incomingUpdatesCount++;
-      }
-    }
-
-    // 4. Remote deletions warning (edge-case)
-    const remotePaths = new Set(remoteNodes.map((n) => `/${n.path.replace(/^\//, "")}`));
-    for (const local of localNodes) {
-      if (!remotePaths.has(local.path)) {
-        const isLocallyModified = local.s3Key !== null;
-        if (isLocallyModified) {
-          conflicts.push({
-            path: local.path.replace(/^\//, ""),
-            name: local.path.split("/").pop() || "",
-            localModifiedAt: local.updatedAt ? local.updatedAt.toISOString() : null,
-          });
-        }
-      }
+      await db
+        .update(projects)
+        .set({
+          syncStatus: "ready",
+          githubLastSyncAt: syncedAtDate,
+          githubLastCommitSha: treeData.commitSha || project.githubLastCommitSha,
+          importSource: {
+            ...src,
+            metadata: {
+              ...metadata,
+              lastError: null,
+              syncPhase: "ready",
+              syncProgress: null,
+              lastValidatedAt: syncedAt,
+            },
+          } as any,
+          updatedAt: syncedAtDate,
+        })
+        .where(
+          and(
+            eq(projects.id, projectId),
+            inArray(projects.syncStatus, ["ready", "failed"]),
+          ),
+        );
     }
 
     return {
@@ -139,6 +175,7 @@ export async function getSyncPreviewAction(projectId: string): Promise<SyncPrevi
       conflicts,
       incomingUpdatesCount,
       newCommitSha: treeData.commitSha,
+      syncedAt,
     };
   } catch (err: any) {
     return {
