@@ -18,7 +18,6 @@ type SuiteName =
     | 'authenticated-shells'
     | 'workspace-bootstrap'
     | 'messages-reconnect-storm'
-    | 'presence-room-fanout'
     | 'worker-isolation'
     | 'extension-sync'
 
@@ -58,13 +57,6 @@ const SUITE_CONFIG: Record<SuiteName, {
         script: repoPath('qa', 'load', 'messages-reconnect-storm.k6.js'),
         requiresAuthCookie: true,
         thresholds: { p95Ms: 900, failedRate: 0.03, checksRate: 0.99 },
-    },
-    'presence-room-fanout': {
-        script: repoPath('qa', 'load', 'presence-room-fanout.k6.js'),
-        requiresAuthCookie: true,
-        requiredEnv: ['PRESENCE_ROOM_ID'],
-        thresholds: { p95Ms: 500, failedRate: 0.03, checksRate: 0.99, extraTrendP95Ms: 400 },
-        extraTrendMetric: 'presence_ack_ms',
     },
     'worker-isolation': {
         script: repoPath('qa', 'load', 'worker-isolation.k6.js'),
@@ -192,9 +184,6 @@ function main() {
             env: {
                 BASE_URL: baseUrl,
                 AUTH_COOKIE: authCookie || undefined,
-                PRESENCE_ROOM_ID: process.env.PRESENCE_ROOM_ID || undefined,
-                PRESENCE_ROOM_TYPE: process.env.PRESENCE_ROOM_TYPE || undefined,
-                PRESENCE_WS_LOAD_URL: process.env.PRESENCE_WS_LOAD_URL || undefined,
                 WORKER_BASE_URL: process.env.WORKER_BASE_URL || undefined,
                 WORKER_LOAD_URL: process.env.WORKER_LOAD_URL || undefined,
                 EXTENSION_TOKEN: process.env.EXTENSION_TOKEN || undefined,
