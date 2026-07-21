@@ -2,7 +2,6 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  availabilityStatusLabel,
   buildOwnerProfileTitle,
   buildProfileMetadataDescription,
   buildPublicProfileTitle,
@@ -41,8 +40,7 @@ describe("profile display helpers", () => {
     assert.equal(description, "Rama is based in Hyderabad on Edge. View their work and connect.");
   });
 
-  it("normalizes availability labels and titles", () => {
-    assert.equal(availabilityStatusLabel("available"), "Available");
+  it("normalizes profile titles", () => {
     assert.equal(buildOwnerProfileTitle({ fullName: "Rama ", username: "rama" }), "Rama (@rama) | Edge");
     assert.equal(buildPublicProfileTitle({ username: "rama" }), "@rama | Edge");
     assert.equal(normalizeProjectTitle(" Network for builders "), "Network for builders");
