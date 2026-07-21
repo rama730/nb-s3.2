@@ -597,7 +597,7 @@ export function ExplorerTree({
                     setGridSize(next);
                   }
                 }}
-                className="text-xs bg-transparent border-none text-zinc-700 dark:text-zinc-300 cursor-pointer focus:ring-0 appearance-none outline-none"
+                className="text-xs bg-transparent border-none text-zinc-700 dark:text-zinc-300 cursor-pointer  appearance-none outline-none"
               >
                 <option value="small">Small</option>
                 <option value="default">Default</option>
