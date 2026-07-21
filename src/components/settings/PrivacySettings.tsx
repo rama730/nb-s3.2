@@ -1,23 +1,20 @@
 "use client";
 
+import { toast } from "sonner";
 import Link from "next/link";
-import { useMemo, useState, type ComponentType } from "react";
+import { useState, type ComponentType } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ExternalLink, Globe, Lock, Search, ShieldBan, Users } from "lucide-react";
+import { Globe, Lock, Search, ShieldBan, Users } from "lucide-react";
 import { usePrivacySettings } from "@/hooks/useSettingsQueries";
 import { invalidatePrivacyDependents } from "@/lib/privacy/client-invalidation";
 import { profileHref } from "@/lib/routing/identifiers";
-import type { PrivacyBlockedAccount, PrivacyData } from "@/lib/types/settingsTypes";
+import type { PrivacyBlockedAccount } from "@/lib/types/settingsTypes";
+import type { ConnectionPrivacySetting, MessagePrivacySetting, ProfileVisibilitySetting } from "@/lib/privacy/relationship-state";
 import { SettingsPageHeader } from "@/components/settings/ui/SettingsPageHeader";
 import { SettingsSectionCard } from "@/components/settings/ui/SettingsSectionCard";
-import { useToast } from "@/components/ui-custom/Toast";
 import { UserAvatar } from "@/components/ui/UserAvatar";
+import { formatCalendarDate, formatDateTime } from "@/lib/ui/date-formatting";
 
-type ProfileVisibility = PrivacyData["settings"]["profileVisibility"];
-type MessagePrivacy = PrivacyData["settings"]["messagePrivacy"];
-type ConnectionPrivacy = PrivacyData["settings"]["connectionPrivacy"];
-
-const BLOCKED_SEARCH_MIN_COUNT = 5;
 
 async function patchPrivacy(url: string, body: Record<string, unknown>) {
     const res = await fetch(url, {
@@ -61,7 +58,7 @@ function OptionButton({
 }: {
     title: string;
     description: string;
-    icon: ComponentType<{ className?: string }>;
+    icon?: ComponentType<{ className?: string }>;
     selected: boolean;
     disabled?: boolean;
     onClick: () => void;
@@ -78,9 +75,7 @@ function OptionButton({
             } ${disabled ? "opacity-60 cursor-not-allowed" : ""}`}
         >
             <div className="flex items-start gap-3">
-                <div className={`rounded-xl p-2 ${selected ? "bg-indigo-100 text-indigo-600 dark:bg-indigo-900/40 dark:text-indigo-300" : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400"}`}>
-                    <Icon className="w-4 h-4" />
-                </div>
+                {Icon ? <div className={`rounded-xl p-2 ${selected ? "bg-indigo-100 text-indigo-600 dark:bg-indigo-900/40 dark:text-indigo-300" : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400"}`}><Icon className="w-4 h-4" /></div> : null}
                 <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                         <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">{title}</div>
@@ -108,71 +103,9 @@ function OverviewChip({
     );
 }
 
-function SegmentedChoice({
-    title,
-    description,
-    selected,
-    disabled,
-    onClick,
-}: {
-    title: string;
-    description: string;
-    selected: boolean;
-    disabled?: boolean;
-    onClick: () => void;
-}) {
-    return (
-        <button
-            type="button"
-            onClick={onClick}
-            disabled={disabled}
-            className={`rounded-2xl border px-4 py-3 text-left transition-colors ${
-                selected
-                    ? "border-indigo-500 bg-indigo-50 dark:border-indigo-500 dark:bg-indigo-950/20"
-                    : "border-zinc-200 bg-white hover:border-zinc-300 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:border-zinc-700"
-            } ${disabled ? "cursor-not-allowed opacity-60" : ""}`}
-        >
-            <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">{title}</div>
-            <div className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{description}</div>
-        </button>
-    );
-}
-
-function getProfileVisibilityLabel(value: ProfileVisibility) {
-    switch (value) {
-        case "connections":
-            return "Connections only";
-        case "private":
-            return "Private";
-        default:
-            return "Public";
-    }
-}
-
-function getMessagePrivacyLabel(value: MessagePrivacy) {
-    return value === "everyone" ? "Everyone" : "Connections only";
-}
-
-function getConnectionPrivacyLabel(value: ConnectionPrivacy) {
-    if (value === "mutuals_only") return "Mutuals only";
-    if (value === "nobody") return "Nobody";
-    return "Everyone";
-}
-
-function getProfileVisibilityImpact(value: ProfileVisibility) {
-    switch (value) {
-        case "connections":
-            return "Strangers can still find you, but they only see a locked profile shell until you connect.";
-        case "private":
-            return "Non-connections see a locked shell with limited identity and only the actions you allow.";
-        default:
-            return "Your full profile is open. Messaging and request rules still apply separately.";
-    }
-}
-
-function getInteractionSummary(messagePrivacy: MessagePrivacy, connectionPrivacy: ConnectionPrivacy) {
-    return `${getMessagePrivacyLabel(messagePrivacy)} can message you. ${getConnectionPrivacyLabel(connectionPrivacy)} can send connection requests.`;
-}
+const PROFILE_LABELS: Record<ProfileVisibilitySetting, string> = { public: "Public", connections: "Connections only", private: "Private" };
+const MESSAGE_LABELS: Record<MessagePrivacySetting, string> = { everyone: "Everyone", connections: "Connections only" };
+const CONNECTION_LABELS: Record<ConnectionPrivacySetting, string> = { everyone: "Everyone", mutuals_only: "Mutuals only", nobody: "Nobody" };
 
 function BlockedAccountRow({
     account,
@@ -208,7 +141,7 @@ function BlockedAccountRow({
             </div>
             <div className="flex items-center gap-3">
                 <div className="hidden text-right text-xs text-zinc-500 dark:text-zinc-400 sm:block">
-                    {account.blockedAt ? `Blocked ${new Date(account.blockedAt).toLocaleDateString()}` : "Blocked"}
+                    {account.blockedAt ? `Blocked ${formatCalendarDate(account.blockedAt)}` : "Blocked"}
                 </div>
                 <button
                     type="button"
@@ -224,7 +157,6 @@ function BlockedAccountRow({
 }
 
 export default function PrivacySettings() {
-    const { showToast } = useToast();
     const queryClient = useQueryClient();
     const { data, isLoading } = usePrivacySettings();
     const [blockedSearch, setBlockedSearch] = useState("");
@@ -233,67 +165,34 @@ export default function PrivacySettings() {
         await invalidatePrivacyDependents(queryClient);
     };
 
-    const profileVisibilityMutation = useMutation({
-        mutationFn: (visibility: ProfileVisibility) =>
-            patchPrivacy("/api/v1/privacy/profile-visibility", { visibility }),
-        onSuccess: async () => {
-            showToast("Profile visibility updated", "success");
+    const updateMutation = useMutation({
+        mutationFn: (update: { url: string; body: Record<string, unknown>; successMessage: string }) => patchPrivacy(update.url, update.body),
+        onSuccess: async (_data, update) => {
+            toast.success(update.successMessage);
             await refreshPrivacy();
         },
-        onError: (error) => {
-            showToast(error instanceof Error ? error.message : "Failed to update profile visibility", "error");
-        },
-    });
-
-    const messagePrivacyMutation = useMutation({
-        mutationFn: (messagePrivacy: MessagePrivacy) =>
-            patchPrivacy("/api/v1/privacy/message-privacy", { messagePrivacy }),
-        onSuccess: async () => {
-            showToast("Messaging privacy updated", "success");
-            await refreshPrivacy();
-        },
-        onError: (error) => {
-            showToast(error instanceof Error ? error.message : "Failed to update messaging privacy", "error");
-        },
-    });
-
-    const connectionPrivacyMutation = useMutation({
-        mutationFn: (connectionPrivacy: ConnectionPrivacy) =>
-            patchPrivacy("/api/v1/privacy/connection-privacy", { connectionPrivacy }),
-        onSuccess: async () => {
-            showToast("Connection request privacy updated", "success");
-            await refreshPrivacy();
-        },
-        onError: (error) => {
-            showToast(error instanceof Error ? error.message : "Failed to update connection request privacy", "error");
-        },
+        onError: (error) => toast.error(error instanceof Error ? error.message : "Failed to update privacy settings"),
     });
 
     const unblockMutation = useMutation({
         mutationFn: unblockAccount,
         onSuccess: async () => {
-            showToast("Account unblocked", "success");
+            toast.success("Account unblocked");
             await refreshPrivacy();
         },
         onError: (error) => {
-            showToast(error instanceof Error ? error.message : "Failed to unblock account", "error");
+            toast.error(error instanceof Error ? error.message : "Failed to unblock account");
         },
     });
 
-    const filteredBlockedAccounts = useMemo(() => {
-        const items = data?.blockedAccounts ?? [];
-        const query = blockedSearch.trim().toLowerCase();
-        if (!query) return items;
-        return items.filter((account) => {
-            const haystack = [account.fullName, account.username, account.headline].filter(Boolean).join(" ").toLowerCase();
-            return haystack.includes(query);
-        });
-    }, [blockedSearch, data?.blockedAccounts]);
+    const blockedQuery = blockedSearch.trim().toLowerCase();
+    const filteredBlockedAccounts = (data?.blockedAccounts ?? []).filter((account) => !blockedQuery
+        || [account.fullName, account.username, account.headline].filter(Boolean).join(" ").toLowerCase().includes(blockedQuery));
 
     const settings = data?.settings;
     const overview = data?.overview;
 
-    const handleProfileVisibilityChange = (visibility: ProfileVisibility) => {
+    const handleProfileVisibilityChange = (visibility: ProfileVisibilitySetting) => {
         if (visibility === settings?.profileVisibility) return;
         if (
             visibility === "private" &&
@@ -303,10 +202,10 @@ export default function PrivacySettings() {
         ) {
             return;
         }
-        profileVisibilityMutation.mutate(visibility);
+        updateMutation.mutate({ url: "/api/v1/privacy/profile-visibility", body: { visibility }, successMessage: "Profile visibility updated" });
     };
 
-    const handleConnectionPrivacyChange = (connectionPrivacy: ConnectionPrivacy) => {
+    const handleConnectionPrivacyChange = (connectionPrivacy: ConnectionPrivacySetting) => {
         if (connectionPrivacy === settings?.connectionPrivacy) return;
         if (
             connectionPrivacy === "nobody" &&
@@ -316,12 +215,12 @@ export default function PrivacySettings() {
         ) {
             return;
         }
-        connectionPrivacyMutation.mutate(connectionPrivacy);
+        updateMutation.mutate({ url: "/api/v1/privacy/connection-privacy", body: { connectionPrivacy }, successMessage: "Connection request privacy updated" });
     };
 
-    const handleMessagePrivacyChange = (messagePrivacy: MessagePrivacy) => {
+    const handleMessagePrivacyChange = (messagePrivacy: MessagePrivacySetting) => {
         if (messagePrivacy === settings?.messagePrivacy) return;
-        messagePrivacyMutation.mutate(messagePrivacy);
+        updateMutation.mutate({ url: "/api/v1/privacy/message-privacy", body: { messagePrivacy }, successMessage: "Messaging privacy updated" });
     };
 
     const handleUnblock = (userId: string) => {
@@ -348,9 +247,9 @@ export default function PrivacySettings() {
                     <div className="space-y-3">
                         <p className="text-sm text-zinc-600 dark:text-zinc-400">{overview.summary}</p>
                         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                            <OverviewChip label="Profile" value={getProfileVisibilityLabel(overview.profileVisibility)} />
-                            <OverviewChip label="Messages" value={getMessagePrivacyLabel(overview.messagePrivacy)} />
-                            <OverviewChip label="Requests" value={getConnectionPrivacyLabel(overview.connectionPrivacy)} />
+                            <OverviewChip label="Profile" value={PROFILE_LABELS[overview.profileVisibility]} />
+                            <OverviewChip label="Messages" value={MESSAGE_LABELS[overview.messagePrivacy]} />
+                            <OverviewChip label="Requests" value={CONNECTION_LABELS[overview.connectionPrivacy]} />
                             <OverviewChip label="Blocked" value={overview.blockedCount} />
                         </div>
                     </div>
@@ -361,28 +260,15 @@ export default function PrivacySettings() {
                 <div className="space-y-4">
                     <p className="text-sm text-zinc-500 dark:text-zinc-400">Why this matters: your profile visibility controls how much identity and profile content strangers can open.</p>
                     <div className="rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm text-zinc-600 dark:border-zinc-800 dark:bg-zinc-950/50 dark:text-zinc-400">
-                        {data?.previews.profileVisibility || (settings ? getProfileVisibilityImpact(settings.profileVisibility) : "Choose who can open your full profile.")}
+                        {data?.previews.profileVisibility || "Choose who can open your full profile."}
                     </div>
-                    {data?.previews.visitorProfileHref ? (
-                        <div className="flex justify-start">
-                            <Link
-                                href={data.previews.visitorProfileHref}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="inline-flex items-center gap-2 rounded-xl border border-zinc-200 px-3 py-2 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50 dark:border-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-900"
-                            >
-                                View as visitor
-                                <ExternalLink className="h-4 w-4" />
-                            </Link>
-                        </div>
-                    ) : null}
                     <div className="grid gap-3">
                     <OptionButton
                         title="Public"
                         description="Anyone can open your full profile. Private interactions still follow your messaging and request rules."
                         icon={Globe}
                         selected={settings?.profileVisibility === "public"}
-                        disabled={profileVisibilityMutation.isPending || !settings}
+                        disabled={updateMutation.isPending || !settings}
                         onClick={() => handleProfileVisibilityChange("public")}
                     />
                     <OptionButton
@@ -390,7 +276,7 @@ export default function PrivacySettings() {
                         description="People can still find you, but only accepted connections can open the full profile."
                         icon={Users}
                         selected={settings?.profileVisibility === "connections"}
-                        disabled={profileVisibilityMutation.isPending || !settings}
+                        disabled={updateMutation.isPending || !settings}
                         onClick={() => handleProfileVisibilityChange("connections")}
                     />
                     <OptionButton
@@ -398,7 +284,7 @@ export default function PrivacySettings() {
                         description="Non-connections see a locked profile shell with only limited identity and allowed actions."
                         icon={Lock}
                         selected={settings?.profileVisibility === "private"}
-                        disabled={profileVisibilityMutation.isPending || !settings}
+                        disabled={updateMutation.isPending || !settings}
                         onClick={() => handleProfileVisibilityChange("private")}
                     />
                     </div>
@@ -409,23 +295,23 @@ export default function PrivacySettings() {
                 <div className="space-y-6">
                     <p className="text-sm text-zinc-500 dark:text-zinc-400">Why this matters: these rules decide who can contact you directly and who can start a new relationship.</p>
                     <div className="rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm text-zinc-600 dark:border-zinc-800 dark:bg-zinc-950/50 dark:text-zinc-400">
-                        {data?.previews.interactionPermissions || (settings ? getInteractionSummary(settings.messagePrivacy, settings.connectionPrivacy) : "Choose who can message you and who can send requests.")}
+                        {data?.previews.interactionPermissions || "Choose who can message you and who can send requests."}
                     </div>
                     <div>
                         <div className="mb-3 text-sm font-semibold text-zinc-900 dark:text-zinc-100">Messaging Privacy</div>
                         <div className="grid gap-3 md:grid-cols-2">
-                            <SegmentedChoice
+                            <OptionButton
                                 title="Connections only"
                                 description="Only accepted connections can start direct messages with you."
                                 selected={settings?.messagePrivacy === "connections"}
-                                disabled={messagePrivacyMutation.isPending || !settings}
+                                disabled={updateMutation.isPending || !settings}
                                 onClick={() => handleMessagePrivacyChange("connections")}
                             />
-                            <SegmentedChoice
+                            <OptionButton
                                 title="Everyone"
                                 description="Anyone can start a direct message unless they are blocked."
                                 selected={settings?.messagePrivacy === "everyone"}
-                                disabled={messagePrivacyMutation.isPending || !settings}
+                                disabled={updateMutation.isPending || !settings}
                                 onClick={() => handleMessagePrivacyChange("everyone")}
                             />
                         </div>
@@ -434,25 +320,25 @@ export default function PrivacySettings() {
                     <div>
                         <div className="mb-3 text-sm font-semibold text-zinc-900 dark:text-zinc-100">Connection Requests</div>
                         <div className="grid gap-3 md:grid-cols-3">
-                            <SegmentedChoice
+                            <OptionButton
                                 title="Everyone"
                                 description="Any eligible account can send you a connection request."
                                 selected={settings?.connectionPrivacy === "everyone"}
-                                disabled={connectionPrivacyMutation.isPending || !settings}
+                                disabled={updateMutation.isPending || !settings}
                                 onClick={() => handleConnectionPrivacyChange("everyone")}
                             />
-                            <SegmentedChoice
+                            <OptionButton
                                 title="Mutual connections only"
                                 description="Only people who share at least one accepted connection with you can send a request."
                                 selected={settings?.connectionPrivacy === "mutuals_only"}
-                                disabled={connectionPrivacyMutation.isPending || !settings}
+                                disabled={updateMutation.isPending || !settings}
                                 onClick={() => handleConnectionPrivacyChange("mutuals_only")}
                             />
-                            <SegmentedChoice
+                            <OptionButton
                                 title="Nobody"
                                 description="No one can send you a new connection request until you change this setting."
                                 selected={settings?.connectionPrivacy === "nobody"}
-                                disabled={connectionPrivacyMutation.isPending || !settings}
+                                disabled={updateMutation.isPending || !settings}
                                 onClick={() => handleConnectionPrivacyChange("nobody")}
                             />
                         </div>
@@ -463,7 +349,7 @@ export default function PrivacySettings() {
             <SettingsSectionCard title="Blocked Accounts" description="Blocked accounts cannot message you, send requests, or appear in discovery and suggestions.">
                 <div className="space-y-4">
                     <p className="text-sm text-zinc-500 dark:text-zinc-400">Why this matters: blocking removes profile interaction, messaging, and discovery visibility across the app.</p>
-                    {data && data.blockedAccounts.length >= BLOCKED_SEARCH_MIN_COUNT ? (
+                    {data && data.blockedAccounts.length > 0 ? (
                         <div className="relative">
                             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
                             <input
@@ -471,7 +357,7 @@ export default function PrivacySettings() {
                                 value={blockedSearch}
                                 onChange={(event) => setBlockedSearch(event.target.value)}
                                 placeholder="Search blocked accounts"
-                                className="w-full rounded-2xl border border-zinc-200 bg-white py-3 pl-10 pr-4 text-sm text-zinc-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-100"
+                                className="w-full rounded-2xl border border-zinc-200 bg-white py-3 pl-10 pr-4 text-sm text-zinc-900 focus:outline-none   dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-100"
                             />
                         </div>
                     ) : null}
@@ -525,7 +411,7 @@ export default function PrivacySettings() {
                                         <div className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">{entry.summary}</div>
                                     </div>
                                     <div className="shrink-0 text-xs text-zinc-500 dark:text-zinc-400">
-                                        {new Date(entry.createdAt).toLocaleString()}
+                                        {formatDateTime(entry.createdAt)}
                                     </div>
                                 </div>
                             </div>
