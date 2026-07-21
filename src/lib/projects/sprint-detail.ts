@@ -10,18 +10,7 @@ export const SPRINT_TIMELINE_FILTERS = [
 
 export type SprintTimelineFilter = (typeof SPRINT_TIMELINE_FILTERS)[number];
 
-export const SPRINT_TIMELINE_MODES = [
-  "chronological",
-  "grouped",
-  "files",
-] as const;
-
-export type SprintTimelineMode = (typeof SPRINT_TIMELINE_MODES)[number];
-export const SPRINT_TIMELINE_MODE_LABELS: Record<SprintTimelineMode, string> = {
-  chronological: "Chronological",
-  grouped: "Grouped by task",
-  files: "Files",
-};
+export type SprintTimelineMode = "chronological";
 
 export const SPRINT_DRAWER_TYPES = ["task"] as const;
 export type SprintDrawerType = (typeof SPRINT_DRAWER_TYPES)[number];
@@ -215,17 +204,10 @@ export type SprintCompareSummary = {
   completedStoryPoints: SprintCompareMetric;
 };
 
-export type SprintViewPreference = {
-  mode: SprintTimelineMode;
-  filter: SprintTimelineFilter;
-};
-
 export type SprintRouteState = {
   filter: SprintTimelineFilter;
-  mode: SprintTimelineMode;
   drawer: SprintDrawerState;
   hasExplicitFilter: boolean;
-  hasExplicitMode: boolean;
 };
 
 type SearchParamsReader = {
@@ -304,7 +286,6 @@ export const SPRINT_FILTER_LABELS: Record<SprintTimelineFilter, string> = {
 };
 
 const sprintRouteFilterSchema = z.enum(SPRINT_TIMELINE_FILTERS);
-const sprintRouteModeSchema = z.enum(SPRINT_TIMELINE_MODES);
 const sprintRouteDrawerTypeSchema = z.enum(SPRINT_DRAWER_TYPES);
 const sprintRouteDrawerIdSchema = z.string().trim().min(1);
 
@@ -336,6 +317,42 @@ export function formatSprintDateRange(startDate: string | null | undefined, endD
     return `Ends ${end.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`;
   }
   return "Dates not set";
+}
+
+const SPRINT_RELATIVE_TIME_UNITS = [
+  ["year", 365 * 24 * 60 * 60 * 1000],
+  ["month", 30 * 24 * 60 * 60 * 1000],
+  ["week", 7 * 24 * 60 * 60 * 1000],
+  ["day", 24 * 60 * 60 * 1000],
+  ["hour", 60 * 60 * 1000],
+  ["minute", 60 * 1000],
+] as const;
+
+const sprintRelativeTime = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+
+export function formatSprintTimelineStamp(
+  value: string | number | Date | null | undefined,
+  fallback = "Date not set",
+) {
+  const date =
+    value instanceof Date
+      ? value
+      : value === null || value === undefined || value === ""
+        ? null
+        : new Date(value);
+  if (!date || !Number.isFinite(date.getTime())) return fallback;
+
+  const elapsed = date.getTime() - Date.now();
+  const delta = Math.abs(elapsed);
+  const [unit, unitMs] =
+    SPRINT_RELATIVE_TIME_UNITS.find(([, currentUnitMs]) => delta >= currentUnitMs) ??
+    SPRINT_RELATIVE_TIME_UNITS[SPRINT_RELATIVE_TIME_UNITS.length - 1]!;
+
+  return `${date.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  })} · ${sprintRelativeTime.format(Math.round(elapsed / unitMs), unit)}`;
 }
 
 export function pluralizeSprintUnit(count: number, singular: string, plural = `${singular}s`) {
@@ -419,30 +436,25 @@ export function parseSprintRouteState(input: URLSearchParams | SearchParamsReade
     input instanceof URLSearchParams
       ? {
           filter: input.get("filter") ?? undefined,
-          mode: input.get("mode") ?? undefined,
           drawerType: input.get("drawerType") ?? undefined,
           drawerId: input.get("drawerId") ?? undefined,
         }
       : isSearchParamsReader(input)
         ? {
             filter: input.get("filter") ?? undefined,
-            mode: input.get("mode") ?? undefined,
             drawerType: input.get("drawerType") ?? undefined,
             drawerId: input.get("drawerId") ?? undefined,
           }
         : {
             filter: Array.isArray(input.filter) ? input.filter[0] : input.filter,
-            mode: Array.isArray(input.mode) ? input.mode[0] : input.mode,
             drawerType: Array.isArray(input.drawerType) ? input.drawerType[0] : input.drawerType,
             drawerId: Array.isArray(input.drawerId) ? input.drawerId[0] : input.drawerId,
           };
 
   const parsedFilter = sprintRouteFilterSchema.safeParse(source.filter);
-  const parsedMode = sprintRouteModeSchema.safeParse(source.mode);
   const parsedDrawerType = sprintRouteDrawerTypeSchema.safeParse(source.drawerType);
   const parsedDrawerId = sprintRouteDrawerIdSchema.safeParse(source.drawerId);
   const filter = parsedFilter.success ? parsedFilter.data : "all";
-  const mode = parsedMode.success ? parsedMode.data : "chronological";
   const drawer =
     parsedDrawerType.success && parsedDrawerId.success
       ? ({ type: parsedDrawerType.data, id: parsedDrawerId.data } as SprintDrawerState)
@@ -450,16 +462,13 @@ export function parseSprintRouteState(input: URLSearchParams | SearchParamsReade
 
   return {
     filter,
-    mode,
     drawer,
     hasExplicitFilter: parsedFilter.success,
-    hasExplicitMode: parsedMode.success,
   };
 }
 
 export function buildSprintRouteQuery(input: {
   filter?: SprintTimelineFilter;
-  mode?: SprintTimelineMode;
   drawer?: SprintDrawerState;
   preserveTab?: boolean;
 }) {
@@ -470,9 +479,6 @@ export function buildSprintRouteQuery(input: {
   if (input.filter && input.filter !== "all") {
     params.set("filter", input.filter);
   }
-  if (input.mode && input.mode !== "chronological") {
-    params.set("mode", input.mode);
-  }
   if (input.drawer && input.drawer.type !== "none") {
     params.set("drawerType", input.drawer.type);
     params.set("drawerId", input.drawer.id);
@@ -482,14 +488,12 @@ export function buildSprintRouteQuery(input: {
 
 export function buildProjectSprintTabHref(projectSlug: string, input?: {
   filter?: SprintTimelineFilter;
-  mode?: SprintTimelineMode;
   drawer?: SprintDrawerState;
 }) {
   const encodedSlug = encodeURIComponent(projectSlug);
   const query = buildSprintRouteQuery({
     preserveTab: true,
     filter: input?.filter,
-    mode: input?.mode,
     drawer: input?.drawer,
   }).toString();
   return query ? `/projects/${encodedSlug}?${query}` : `/projects/${encodedSlug}?tab=sprints`;
@@ -497,16 +501,15 @@ export function buildProjectSprintTabHref(projectSlug: string, input?: {
 
 export function buildProjectSprintDetailHref(projectSlug: string, sprintId: string, input?: {
   filter?: SprintTimelineFilter;
-  mode?: SprintTimelineMode;
   drawer?: SprintDrawerState;
 }) {
   const encodedSlug = encodeURIComponent(projectSlug);
-  const encodedSprintId = encodeURIComponent(sprintId);
-  const query = buildSprintRouteQuery({
+  const queryParams = buildSprintRouteQuery({
     filter: input?.filter,
-    mode: input?.mode,
     drawer: input?.drawer,
-  }).toString();
-  const base = `/projects/${encodedSlug}/sprints/${encodedSprintId}`;
-  return query ? `${base}?${query}` : base;
+  });
+  queryParams.set('tab', 'sprints');
+  queryParams.set('sprintId', sprintId);
+  const query = queryParams.toString();
+  return `/projects/${encodedSlug}?${query}`;
 }
