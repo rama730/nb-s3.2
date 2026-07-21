@@ -60,7 +60,7 @@ The canonical UI folder is `src/components/chat/v2`:
 - Attention/unread model: `src/hooks/useMessageAttentionState.ts`.
 - Linked work: `src/hooks/useMessageWorkLinks.ts`.
 - Typing: `src/hooks/useChatTypingState.ts`, `src/hooks/useConversationTypingIndex.ts`, `src/hooks/useTypingChannel.ts`.
-- Presence: `src/hooks/usePresenceHealth.ts`, `src/hooks/usePresenceStatus.ts`, `src/hooks/usePublishOnlinePresence.ts`.
+- Presence: `src/hooks/usePresenceHealth.ts`, `src/hooks/usePresenceTyping.ts`, `src/hooks/usePublishOnlinePresence.ts`.
 - Shortcuts and supporting reads: `src/hooks/useMessagingShortcuts.ts`, `src/hooks/useLinkPreview.ts`.
 
 ### Server actions
@@ -81,10 +81,8 @@ The server action folder is `src/app/actions/messaging`:
 ### APIs, storage, and presence
 
 - `src/app/api/v1/messages/attachments/[attachmentId]/route.ts` authorizes and streams private attachments. Image previews are width-bounded and retain the original aspect ratio.
-- `src/app/api/realtime/presence-token/route.ts` issues ephemeral presence credentials.
-- `src/lib/realtime/presence-client.ts`, `presence-config.ts`, `presence-health.ts`, `presence-token.ts`, and `presence-types.ts` own the typing/presence transport.
+- `src/lib/realtime/presence-client.ts` and `presence-types.ts` own the Supabase typing/presence transport.
 - `src/lib/realtime/subscriptions.ts` is the durable Supabase subscription boundary.
-- `services/presence/src/server.ts` is the dedicated ephemeral WebSocket service.
 - Supabase Storage bucket: `chat-attachments` (private).
 
 ### Messaging domain modules
@@ -119,7 +117,7 @@ Messaging database history is carried by the following migrations:
 - Scale/collaboration/receipts: `0053_database_partitioning.sql`, `0059_messaging_reactions_reports_receipts.sql`, `0060_messaging_collaboration_foundation.sql`, `0064_messaging_reactions_reports_receipts_rls.sql`, `0066_message_delivery_receipts.sql`, `0067_read_receipts_conversation_id.sql`.
 - Notifications/scoping/optimization/hardening: `0072_user_notifications.sql`, `0073_message_reactions_conversation_scope.sql`, `0074_v2_schema_optimizations.sql`, `0075_review_optimization_indexes.sql`, `0078_public_rls_security_hardening.sql`.
 
-`supabase-setup.sql` mirrors the deployable RLS/policy state. Historical migrations are append-only and should not be edited to change current runtime behavior.
+The Drizzle journal and SQL governance checks are the deployable RLS/policy source of truth. Historical migrations are append-only and should not be edited to change current runtime behavior.
 
 ### Cross-system dependencies
 
