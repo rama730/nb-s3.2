@@ -196,7 +196,7 @@ export async function emitApplicationReceivedNotification(params: {
         importance: importanceForKind("application_received"),
         title: `${params.actorName || "Someone"} applied to ${params.projectTitle || "your project"}`,
         body: params.projectTitle ? `Project: ${params.projectTitle}` : "New application received",
-        href: `/people?tab=applications&applicationId=${encodeURIComponent(params.applicationId)}`,
+        href: `/people?tab=requests&applicationId=${encodeURIComponent(params.applicationId)}`,
         entityRefs: {
             applicationId: params.applicationId,
             projectId: params.projectId,
@@ -235,7 +235,7 @@ export async function emitApplicationDecisionNotification(params: {
         body: params.projectTitle ? `Project: ${params.projectTitle}` : null,
         href: params.conversationId
             ? `/messages?conversationId=${encodeURIComponent(params.conversationId)}`
-            : `/people?tab=applications&applicationId=${encodeURIComponent(params.applicationId)}`,
+            : `/people?tab=requests&applicationId=${encodeURIComponent(params.applicationId)}`,
         entityRefs: {
             applicationId: params.applicationId,
             conversationId: params.conversationId ?? null,
