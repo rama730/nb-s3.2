@@ -26,7 +26,6 @@ interface MessagesV2UiState {
     setHighlightedConversationId: (conversationId: string | null) => void;
     openPopupConversationList: (options?: { highlightConversationId?: string | null }) => void;
     upsertMessageAttention: (conversationId: string, attention: MessageAttentionState) => void;
-    clearMessageAttention: (conversationId: string) => void;
     clearMessageAttentionSmooth: (conversationIds: string | string[]) => void;
     setDraft: (conversationId: string, value: string) => void;
     clearDraft: (conversationId: string) => void;
@@ -79,26 +78,6 @@ export const useMessagesV2UiStore = create<MessagesV2UiState>()(
                                 attention,
                             ),
                         },
-                    };
-                }),
-            clearMessageAttention: (conversationId) =>
-                set((state) => {
-                    const next = { ...state.messageAttentionByConversation };
-                    delete next[conversationId];
-                    const timer = attentionClearTimers.get(conversationId);
-                    if (timer) {
-                        clearTimeout(timer);
-                        attentionClearTimers.delete(conversationId);
-                    }
-                    return {
-                        highlightedConversationId: state.highlightedConversationId === conversationId
-                            ? null
-                            : state.highlightedConversationId,
-                        messageAttentionSuppressedUntilByConversation: {
-                            ...state.messageAttentionSuppressedUntilByConversation,
-                            [conversationId]: Date.now() + 5_000,
-                        },
-                        messageAttentionByConversation: next,
                     };
                 }),
             clearMessageAttentionSmooth: (conversationIds) => {
