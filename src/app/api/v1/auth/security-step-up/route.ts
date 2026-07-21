@@ -1,4 +1,4 @@
-import { eq, sql } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import { validateCsrf } from "@/lib/security/csrf";
 import { resolvePasswordCredentialState } from "@/lib/auth/account-identity";
 import { db } from "@/lib/db";
@@ -13,7 +13,8 @@ import {
 } from "@/app/api/v1/_shared";
 import { logger } from "@/lib/logger";
 import { getProtectedRecoveryCodes } from "@/lib/services/profile-service";
-import { issueSecurityStepUpCookie, type SecurityStepUpMethod } from "@/lib/security/step-up";
+import { issueSecurityStepUpCookie } from "@/lib/security/step-up";
+import { buildSecurityStepUpMethods, type SecurityStepUpMethod } from "@/lib/security/step-up-methods";
 import {
   consumeRecoveryCode,
   countRemainingRecoveryCodes,
@@ -30,11 +31,6 @@ type SecurityStepUpBody = {
   password?: string;
 };
 
-function parseBody(payload: unknown): SecurityStepUpBody {
-  if (!payload || typeof payload !== "object") return {};
-  return payload as SecurityStepUpBody;
-}
-
 async function resolveStepUpCapabilities(input: {
   supabase: Awaited<ReturnType<typeof requireAuthenticatedUser>>["supabase"];
   user: NonNullable<Awaited<ReturnType<typeof requireAuthenticatedUser>>["user"]>;
@@ -45,12 +41,11 @@ async function resolveStepUpCapabilities(input: {
     (await getProtectedRecoveryCodes(input.user.id, { authorized: true }))?.securityRecoveryCodes ?? [],
   );
   const passwordLastChangedAt = await getLatestPasswordChangeAt(input.user.id);
-  const availableMethods: SecurityStepUpMethod[] = [];
-  if (verifiedTotpFactor?.id) availableMethods.push("totp");
-  if (remainingRecoveryCodes > 0) availableMethods.push("recovery_code");
-  if (input.user.email && resolvePasswordCredentialState(input.user, passwordLastChangedAt)) {
-    availableMethods.push("password");
-  }
+  const availableMethods = buildSecurityStepUpMethods({
+    hasTotp: Boolean(verifiedTotpFactor?.id),
+    hasRecoveryCodes: remainingRecoveryCodes > 0,
+    hasPassword: Boolean(input.user.email && resolvePasswordCredentialState(input.user, passwordLastChangedAt)),
+  });
 
   return {
     availableMethods,
@@ -169,7 +164,8 @@ export async function POST(request: Request) {
 
   let body: SecurityStepUpBody = {};
   try {
-    body = parseBody(await request.json());
+    const payload: unknown = await request.json();
+    body = payload && typeof payload === "object" ? payload as SecurityStepUpBody : {};
   } catch {
     logApiRoute(request, {
       requestId,
@@ -234,7 +230,6 @@ export async function POST(request: Request) {
     if (method === "totp") {
       const factorId = typeof body.factorId === "string" ? body.factorId.trim() : "";
       const code = typeof body.code === "string" ? body.code.trim() : "";
-      // M13: Validate factor ID format (UUID)
       if (!factorId || !/^[a-f0-9-]{36}$/.test(factorId) || !/^[0-9]{6}$/.test(code)) {
         return jsonError("Enter the current 6-digit code from your authenticator app", 400, "BAD_REQUEST");
       }
@@ -256,10 +251,7 @@ export async function POST(request: Request) {
     if (method === "recovery_code") {
       const rawCode = typeof body.code === "string" ? body.code : "";
 
-      // SEC-H3: before redeeming, confirm the codes are still bound to a
-      // TOTP factor that is currently verified for this user. When a user
-      // rotates their authenticator the old factor disappears and we must
-      // reject any surviving recovery codes rather than grant step-up.
+      // Recovery codes remain valid only while their authenticator factor is verified.
       const currentFactors = await listSecurityMfaFactors(auth.supabase);
       const verifiedTotpFactorIds = new Set(
         getVerifiedTotpFactors(currentFactors).map((factor) => factor.id),
@@ -383,7 +375,7 @@ export async function POST(request: Request) {
         );
       }
 
-      // M16: Non-blocking audit — failure should not abort the step-up operation
+      // Audit failure must not abort a successful verification.
       try {
         await recordSecurityEvent({
           userId: user.id,
