@@ -2,7 +2,7 @@ import { redirect } from 'next/navigation'
 import type { ReactNode } from 'react'
 import { Suspense } from 'react'
 import { getProfileDetails, getUserProfile } from '@/lib/data/profile'
-import ProfileShell from '@/components/profile/ProfileShell'
+import { ProfileV2Client } from '@/components/profile/v2/ProfileV2Client'
 import { getViewerAuthContext } from '@/lib/server/viewer-context'
 import { buildRouteMetadata } from '@/lib/metadata/route-metadata'
 import { logger } from '@/lib/logger'
@@ -92,13 +92,22 @@ async function ResolvedProfile() {
     }
 
     if (profileData) {
-        content = <ProfileShell initialData={profileData} profileId={profileData.profile.id} />
+        content = <ProfileV2Client
+            profile={profileData.profile}
+            stats={profileData.stats}
+            isOwner={profileData.isOwner}
+            currentUser={profileData.currentUser}
+            connectionStatus={profileData.connectionStatus}
+            privacyRelationship={profileData.privacyRelationship}
+            lockedShell={profileData.lockedShell}
+            collaborationSummary={profileData.collaborationSummary}
+        />
     }
 
     return <>{content}</>
 }
 
-export default function ProfilePage({ searchParams }: { searchParams?: Promise<Record<string, string | string[] | undefined>> }) {
+export default function ProfilePage() {
     return (
         <div
             data-scroll-root="route"
