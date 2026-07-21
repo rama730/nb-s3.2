@@ -344,7 +344,7 @@ describe("FolderListView — Retry re-invokes loadFolderContent (Req 4.10)", () 
   it("wires `<FolderListError onRetry={folder.retry}>` verbatim", () => {
     assert.match(
       VIEW_SOURCE,
-      /<FolderListError\s+projectId=\{projectId\}\s+onRetry=\{folder\.retry\}/,
+      /<FolderListError\s+onRetry=\{folder\.retry\}/,
       "FolderListView must pass `folder.retry` as the Retry callback",
     );
   });
