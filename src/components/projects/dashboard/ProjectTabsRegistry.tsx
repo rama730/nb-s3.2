@@ -1,24 +1,13 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import DashboardTab from "@/components/projects/tabs/DashboardTab";
 import { SkeletonTasks } from "@/components/projects/skeletons/SkeletonTasks";
 import { SkeletonFiles } from "@/components/projects/skeletons/SkeletonFiles";
 import { SkeletonSprints } from "@/components/projects/skeletons/SkeletonSprints";
 import { SkeletonSettings } from "@/components/projects/skeletons/SkeletonSettings";
 import { SkeletonAnalytics } from "@/components/projects/skeletons/SkeletonAnalytics";
 import { SkeletonDoc } from "@/components/projects/skeletons/SkeletonDoc";
-
-// Generic Skeleton for other tabs
-const TabSkeleton = () => (
-    <div className="animate-pulse space-y-4">
-        <div className="h-8 bg-zinc-200 dark:bg-zinc-800 rounded-lg w-1/3" />
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <div className="h-48 bg-zinc-200 dark:bg-zinc-800 rounded-2xl" />
-            <div className="h-48 bg-zinc-200 dark:bg-zinc-800 rounded-2xl" />
-        </div>
-        <div className="h-64 bg-zinc-200 dark:bg-zinc-800 rounded-2xl" />
-    </div>
-);
 
 const SkeletonUpdates = () => (
     <div className="grid w-full max-w-none gap-8 xl:grid-cols-[minmax(0,760px)_minmax(400px,1fr)]">
@@ -55,10 +44,7 @@ const SkeletonUpdates = () => (
     </div>
 );
 
-export const DashboardTab = dynamic(
-    () => import("@/components/projects/tabs/DashboardTab"),
-    { loading: () => <TabSkeleton />, ssr: true }
-);
+export { DashboardTab };
 
 export const DocTab = dynamic(
     () => import("@/components/projects/tabs/DocTab"),
@@ -76,7 +62,7 @@ export const TasksTab = dynamic(
 );
 
 export const FilesTab = dynamic(
-    () => import("@/components/projects/v2/ProjectFilesWorkspace"),
+    () => import("@/components/projects/v2/files-tab/FilesTabRoot").then((mod) => mod.FilesTabRoot),
     { loading: () => <SkeletonFiles />, ssr: false }
 );
 
