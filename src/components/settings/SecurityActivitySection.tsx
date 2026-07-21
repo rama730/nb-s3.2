@@ -1,8 +1,10 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import Button from "@/components/ui-custom/Button";
+import { useState } from "react";
+import { Button } from "@/components/ui/button";
 import type { SecurityActivityEntry } from "@/lib/types/settingsTypes";
+import { SecurityListRow } from "@/components/settings/ui/SecurityListRow";
+import { formatDateTime } from "@/lib/ui/date-formatting";
 
 type SecurityActivitySectionProps = {
   activity: SecurityActivityEntry[] | undefined;
@@ -10,30 +12,17 @@ type SecurityActivitySectionProps = {
 
 const DEFAULT_VISIBLE_ITEMS = 6;
 
-function getEventLabel(eventType: SecurityActivityEntry["eventType"]): string {
-  switch (eventType) {
-    case "authenticator_app_enabled":
-      return "Authenticator app enabled";
-    case "authenticator_app_removed":
-      return "Authenticator app removed";
-    case "recovery_codes_generated":
-      return "Recovery codes generated";
-    case "recovery_codes_regenerated":
-      return "Recovery codes regenerated";
-    case "recovery_code_used":
-      return "Recovery code used";
-    case "recovery_code_redemption_failed":
-      return "Recovery code redemption attempted";
-    case "password_set":
-      return "Password added";
-    case "password_changed":
-      return "Password changed";
-    case "other_sessions_revoked":
-      return "Other devices logged out";
-    default:
-      return eventType;
-  }
-}
+const EVENT_LABELS: Record<SecurityActivityEntry["eventType"], string> = {
+  authenticator_app_enabled: "Authenticator app enabled",
+  authenticator_app_removed: "Authenticator app removed",
+  recovery_codes_generated: "Recovery codes generated",
+  recovery_codes_regenerated: "Recovery codes regenerated",
+  recovery_code_used: "Recovery code used",
+  recovery_code_redemption_failed: "Recovery code redemption attempted",
+  password_set: "Password added",
+  password_changed: "Password changed",
+  other_sessions_revoked: "Other devices logged out",
+};
 
 function getEventSummary(entry: SecurityActivityEntry): string | null {
   if (entry.eventType === "other_sessions_revoked" && typeof entry.metadata.revokedCount === "number") {
@@ -69,11 +58,8 @@ function getEventSummary(entry: SecurityActivityEntry): string | null {
 
 export default function SecurityActivitySection({ activity }: SecurityActivitySectionProps) {
   const [showAll, setShowAll] = useState(false);
-  const items = useMemo(() => activity ?? [], [activity]);
-  const visibleItems = useMemo(
-    () => (showAll ? items : items.slice(0, DEFAULT_VISIBLE_ITEMS)),
-    [items, showAll],
-  );
+  const items = activity ?? [];
+  const visibleItems = showAll ? items : items.slice(0, DEFAULT_VISIBLE_ITEMS);
 
   if (items.length === 0) {
     return (
@@ -87,20 +73,11 @@ export default function SecurityActivitySection({ activity }: SecurityActivitySe
     <div className="space-y-3">
       {visibleItems.map((entry) => {
         const summary = getEventSummary(entry);
-        return (
-          <div
+        return <SecurityListRow
             key={entry.id}
-            className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800"
-          >
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
-                {getEventLabel(entry.eventType)}
-              </div>
-              <div className="text-xs text-zinc-500 dark:text-zinc-400">
-                {new Date(entry.createdAt).toLocaleString()}
-              </div>
-            </div>
-            <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-zinc-500 dark:text-zinc-400">
+            title={EVENT_LABELS[entry.eventType]}
+            meta={formatDateTime(entry.createdAt)}
+            details={<>
               {entry.networkFingerprint ? <span>Network {entry.networkFingerprint}</span> : null}
               {entry.deviceFingerprint ? (
                 <>
@@ -108,14 +85,9 @@ export default function SecurityActivitySection({ activity }: SecurityActivitySe
                   <span>Device {entry.deviceFingerprint}</span>
                 </>
               ) : null}
-            </div>
-            {summary ? (
-              <div className="mt-2 text-xs text-zinc-600 dark:text-zinc-300">
-                {summary}
-              </div>
-            ) : null}
-          </div>
-        );
+            </>}
+            summary={summary}
+          />;
       })}
 
       <div className="rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-600 dark:border-zinc-800 dark:bg-zinc-950/40 dark:text-zinc-400">
