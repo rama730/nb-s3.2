@@ -51,8 +51,14 @@ function createPassThroughResponse(requestHeaders?: Headers): NextResponse {
     })
 }
 
-function redirectWithRequestId(url: URL, requestId: string, routeClass: string): NextResponse {
-    return withRequestId(NextResponse.redirect(url), requestId, routeClass)
+function redirectWithRequestId(url: URL, requestId: string, routeClass: string, sourceResponse?: NextResponse): NextResponse {
+    const redirectResponse = withRequestId(NextResponse.redirect(url), requestId, routeClass)
+    if (sourceResponse) {
+        for (const cookie of sourceResponse.cookies.getAll()) {
+            redirectResponse.cookies.set(cookie)
+        }
+    }
+    return redirectResponse
 }
 
 function getCanonicalPublicUsernamePath(pathname: string): string | null {
@@ -302,6 +308,11 @@ export async function updateSession(request: NextRequest, options: UpdateSession
     }
 
     const url = request.nextUrl.clone()
+    const onboardingCompleteCookie = user ? request.cookies.get(`onboarding_complete_${user.id}`)?.value === 'true' : false
+    if (onboardingCompleteCookie) {
+        onboardingComplete = true
+    }
+
     const shouldVerifyOnboardingFromProfile =
         Boolean(user)
         && emailVerified
@@ -321,6 +332,17 @@ export async function updateSession(request: NextRequest, options: UpdateSession
             pathname,
             routeClass,
         })
+        if (onboardingComplete) {
+            supabaseResponse.cookies.set({
+                name: `onboarding_complete_${user.id}`,
+                value: 'true',
+                httpOnly: true,
+                sameSite: 'lax',
+                secure: process.env.NODE_ENV === 'production',
+                path: '/',
+                maxAge: 60 * 60 * 24 * 365, // 1 year
+            })
+        }
     }
 
     if (!user && isProtectedAppRoute(pathname)) {
@@ -333,7 +355,7 @@ export async function updateSession(request: NextRequest, options: UpdateSession
             'redirect',
             normalizeAuthNextPath(`${pathname}${request.nextUrl.search}`),
         )
-        return redirectWithRequestId(url, requestId, routeClass)
+        return redirectWithRequestId(url, requestId, routeClass, supabaseResponse)
     }
 
     if (!user && isOnboardingRoute(pathname)) {
@@ -342,7 +364,7 @@ export async function updateSession(request: NextRequest, options: UpdateSession
         }
 
         url.pathname = '/signup'
-        return redirectWithRequestId(url, requestId, routeClass)
+        return redirectWithRequestId(url, requestId, routeClass, supabaseResponse)
     }
 
     if (!user && pathname === '/verify-email') {
@@ -351,13 +373,13 @@ export async function updateSession(request: NextRequest, options: UpdateSession
         }
 
         url.pathname = '/login'
-        return redirectWithRequestId(url, requestId, routeClass)
+        return redirectWithRequestId(url, requestId, routeClass, supabaseResponse)
     }
 
     if (user && !emailVerified && pathname !== '/verify-email' && pathname !== '/auth/callback') {
         if (isProtectedAppRoute(pathname) || isOnboardingRoute(pathname)) {
             url.pathname = '/verify-email'
-            return redirectWithRequestId(url, requestId, routeClass)
+            return redirectWithRequestId(url, requestId, routeClass, supabaseResponse)
         }
     }
 
@@ -367,7 +389,7 @@ export async function updateSession(request: NextRequest, options: UpdateSession
 
         if (redirectPath && redirectPath !== '/hub') {
             const redirectUrl = new URL(redirectPath, request.url)
-            return redirectWithRequestId(redirectUrl, requestId, routeClass)
+            return redirectWithRequestId(redirectUrl, requestId, routeClass, supabaseResponse)
         }
 
         url.pathname = !emailVerified
@@ -375,20 +397,20 @@ export async function updateSession(request: NextRequest, options: UpdateSession
             : onboardingComplete
                 ? '/hub'
                 : '/onboarding'
-        return redirectWithRequestId(url, requestId, routeClass)
+        return redirectWithRequestId(url, requestId, routeClass, supabaseResponse)
     }
 
     if (user && pathname === '/verify-email') {
         if (emailVerified) {
             url.pathname = onboardingComplete ? '/hub' : '/onboarding'
-            return redirectWithRequestId(url, requestId, routeClass)
+            return redirectWithRequestId(url, requestId, routeClass, supabaseResponse)
         }
         return withRequestId(supabaseResponse, requestId, routeClass)
     }
 
     if (user && isOnboardingRoute(pathname) && onboardingComplete) {
         url.pathname = '/hub'
-        return redirectWithRequestId(url, requestId, routeClass)
+        return redirectWithRequestId(url, requestId, routeClass, supabaseResponse)
     }
 
     if (user && isProtectedAppRoute(pathname) && !onboardingComplete) {
@@ -398,7 +420,7 @@ export async function updateSession(request: NextRequest, options: UpdateSession
         if (returnPath !== '/hub' && returnPath !== '/onboarding') {
             url.searchParams.set('next', returnPath)
         }
-        return redirectWithRequestId(url, requestId, routeClass)
+        return redirectWithRequestId(url, requestId, routeClass, supabaseResponse)
     }
 
     if (pathname === '/') {
@@ -410,7 +432,7 @@ export async function updateSession(request: NextRequest, options: UpdateSession
             url.pathname = '/login'
         }
 
-        return redirectWithRequestId(url, requestId, routeClass)
+        return redirectWithRequestId(url, requestId, routeClass, supabaseResponse)
     }
 
     return withRequestId(supabaseResponse, requestId, routeClass)
