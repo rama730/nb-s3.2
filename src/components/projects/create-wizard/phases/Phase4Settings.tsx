@@ -84,7 +84,7 @@ export default function Phase4Settings() {
                             type="checkbox"
                             checked={terms?.portfolio_showcase_allowed ?? true}
                             onChange={(e) => updateTerms({ portfolio_showcase_allowed: e.target.checked })}
-                            className="w-4 h-4 rounded border-zinc-300 text-indigo-600 focus:ring-indigo-500"
+                            className="w-4 h-4 rounded border-zinc-300 text-indigo-600 "
                         />
                         <label className="text-sm text-zinc-700 dark:text-zinc-300">
                             Contributors can showcase work in their portfolios
