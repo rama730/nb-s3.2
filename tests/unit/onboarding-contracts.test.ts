@@ -1,7 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
-    ONBOARDING_AVAILABILITY_VALUES,
     ONBOARDING_EXPERIENCE_LEVEL_VALUES,
     ONBOARDING_GENDER_VALUES,
     ONBOARDING_HOURS_PER_WEEK_VALUES,
@@ -14,16 +13,6 @@ import { normalizeOnboardingPayload } from '@/lib/validations/onboarding'
 import { profileUpdateSchema } from '@/lib/validations/profile'
 
 test('onboarding contracts align with payload schema enums', () => {
-    for (const availabilityStatus of ONBOARDING_AVAILABILITY_VALUES) {
-        const payload = normalizeOnboardingPayload({
-            username: 'contract_user',
-            fullName: 'Contract User',
-            availabilityStatus,
-            visibility: 'public',
-        })
-        assert.equal(payload.availabilityStatus, availabilityStatus)
-    }
-
     for (const messagePrivacy of ONBOARDING_MESSAGE_PRIVACY_VALUES) {
         const payload = normalizeOnboardingPayload({
             username: 'contract_user',
@@ -75,10 +64,6 @@ test('onboarding contracts align with payload schema enums', () => {
 })
 
 test('profile update schema accepts onboarding enum values (db constraint alignment)', () => {
-    for (const availabilityStatus of ONBOARDING_AVAILABILITY_VALUES) {
-        const result = profileUpdateSchema.safeParse({ availabilityStatus })
-        assert.equal(result.success, true)
-    }
     for (const messagePrivacy of ONBOARDING_MESSAGE_PRIVACY_VALUES) {
         const result = profileUpdateSchema.safeParse({ messagePrivacy })
         assert.equal(result.success, true)
@@ -95,6 +80,18 @@ test('profile update schema accepts onboarding enum values (db constraint alignm
         const result = profileUpdateSchema.safeParse({ genderIdentity })
         assert.equal(result.success, true)
     }
+})
+
+test('legacy availability input is ignored by onboarding and profile contracts', () => {
+    const onboarding = normalizeOnboardingPayload({
+        username: 'contract_user',
+        fullName: 'Contract User',
+        availabilityStatus: 'busy',
+    } as any)
+    assert.equal('availabilityStatus' in onboarding, false)
+
+    const profile = profileUpdateSchema.parse({ availabilityStatus: 'available' })
+    assert.equal('availabilityStatus' in profile, false)
 })
 
 test('onboarding event schema validates known event types and step constraints', () => {
