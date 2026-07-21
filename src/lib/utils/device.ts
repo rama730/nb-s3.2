@@ -56,17 +56,3 @@ export function parseUserAgent(userAgent: string): DeviceInfo {
 
     return { browser, os, icon };
 }
-
-export function getDeviceType(userAgent: string): "desktop" | "tablet" | "mobile" {
-    const ua = userAgent.toLowerCase();
-
-    if (ua.includes("mobile") || ua.includes("iphone") || (ua.includes("android") && !ua.includes("tablet"))) {
-        return "mobile";
-    }
-
-    if (ua.includes("tablet") || ua.includes("ipad")) {
-        return "tablet";
-    }
-
-    return "desktop";
-}
