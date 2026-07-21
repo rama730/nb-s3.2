@@ -3,7 +3,7 @@
 import { db } from "@/lib/db";
 import { projectFileIndex, projectNodeEvents, projectNodeLocks, projectNodes } from "@/lib/db/schema";
 import type { ProjectNode } from "@/lib/db/schema";
-import { eq, and, or, isNull, isNotNull, ilike, inArray, sql, gt, ne, type SQL } from "drizzle-orm";
+import { eq, and, or, isNull, isNotNull, ilike, inArray, sql, gt, type SQL } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
@@ -107,6 +107,7 @@ async function assertSubtreeNotLockedByAnotherUser(
     node: { id: string; path: string; type: string },
     userId: string,
 ) {
+    void userId;
     const [lock] = await tx
         .select({ nodeId: projectNodeLocks.nodeId })
         .from(projectNodeLocks)
@@ -114,13 +115,12 @@ async function assertSubtreeNotLockedByAnotherUser(
         .where(and(
             eq(projectNodeLocks.projectId, projectId),
             gt(projectNodeLocks.expiresAt, new Date()),
-            ne(projectNodeLocks.lockedBy, userId),
             subtreePathPredicate(node)
         ))
         .limit(1);
 
     if (lock) {
-        throw new Error("File is locked by another collaborator");
+        throw new Error("A file in this subtree has an active editing lease");
     }
 }
 
