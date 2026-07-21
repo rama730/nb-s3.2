@@ -76,6 +76,10 @@ const LIB_FILES_DIR = path.resolve(
   __dirname,
   "../../../src/lib/files",
 );
+const API_FILES_DIR = path.resolve(
+  __dirname,
+  "../../../src/app/api/v1/files",
+);
 
 function readActionSource(file: string): string {
   return readFileSync(path.join(ACTIONS_DIR, file), "utf8");
@@ -85,34 +89,43 @@ function readLibSource(file: string): string {
   return readFileSync(path.join(LIB_FILES_DIR, file), "utf8");
 }
 
+function readApiFileSource(file: string): string {
+  return readFileSync(path.join(API_FILES_DIR, file), "utf8");
+}
+
 const SHARED_SRC = readLibSource("internal-helpers.ts");
 const MUTATIONS_SRC = readActionSource("mutations.ts");
 const CONTENT_SRC = readActionSource("content.ts");
 const VERSIONS_SRC = readActionSource("versions.ts");
-const LOCKS_SRC = readActionSource("locks.ts");
 const LINKS_SRC = readActionSource("links.ts");
 const EVENTS_SRC = readActionSource("events.ts");
 const NODES_SRC = readActionSource("nodes.ts");
+const LOCK_SERVICE_SRC = readLibSource("file-lock-service.ts");
+const LOCK_ROUTE_SRC = readApiFileSource("[nodeId]/lock/route.ts");
+const LOCK_RENEW_ROUTE_SRC = readApiFileSource("[nodeId]/lock-renew/route.ts");
 
 // ─── (i) Viewer sees no mutation UI (Req 19.3, Req 5.4) ──────────────
 
 describe("Role_Viewer — mutation UI is absent (Req 19.3, Req 5.4)", () => {
   function renderActionsBarWithRole(role: Role): string {
     return renderToStaticMarkup(
-      React.createElement(QueryClientProvider, {
-        client: testQueryClient,
-        children: React.createElement(FilesTabRoleProvider, {
+      React.createElement(
+        QueryClientProvider,
+        { client: testQueryClient },
+        React.createElement(
+          FilesTabRoleProvider,
+          {
           role,
           canEdit: role !== "Role_Viewer",
-          children: React.createElement(FileActionsBar, {
+          },
+          React.createElement(FileActionsBar, {
             mode: "view",
             onView: () => {},
             onRaw: () => {},
             onEdit: () => {},
-            onDownload: () => {},
           }),
-        }),
-      })
+        ),
+      ),
     );
   }
 
@@ -166,16 +179,16 @@ describe("Role_Viewer — mutation UI is absent (Req 19.3, Req 5.4)", () => {
     // harnesses that forget to mount the provider. Req 19.3 ("must not
     // be visible, focusable, or activatable").
     const html = renderToStaticMarkup(
-      React.createElement(QueryClientProvider, {
-        client: testQueryClient,
-        children: React.createElement(FileActionsBar, {
+      React.createElement(
+        QueryClientProvider,
+        { client: testQueryClient },
+        React.createElement(FileActionsBar, {
           mode: "view",
           onView: () => {},
           onRaw: () => {},
           onEdit: () => {},
-          onDownload: () => {},
         }),
-      })
+      ),
     );
     // Since canEdit defaults to false, verify replace input is absent
     assert.doesNotMatch(html, /data-testid="files-tab-file-actions-replace-input"/);
@@ -262,12 +275,8 @@ describe("Server-side mutation authorization (Req 19.6)", () => {
     { fn: "formatProjectFileContent", src: () => CONTENT_SRC },
     { fn: "updateProjectFileStats", src: () => CONTENT_SRC },
     // versions.ts — version history writes
-    { fn: "replaceNodeWithNewVersion", src: () => VERSIONS_SRC },
+    { fn: "applyUploadedFileRevision", src: () => VERSIONS_SRC },
     { fn: "restoreFileVersion", src: () => VERSIONS_SRC },
-    // locks.ts — lock acquisition is a write-side capability
-    { fn: "acquireProjectNodeLock", src: () => LOCKS_SRC },
-    { fn: "refreshProjectNodeLock", src: () => LOCKS_SRC },
-    { fn: "releaseProjectNodeLock", src: () => LOCKS_SRC },
     // links.ts — task-file linking mutates
     { fn: "linkNodeToTask", src: () => LINKS_SRC },
     { fn: "unlinkNodeFromTask", src: () => LINKS_SRC },
@@ -292,7 +301,7 @@ describe("Server-side mutation authorization (Req 19.6)", () => {
       // Step 1: the unauthenticated-caller guard must be present.
       assert.match(
         body,
-        /if\s*\(!user\)\s*throw\s+new\s+Error\(\s*["']Unauthorized["']\s*\)/,
+        /if\s*\(!user\)\s*throw\s+new\s+Error\(\s*["']Unauthorized["']\s*\)|await\s+requireUser\(\)/,
         `${fn} must reject anonymous callers with an "Unauthorized" error (Req 19.6)`,
       );
 
@@ -307,6 +316,45 @@ describe("Server-side mutation authorization (Req 19.6)", () => {
     });
   }
 
+  it("file lease routes require auth, CSRF, and write access before lock service calls", () => {
+    for (const [label, source, serviceCall] of [
+      ["acquire", LOCK_ROUTE_SRC, "acquireFileLease"],
+      ["release", LOCK_ROUTE_SRC, "releaseFileLease"],
+      ["renew", LOCK_RENEW_ROUTE_SRC, "renewFileLease"],
+    ] as const) {
+      assert.match(
+        source,
+        /requireFileLeaseUser\(request,\s*\{[\s\S]*csrf:\s*true/,
+        `${label}: route must require authenticated CSRF-protected requests`,
+      );
+      assert.match(
+        source,
+        /assertProjectWriteAccess\([\s\S]*auth\.user!\.id\)/,
+        `${label}: route must reject viewer/read-only users before mutating leases`,
+      );
+      assert.match(
+        source,
+        new RegExp(`assertProjectWriteAccess[\\s\\S]*${serviceCall}\\(`),
+        `${label}: write access must be checked before ${serviceCall}`,
+      );
+    }
+  });
+
+  it("file lease service scopes renew/release to the authenticated holder credentials", () => {
+    for (const fn of ["renewFileLease", "releaseFileLease"] as const) {
+      const body = extractFunctionBody(LOCK_SERVICE_SRC, fn);
+      assert.ok(body, `${fn} must be defined`);
+      for (const guard of [
+        /locked_by\s*=\s*\$\{input\.userId\}::uuid/,
+        /session_id\s*=\s*\$\{input\.credentials\.sessionId\}::uuid/,
+        /lease_id\s*=\s*\$\{input\.credentials\.leaseId\}::uuid/,
+        /fencing_token\s*=\s*\$\{input\.credentials\.fencingToken\}/,
+      ]) {
+        assert.match(body, guard, `${fn}: ${guard} guard is required`);
+      }
+    }
+  });
+
   it("assertProjectWriteAccess helper throws 'Forbidden' for callers without write capability", () => {
     // The shared helper is the single choke-point where the viewer
     // role is refused. This source-level assertion pins the contract
@@ -319,8 +367,8 @@ describe("Server-side mutation authorization (Req 19.6)", () => {
     // fails closed for the `viewer` role.
     assert.match(
       helperBody,
-      /if\s*\(!access\.project\)\s*throw\s+new\s+Error\(\s*["']Forbidden["']\s*\)/,
-      "must fail closed with Forbidden when the project is not visible to the caller",
+      /if\s*\(!access\.canWrite\)\s*throw\s+new\s+Error\(\s*["']Forbidden["']\s*\)/,
+      "must fail closed with Forbidden when the caller lacks write access",
     );
     assert.match(
       helperBody,
