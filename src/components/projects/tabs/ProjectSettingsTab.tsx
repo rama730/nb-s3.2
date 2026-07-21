@@ -2,7 +2,6 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import dynamic from "next/dynamic";
 import Image from "next/image";
 import { useFieldArray, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -13,7 +12,6 @@ import {
     Bell,
     ChevronDown,
     Crown,
-    Database,
     Download,
     FileText,
     Folder,
@@ -22,7 +20,6 @@ import {
     Loader2,
     Lock,
     RefreshCw,
-    Route,
     Search,
     Settings,
     Shield,
@@ -37,6 +34,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { SkillPicker } from "@/components/skills/SkillPicker";
 import { Button } from "@/components/ui/button";
 import { transferProjectOwnership } from "@/app/actions/account";
 import {
@@ -62,7 +60,6 @@ import {
     updateProjectLifecycleAction,
     updateProjectFileUploadDefaultsAction,
     updateProjectMemberFileUploadAction,
-    updateProjectManualFileAnalyticsVisibilityAction,
     updateProjectMemberNotificationSettingsAction,
     updateProjectMemberRoleAction,
     updateProjectNotificationSettingsAction,
@@ -75,7 +72,6 @@ import {
     isKnownProjectType,
     OTHER_PROJECT_TYPE_ID,
     POPULAR_PROJECT_TAGS,
-    POPULAR_PROJECT_TECH,
     PROJECT_TYPE_OPTIONS,
 } from "@/lib/projects/project-create-options";
 import {
@@ -122,24 +118,13 @@ import {
     normalizeProjectDocSettings,
     type ProjectDocSettings,
 } from "@/lib/projects/doc";
+import { LifecycleEditor as BaseLifecycleEditor } from "@/components/projects/LifecycleEditor";
+import { ProjectRolesEditor } from "@/components/projects/settings/ProjectRolesEditor";
 import {
     normalizeProjectRoleFormValues,
     type ProjectRoleFormValue,
     type ProjectRolesFormValues,
 } from "@/lib/projects/project-roles-form";
-
-const LifecycleEditor = dynamic(() => import("@/components/projects/settings/LifecycleEditor"), {
-    loading: () => <SettingsInlineLoading label="Loading lifecycle editor..." />,
-    ssr: false,
-});
-
-const ProjectRolesEditor = dynamic(
-    () => import("@/components/projects/settings/ProjectRolesEditor").then((mod) => mod.ProjectRolesEditor),
-    {
-        loading: () => <SettingsInlineLoading label="Loading roles editor..." />,
-        ssr: false,
-    },
-);
 
 interface ProjectSettingsTabProps {
     projectId: string;
@@ -218,27 +203,10 @@ type FileWorkspaceSettingsData = {
         uploadPermissionLocked: boolean;
         uploadPermissionLabel: string;
     }>;
-    manualFiles: Array<{
-        id: string;
-        name: string;
-        path: string;
-        uploadedByName: string | null;
-        uploadedAt: string | null;
-        updatedAt: string | null;
-        size: number | null;
-        linkedTasks: number;
-        analyticsVisible: boolean;
-        publicVisible: boolean;
-        privateReason: string | null;
-    }>;
     summary: {
         alwaysAllowedCount: number;
         enabledMemberCount: number;
         disabledMemberCount: number;
-        viewerCount: number;
-        manualFileCount: number;
-        privateManualFileCount: number;
-        analyticsVisibleManualFileCount: number;
     };
 };
 
@@ -276,8 +244,6 @@ type RemovalPreflightData = {
 type CollaboratorFilter = "all" | "admin" | "member" | "viewer";
 type RemovalMode = "preserve_history" | "unassign_active_tasks" | "reassign_active_tasks";
 type RemovalTaskPreview = { id: string; title: string; taskNumber: number | null; status: string | null };
-type RemovalFileReviewPreview = { id: string; taskId: string; taskTitle: string | null; nodeName: string | null; annotation: string | null };
-type RemovalApplicationPreview = { id: string; roleId: string; roleTitle: string | null; roleName: string | null };
 
 type CoverDraft = {
     file: File;
@@ -304,14 +270,6 @@ type ScrollSnapshot = {
     windowScrollY: number;
 };
 
-function SettingsInlineLoading({ label }: { label: string }) {
-    return (
-        <div className="rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-6 text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900/40 dark:text-zinc-400">
-            {label}
-        </div>
-    );
-}
-
 const SECTION_ICONS: Record<ProjectSettingsSectionId, React.ComponentType<{ className?: string }>> = {
     general: Settings,
     access: Globe,
@@ -322,9 +280,7 @@ const SECTION_ICONS: Record<ProjectSettingsSectionId, React.ComponentType<{ clas
     readme: FileText,
     updates: Bell,
     notifications: Bell,
-    automation: Route,
     "security-audit": Shield,
-    data: Database,
     danger: AlertTriangle,
 };
 
@@ -556,11 +512,6 @@ function projectMemberRole(member: ProjectSettingsMember, ownerId: string | null
     return ownerId && member.id === ownerId ? "owner" : "member";
 }
 
-function formatRole(role: string | null | undefined) {
-    if (!role) return "Member";
-    return role.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
-}
-
 function resetSettingsFromProject(project: any) {
     return {
         visibility: normalizeProjectVisibility(project?.visibility),
@@ -668,7 +619,6 @@ export default function ProjectSettingsTab({
     const [fileWorkspaceData, setFileWorkspaceData] = useState<FileWorkspaceSettingsData | null>(null);
     const [fileWorkspaceLoading, setFileWorkspaceLoading] = useState(false);
     const [fileWorkspaceSavingMemberId, setFileWorkspaceSavingMemberId] = useState<string | null>(null);
-    const [fileWorkspaceSavingFileId, setFileWorkspaceSavingFileId] = useState<string | null>(null);
     const [fileWorkspaceBulkSaving, setFileWorkspaceBulkSaving] = useState(false);
     const [projectNotificationData, setProjectNotificationData] = useState<ProjectNotificationSettingsData | null>(null);
     const [projectNotificationDraft, setProjectNotificationDraft] = useState<ProjectNotificationPolicy>(() => buildDefaultProjectNotificationPolicy());
@@ -1257,29 +1207,6 @@ export default function ProjectSettingsTab({
             setFileWorkspaceBulkSaving(false);
         }
     }, [loadFileWorkspaceSettings, loadSettingsAudit, projectId]);
-
-    const handleManualFileAnalyticsVisibility = useCallback(async (
-        file: FileWorkspaceSettingsData["manualFiles"][number],
-        analyticsVisible: boolean,
-    ) => {
-        setFileWorkspaceSavingFileId(file.id);
-        try {
-            const result = await updateProjectManualFileAnalyticsVisibilityAction(projectId, file.id, analyticsVisible);
-            if (!result.success) {
-                toast.error(result.message);
-                return;
-            }
-            toast.success(result.message);
-            await loadFileWorkspaceSettings();
-            void loadSettingsAudit();
-            router.refresh();
-        } catch (error) {
-            console.error("Failed to update file analytics visibility", error);
-            toast.error("Failed to update file analytics visibility.");
-        } finally {
-            setFileWorkspaceSavingFileId(null);
-        }
-    }, [loadFileWorkspaceSettings, loadSettingsAudit, projectId, router]);
 
     const handleProjectNotificationPreset = useCallback((preset: ProjectNotificationPreset) => {
         setProjectNotificationDraft(buildDefaultProjectNotificationPolicy(preset));
@@ -2374,14 +2301,12 @@ export default function ProjectSettingsTab({
                                     tone="indigo"
                                     limit={PROJECT_TAG_LIMIT}
                                 />
-                                <ChipEditor
-                                    label="Tech Stack"
-                                    values={skills}
+                                <SkillPicker
+                                    value={skills}
                                     onChange={setSkills}
-                                    suggestions={POPULAR_PROJECT_TECH}
-                                    placeholder="Add a technology"
-                                    tone="emerald"
-                                    limit={PROJECT_SKILL_LIMIT}
+                                    maxSkills={PROJECT_SKILL_LIMIT}
+                                    label="Project skills and technologies"
+                                    description="Select the technologies and professional skills used by this project."
                                 />
                             </div>
                         </SettingsCard>
@@ -2694,6 +2619,7 @@ export default function ProjectSettingsTab({
                             <ProjectRolesEditor
                                 fields={roleFields}
                                 register={registerRoles}
+                                control={rolesControl}
                                 errors={roleErrors}
                                 disabled={savingSettings}
                                 onAddRole={handleAddSettingsRole}
@@ -2741,7 +2667,7 @@ export default function ProjectSettingsTab({
                             ]}
                         />
                         <SettingsCard title="Project lifecycle" description="Define the journey stages used by the project dashboard.">
-                            <LifecycleEditor
+                            <LifecycleSettingsEditor
                                 initialStages={project?.lifecycle_stages || project?.lifecycleStages || ["Concept", "MVP", "Launch"]}
                                 currentStageIndex={project?.current_stage_index ?? project?.currentStageIndex ?? 0}
                                 isSaving={savingLifecycle}
@@ -3041,7 +2967,7 @@ export default function ProjectSettingsTab({
                                 <Button type="button" variant="outline" onClick={() => void handleResetNotifications()} disabled={savingSettings}>
                                     Reset recommended defaults
                                 </Button>
-                                <Button variant="outline" onClick={() => router.push("/settings/notifications")}>
+                                <Button variant="outline" onClick={() => router.push("/settings?tab=notifications")}>
                                     Open global notification settings
                                 </Button>
                             </div>
@@ -3162,30 +3088,6 @@ export default function ProjectSettingsTab({
                     </div>
                 )}
 
-                {activeSection === "data" && (
-                    <div className="space-y-5">
-                        <SummaryCard
-                            title="Data"
-                            description="Export is available now. Import and restore stay hidden until validation, preview, and rollback are safe."
-                            icon={Database}
-                            meta={[
-                                ["Export", "Available"],
-                                ["Import / restore", "Hidden until enforceable"],
-                            ]}
-                        />
-                        <SettingsCard title="Export project snapshot" description="Download a JSON snapshot of project identity, settings, lifecycle, and loaded member summaries.">
-                            <Button
-                                onClick={() => void handleExport()}
-                                disabled={loadingExport}
-                                className="gap-2"
-                            >
-                                {loadingExport ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-                                Export project snapshot
-                            </Button>
-                        </SettingsCard>
-                    </div>
-                )}
-
                 {activeSection === "danger" && (
                     <div className="space-y-5">
                         <SummaryCard
@@ -3246,7 +3148,7 @@ export default function ProjectSettingsTab({
                                         <option value="">Choose an existing member</option>
                                         {rolePolicy.transferCandidates.map((member) => (
                                             <option key={member.id} value={member.id}>
-                                                {getProjectMemberDisplayName(member)} · {formatRole(projectMemberRole(member, ownerId))}
+                                                {getProjectMemberDisplayName(member)} · {getProjectMemberRoleLabel(projectMemberRole(member, ownerId))}
                                             </option>
                                         ))}
                                     </select>
@@ -4259,94 +4161,6 @@ function PublicTabVisibilityEditor({
     );
 }
 
-function formatFileSizeLabel(size: number | null) {
-    if (!size || size <= 0) return "Unknown size";
-    if (size < 1024) return `${size} B`;
-    if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
-    return `${(size / (1024 * 1024)).toFixed(size < 10 * 1024 * 1024 ? 1 : 0)} MB`;
-}
-
-function ManualFileInventory({
-    data,
-    isLoading,
-    savingFileId,
-    onToggleAnalytics,
-}: {
-    data: FileWorkspaceSettingsData | null;
-    isLoading: boolean;
-    savingFileId: string | null;
-    onToggleAnalytics: (file: FileWorkspaceSettingsData["manualFiles"][number], analyticsVisible: boolean) => void | Promise<void>;
-}) {
-    if (isLoading && !data) {
-        return (
-            <div className="flex items-center gap-2 text-sm text-zinc-500">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Loading manual files...
-            </div>
-        );
-    }
-    const files = data?.manualFiles ?? [];
-    if (files.length === 0) {
-        return <p className="rounded-xl border border-dashed border-zinc-300 p-3 text-sm text-zinc-500 dark:border-zinc-800">No manually uploaded files found. GitHub-indexed files stay in Files and are summarized in Analytics.</p>;
-    }
-    const visibleFiles = files.slice(0, 12);
-    return (
-        <div className="space-y-2">
-            {visibleFiles.map((file) => {
-                const isSaving = savingFileId === file.id;
-                return (
-                    <div
-                        key={file.id}
-                        className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-950"
-                    >
-                        <div className="min-w-0">
-                            <p className="truncate text-sm font-semibold text-zinc-950 dark:text-zinc-50">{file.name}</p>
-                            <p className="mt-1 truncate text-xs text-zinc-500">{file.path}</p>
-                            <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-zinc-500">
-                                <span>{file.uploadedByName ?? "Unknown uploader"}</span>
-                                <span>{file.updatedAt ? new Date(file.updatedAt).toLocaleDateString() : "No date"}</span>
-                                <span>{formatFileSizeLabel(file.size)}</span>
-                                <span>{file.linkedTasks} linked {file.linkedTasks === 1 ? "task" : "tasks"}</span>
-                            </div>
-                        </div>
-                        <div className="flex shrink-0 items-center gap-2">
-                            <span className={cn(
-                                "rounded-full px-2 py-0.5 text-[11px] font-semibold",
-                                file.publicVisible ? "bg-blue-50 text-blue-700 dark:bg-blue-950/50 dark:text-blue-200" : "bg-zinc-100 text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300",
-                            )}>
-                                {file.publicVisible ? "Public file" : "Private file"}
-                            </span>
-                            <span className={cn(
-                                "rounded-full px-2 py-0.5 text-[11px] font-semibold",
-                                file.analyticsVisible ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-200" : "bg-amber-50 text-amber-700 dark:bg-amber-950/50 dark:text-amber-200",
-                            )}>
-                                {file.analyticsVisible ? "In analytics" : "Hidden from analytics"}
-                            </span>
-                            {isSaving ? (
-                                <Loader2 className="h-4 w-4 animate-spin text-blue-500" />
-                            ) : (
-                                <Button
-                                    type="button"
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={() => void onToggleAnalytics(file, !file.analyticsVisible)}
-                                >
-                                    {file.analyticsVisible ? "Hide" : "Show"}
-                                </Button>
-                            )}
-                        </div>
-                    </div>
-                );
-            })}
-            {data && data.summary.manualFileCount > visibleFiles.length ? (
-                <p className="rounded-xl border border-zinc-200 px-3 py-2 text-xs text-zinc-500 dark:border-zinc-800">
-                    Showing {visibleFiles.length} of {data.summary.manualFileCount}. Use the Files tab for the full inventory.
-                </p>
-            ) : null}
-        </div>
-    );
-}
-
 function FileWorkspaceMembers({
     data,
     isLoading,
@@ -4423,6 +4237,51 @@ function FileWorkspaceMembers({
                     </div>
                 );
             })}
+        </div>
+    );
+}
+
+function LifecycleSettingsEditor({
+    initialStages,
+    currentStageIndex,
+    isSaving,
+    onSave,
+}: {
+    initialStages: string[];
+    currentStageIndex: number;
+    isSaving: boolean;
+    onSave: (stages: string[], currentStageIdentity: string) => Promise<void>;
+}) {
+    const [stages, setStages] = useState(initialStages);
+    const currentStageIdentity = initialStages[currentStageIndex] || "";
+    useEffect(() => {
+        setStages(initialStages);
+    }, [initialStages]);
+
+    const handleSave = useCallback(async () => {
+        const cleaned = stages.map((stage) => stage.trim().replace(/\s+/g, " ")).filter(Boolean);
+        if (cleaned.length === 0) {
+            toast.error("You must have at least one stage");
+            return;
+        }
+        await onSave(cleaned, currentStageIdentity);
+    }, [currentStageIdentity, onSave, stages]);
+
+    return (
+        <div className="space-y-4">
+            <BaseLifecycleEditor
+                stages={stages}
+                onChange={setStages}
+                currentStageIndex={currentStageIndex}
+            />
+            <Button
+                type="button"
+                onClick={() => void handleSave()}
+                disabled={isSaving || stages.length === 0}
+                className="bg-indigo-600 text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+                {isSaving ? "Saving..." : "Save Lifecycle"}
+            </Button>
         </div>
     );
 }
