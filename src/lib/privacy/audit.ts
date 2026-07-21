@@ -109,22 +109,9 @@ export async function recordPrivacyReadEvent(input: {
   request?: Request;
   executor?: PrivacyReadAuditExecutor;
 }) {
-  const requestMetadata = input.request
-    ? buildPseudonymizedAuditRequestMetadata(input.request)
-    : {};
-
-  await (input.executor ?? db).insert(profileAuditEvents).values({
-    userId: input.subjectUserId,
-    eventType: input.eventType,
-    previousValue: null,
-    nextValue: null,
-    metadata: {
-      viewerUserId: input.viewerUserId,
-      route: input.route,
-      requestId: input.requestId ?? null,
-      ...(input.metadata ?? {}),
-      ...requestMetadata,
-    },
+  await recordPrivacyReadEvents({
+    ...input,
+    subjectUserIds: [input.subjectUserId],
   });
 }
 
@@ -135,6 +122,7 @@ export async function recordPrivacyReadEvents(input: {
   route: string;
   requestId?: string | null;
   metadata?: Record<string, unknown>;
+  request?: Request;
   executor?: PrivacyReadAuditExecutor;
 }) {
   const subjectUserIds = Array.from(new Set(input.subjectUserIds.filter(Boolean)));
@@ -151,6 +139,7 @@ export async function recordPrivacyReadEvents(input: {
         route: input.route,
         requestId: input.requestId ?? null,
         ...(input.metadata ?? {}),
+        ...(input.request ? buildPseudonymizedAuditRequestMetadata(input.request) : {}),
       },
     })),
   );
