@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { useEffect, useRef } from "react";
 import { useQuery, type QueryClient } from "@tanstack/react-query";
-import { format, formatDistanceToNowStrict } from "date-fns";
 import { ExternalLink, X } from "lucide-react";
 
 import { getProjectTaskDetailAction } from "@/app/actions/project";
@@ -11,27 +10,13 @@ import { UserAvatar } from "@/components/ui/UserAvatar";
 import { recordSprintMetric } from "@/lib/projects/sprint-observability";
 import {
   SPRINT_TASK_STATUS_PRESENTATION,
+  formatSprintTimelineStamp,
   type SprintDrawerPreview,
   type SprintDrawerState,
 } from "@/lib/projects/sprint-detail";
 import { cn } from "@/lib/utils";
 
 const DRAWER_WIDTH_CLASS = "lg:w-[24rem] xl:w-[26rem]";
-
-function isValidDate(value: string | number | Date | null | undefined) {
-  if (value === null || value === undefined) return false;
-  if (value instanceof Date) return Number.isFinite(value.getTime());
-  if (typeof value === "number") return Number.isFinite(new Date(value).getTime());
-  if (typeof value === "string" && value.trim() === "") return false;
-  return Number.isFinite(Date.parse(String(value)));
-}
-
-function formatTimelineStamp(value: string | number | Date | null | undefined) {
-  if (!isValidDate(value)) return "Recently";
-  const normalizedValue = value instanceof Date ? value : (value as string | number);
-  const date = normalizedValue instanceof Date ? normalizedValue : new Date(normalizedValue);
-  return `${format(date, "MMM d, yyyy")} · ${formatDistanceToNowStrict(date, { addSuffix: true })}`;
-}
 
 function buildSprintDrawerTaskQueryKey(projectId: string, taskId: string | null) {
   return ["project", projectId, "sprint-drawer-task", taskId] as const;
@@ -143,7 +128,7 @@ export function SprintDetailDrawer({
                   {preview.badgeText}
                 </span>
                 <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                  {formatTimelineStamp(preview.occurredAt)}
+                  {formatSprintTimelineStamp(preview.occurredAt, "Recently")}
                 </span>
               </div>
               <h3 className="mt-3 text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">
