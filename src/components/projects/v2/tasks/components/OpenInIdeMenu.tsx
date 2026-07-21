@@ -1,5 +1,6 @@
 "use client";
 
+import { toast } from "sonner";
 /**
  * Row-action dropdown for task-file rows. Surfaces four ways to open a file:
  *
@@ -45,7 +46,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useToast } from "@/components/ui-custom/Toast";
 import { getProjectFileSignedUrl } from "@/app/actions/files/content";
 import {
   buildIdeUrl,
@@ -142,7 +142,6 @@ export function OpenInIdeMenu({
   disabled,
   variant = "compact",
 }: OpenInIdeMenuProps) {
-  const { showToast } = useToast();
   const [phase, setPhase] = useState<LaunchPhase>("idle");
 
   // Platform is stable per page-load — detectPlatform reads navigator which
@@ -165,7 +164,7 @@ export function OpenInIdeMenu({
   const fetchSignedBlob = useCallback(
     async (): Promise<{ blob: Blob; signedUrl: string } | null> => {
       if (!node.s3Key) {
-        showToast("This file has no stored bytes yet.", "error");
+        toast.error("This file has no stored bytes yet.");
         return null;
       }
       try {
@@ -178,11 +177,11 @@ export function OpenInIdeMenu({
       } catch (error) {
         const message =
           error instanceof Error ? error.message : "Failed to fetch file";
-        showToast(`Could not fetch file: ${message}`, "error");
+        toast.error(`Could not fetch file: ${message}`);
         return null;
       }
     },
-    [node.s3Key, projectId, showToast],
+    [node.s3Key, projectId],
   );
 
   const triggerDownload = useCallback(
@@ -247,10 +246,7 @@ export function OpenInIdeMenu({
         await launchIdeChain({
           urls,
           onExhausted: () => {
-            showToast(
-              `Saved to Downloads/NB-Workspace/${effectiveSlug}/. Install Cursor or VS Code to launch directly next time.`,
-              "info",
-            );
+            toast.info(`Saved to Downloads/NB-Workspace/${effectiveSlug}/. Install Cursor or VS Code to launch directly next time.`);
           },
         });
 
@@ -269,9 +265,7 @@ export function OpenInIdeMenu({
       node,
       triggerDownload,
       taskId,
-      projectId,
-      showToast,
-      onAfterDownload,
+      projectId,onAfterDownload,
     ],
   );
 
@@ -313,8 +307,8 @@ export function OpenInIdeMenu({
       type="button"
       data-testid="open-in-ide-trigger"
       data-node-id={node.id}
-      data-variant="primary"
-      className="inline-flex h-8 items-center gap-1.5 rounded-md bg-indigo-600 px-3 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-indigo-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-indigo-500 dark:hover:bg-indigo-400 dark:focus-visible:ring-indigo-500/50"
+      data-variant="default"
+      className="inline-flex h-8 items-center gap-1.5 rounded-md bg-indigo-600 px-3 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-indigo-700 focus-visible:outline-none   disabled:cursor-not-allowed disabled:opacity-60 dark:bg-indigo-500 dark:hover:bg-indigo-400 dark:"
       disabled={disabled}
     >
       {isBusy ? (
