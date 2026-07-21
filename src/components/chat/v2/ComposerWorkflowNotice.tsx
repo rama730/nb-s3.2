@@ -1,6 +1,5 @@
 'use client';
 
-import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 
@@ -9,23 +8,13 @@ interface ComposerWorkflowNoticeProps {
         tone: 'success' | 'danger' | 'warning' | 'neutral' | 'info' | 'brand';
         icon: ReactNode;
         badge: string;
-        lastStatusLabel?: string | null;
         title: string;
         description: string;
-        canAccept?: boolean;
-        canReject?: boolean;
-        canWithdraw?: boolean;
-        canReopen?: boolean;
-        canEditRequest?: boolean;
-        requestHref?: string | null;
-        projectHref?: string | null;
         actionLabel?: string | null;
     };
     isPopup: boolean;
     requestLoading: boolean;
-    applicationActionLoading: 'accept' | 'reject' | 'withdraw' | 'reopen' | null;
     onConnectionAction: () => void;
-    onApplicationAction: (action: 'accept' | 'reject' | 'withdraw' | 'reopen') => void;
 }
 
 const toneStyles = {
@@ -42,9 +31,7 @@ export function ComposerWorkflowNotice({
     workflowNotice,
     isPopup,
     requestLoading,
-    applicationActionLoading,
     onConnectionAction,
-    onApplicationAction,
 }: ComposerWorkflowNoticeProps) {
     return (
         <div className={cn(
@@ -60,7 +47,6 @@ export function ComposerWorkflowNotice({
                     <div className="min-w-0">
                         <div className="text-xs font-semibold uppercase tracking-wide opacity-80">
                             {workflowNotice.badge}
-                            {workflowNotice.lastStatusLabel ? ` · ${workflowNotice.lastStatusLabel}` : ''}
                         </div>
                         <div className="mt-1 text-sm font-medium">{workflowNotice.title}</div>
                         <div className="mt-1 text-xs opacity-80">{workflowNotice.description}</div>
@@ -68,70 +54,6 @@ export function ComposerWorkflowNotice({
                 </div>
             </div>
             <div className="mt-3 flex flex-wrap items-center gap-2">
-                {workflowNotice.canAccept ? (
-                    <button
-                        type="button"
-                        onClick={() => onApplicationAction('accept')}
-                        disabled={applicationActionLoading !== null}
-                        className="rounded-lg bg-indigo-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-60"
-                    >
-                        {applicationActionLoading === 'accept' ? 'Accepting…' : 'Accept'}
-                    </button>
-                ) : null}
-                {workflowNotice.canReject ? (
-                    <button
-                        type="button"
-                        onClick={() => onApplicationAction('reject')}
-                        disabled={applicationActionLoading !== null}
-                        className="rounded-lg border border-indigo-300 px-2.5 py-1 text-xs font-medium hover:bg-indigo-100 disabled:opacity-60 dark:border-indigo-800 dark:hover:bg-indigo-900/40"
-                    >
-                        {applicationActionLoading === 'reject' ? 'Rejecting…' : 'Reject'}
-                    </button>
-                ) : null}
-                {workflowNotice.canWithdraw ? (
-                    <button
-                        type="button"
-                        onClick={() => onApplicationAction('withdraw')}
-                        disabled={applicationActionLoading !== null}
-                        className="rounded-lg border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 disabled:opacity-60 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
-                    >
-                        {applicationActionLoading === 'withdraw' ? 'Withdrawing…' : 'Withdraw'}
-                    </button>
-                ) : null}
-                {workflowNotice.canReopen ? (
-                    <button
-                        type="button"
-                        onClick={() => onApplicationAction('reopen')}
-                        disabled={applicationActionLoading !== null}
-                        className="rounded-lg border border-indigo-300 px-2.5 py-1 text-xs font-medium hover:bg-indigo-100 disabled:opacity-60 dark:border-indigo-800 dark:hover:bg-indigo-900/40"
-                    >
-                        {applicationActionLoading === 'reopen' ? 'Reopening…' : 'Reopen'}
-                    </button>
-                ) : null}
-                {workflowNotice.canEditRequest && workflowNotice.requestHref ? (
-                    <Link
-                        href={workflowNotice.requestHref}
-                        className="rounded-lg border border-indigo-300 px-2.5 py-1 text-xs font-medium hover:bg-indigo-100 dark:border-indigo-800 dark:hover:bg-indigo-900/40"
-                    >
-                        Edit request
-                    </Link>
-                ) : null}
-                {workflowNotice.requestHref && !workflowNotice.canEditRequest ? (
-                    <Link
-                        href={workflowNotice.requestHref}
-                        className="rounded-lg border border-indigo-300 px-2.5 py-1 text-xs font-medium hover:bg-indigo-100 dark:border-indigo-800 dark:hover:bg-indigo-900/40"
-                    >
-                        View request
-                    </Link>
-                ) : null}
-                {workflowNotice.projectHref ? (
-                    <Link
-                        href={workflowNotice.projectHref}
-                        className="rounded-lg bg-indigo-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-indigo-700"
-                    >
-                        Open project
-                    </Link>
-                ) : null}
                 {workflowNotice.actionLabel ? (
                     <button
                         type="button"
