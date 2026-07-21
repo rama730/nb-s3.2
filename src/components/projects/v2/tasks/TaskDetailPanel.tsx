@@ -95,6 +95,10 @@ export default function TaskDetailPanel({
     ],
     [resource.counts.comments, resource.counts.files, resource.counts.subtasks],
   );
+  const completedSubtaskCount = useMemo(
+    () => resource.subtasks.filter((subtask) => subtask.completed).length,
+    [resource.subtasks],
+  );
 
   const confirmDeleteTask = async () => {
     setDeleteError(null);
@@ -218,8 +222,8 @@ export default function TaskDetailPanel({
         </div>
 
         <div className="relative flex-1 overflow-y-auto bg-white dark:bg-zinc-900">
-          {resource.loadedTabs.details ? (
-            <div className={activeTab === "details" ? "block" : "hidden"}>
+          {activeTab === "details" && resource.loadedTabs.details ? (
+            <div>
               <DetailsTab
                 task={resource.task}
                 canEdit={isOwnerOrMember}
@@ -227,21 +231,21 @@ export default function TaskDetailPanel({
                 mutationError={resource.taskMutations.mutationError}
                 members={members}
                 sprints={sprints}
-                subtasks={resource.subtasks}
-                attachments={resource.attachments}
+                subtaskCount={resource.counts.subtasks}
+                completedSubtaskCount={completedSubtaskCount}
+                attachmentCount={resource.counts.files}
                 fileWarnings={resource.fileWarnings}
                 fileWarningSummary={resource.fileWarningSummary}
                 onUpdateField={resource.taskMutations.updateField}
                 onUpdateStatus={resource.taskMutations.updateStatus}
                 onUpdateAssignee={resource.taskMutations.updateAssignee}
-                onToggleSubtask={resource.toggleSubtask}
-                onDownloadAttachment={resource.fileMutations.downloadAttachment}
+                onOpenTab={setActiveTab}
               />
             </div>
           ) : null}
 
-          {resource.loadedTabs.subtasks ? (
-            <div className={activeTab === "subtasks" ? "block" : "hidden"}>
+          {activeTab === "subtasks" && resource.loadedTabs.subtasks ? (
+            <div>
               <SubtasksTab
                 subtasks={resource.subtasks}
                 isLoading={resource.loading.subtasks}
@@ -254,8 +258,8 @@ export default function TaskDetailPanel({
             </div>
           ) : null}
 
-          {resource.loadedTabs.comments ? (
-            <div className={activeTab === "comments" ? "block" : "hidden"}>
+          {activeTab === "comments" && resource.loadedTabs.comments ? (
+            <div>
               <CommentsTab
                 projectId={projectId}
                 comments={resource.comments}
@@ -278,8 +282,8 @@ export default function TaskDetailPanel({
             </div>
           ) : null}
 
-          {resource.loadedTabs.files ? (
-            <div className={activeTab === "files" ? "block" : "hidden"}>
+          {activeTab === "files" && resource.loadedTabs.files ? (
+            <div>
               <FilesTab
                 projectId={projectId}
                 taskId={resource.task.id}
@@ -300,7 +304,6 @@ export default function TaskDetailPanel({
                     ? { success: true }
                     : { success: false, error: result.error };
                 }}
-                onAttachExisting={resource.fileMutations.attachExisting}
                 onUnlink={resource.fileMutations.unlinkAttachment}
                 onOpenFile={resource.fileMutations.downloadAttachment}
                 onResolvePendingResolution={resource.fileMutations.resolvePendingResolution}
@@ -327,8 +330,8 @@ export default function TaskDetailPanel({
             </div>
           ) : null}
 
-          {resource.loadedTabs.activity ? (
-            <div className={activeTab === "activity" ? "block" : "hidden"}>
+          {activeTab === "activity" && resource.loadedTabs.activity ? (
+            <div>
               <ActivityTab
                 items={resource.activity}
                 isLoading={resource.loading.activity}
