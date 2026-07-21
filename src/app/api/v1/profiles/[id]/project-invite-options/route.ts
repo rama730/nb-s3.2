@@ -1,8 +1,7 @@
 import { enforceRouteLimit, getRequestId, jsonError, jsonSuccess, logApiRoute, requireAuthenticatedUser } from "@/app/api/v1/_shared";
 import { getProfileInviteProjectOptions } from "@/lib/profile/collaboration";
 import { logger } from "@/lib/logger";
-
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+import { isUuid } from "@/lib/validations/uuid";
 
 export async function GET(
   request: Request,
@@ -11,7 +10,7 @@ export async function GET(
   const startedAt = Date.now();
   const requestId = getRequestId(request);
   const { id } = await params;
-  if (!UUID_PATTERN.test(id)) {
+  if (!isUuid(id)) {
     return jsonError("Invalid profile id", 400, "BAD_REQUEST");
   }
 
