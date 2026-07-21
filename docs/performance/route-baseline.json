@@ -2,7 +2,7 @@
   "generatedAt": "2026-03-12T01:58:17.566Z",
   "source": "/tmp/page-load-metrics.json",
   "sourceMeasuredAt": "2026-03-12T01:12:14.296Z",
-  "routeCount": 19,
+  "routeCount": 12,
   "routes": [
     {
       "routeId": "/",
@@ -123,76 +123,6 @@
       "browserNavDurationMs": 954,
       "serverTtfbMs": 90,
       "domContentLoadedMs": 121
-    },
-    {
-      "routeId": "/settings/account",
-      "pageFile": "src/app/(main)/settings/account/page.tsx",
-      "status": 200,
-      "finalUrl": "http://localhost:3000/login?redirect=%2Fsettings%2Faccount",
-      "browserLoadMs": 1006,
-      "browserNavDurationMs": 1006,
-      "serverTtfbMs": 90,
-      "domContentLoadedMs": 105
-    },
-    {
-      "routeId": "/settings/security",
-      "pageFile": "src/app/(main)/settings/security/page.tsx",
-      "status": 200,
-      "finalUrl": "http://localhost:3000/login?redirect=%2Fsettings%2Fsecurity",
-      "browserLoadMs": 612,
-      "browserNavDurationMs": 612,
-      "serverTtfbMs": 77,
-      "domContentLoadedMs": 102
-    },
-    {
-      "routeId": "/settings/privacy",
-      "pageFile": "src/app/(main)/settings/privacy/page.tsx",
-      "status": 200,
-      "finalUrl": "http://localhost:3000/login?redirect=%2Fsettings%2Fprivacy",
-      "browserLoadMs": 629,
-      "browserNavDurationMs": 629,
-      "serverTtfbMs": 78,
-      "domContentLoadedMs": 102
-    },
-    {
-      "routeId": "/settings/notifications",
-      "pageFile": "src/app/(main)/settings/notifications/page.tsx",
-      "status": 200,
-      "finalUrl": "http://localhost:3000/login?redirect=%2Fsettings%2Fnotifications",
-      "browserLoadMs": 618,
-      "browserNavDurationMs": 618,
-      "serverTtfbMs": 80,
-      "domContentLoadedMs": 109
-    },
-    {
-      "routeId": "/settings/appearance",
-      "pageFile": "src/app/(main)/settings/appearance/page.tsx",
-      "status": 200,
-      "finalUrl": "http://localhost:3000/login?redirect=%2Fsettings%2Fappearance",
-      "browserLoadMs": 638,
-      "browserNavDurationMs": 638,
-      "serverTtfbMs": 92,
-      "domContentLoadedMs": 106
-    },
-    {
-      "routeId": "/settings/integrations",
-      "pageFile": "src/app/(main)/settings/integrations/page.tsx",
-      "status": 200,
-      "finalUrl": "http://localhost:3000/login?redirect=%2Fsettings%2Fintegrations",
-      "browserLoadMs": 620,
-      "browserNavDurationMs": 620,
-      "serverTtfbMs": 78,
-      "domContentLoadedMs": 103
-    },
-    {
-      "routeId": "/settings/languages",
-      "pageFile": "src/app/(main)/settings/languages/page.tsx",
-      "status": 200,
-      "finalUrl": "http://localhost:3000/login?redirect=%2Fsettings%2Flanguages",
-      "browserLoadMs": 684,
-      "browserNavDurationMs": 684,
-      "serverTtfbMs": 78,
-      "domContentLoadedMs": 102
     }
   ]
 }
