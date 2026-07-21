@@ -29,6 +29,30 @@ describe("check-api-envelope-contract script", () => {
     assert.equal(result.errors.length, 0, `Expected no violations, got: ${result.errors.join("\n")}`);
   });
 
+  it("passes when a route delegates to an internal envelope helper", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "api-envelope-delegated-"));
+    write(
+      path.join(tmp, "src/app/api/v1/privacy/route.ts"),
+      `
+        import { handlePatch } from "@/app/api/v1/privacy/_update";
+        export function PATCH(request: Request) { return handlePatch(request); }
+      `,
+    );
+    write(
+      path.join(tmp, "src/app/api/v1/privacy/_update.ts"),
+      `
+        import { jsonSuccess, jsonError } from "@/app/api/v1/_shared";
+        export async function handlePatch(request: Request) {
+          if (!request) return jsonError("bad", 400, "BAD_REQUEST");
+          return jsonSuccess({ ok: true });
+        }
+      `,
+    );
+
+    const result = validateApiEnvelopeContract(tmp);
+    assert.equal(result.errors.length, 0, `Expected no violations, got: ${result.errors.join("\n")}`);
+  });
+
   it("fails when route uses direct NextResponse.json", () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "api-envelope-fail-"));
     write(
