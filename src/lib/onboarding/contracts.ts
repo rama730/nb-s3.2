@@ -3,9 +3,6 @@ export const ONBOARDING_TOTAL_STEPS = 4 as const
 export const ONBOARDING_VISIBILITY_VALUES = ['public', 'connections', 'private'] as const
 export type OnboardingVisibility = typeof ONBOARDING_VISIBILITY_VALUES[number]
 
-export const ONBOARDING_AVAILABILITY_VALUES = ['available', 'busy', 'offline', 'focusing'] as const
-export type OnboardingAvailabilityStatus = typeof ONBOARDING_AVAILABILITY_VALUES[number]
-
 export const ONBOARDING_MESSAGE_PRIVACY_VALUES = ['everyone', 'connections'] as const
 export type OnboardingMessagePrivacy = typeof ONBOARDING_MESSAGE_PRIVACY_VALUES[number]
 
@@ -33,7 +30,6 @@ export type OnboardingPayloadContract = {
     skills: string[]
     interests: string[]
     openTo: string[]
-    availabilityStatus: OnboardingAvailabilityStatus
     messagePrivacy: OnboardingMessagePrivacy
     socialLinks: OnboardingSocialLinks
     experienceLevel?: OnboardingExperienceLevel
