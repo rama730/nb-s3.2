@@ -9,7 +9,6 @@ import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { PasswordStrengthMeter } from "@/components/settings/PasswordStrengthMeter";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { getPasswordPolicyResult } from "@/lib/security/password-policy";
@@ -79,6 +78,17 @@ export default function ResetPasswordPage() {
 
         setSubmitting(true);
         try {
+            const safetyResponse = await fetch("/api/v1/auth/password-safety", {
+                method: "POST",
+                credentials: "same-origin",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ password: newPassword }),
+            });
+            const safetyBody = await safetyResponse.json().catch(() => null) as { message?: string } | null;
+            if (!safetyResponse.ok) {
+                throw new Error(safetyBody?.message || "Unable to verify password safety.");
+            }
+
             const { error: updateError } = await supabase.auth.updateUser({ password: newPassword });
             if (updateError) {
                 throw updateError;
@@ -148,7 +158,7 @@ export default function ResetPasswordPage() {
                                 ) : null}
 
                                 <div className="space-y-2">
-                                    <Label htmlFor="new-password">New password</Label>
+                                    <label htmlFor="new-password" className="text-sm font-medium leading-none">New password</label>
                                     <Input
                                         id="new-password"
                                         type="password"
@@ -158,11 +168,11 @@ export default function ResetPasswordPage() {
                                         required
                                         disabled={submitting}
                                     />
-                                    <PasswordStrengthMeter password={newPassword} />
+                                    <PasswordStrengthMeter password={newPassword} result={passwordPolicy} />
                                 </div>
 
                                 <div className="space-y-2">
-                                    <Label htmlFor="confirm-password">Confirm password</Label>
+                                    <label htmlFor="confirm-password" className="text-sm font-medium leading-none">Confirm password</label>
                                     <Input
                                         id="confirm-password"
                                         type="password"
