@@ -9,11 +9,13 @@ import { db } from "@/lib/db";
 import { projectNodeEvents, projectNodes, projects, taskNodeLinks, tasks } from "@/lib/db/schema";
 import { and, eq, gt, inArray, isNull } from "drizzle-orm";
 import { getProjectAccessById } from "@/lib/data/project-access";
+import { isLooseUuid } from "@/lib/validations/uuid";
+import { z } from "zod";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const sinceSchema = z.coerce.number().int().min(0);
 
 /**
  * GET /api/v1/projects/[id]/sync-diff
@@ -37,7 +39,7 @@ export async function GET(
     if (!user) return jsonError("Not authenticated", 401, "UNAUTHORIZED");
 
     const { id: projectId } = await context.params;
-    if (!UUID_RE.test(projectId)) {
+    if (!isLooseUuid(projectId)) {
         return jsonError("Invalid project id", 400, "BAD_REQUEST");
     }
 
@@ -54,10 +56,11 @@ export async function GET(
         return jsonError("Missing required since parameter", 400, "BAD_REQUEST");
     }
 
-    const since = parseInt(sinceStr, 10);
-    if (Number.isNaN(since) || since < 0) {
+    const parsedSince = sinceSchema.safeParse(sinceStr);
+    if (!parsedSince.success) {
         return jsonError("Invalid since parameter", 400, "BAD_REQUEST");
     }
+    const since = parsedSince.data;
 
     const [projectSequence] = await db
         .select({ currentSequence: projects.currentSequenceNumber })
