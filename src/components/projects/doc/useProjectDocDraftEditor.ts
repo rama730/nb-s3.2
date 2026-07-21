@@ -28,15 +28,6 @@ type UseProjectDocDraftEditorInput = {
     autosaveDelayMs?: number;
 };
 
-function fallbackQualityReport(content: string): ProjectDocQualityReport {
-    return {
-        score: 0,
-        issues: [],
-        sectionPresence: {},
-        contentBytes: new Blob([content]).size,
-    };
-}
-
 export function useProjectDocDraftEditor({
     projectId,
     docSlug = "readme",
