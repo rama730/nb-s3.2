@@ -1,10 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Loader2, ShieldCheck } from "lucide-react";
-import Button from "@/components/ui-custom/Button";
-import Input from "@/components/ui-custom/Input";
-import { Label } from "@/components/ui-custom/Label";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Dialog,
   DialogContent,
@@ -42,10 +41,7 @@ export default function SecurityStepUpDialog({
   factorId,
   onVerified,
 }: SecurityStepUpDialogProps) {
-  const defaultMethod = useMemo(
-    () => availableMethods[0] ?? null,
-    [availableMethods],
-  );
+  const defaultMethod = availableMethods[0] ?? null;
   const [method, setMethod] = useState<SecurityStepUpMethod | null>(defaultMethod);
   const [code, setCode] = useState("");
   const [password, setPassword] = useState("");
@@ -69,17 +65,9 @@ export default function SecurityStepUpDialog({
   const handleSubmit = async () => {
     setSubmitting(true);
     try {
-      const payload: Record<string, unknown> = { method };
-      if (method === "totp") {
-        payload.factorId = factorId;
-        payload.code = code.trim();
-      }
-      if (method === "recovery_code") {
-        payload.code = code.trim();
-      }
-      if (method === "password") {
-        payload.password = password;
-      }
+      const payload = method === "password"
+        ? { method, password }
+        : { method, code: code.trim(), ...(method === "totp" ? { factorId } : {}) };
 
       const response = await fetch("/api/v1/auth/security-step-up", {
         method: "POST",
@@ -140,30 +128,17 @@ export default function SecurityStepUpDialog({
             </div>
           ) : null}
 
-          {isTotp ? (
+          {method !== "password" ? (
             <div className="space-y-2">
-              <Label htmlFor="security-step-up-totp">Current 6-digit code</Label>
+              <label htmlFor="security-step-up-code" className="text-sm font-medium leading-none">{isTotp ? "Current 6-digit code" : "Recovery code"}</label>
               <Input
-                id="security-step-up-totp"
-                inputMode="numeric"
-                pattern="[0-9]*"
-                maxLength={6}
+                id="security-step-up-code"
+                inputMode={isTotp ? "numeric" : undefined}
+                pattern={isTotp ? "[0-9]*" : undefined}
+                maxLength={isTotp ? 6 : undefined}
                 value={code}
-                onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
-                placeholder="123456"
-                disabled={submitting}
-              />
-            </div>
-          ) : null}
-
-          {isRecoveryCode ? (
-            <div className="space-y-2">
-              <Label htmlFor="security-step-up-recovery-code">Recovery code</Label>
-              <Input
-                id="security-step-up-recovery-code"
-                value={code}
-                onChange={(event) => setCode(event.target.value.toUpperCase())}
-                placeholder="ABCD-EFGH"
+                onChange={(event) => setCode(isTotp ? event.target.value.replace(/\D/g, "").slice(0, 6) : event.target.value.toUpperCase())}
+                placeholder={isTotp ? "123456" : "ABCD-EFGH"}
                 disabled={submitting}
               />
             </div>
@@ -171,7 +146,7 @@ export default function SecurityStepUpDialog({
 
           {method === "password" ? (
             <div className="space-y-2">
-              <Label htmlFor="security-step-up-password">Current password</Label>
+              <label htmlFor="security-step-up-password" className="text-sm font-medium leading-none">Current password</label>
               <Input
                 id="security-step-up-password"
                 type="password"
