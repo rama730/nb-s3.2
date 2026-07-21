@@ -43,7 +43,6 @@ export function normalizeProfile(p: any) {
         bannerUrl: trimOptionalDisplayText(p.bannerUrl ?? p.banner_url),
         socialLinks,
         openTo,
-        availabilityStatus: p.availabilityStatus ?? p.availability_status ?? 'available',
         experienceLevel: p.experienceLevel ?? p.experience_level ?? null,
         hoursPerWeek: p.hoursPerWeek ?? p.hours_per_week ?? null,
         genderIdentity: p.genderIdentity ?? p.gender_identity ?? null,
