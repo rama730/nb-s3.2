@@ -1,11 +1,10 @@
 import { NextRequest } from 'next/server';
-import { createClient } from '@/lib/supabase/server';
 import { db } from '@/lib/db';
 import { importJobs, importJobFiles } from '@/lib/db/schema';
 import { and, eq, ne, gt, or, asc } from 'drizzle-orm';
 import { jsonError, jsonSuccess } from '@/app/api/v1/_envelope';
 import { assertProjectReadAccess } from '@/lib/files/internal-helpers';
-import { enforceRouteLimit } from '@/app/api/v1/_shared';
+import { enforceRouteLimit, requireAuthenticatedUser } from '@/app/api/v1/_shared';
 import { z } from 'zod';
 import { logger } from '@/lib/logger';
 
@@ -42,13 +41,9 @@ export async function GET(request: NextRequest) {
         const limitResponse = await enforceRouteLimit(request, 'api:v1:github:import:status', 300, 60);
         if (limitResponse) return limitResponse;
 
-        const supabase = await createClient();
-        const {
-            data: { user },
-        } = await supabase.auth.getUser();
-        if (!user) {
-            return jsonError('Unauthorized', 401, 'UNAUTHORIZED');
-        }
+        const auth = await requireAuthenticatedUser();
+        if (auth.response || !auth.user) return auth.response ?? jsonError('Unauthorized', 401, 'UNAUTHORIZED');
+        const user = auth.user;
 
         const { searchParams } = new URL(request.url);
         const jobId = searchParams.get('jobId');
