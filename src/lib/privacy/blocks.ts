@@ -1,21 +1,32 @@
+import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
-import {
-  clearBlockedRelationshipState,
-  replaceRelationshipWithBlockedState,
-} from "@/lib/privacy/relationship-transition";
+import { profiles } from "@/lib/db/schema";
+import { recordPrivacyEvent } from "@/lib/privacy/audit";
+import { clearBlockedRelationshipState, replaceRelationshipWithBlockedState } from "@/lib/privacy/relationship-transition";
 
-function assertValidBlockOperation(blockerId: string, blockedUserId: string) {
-  if (blockerId === blockedUserId) {
-    throw new Error("cannot block self");
-  }
-}
+export async function setUserBlocked(input: {
+  blockerId: string;
+  targetUserId: string;
+  blocked: boolean;
+  request: Request;
+}) {
+  if (input.blockerId === input.targetUserId) throw new Error("cannot block self");
+  const [target] = await db.select({ id: profiles.id, username: profiles.username }).from(profiles).where(eq(profiles.id, input.targetUserId)).limit(1);
+  if (!target) return null;
 
-export async function blockUser(blockerId: string, blockedUserId: string) {
-  assertValidBlockOperation(blockerId, blockedUserId);
-  const now = new Date();
-  return db.transaction((tx) => replaceRelationshipWithBlockedState(tx, blockerId, blockedUserId, now));
-}
-
-export async function unblockUser(blockerId: string, blockedUserId: string) {
-  await db.transaction((tx) => clearBlockedRelationshipState(tx, blockerId, blockedUserId));
+  await db.transaction(async (tx) => {
+    if (input.blocked) {
+      await replaceRelationshipWithBlockedState(tx, input.blockerId, input.targetUserId, new Date());
+    } else {
+      await clearBlockedRelationshipState(tx, input.blockerId, input.targetUserId);
+    }
+    await recordPrivacyEvent({
+      executor: tx,
+      userId: input.blockerId,
+      eventType: input.blocked ? "account_blocked" : "account_unblocked",
+      request: input.request,
+      metadata: { targetUserId: input.targetUserId, targetUsername: target.username ?? null },
+    });
+  });
+  return target;
 }
