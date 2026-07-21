@@ -1,10 +1,9 @@
 import { scheduleAccountDeletion } from '@/app/actions/account';
-import { getRequestId, jsonError, jsonSuccess, logApiRoute } from '@/app/api/v1/_shared';
+import { getRequestId, jsonError, jsonSuccess, logApiRoute, requireAuthenticatedUser } from '@/app/api/v1/_shared';
 import { logger } from '@/lib/logger';
 import { validateCsrf } from '@/lib/security/csrf';
 import { checkIdempotencyKey, saveIdempotencyResult } from '@/lib/security/idempotency';
 import { consumeRateLimit } from '@/lib/security/rate-limit';
-import { createClient } from '@/lib/supabase/server';
 import { z } from 'zod';
 
 const deleteAccountBodySchema = z.object({
@@ -36,8 +35,6 @@ export async function DELETE(request: Request) {
     const startedAt = Date.now();
     const requestId = getRequestId(request);
     const idempotencyKey = request.headers.get('idempotency-key') || undefined;
-    const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
 
     // CSRF check — uses shared validation utility
     const csrfError = validateCsrf(request);
@@ -53,7 +50,8 @@ export async function DELETE(request: Request) {
         return csrfError;
     }
 
-    if (!user) {
+    const auth = await requireAuthenticatedUser();
+    if (auth.response || !auth.user) {
         logApiRoute(request, {
             requestId,
             action: 'account.delete',
@@ -62,8 +60,9 @@ export async function DELETE(request: Request) {
             status: 401,
             errorCode: 'UNAUTHORIZED',
         });
-        return jsonError('Not authenticated', 401, 'UNAUTHORIZED');
+        return auth.response ?? jsonError('Not authenticated', 401, 'UNAUTHORIZED');
     }
+    const user = auth.user;
 
     // Idempotency — prevent duplicate deletion schedules
     const idempotencyCheck = await checkIdempotencyKey(request, 'account.delete', user.id);
