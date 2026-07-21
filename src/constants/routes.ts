@@ -12,6 +12,21 @@ export const ROUTES = {
     PROFILE: '/profile',
 } as const
 
+export const SETTINGS_TABS = [
+    "account",
+    "security",
+    "privacy",
+    "notifications",
+    "appearance",
+    "integrations",
+] as const
+
+export type SettingsTab = (typeof SETTINGS_TABS)[number]
+
+export function settingsTabHref(tab: SettingsTab) {
+    return tab === "account" ? ROUTES.SETTINGS : `${ROUTES.SETTINGS}?tab=${tab}`
+}
+
 export const API_ROUTES = {
     HEALTH: '/api/v1/health',
     PROJECTS: '/api/v1/projects',
