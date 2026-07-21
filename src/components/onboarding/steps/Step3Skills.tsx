@@ -2,11 +2,10 @@
 
 import { StepHeader } from '@/components/onboarding/StepHeader'
 import ChipSelector from '@/components/onboarding/ChipSelector'
+import { SkillPicker } from '@/components/skills/SkillPicker'
 import { STEP_UI_CONFIG } from '@/lib/onboarding/step-ui-config'
-import { Label } from '@/components/ui/label'
 
 interface Step3SkillsProps {
-  skillOptions: Array<{ value: string; label: string }>
   interestOptions: Array<{ value: string; label: string }>
   selectedSkills: Set<string>
   selectedInterests: Set<string>
@@ -17,7 +16,6 @@ interface Step3SkillsProps {
 const step3Config = STEP_UI_CONFIG.find((s) => s.id === 3)!
 
 export default function Step3Skills({
-  skillOptions,
   interestOptions,
   selectedSkills,
   selectedInterests,
@@ -31,26 +29,28 @@ export default function Step3Skills({
       <div className="flex flex-col gap-6">
         {/* Skills section */}
         <div className="flex flex-col gap-2">
-          <Label className="text-base font-medium text-foreground">
-            Skills <span className="text-destructive">*</span>
-          </Label>
-          <ChipSelector
-            options={skillOptions}
-            selected={selectedSkills}
-            onToggle={onToggleSkill}
-            variant="multi"
-            size="md"
-            colorVariant="primary"
-            maxVisible={12}
-            expandLabel="Show more"
+          <SkillPicker
+            value={[...selectedSkills]}
+            onChange={(nextSkills) => {
+              const next = new Set(nextSkills)
+              for (const skill of selectedSkills) {
+                if (!next.has(skill)) onToggleSkill(skill)
+              }
+              for (const skill of nextSkills) {
+                if (!selectedSkills.has(skill)) onToggleSkill(skill)
+              }
+            }}
+            maxSkills={25}
+            label="Skills (required)"
+            description="Search across engineering, design, product, business, and human skills."
           />
         </div>
 
         {/* Interests section */}
         <div className="flex flex-col gap-2">
-          <Label className="text-base font-medium text-foreground">
+          <label className="text-base font-medium text-foreground">
             Interests
-          </Label>
+          </label>
           <ChipSelector
             options={interestOptions}
             selected={selectedInterests}
