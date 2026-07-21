@@ -19,7 +19,6 @@ const TARGET_PREFIXES = [
 const TARGET_FILES = new Set<string>([
   "src/hooks/mutations/useProjectMutations.ts",
   "src/hooks/useSettingsQueries.ts",
-  "src/hooks/useProfile.ts",
   "src/hooks/useProfileData.ts",
   "src/hooks/useMessagesData.ts",
   "src/hooks/useConnections.ts",
