@@ -60,7 +60,7 @@ export function TaskLinkChip({
         "bg-sky-50 text-sky-700 ring-1 ring-sky-200",
         "dark:bg-sky-500/15 dark:text-sky-200 dark:ring-sky-500/30",
         "cursor-pointer transition-colors hover:bg-sky-100 dark:hover:bg-sky-500/25",
-        "focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400",
+        "focus:outline-none  ",
         className,
       )}
     >
