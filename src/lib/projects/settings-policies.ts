@@ -16,17 +16,13 @@ export type ProjectSettingsSectionId =
     | "readme"
     | "updates"
     | "notifications"
-    | "automation"
     | "security-audit"
-    | "data"
     | "danger";
 
-export type ProjectSettingsSectionDefinition = {
+type ProjectSettingsSectionDefinition = {
     id: ProjectSettingsSectionId;
     label: string;
     description: string;
-    available: boolean;
-    hiddenReason?: string;
 };
 
 export type ProjectSettingsMember = {
@@ -99,7 +95,7 @@ export type ProjectPersonReference = {
     canOpenProfile: boolean;
 };
 
-export type ProjectSettingsPreflightInput = {
+type ProjectSettingsPreflightInput = {
     status?: "draft" | "active" | "completed" | "archived" | string | null;
     openRolesCount?: number | null;
     pendingApplicationsCount?: number | null;
@@ -108,7 +104,7 @@ export type ProjectSettingsPreflightInput = {
     canDelete?: boolean | null;
 };
 
-export type ProjectAccessImpactInput = {
+type ProjectAccessImpactInput = {
     visibility?: unknown;
     membersCount?: number | null;
     followersCount?: number | null;
@@ -117,13 +113,13 @@ export type ProjectAccessImpactInput = {
     activeTasksCount?: number | null;
 };
 
-export type ProjectAccessTransitionInput = ProjectAccessImpactInput & {
+type ProjectAccessTransitionInput = ProjectAccessImpactInput & {
     previousVisibility?: unknown;
     nextVisibility?: unknown;
     hasManagedProjectImage?: boolean | null;
 };
 
-export type ProjectMemberRemovalPreflightInput = {
+type ProjectMemberRemovalPreflightInput = {
     member?: ProjectSettingsMember | null;
     visibility?: unknown;
     activeAssignedTasks?: number | null;
@@ -138,13 +134,6 @@ export const PROJECT_MEMBER_ROLE_LABELS: Record<ProjectMemberRole, string> = {
     admin: "Co-leader",
     member: "Member",
     viewer: "Viewer",
-};
-
-export const PROJECT_MEMBER_ROLE_DESCRIPTIONS: Record<ProjectMemberRole, string> = {
-    owner: "Single accountable lead with transfer, archive, delete, and all settings permissions.",
-    admin: "Co-leader with collaborator, role/application, task, file, and workflow management.",
-    member: "Contributor who can participate in project work by policy.",
-    viewer: "Read-focused participant without task assignment or edit rights.",
 };
 
 export const PROJECT_MEMBER_ROLE_CAPABILITIES: Record<ProjectMemberRole, ProjectMemberCapability[]> = {
@@ -224,6 +213,33 @@ export function getProjectMemberRoleLabel(role: unknown) {
     return PROJECT_MEMBER_ROLE_LABELS[normalizeProjectMemberRole(role)] ?? "Member";
 }
 
+export function formatProjectTeamRole(input: {
+    membershipRole: unknown;
+    projectRoleTitle?: string | null;
+    leadFocus?: string | null;
+}) {
+    const membershipRole = normalizeProjectMemberRole(input.membershipRole);
+    const membershipLabel = PROJECT_MEMBER_ROLE_LABELS[membershipRole];
+    const projectRoleTitle = input.projectRoleTitle?.trim() || "";
+    const leadFocus = input.leadFocus?.trim() || "";
+    const genericTitles: Record<ProjectMemberRole, string[]> = {
+        owner: ["owner", "lead", "leader"],
+        admin: ["admin", "co-lead", "co-leader"],
+        member: ["member"],
+        viewer: ["viewer"],
+    };
+    const specificRole = genericTitles[membershipRole].includes(projectRoleTitle.toLowerCase())
+        ? ""
+        : projectRoleTitle;
+
+    if (membershipRole === "owner") {
+        const role = leadFocus || specificRole;
+        return role ? `${membershipLabel} / ${role}` : membershipLabel;
+    }
+
+    return specificRole ? `${specificRole} · ${membershipLabel}` : membershipLabel;
+}
+
 export function projectMemberCan(role: unknown, capability: ProjectMemberCapability) {
     return PROJECT_MEMBER_ROLE_CAPABILITIES[normalizeProjectMemberRole(role)].includes(capability);
 }
@@ -234,10 +250,6 @@ export function canProjectMemberUploadFiles(input: { role?: unknown; fileUploadE
     if (role === "viewer") return false;
     if (role !== "member") return false;
     return input.fileUploadEnabled !== false;
-}
-
-export function canProjectMemberMergeTasks(role: unknown) {
-    return projectMemberCan(role, "merge_task");
 }
 
 export function normalizeProjectPublicTabVisibility(value: unknown): ProjectPublicTabVisibility {
@@ -409,86 +421,61 @@ export const PROJECT_SETTINGS_SECTIONS: ProjectSettingsSectionDefinition[] = [
         id: "general",
         label: "General",
         description: "Project identity, collaboration intent, and public-facing summary.",
-        available: true,
     },
     {
         id: "access",
         label: "Access",
         description: "Visibility, discovery, sharing, and follower-facing access behavior.",
-        available: true,
     },
     {
         id: "collaborators",
         label: "Collaborators",
         description: "Member visibility, roles, and ownership readiness.",
-        available: true,
     },
     {
         id: "roles-applications",
         label: "Project Roles Editor",
         description: "Open roles, application intake, and reviewer routing.",
-        available: true,
     },
     {
         id: "tasks-workflow",
         label: "Project Lifecycle",
         description: "Journey stages, task defaults, and workflow guidance.",
-        available: true,
     },
     {
         id: "files-workspace",
         label: "Files & Workspace",
         description: "File intake, version behavior, reviews, and open-with guidance.",
-        available: true,
     },
     {
         id: "readme",
         label: "Doc",
         description: "Documentation publishing rules, media policy, and smart blocks.",
-        available: true,
     },
     {
         id: "updates",
         label: "Updates",
         description: "Project update publishing, visibility, follower notifications, and discussion rules.",
-        available: true,
     },
     {
         id: "notifications",
         label: "Notifications",
         description: "Project event categories and member/follower attention rules.",
-        available: true,
-    },
-    {
-        id: "automation",
-        label: "Automation",
-        description: "Stale-work reminders and cadence automation.",
-        available: false,
-        hiddenReason: "Automation rules are not enforceable yet.",
     },
     {
         id: "security-audit",
         label: "Security & Data",
         description: "Recent settings audit, protected actions, and project data export.",
-        available: true,
-    },
-    {
-        id: "data",
-        label: "Data",
-        description: "Exportable project settings and future data portability controls.",
-        available: false,
-        hiddenReason: "Merged into Security & Data.",
     },
     {
         id: "danger",
         label: "Danger Zone",
         description: "Archive, transfer ownership, and delete with preflight checks.",
-        available: true,
     },
 ];
 
 export function getVisibleProjectSettingsSections() {
-    return PROJECT_SETTINGS_SECTIONS.filter((section) => section.available);
+    return PROJECT_SETTINGS_SECTIONS;
 }
 
 export const normalizeProjectVisibility = normalizeCanonicalProjectVisibility;
@@ -780,24 +767,6 @@ export function buildProjectMemberRemovalPreflight(input: ProjectMemberRemovalPr
         summary: warnings.length > 0
             ? `${displayName} can be removed safely, but ${warnings.length} affected area${warnings.length === 1 ? "" : "s"} should be reviewed.`
             : `${displayName} can be removed with no active responsibility blockers.`,
-    };
-}
-
-export function buildProjectNotificationPolicy() {
-    return {
-        categories: [
-            "Updates that create follower/member attention",
-            "Task assignment, blocked, and done events",
-            "File version, replacement, and review events",
-            "Role/application decisions and workflow requests",
-        ],
-        affectedAreas: [
-            "Notification tray and toast policy",
-            "Task panel activity and comments",
-            "Applications and collaborator flows",
-            "Project follower update routing",
-        ],
-        summary: "Project notifications stay event-based; personal delivery channels stay in global notification settings.",
     };
 }
 
