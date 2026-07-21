@@ -1,10 +1,11 @@
 "use client";
 
+import { toast } from "sonner";
 import { useState } from "react";
 import { AlertTriangle } from "lucide-react";
-import Button from "@/components/ui-custom/Button";
+import { Button } from "@/components/ui/button";
 import { cancelAccountDeletion } from "@/app/actions/account";
-import { useToast } from "@/components/ui-custom/Toast";
+import { formatCalendarDate } from "@/lib/ui/date-formatting";
 
 interface Props {
     hardDeleteAt: string;
@@ -12,7 +13,6 @@ interface Props {
 }
 
 export default function PendingDeletionBanner({ hardDeleteAt, onCancelled }: Props) {
-    const { showToast } = useToast();
     const [cancelling, setCancelling] = useState(false);
 
     const deleteDate = new Date(hardDeleteAt);
@@ -26,13 +26,13 @@ export default function PendingDeletionBanner({ hardDeleteAt, onCancelled }: Pro
         try {
             const result = await cancelAccountDeletion();
             if (result.success) {
-                showToast("Account reactivated successfully!", "success");
+                toast.success("Account reactivated successfully!");
                 onCancelled();
             } else {
-                showToast(result.error || "Failed to cancel deletion", "error");
+                toast.error(result.error || "Failed to cancel deletion");
             }
         } catch {
-            showToast("Failed to cancel deletion", "error");
+            toast.error("Failed to cancel deletion");
         } finally {
             setCancelling(false);
         }
@@ -50,7 +50,7 @@ export default function PendingDeletionBanner({ hardDeleteAt, onCancelled }: Pro
                     </p>
                     <p className="text-sm text-red-700 dark:text-red-300 mt-1">
                         Your account will be permanently deleted on{" "}
-                        <span className="font-semibold">{deleteDate.toLocaleDateString()}</span>
+                        <span className="font-semibold">{formatCalendarDate(deleteDate)}</span>
                         {daysRemaining > 0 && (
                             <> ({daysRemaining} day{daysRemaining !== 1 ? "s" : ""} remaining)</>
                         )}
