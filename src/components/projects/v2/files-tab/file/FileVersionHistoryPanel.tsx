@@ -18,17 +18,19 @@
 
 "use client";
 
+import { toast } from "sonner";
+
 import * as React from "react";
 import { Download, History, Loader2, RotateCcw, Trash2 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { logger } from "@/lib/logger";
-import { useToast } from "@/components/ui-custom/Toast";
 import { useFileVersions } from "@/hooks/useFileVersions";
 import { getVersionSignedUrl } from "@/app/actions/files/versions";
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 import type { FileVersion } from "@/lib/db/schema";
 import { VersionPill } from "../VersionPill";
+import { FileInspectorPanelHeader } from "./FileInspectorPanelHeader";
 
 type FileVersionWithUploader = FileVersion & {
   uploadedByName?: string | null;
@@ -72,6 +74,7 @@ export interface FileVersionHistoryPanelProps {
   /** Optional uploader display names keyed by user id. */
   uploaderNames?: Record<string, string>;
   onCompareClick?: (versionNumber: number) => void;
+  onClose: () => void;
 }
 
 // ─── Component ───────────────────────────────────────────────────────
@@ -85,8 +88,8 @@ export function FileVersionHistoryPanel({
   isDeleted = false,
   uploaderNames,
   onCompareClick,
+  onClose,
 }: FileVersionHistoryPanelProps): React.JSX.Element {
-  const { showToast } = useToast();
   const { versions, isLoading, error, listVersions, restoreVersion, deleteVersion } =
     useFileVersions(projectId, nodeId);
 
@@ -127,10 +130,7 @@ export function FileVersionHistoryPanel({
       try {
         const result = await restoreVersion(version.version);
         if (result.success) {
-          showToast(
-            `Restored v${version.version} successfully`,
-            "success",
-          );
+          toast.success(`Restored v${version.version} successfully`);
           
           if ((result as any).node) {
             useFilesWorkspaceStore.getState().setNodes(projectId, [(result as any).node]);
@@ -155,17 +155,17 @@ export function FileVersionHistoryPanel({
           // Refresh the list to show the updated active version
           await listVersions();
         } else {
-          showToast(result.error || "Restore failed", "error");
+          toast.error(result.error || "Restore failed");
         }
       } catch (err) {
         const message =
           err instanceof Error ? err.message : "Restore failed";
-        showToast(message, "error");
+        toast.error(message);
       } finally {
         setPendingAction(null);
       }
     },
-    [canEdit, isDeleted, projectId, nodeId, restoreVersion, listVersions, showToast],
+    [canEdit, isDeleted, projectId, nodeId, restoreVersion, listVersions],
   );
 
   // ── Download handler ────────────────────────────────────────────────
@@ -190,12 +190,12 @@ export function FileVersionHistoryPanel({
       } catch (err) {
         const message =
           err instanceof Error ? err.message : "Download failed";
-        showToast(message, "error");
+        toast.error(message);
       } finally {
         setPendingAction(null);
       }
     },
-    [projectId, nodeId, nodeName, showToast],
+    [projectId, nodeId, nodeName],
   );
 
   // ── Delete handler (Lead / Co-Lead) ─────────────────────────────────
@@ -221,7 +221,7 @@ export function FileVersionHistoryPanel({
       try {
         const result = await deleteVersion(version.version);
         if (result.success) {
-          showToast(`Deleted version ${version.version} successfully`, "success");
+          toast.success(`Deleted version ${version.version} successfully`);
           
           if ((result as any).node) {
             useFilesWorkspaceStore.getState().setNodes(projectId, [(result as any).node]);
@@ -235,16 +235,16 @@ export function FileVersionHistoryPanel({
           }
           await listVersions();
         } else {
-          showToast((result as any).error || "Delete failed", "error");
+          toast.error((result as any).error || "Delete failed");
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : "Delete failed";
-        showToast(message, "error");
+        toast.error(message);
       } finally {
         setPendingAction(null);
       }
     },
-    [canEdit, isDeleted, projectId, nodeId, deleteVersion, listVersions, showToast]
+    [canEdit, isDeleted, projectId, nodeId, deleteVersion, listVersions]
   );
 
   // ── Uploader label helper ───────────────────────────────────────────
@@ -283,19 +283,21 @@ export function FileVersionHistoryPanel({
         "dark:bg-zinc-950",
       )}
     >
-      {/* Header */}
-      <div className="shrink-0 border-b border-zinc-200 px-3 py-2.5 dark:border-zinc-800">
-        <h3 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-          <History className="h-3.5 w-3.5" aria-hidden="true" />
-          Version History
-        </h3>
-        <div className="mt-0.5 flex items-center gap-1.5">
+      <FileInspectorPanelHeader
+        title="Version History"
+        icon={<History className="h-3.5 w-3.5" aria-hidden="true" />}
+        onClose={onClose}
+        closeLabel="Close version history"
+        closeTestId="files-tab-version-history-close"
+        subtitle={
+          <div className="flex items-center gap-1.5">
           <p className="truncate text-[11px] text-zinc-400 dark:text-zinc-500">
             {nodeName}
           </p>
           <VersionPill v={currentVersion} className="h-3.5 px-1 text-[9px]" />
-        </div>
-      </div>
+          </div>
+        }
+      />
 
       {/* Soft-deleted banner (Req 10.7, 14.2) */}
       {isDeleted && (
@@ -390,14 +392,14 @@ export function FileVersionHistoryPanel({
                         )}
                       </button>
 
-                      {onCompareClick && (
+                      {onCompareClick && !isCurrent && (
                         <button
                           type="button"
                           onClick={() => onCompareClick(version.version)}
                           aria-label={`Compare version ${version.version}`}
                           className="inline-flex items-center justify-center gap-0.5 rounded border border-zinc-200 bg-white px-1.5 py-0.5 text-[10px] font-medium text-zinc-700 transition-colors hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
                         >
-                          Compare
+                          Compare with active
                         </button>
                       )}
 
