@@ -17,7 +17,7 @@
  *  • Role chip is the auto-inferred Deliverable / Reference / Working tag
  *    promoted from the header summary onto each row.
  *  • Primary action is the existing `OpenInIdeMenu` rendered with the
- *    new `variant="primary"` treatment so the "Open with" chooser is
+ *    new `variant="default"` treatment so the "Open with" chooser is
  *    unmissable.
  *  • Overflow menu mirrors the right-click context menu so keyboard +
  *    touch users have parity with mouse users.
@@ -339,7 +339,7 @@ export function TaskFileRow({
           <button
             type="button"
             onClick={() => onToggleExpanded?.(node)}
-            className="inline-flex h-8 items-center gap-1.5 rounded-md bg-indigo-600 px-3 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-indigo-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 dark:bg-indigo-500 dark:hover:bg-indigo-400"
+            className="inline-flex h-8 items-center gap-1.5 rounded-md bg-indigo-600 px-3 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-indigo-700 focus-visible:outline-none   dark:bg-indigo-500 dark:hover:bg-indigo-400"
             data-testid="task-file-row-folder-open"
           >
             <FolderIcon className="h-3.5 w-3.5" />
@@ -371,7 +371,7 @@ export function TaskFileRow({
               type="button"
               data-testid="task-file-row-overflow"
               aria-label={`More actions for ${node.name}`}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-transparent text-zinc-500 transition-colors hover:border-zinc-200 hover:bg-zinc-50 hover:text-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 dark:text-zinc-400 dark:hover:border-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-transparent text-zinc-500 transition-colors hover:border-zinc-200 hover:bg-zinc-50 hover:text-zinc-900 focus-visible:outline-none   dark:text-zinc-400 dark:hover:border-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
             >
               <MoreHorizontal className="h-4 w-4" />
             </button>
