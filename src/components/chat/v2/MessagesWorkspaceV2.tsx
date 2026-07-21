@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { Profiler, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ProfilerOnRenderCallback, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { Loader2, MessageSquare, PenSquare, Search, WifiOff, ChevronDown } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -15,7 +15,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { markConversationMessageNotificationsReadAction } from '@/app/actions/notifications';
 import { useChatTypingState } from '@/hooks/useChatTypingState';
 import { useAuth } from '@/hooks/useAuth';
-import { useDebounce } from '@/hooks/hub/useDebounce';
+import { useDebounce } from 'use-debounce';
 import { useMessagesV2Realtime } from '@/hooks/useMessagesV2Realtime';
 import {
     useConversationThread,
@@ -34,6 +34,7 @@ import { refreshConversationCache } from '@/lib/messages/v2-refresh';
 import { getEffectiveMessageAttentionUnreadCount } from '@/lib/messages/attention';
 import { isTemporaryMessageId } from '@/lib/messages/utils';
 import { queryKeys } from '@/lib/query-keys';
+import { OPEN_MESSAGES_SEARCH_EVENT } from '@/components/layout/header/global-search';
 import { ConversationHeaderV2 } from './ConversationHeaderV2';
 import { ConversationListV2 } from './ConversationListV2';
 import { DropZoneOverlay } from './DropZoneOverlay';
@@ -64,6 +65,41 @@ type ConversationLastMessageSnapshot = {
     id?: string | null;
     createdAt?: Date | string | null;
 } | null | undefined;
+
+const ENABLE_MESSAGES_RENDER_PROFILER = process.env.NEXT_PUBLIC_MESSAGES_RENDER_PROFILER === '1';
+
+const handleMessagesProfilerRender: ProfilerOnRenderCallback = (
+    id,
+    phase,
+    actualDuration,
+    baseDuration,
+    startTime,
+    commitTime,
+) => {
+    if (typeof performance !== 'undefined' && typeof performance.mark === 'function') {
+        performance.mark(`messages-v2:render:${id}:${phase}`);
+    }
+    console.debug('[messages-v2] render_profile', {
+        id,
+        phase,
+        actualDuration,
+        baseDuration,
+        startTime,
+        commitTime,
+    });
+};
+
+function MessagesRenderProfiler({ mode, children }: { mode: MessagesWorkspaceV2Props['mode']; children: ReactNode }) {
+    if (!ENABLE_MESSAGES_RENDER_PROFILER) {
+        return <>{children}</>;
+    }
+
+    return (
+        <Profiler id={`messages-workspace:${mode}`} onRender={handleMessagesProfilerRender}>
+            {children}
+        </Profiler>
+    );
+}
 
 function lastMessageEpoch(value: ConversationLastMessageSnapshot) {
     if (!value?.createdAt) return 0;
@@ -112,7 +148,7 @@ export function MessagesWorkspaceV2({
     const [replyContextJumpState, setReplyContextJumpState] = useState<ReplyContextJumpState | null>(null);
     const [threadScrollToLatestSignal, setThreadScrollToLatestSignal] = useState(0);
     const [globalSearch, setGlobalSearch] = useState('');
-    const debouncedSearch = useDebounce(globalSearch.trim(), 250);
+    const [debouncedSearch] = useDebounce(globalSearch.trim(), 250);
     const [visibleConversationIds, setVisibleConversationIds] = useState<string[]>([]);
     const [searchOpen, setSearchOpen] = useState(false);
     const [newMessageOpen, setNewMessageOpen] = useState(false);
@@ -132,23 +168,25 @@ export function MessagesWorkspaceV2({
     } | null>(null);
     const commitVisibleThreadReadRef = useRef<(() => void) | null>(null);
     const composerAddFilesRef = useRef<((files: File[]) => void) | null>(null);
+    const isChatsTabActive = activeTab === 'chats';
+    const hasActiveConversation = Boolean(selectedConversationId);
     const ensureConversation = useEnsureDirectConversation();
-    const inbox = useInbox();
+    const inbox = useInbox(20, isChatsTabActive);
     const thread = useConversationThread(selectedConversationId);
     const { markRead, muteConversation, archiveConversation, pinMessage, injectMessageContext } = useMessagesActions();
     const search = useMessageSearch(debouncedSearch);
     const { activeTypingUsers, sendTyping, typingUsersByConversation } = useChatTypingState({
         activeConversationId: selectedConversationId,
         visibleConversationIds,
-        enabled: true,
-        listVisible: true,
+        enabled: hasActiveConversation || isChatsTabActive,
+        listVisible: isChatsTabActive,
     });
     const isOnline = useOnlineStatus();
     const presenceHealth = usePresenceHealth();
-    const realtime = useMessagesV2Realtime(
-        selectedConversationId,
-        true,
-    );
+    const realtime = useMessagesV2Realtime(selectedConversationId, {
+        inbox: isChatsTabActive,
+        activeThread: hasActiveConversation,
+    });
 
     const clearConversationAttention = useCallback((conversationId: string) => {
         clearMessageAttentionSmooth(conversationId);
@@ -622,6 +660,13 @@ export function MessagesWorkspaceV2({
         }
     }, [handleCommitVisibleThreadRead, setSelectedConversationId, setReplyTarget, setFocusMessageId, setUrlMessageId, setReplyContextJumpState, mode, router]);
 
+    useEffect(() => {
+        if (mode !== 'page') return;
+        const openLocalSearch = () => setSearchOpen(true);
+        window.addEventListener(OPEN_MESSAGES_SEARCH_EVENT, openLocalSearch);
+        return () => window.removeEventListener(OPEN_MESSAGES_SEARCH_EVENT, openLocalSearch);
+    }, [mode]);
+
     useMessagingShortcuts({
         onEscape: () => {
             if (searchOpen) {
@@ -703,6 +748,7 @@ export function MessagesWorkspaceV2({
         : 'bg-zinc-50/60 dark:bg-zinc-950';
 
     return (
+        <MessagesRenderProfiler mode={mode}>
         <div className={cn('flex h-full min-h-0 flex-col overflow-hidden', shellClasses)}>
 
 
@@ -716,7 +762,7 @@ export function MessagesWorkspaceV2({
                         {!isOnline
                             ? 'You\u2019re offline \u2014 messages will send when your connection restores.'
                             : presenceHealth.status === 'unavailable'
-                                ? 'Typing indicators and online presence are unavailable until the presence service reconnects.'
+                                ? 'Typing indicators and online presence are unavailable until realtime reconnects.'
                                 : presenceHealth.status === 'degraded'
                                     ? 'Typing indicators and online presence are reconnecting \u2014 message delivery will continue.'
                             : 'Realtime connection lost \u2014 messages may be delayed.'}
@@ -1069,5 +1115,6 @@ export function MessagesWorkspaceV2({
                 </DialogContent>
             </Dialog>
         </div>
+        </MessagesRenderProfiler>
     );
 }
