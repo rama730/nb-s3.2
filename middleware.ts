@@ -141,6 +141,10 @@ function buildCsp(nonce: string, request: NextRequest) {
 }
 
 export async function middleware(request: NextRequest) {
+  if (request.nextUrl.pathname.startsWith("/api/")) {
+    return NextResponse.next();
+  }
+
   const requestHeaders = new Headers(request.headers);
   const nonce = toBase64Url(crypto.getRandomValues(new Uint8Array(24)).buffer);
   requestHeaders.set(CSP_NONCE_HEADER, nonce);
