@@ -1,7 +1,8 @@
 'use server';
 
 import { and, desc, eq, inArray, isNull, ne, or, sql } from 'drizzle-orm';
-import { createClient } from '@/lib/supabase/server';
+import { getAuthUser } from '@/lib/supabase/auth-user';
+import { isUuid } from '@/lib/validations/uuid';
 import { db } from '@/lib/db';
 import {
     conversationParticipants,
@@ -32,7 +33,8 @@ import {
     type WorkflowResolutionAction,
     withStructuredMessageMetadata,
 } from '@/lib/messages/structured';
-import { buildConversationParticipantPreview } from '@/lib/messages/preview-authority';
+import { refreshConversationParticipantPreviewsIfNeeded } from '@/lib/messages/preview-refresh';
+import { withDeliveryMetadata } from '@/lib/messages/delivery-state';
 import { emitWorkflowAssignedNotification, emitWorkflowResolvedNotification } from '@/lib/notifications/emitters';
 import { enqueueProjectNotificationEvent } from '@/lib/notifications/project-events';
 import {
@@ -108,21 +110,6 @@ function workflowKindLabel(kind: string | null | undefined) {
     return labels[kind ?? ''] ?? (kind ?? 'workflow').replace(/_/g, ' ');
 }
 
-function withDeliveryMetadata(
-    metadata: Record<string, unknown> | null | undefined,
-): Record<string, unknown> {
-    return {
-        ...(metadata || {}),
-        deliveryState: 'sent',
-    };
-}
-
-async function getAuthUser() {
-    const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    return user;
-}
-
 async function resolveConversationId(params: {
     conversationId?: string | null;
     targetUserId?: string | null;
@@ -189,16 +176,10 @@ function formatDueDateKey(date: Date) {
 type MessageTaskPriority = 'low' | 'medium' | 'high' | 'urgent';
 
 const MESSAGE_TASK_PRIORITIES = new Set<MessageTaskPriority>(['low', 'medium', 'high', 'urgent']);
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
 function normalizeMessageTaskPriority(priority: unknown): MessageTaskPriority {
     return typeof priority === 'string' && MESSAGE_TASK_PRIORITIES.has(priority as MessageTaskPriority)
         ? priority as MessageTaskPriority
         : 'medium';
-}
-
-function isUuid(value: string | null | undefined): value is string {
-    return Boolean(value && UUID_PATTERN.test(value));
 }
 
 async function getConversationParticipantProfile(conversationId: string, profileId: string) {
@@ -294,61 +275,6 @@ async function hydrateSingleMessage(conversationId: string, messageId: string) {
     return context.success && context.available && context.message ? context.message : null;
 }
 
-async function recomputeConversationPreviewsIfNeeded(conversationId: string, messageId: string) {
-    const participants = await db
-        .select({
-            id: conversationParticipants.id,
-            userId: conversationParticipants.userId,
-            lastMessageId: conversationParticipants.lastMessageId,
-        })
-        .from(conversationParticipants)
-        .where(eq(conversationParticipants.conversationId, conversationId));
-
-    const needsRefresh = participants.some((participant) => participant.lastMessageId === messageId);
-    if (!needsRefresh) {
-        return;
-    }
-
-    await Promise.all(participants.map(async (participant) => {
-        const [latest] = await db
-            .select({
-                id: messages.id,
-                content: messages.content,
-                type: messages.type,
-                metadata: messages.metadata,
-                createdAt: messages.createdAt,
-                senderId: messages.senderId,
-            })
-            .from(messages)
-            .where(
-                and(
-                    eq(messages.conversationId, conversationId),
-                    isNull(messages.deletedAt),
-                    sql`NOT EXISTS (
-                        SELECT 1
-                        FROM message_hidden_for_users h
-                        WHERE h.message_id = ${messages.id}
-                          AND h.user_id = ${participant.userId}
-                    )`,
-                ),
-            )
-            .orderBy(desc(messages.createdAt), desc(messages.id))
-            .limit(1);
-
-        await db
-            .update(conversationParticipants)
-            .set(buildConversationParticipantPreview(
-                latest
-                    ? {
-                        ...latest,
-                        metadata: latest.metadata as Record<string, unknown> | null,
-                    }
-                    : null,
-            ))
-            .where(eq(conversationParticipants.id, participant.id));
-    }));
-}
-
 async function emitActivityBridgeMessage(params: {
     conversationId: string;
     senderId: string;
@@ -377,7 +303,7 @@ async function emitActivityBridgeMessage(params: {
             senderId: params.senderId,
             type: 'system',
             content: null,
-            metadata: withDeliveryMetadata(withStructuredMessageMetadata({ version: 4 }, payload)),
+            metadata: withDeliveryMetadata(withStructuredMessageMetadata({ version: 4 }, payload), 'sent'),
         })
         .returning({ id: messages.id });
 
@@ -559,24 +485,6 @@ function toTaskChip(task: { id: string; title: string; taskNumber: number }): Me
         id: task.id,
         label: `#${task.taskNumber} ${task.title}`,
         subtitle: null,
-    };
-}
-
-function toFileChip(file: { id: string; name: string; path: string }): MessageContextChip {
-    return {
-        kind: 'file',
-        id: file.id,
-        label: file.name,
-        subtitle: file.path,
-    };
-}
-
-function toProfileChip(profile: { id: string; label: string; subtitle: string | null }): MessageContextChip {
-    return {
-        kind: 'profile',
-        id: profile.id,
-        label: profile.label,
-        subtitle: profile.subtitle,
     };
 }
 
@@ -853,7 +761,7 @@ export async function sendStructuredMessageActionV2(params: {
                     metadata: withDeliveryMetadata(withStructuredMessageMetadata({
                         version: 4,
                         ...(params.clientMessageId ? { clientMessageId: params.clientMessageId } : {}),
-                    }, structured)),
+                    }, structured), 'sent'),
                 })
                 .returning({ id: messages.id });
 
@@ -913,7 +821,7 @@ export async function sendStructuredMessageActionV2(params: {
                         metadata: withDeliveryMetadata(withStructuredMessageMetadata({
                             version: 4,
                             ...(params.clientMessageId ? { clientMessageId: params.clientMessageId } : {}),
-                        }, nextStructured)),
+                        }, nextStructured), 'sent'),
                     })
                     .where(eq(messages.id, messageRow!.id));
             }
@@ -1158,7 +1066,7 @@ export async function resolveMessageWorkflowActionV2(params: {
                     metadata: withDeliveryMetadata(withStructuredMessageMetadata(
                         (workflow.messageMetadata as Record<string, unknown>) || {},
                         nextStructured,
-                    )),
+                    ), 'sent'),
                 })
                 .where(eq(messages.id, workflow.messageId!));
 
@@ -1272,7 +1180,7 @@ export async function resolveMessageWorkflowActionV2(params: {
             }
         }
 
-        await recomputeConversationPreviewsIfNeeded(workflow.conversationId, workflow.messageId);
+        await refreshConversationParticipantPreviewsIfNeeded(workflow.conversationId, workflow.messageId);
         const bridgeMessage = bridgeConfig
             ? await emitActivityBridgeMessage({
                 conversationId: workflow.conversationId,
