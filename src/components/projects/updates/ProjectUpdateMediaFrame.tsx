@@ -3,6 +3,12 @@
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { ImageOff, LoaderCircle } from "lucide-react";
 
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogTitle,
+} from "@/components/ui/dialog";
 import type { ProjectUpdateMediaItem } from "@/lib/projects/updates";
 import { cn } from "@/lib/utils";
 
@@ -153,7 +159,7 @@ export function ProjectUpdateMediaFrame({
                     type="button"
                     onClick={onOpen}
                     className={cn(
-                        "block text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+                        "block text-left focus:outline-none    ",
                         isPortrait ? "-ml-1 mr-auto w-full max-w-[320px]" : "w-full max-w-full",
                     )}
                     aria-label={openLabel ?? "Open project update media"}
@@ -177,5 +183,56 @@ export function ProjectUpdateMediaFrame({
         >
             {frame}
         </a>
+    );
+}
+
+export function ProjectUpdateMediaViewer({
+    item,
+    onOpenChange,
+}: {
+    item: ProjectUpdateMediaItem | null;
+    onOpenChange: (open: boolean) => void;
+}) {
+    const src = item?.url ?? "";
+    const isVideo = item ? isProjectUpdateVideoMedia(item, src) : false;
+    const title = item?.label || item?.altText || "Project update media";
+
+    return (
+        <Dialog open={Boolean(item && src)} onOpenChange={onOpenChange}>
+            <DialogContent
+                className="max-h-[92vh] w-[min(94vw,1040px)] overflow-hidden border-zinc-800 bg-zinc-950 p-0 text-zinc-50 shadow-2xl sm:max-w-[min(94vw,1040px)]"
+                overlayClassName="bg-black/80"
+            >
+                <DialogTitle className="sr-only">{title}</DialogTitle>
+                <DialogDescription className="sr-only">
+                    Project update media preview.
+                </DialogDescription>
+                <div className="flex max-h-[92vh] min-h-0 flex-col">
+                    <div className="border-b border-white/10 px-4 py-3 pr-12">
+                        <p className="truncate text-sm font-semibold text-white">{title}</p>
+                        {item?.mimeType ? (
+                            <p className="mt-0.5 text-xs text-zinc-400">{item.mimeType}</p>
+                        ) : null}
+                    </div>
+                    <div className="flex min-h-0 flex-1 items-center justify-center bg-black p-3">
+                        {isVideo ? (
+                            <video
+                                className="max-h-[78vh] max-w-full rounded-lg object-contain"
+                                controls
+                                playsInline
+                                src={src}
+                            />
+                        ) : (
+                            <img
+                                src={src}
+                                alt={item?.altText || item?.label || "Project update media"}
+                                className="max-h-[78vh] max-w-full rounded-lg object-contain"
+                                decoding="async"
+                            />
+                        )}
+                    </div>
+                </div>
+            </DialogContent>
+        </Dialog>
     );
 }
