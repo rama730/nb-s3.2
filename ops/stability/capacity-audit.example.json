@@ -38,7 +38,7 @@
       "measuredPeak": "Observed peak during validation.",
       "targetCapacity": "Target capacity with headroom.",
       "status": "pending",
-      "mitigation": "Dedicated presence service or vendor scaling."
+      "mitigation": "Channel consolidation, plan increase, or vendor scaling."
     },
     {
       "id": "redis",
