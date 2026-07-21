@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
-test("project detail header scroll behavior is shared by Files and Settings tabs", () => {
+test("project detail header scroll behavior stays route-owned outside contained workspaces", () => {
     const source = fs.readFileSync(
         path.join(process.cwd(), "src/components/projects/dashboard/ProjectLayout.tsx"),
         "utf8",
@@ -11,23 +11,23 @@ test("project detail header scroll behavior is shared by Files and Settings tabs
 
     assert.match(
         source,
-        /const isContainedWorkspaceTab = isFilesTab;/,
-        "only the Files workspace should use the contained full-height layout",
+        /const isContainedWorkspaceTab = isFilesTab \|\| isDocEditWorkspaceTab;/,
+        "Files and Doc edit mode should use the contained full-height layout",
     );
     assert.doesNotMatch(
         source,
         /isFilesTab\s*\|\|\s*isSettingsTab/,
         "Settings should use the normal route scroll contract so the sticky project header works",
     );
-    assert.match(
+    assert.doesNotMatch(
         source,
-        /layoutRoot\?\.addEventListener\("scroll", handleNestedScroll, \{ capture: true, passive: true \}\)/,
-        "contained workspace scroll panes should feed the shared header scroll state",
+        /handleNestedScroll|handleWheel|nestedScrollTops/,
+        "contained workspace panes should own their own scroll chrome",
     );
     assert.match(
         source,
         /h-0 -translate-y-2 opacity-0 pointer-events-none/,
-        "the contained Files header should smoothly collapse when its inner pane scrolls",
+        "route-scrolled pages should still smoothly collapse the top row",
     );
     assert.match(
         source,
