@@ -3,7 +3,6 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 
 import { fetchProjectSprintDetailAction, fetchProjectSprintTimelinePageAction, fetchProjectSprintsAction, fetchProjectTasksAction } from '@/app/actions/project';
-import type { Task } from '@/components/projects/v2/tasks/TaskCard';
 import { queryKeys } from '@/lib/query-keys';
 import type { SprintDetailPayload } from '@/lib/projects/sprint-detail';
 import { normalizeTaskSurfaceRecord } from '@/lib/projects/task-presentation';
@@ -20,17 +19,17 @@ const filterTasksByScope = (tasks: any[], scope: ProjectTaskScope) => {
     return normalized;
 };
 
-export const PROJECT_TASKS_QUERY_KEY = (projectId: string, scope: ProjectTaskScope = 'all') => queryKeys.project.detail.tasks(projectId, normalizeScope(scope));
-export const SPRINT_TASKS_QUERY_KEY = (projectId: string, sprintId: string) => queryKeys.project.detail.sprintTasks(projectId, sprintId);
+export const PROJECT_TASKS_QUERY_KEY = (projectId: string, scope: ProjectTaskScope = 'all', search = '') => queryKeys.project.detail.tasks(projectId, normalizeScope(scope), search.trim().slice(0, 100));
 export const SPRINT_DETAIL_QUERY_KEY = (projectId: string, sprintId: string) => queryKeys.project.detail.sprintDetail(projectId, sprintId);
 export const PROJECT_SPRINTS_QUERY_KEY = (projectId: string) => queryKeys.project.detail.sprints(projectId);
 
-export function useProjectInfiniteTasks(projectId: string, initialData?: any, scope: ProjectTaskScope = 'all') {
+export function useProjectInfiniteTasks(projectId: string, initialData?: any, scope: ProjectTaskScope = 'all', search = '') {
     const normalizedScope = normalizeScope(scope);
+    const normalizedSearch = search.trim().slice(0, 100);
     const initialTasksRaw = Array.isArray(initialData) ? initialData : [];
     const initialTasks = filterTasksByScope(initialTasksRaw, normalizedScope);
     const lastCreatedAt = initialTasks?.length ? (initialTasks[initialTasks.length - 1] as any)?.createdAt : undefined;
-    const initialQueryData = initialTasks?.length
+    const initialQueryData = !normalizedSearch && initialTasks?.length
         ? {
               pages: [
                   {
@@ -45,9 +44,9 @@ export function useProjectInfiniteTasks(projectId: string, initialData?: any, sc
         : undefined;
 
     return useInfiniteQuery({
-        queryKey: PROJECT_TASKS_QUERY_KEY(projectId, normalizedScope),
+        queryKey: PROJECT_TASKS_QUERY_KEY(projectId, normalizedScope, normalizedSearch),
         queryFn: async ({ pageParam }: { pageParam: string | undefined }) => {
-            const result = await fetchProjectTasksAction(projectId, 50, pageParam, normalizedScope);
+            const result = await fetchProjectTasksAction(projectId, 50, pageParam, normalizedScope, normalizedSearch);
             if (!result.success) throw new Error(result.error);
             return result;
         },
