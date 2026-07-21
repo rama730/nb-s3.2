@@ -3,12 +3,6 @@
 import { useCallback, useState, type Dispatch, type RefObject, type SetStateAction } from 'react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
-import {
-    acceptApplicationAction,
-    rejectApplicationAction,
-    reopenApplicationAction,
-    withdrawApplicationAction,
-} from '@/app/actions/applications';
 import { acceptConnectionRequest, cancelConnectionRequest, sendConnectionRequest } from '@/app/actions/connections';
 import type { MessageWithSender, UploadedAttachment } from '@/app/actions/messaging';
 import type { ConversationCapabilityV2 } from '@/app/actions/messaging/v2';
@@ -17,16 +11,10 @@ import { formatDraftWithCodeSnippet } from '@/lib/messages/code-snippets';
 import { upsertThreadConversation } from '@/lib/messages/v2-cache';
 import { refreshConversationCache } from '@/lib/messages/v2-refresh';
 import { useMessagesActions } from '@/hooks/useMessagesV2';
-import {
-    type MessagesV2OutboxStructuredAction,
-    useMessagesV2OutboxStore,
-} from '@/stores/messagesV2OutboxStore';
-import type { MessageContextChip } from '@/lib/messages/structured';
+import { useMessagesV2OutboxStore } from '@/stores/messagesV2OutboxStore';
 import { useMessagesV2UiStore } from '@/stores/messagesV2UiStore';
 import type {
-    ApplicationWorkflowAction,
     PendingAttachment,
-    StructuredActionDraft,
 } from './message-composer-v2-shared';
 
 interface UseMessageComposerActionsParams {
@@ -38,12 +26,6 @@ interface UseMessageComposerActionsParams {
     clearDraft: (conversationId: string) => void;
     attachments: PendingAttachment[];
     clearAttachments: () => void;
-    pendingContextChips: MessageContextChip[];
-    setPendingContextChips: Dispatch<SetStateAction<MessageContextChip[]>>;
-    structuredDraft: StructuredActionDraft;
-    closeSlashMenu: () => void;
-    clearStructuredDraft: () => void;
-    buildStructuredDraftContextChips: (draftState: StructuredActionDraft) => MessageContextChip[];
     onClearReply: () => void;
     inputRef: RefObject<HTMLTextAreaElement | null>;
     clearTypingIdleTimer: () => void;
@@ -67,12 +49,6 @@ export function useMessageComposerActions({
     clearDraft,
     attachments,
     clearAttachments,
-    pendingContextChips,
-    setPendingContextChips,
-    structuredDraft,
-    closeSlashMenu,
-    clearStructuredDraft,
-    buildStructuredDraftContextChips,
     onClearReply,
     inputRef,
     clearTypingIdleTimer,
@@ -81,33 +57,30 @@ export function useMessageComposerActions({
     onWillSend,
 }: UseMessageComposerActionsParams) {
     const queryClient = useQueryClient();
-    const { sendConversationMessage, sendStructuredMessage } = useMessagesActions();
+    const { sendConversationMessage } = useMessagesActions();
     const upsertOutboxItem = useMessagesV2OutboxStore((state) => state.upsertItem);
     const removeOutboxItem = useMessagesV2OutboxStore((state) => state.removeItem);
     const markOutboxItem = useMessagesV2OutboxStore((state) => state.markItem);
     const setSelectedConversationId = useMessagesV2UiStore((state) => state.setSelectedConversationId);
     const [isSending, setIsSending] = useState(false);
     const [requestLoading, setRequestLoading] = useState(false);
-    const [applicationActionLoading, setApplicationActionLoading] = useState<ApplicationWorkflowAction | null>(null);
 
     const queueOutgoingMessage = useCallback((params: {
         clientMessageId: string;
         content: string;
         uploadedAttachments?: UploadedAttachment[];
         state: 'sending' | 'queued' | 'failed';
-        contextChips?: MessageContextChip[];
-        structuredAction?: MessagesV2OutboxStructuredAction | null;
     }) => {
         upsertOutboxItem({
             clientMessageId: params.clientMessageId,
             conversationId,
             targetUserId: targetUserId ?? null,
-            mode: params.structuredAction ? 'structured' : 'plain',
+            mode: 'plain',
             content: params.content,
             attachments: params.uploadedAttachments ?? [],
             replyToMessageId: replyTarget?.id || null,
-            contextChips: params.contextChips ?? [],
-            structuredAction: params.structuredAction ?? null,
+            contextChips: [],
+            structuredAction: null,
             createdAt: Date.now(),
             attempts: 0,
             nextRetryAt: Date.now(),
@@ -128,134 +101,6 @@ export function useMessageComposerActions({
         updateTypingState(false);
     }, [clearTypingIdleTimer, onWillSend, setSendAnimating, updateTypingState]);
 
-    const handleSendStructured = useCallback(async () => {
-        if (!structuredDraft.kind || isSending || !canSendFromCapability(capability)) {
-            return;
-        }
-
-        const summary = structuredDraft.summary.trim()
-            || (
-                structuredDraft.kind === 'project_invite'
-                    ? 'Invitation to collaborate on a project.'
-                    : structuredDraft.kind === 'availability_request'
-                        ? 'Can you confirm your current availability?'
-                        : structuredDraft.kind === 'task_approval'
-                            ? 'Please review this task for approval.'
-                            : structuredDraft.kind === 'rate_share'
-                                ? `${structuredDraft.amount.trim()} / ${structuredDraft.unit.trim()}`
-                                : structuredDraft.kind === 'handoff_summary'
-                                    ? structuredDraft.next.trim() || structuredDraft.completed.trim() || structuredDraft.blocked.trim() || 'Handoff summary'
-                                    : 'Requesting feedback on this work.'
-            );
-
-        if (structuredDraft.kind === 'rate_share' && (!structuredDraft.amount.trim() || !structuredDraft.unit.trim())) {
-            toast.error('Enter both a rate amount and unit');
-            return;
-        }
-        if (structuredDraft.kind === 'project_invite' && !structuredDraft.projectId) {
-            toast.error('Select a project to invite into');
-            return;
-        }
-        if (structuredDraft.kind === 'task_approval' && !structuredDraft.taskId) {
-            toast.error('Select a task to approve');
-            return;
-        }
-
-        const contextChips = buildStructuredDraftContextChips(structuredDraft);
-        const clientMessageId = createClientMessageId();
-        const optimisticStructuredAction: MessagesV2OutboxStructuredAction = {
-            kind: structuredDraft.kind,
-            title: structuredDraft.title.trim() || null,
-            summary,
-            note: structuredDraft.note.trim() || null,
-            projectId: structuredDraft.projectId || null,
-            taskId: structuredDraft.taskId || null,
-            fileId: structuredDraft.fileId || null,
-            profileId: structuredDraft.profileId || null,
-            amount: structuredDraft.amount.trim() || null,
-            unit: structuredDraft.unit.trim() || null,
-            dueAt: structuredDraft.dueAt || null,
-            completed: structuredDraft.completed.trim() || null,
-            blocked: structuredDraft.blocked.trim() || null,
-            next: structuredDraft.next.trim() || null,
-        };
-
-        queueOutgoingMessage({
-            clientMessageId,
-            content: '',
-            state: 'sending',
-            contextChips,
-            structuredAction: optimisticStructuredAction,
-        });
-        beginSendAnimation();
-        onClearReply();
-        setPendingContextChips([]);
-        clearStructuredDraft();
-        closeSlashMenu();
-
-        try {
-            const result = await sendStructuredMessage.mutateAsync({
-                conversationId,
-                targetUserId: targetUserId ?? null,
-                clientMessageId,
-                kind: structuredDraft.kind,
-                title: structuredDraft.title.trim() || null,
-                summary,
-                note: structuredDraft.note.trim() || null,
-                projectId: structuredDraft.projectId || null,
-                taskId: structuredDraft.taskId || null,
-                fileId: structuredDraft.fileId || null,
-                profileId: structuredDraft.profileId || null,
-                amount: structuredDraft.amount.trim() || null,
-                unit: structuredDraft.unit.trim() || null,
-                dueAt: structuredDraft.dueAt || null,
-                completed: structuredDraft.completed.trim() || null,
-                blocked: structuredDraft.blocked.trim() || null,
-                next: structuredDraft.next.trim() || null,
-                contextChips,
-            });
-
-            removeOutboxItem(clientMessageId);
-            if (result.conversation) {
-                upsertThreadConversation(queryClient, result.conversation);
-            }
-            // Transition from draft to real conversation after first message send
-            if (conversationId.startsWith('draft:') && result.conversationId && result.conversationId !== conversationId) {
-                setSelectedConversationId(result.conversationId);
-            }
-        } catch (error) {
-            markOutboxItem(clientMessageId, {
-                state: 'queued',
-                attempts: 1,
-                nextRetryAt: Date.now() + 3_000,
-                error: error instanceof Error ? error.message : 'network_error',
-            });
-            toast.info('Structured message queued. It will retry automatically.');
-        } finally {
-            setIsSending(false);
-            inputRef.current?.focus();
-        }
-    }, [
-        beginSendAnimation,
-        buildStructuredDraftContextChips,
-        capability,
-        clearStructuredDraft,
-        closeSlashMenu,
-        conversationId,
-        inputRef,
-        isSending,
-        markOutboxItem,
-        onClearReply,
-        queryClient,
-        queueOutgoingMessage,
-        removeOutboxItem,
-        sendStructuredMessage,
-        setSelectedConversationId,
-        setPendingContextChips,
-        structuredDraft,
-        targetUserId,
-    ]);
-
     const handleSend = useCallback(async () => {
         const text = formatDraftWithCodeSnippet(draft);
         const uploadedAttachments = attachments
@@ -273,11 +118,9 @@ export function useMessageComposerActions({
         if (isSending) return;
 
         const clientMessageId = createClientMessageId();
-        const contextChips = pendingContextChips;
 
         clearDraft(conversationId);
         onClearReply();
-        setPendingContextChips([]);
         clearAttachments();
         if (inputRef.current) inputRef.current.style.height = 'auto';
 
@@ -286,7 +129,6 @@ export function useMessageComposerActions({
             content: text,
             uploadedAttachments,
             state: 'sending',
-            contextChips,
         });
         beginSendAnimation();
 
@@ -298,7 +140,7 @@ export function useMessageComposerActions({
                 attachments: uploadedAttachments,
                 clientMessageId,
                 replyToMessageId: replyTarget?.id || null,
-                contextChips,
+                contextChips: [],
             });
 
             removeOutboxItem(clientMessageId);
@@ -332,14 +174,12 @@ export function useMessageComposerActions({
         isSending,
         markOutboxItem,
         onClearReply,
-        pendingContextChips,
         queryClient,
         queueOutgoingMessage,
         removeOutboxItem,
         replyTarget?.id,
         sendConversationMessage,
         setSelectedConversationId,
-        setPendingContextChips,
         targetUserId,
     ]);
 
@@ -370,48 +210,10 @@ export function useMessageComposerActions({
         }
     }, [capability, refreshMessagingState, targetUserId]);
 
-    const handleApplicationAction = useCallback(async (action: ApplicationWorkflowAction) => {
-        const applicationId = capability?.activeApplicationId;
-        if (!applicationId) return;
-
-        setApplicationActionLoading(action);
-        try {
-            const idempotencyKey = `chat-v2:composer:${action}:${applicationId}`;
-            const result = action === 'accept'
-                ? await acceptApplicationAction(applicationId, undefined, { idempotencyKey })
-                : action === 'reject'
-                    ? await rejectApplicationAction(applicationId, undefined, 'other', { idempotencyKey })
-                    : action === 'withdraw'
-                        ? await withdrawApplicationAction(applicationId, undefined, { idempotencyKey })
-                        : await reopenApplicationAction(applicationId, undefined, { idempotencyKey });
-
-            if (!result.success) {
-                toast.error(result.error || `Failed to ${action} application`);
-                return;
-            }
-
-            toast.success(
-                action === 'withdraw'
-                    ? 'Application withdrawn'
-                    : action === 'reopen'
-                        ? 'Application reopened'
-                        : `Application ${action}ed`,
-            );
-            await refreshMessagingState();
-        } catch (error) {
-            toast.error(error instanceof Error ? error.message : 'Failed to update application');
-        } finally {
-            setApplicationActionLoading(null);
-        }
-    }, [capability?.activeApplicationId, refreshMessagingState]);
-
     return {
         isSending,
         requestLoading,
-        applicationActionLoading,
-        handleSendStructured,
         handleSend,
         handleConnectionAction,
-        handleApplicationAction,
     };
 }
