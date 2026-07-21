@@ -289,7 +289,7 @@ function isProjectPublic(project: ProjectDocMediaProject) {
 }
 
 function isTrustedReadmeImageUrl(url: URL, project: ProjectDocMediaProject, source: ProjectDocGithubSource | null) {
-    if (!source || !isProjectPublic(project)) return false;
+    if (!source) return false;
     if (!TRUSTED_PUBLIC_README_IMAGE_HOSTS.has(url.hostname.toLowerCase())) return false;
     if (url.hostname.toLowerCase() === "raw.githubusercontent.com") {
         const [, owner, repo] = url.pathname.split("/");
