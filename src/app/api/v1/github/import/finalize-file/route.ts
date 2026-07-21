@@ -1,12 +1,12 @@
 import { NextRequest } from 'next/server';
-import { createClient, createAdminClient } from '@/lib/supabase/server';
+import { createAdminClient } from '@/lib/supabase/server';
 import { db } from '@/lib/db';
 import { importJobs, importJobFiles, uploadIntents, projectNodes, fileVersions } from '@/lib/db/schema';
 import { and, eq, isNull } from 'drizzle-orm';
 import { jsonError, jsonSuccess } from '@/app/api/v1/_envelope';
 import { validateCsrf } from '@/lib/security/csrf';
 import { assertProjectWriteAccess, recordNodeEvent } from '@/lib/files/internal-helpers';
-import { enforceRouteLimit } from '@/app/api/v1/_shared';
+import { enforceRouteLimit, requireAuthenticatedUser } from '@/app/api/v1/_shared';
 import { createDirectoryStructureFromPaths } from '@/lib/import/utils';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
@@ -31,13 +31,9 @@ export async function POST(request: NextRequest) {
         const limitResponse = await enforceRouteLimit(request, 'api:v1:github:import:finalize-file', 300, 60);
         if (limitResponse) return limitResponse;
 
-        const supabase = await createClient();
-        const {
-            data: { user },
-        } = await supabase.auth.getUser();
-        if (!user) {
-            return jsonError('Unauthorized', 401, 'UNAUTHORIZED');
-        }
+        const auth = await requireAuthenticatedUser();
+        if (auth.response || !auth.user) return auth.response ?? jsonError('Unauthorized', 401, 'UNAUTHORIZED');
+        const user = auth.user;
 
         let body;
         try {
