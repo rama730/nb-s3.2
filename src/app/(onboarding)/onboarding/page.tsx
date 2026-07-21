@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { createClient } from '@/lib/supabase/client'
 import { queryKeys } from '@/lib/query-keys'
+import { getRolePreferences } from '@/lib/profile/role-preferences'
 
 import { OnboardingLayout } from '@/components/onboarding/OnboardingLayout'
 import { OnboardingSidebar } from '@/components/onboarding/OnboardingSidebar'
@@ -34,7 +35,6 @@ import { useOnboardingBootstrap } from '@/components/onboarding/OnboardingBootst
 import { uploadToSupabaseSignedUrl } from '@/lib/upload/supabase-signed-upload-client'
 import { validateUsername } from '@/lib/validations/username'
 import {
-    ONBOARDING_AVAILABILITY_VALUES,
     ONBOARDING_EXPERIENCE_LEVEL_VALUES,
     ONBOARDING_GENDER_VALUES,
     ONBOARDING_HOURS_PER_WEEK_VALUES,
@@ -42,7 +42,6 @@ import {
     ONBOARDING_SOCIAL_KEYS,
     ONBOARDING_TOTAL_STEPS,
     ONBOARDING_VISIBILITY_VALUES,
-    type OnboardingAvailabilityStatus,
     type OnboardingExperienceLevel,
     type OnboardingGenderIdentity,
     type OnboardingHoursPerWeek,
@@ -71,14 +70,6 @@ import {
     Loader2,
 } from 'lucide-react'
 
-// Skill suggestions
-const SKILL_SUGGESTIONS = [
-    'React', 'Next.js', 'TypeScript', 'JavaScript', 'Python',
-    'Node.js', 'GraphQL', 'PostgreSQL', 'MongoDB', 'AWS',
-    'Docker', 'Kubernetes', 'Figma', 'UI/UX Design', 'Machine Learning',
-    'Data Science', 'Mobile Development', 'iOS', 'Android', 'Flutter'
-]
-
 // Interest suggestions
 const INTEREST_SUGGESTIONS = [
     'Open Source', 'Startups', 'AI/ML', 'Web3', 'Gaming',
@@ -105,7 +96,6 @@ interface OnboardingData {
     skills: string[]
     interests: string[]
     openTo: string[]
-    availabilityStatus: OnboardingAvailabilityStatus
     messagePrivacy: OnboardingMessagePrivacy
     socialLinks: OnboardingSocialLinksState
     experienceLevel: OnboardingExperienceLevel | ''
@@ -132,7 +122,6 @@ const EMPTY_ONBOARDING_DATA: OnboardingData = {
     skills: [],
     interests: [],
     openTo: [],
-    availabilityStatus: 'available',
     messagePrivacy: 'connections',
     socialLinks: ONBOARDING_SOCIAL_KEYS.reduce((acc, key) => {
         acc[key] = ''
@@ -188,10 +177,7 @@ function parseStoredOnboardingDraft(raw: string, expectedUserId: string): Scoped
             data.interests = sourceData.interests.filter((interest): interest is string => typeof interest === 'string')
         }
         if (Array.isArray(sourceData.openTo)) {
-            data.openTo = sourceData.openTo.filter((item): item is string => typeof item === 'string')
-        }
-        if (ONBOARDING_AVAILABILITY_VALUES.includes(sourceData.availabilityStatus as OnboardingAvailabilityStatus)) {
-            data.availabilityStatus = sourceData.availabilityStatus as OnboardingAvailabilityStatus
+            data.openTo = getRolePreferences(sourceData.openTo)
         }
         if (ONBOARDING_MESSAGE_PRIVACY_VALUES.includes(sourceData.messagePrivacy as OnboardingMessagePrivacy)) {
             data.messagePrivacy = sourceData.messagePrivacy as OnboardingMessagePrivacy
@@ -368,8 +354,6 @@ export default function OnboardingPage() {
     const stepEnteredAtRef = useRef<number>(Date.now())
     const lastStepViewRef = useRef<number | null>(null)
     const [error, setError] = useState<string | null>(null)
-    const [customOpenTo, setCustomOpenTo] = useState('')
-    const [customOpenToError, setCustomOpenToError] = useState<string | null>(null)
     const [draftSaveDelayMs, setDraftSaveDelayMs] = useState(900)
 
     const [data, setData] = useState<OnboardingData>(initialData)
@@ -381,7 +365,6 @@ export default function OnboardingPage() {
         socialLinksCount: Object.values(data.socialLinks).filter(Boolean).length,
         hasIdentityDetails: Boolean(data.genderIdentity || data.pronouns),
         hasProfessionalDetails: Boolean(data.headline || data.bio || data.location || data.website),
-        availabilityStatus: data.availabilityStatus,
         messagePrivacy: data.messagePrivacy,
         visibility: data.visibility,
     }), [data])
@@ -867,30 +850,6 @@ export default function OnboardingPage() {
         }))
     }, [markInteraction])
 
-    const addCustomOpenTo = useCallback(() => {
-        const normalized = customOpenTo.trim()
-        if (!normalized) {
-            setCustomOpenToError('Enter an option before adding')
-            return
-        }
-
-        const lowered = normalized.toLowerCase()
-        if (data.openTo.some((value) => value.toLowerCase() === lowered)) {
-            setCustomOpenToError('This option already exists')
-            return
-        }
-
-        if (data.openTo.length >= 12) {
-            setCustomOpenToError('You can add up to 12 open-to options')
-            return
-        }
-
-        setCustomOpenToError(null)
-        markInteraction('toggle')
-        setData((prev) => ({ ...prev, openTo: [...prev.openTo, normalized] }))
-        setCustomOpenTo('')
-    }, [customOpenTo, data.openTo, markInteraction])
-
     const handleSubmit = async () => {
         if (submitInFlightRef.current) return
         submitInFlightRef.current = true
@@ -934,7 +893,6 @@ export default function OnboardingPage() {
                 skills: data.skills,
                 interests: data.interests,
                 openTo: data.openTo,
-                availabilityStatus: data.availabilityStatus,
                 messagePrivacy: data.messagePrivacy,
                 socialLinks: data.socialLinks,
                 experienceLevel: data.experienceLevel || undefined,
@@ -980,7 +938,7 @@ export default function OnboardingPage() {
                     !data.headline ? 'Add a headline' : null,
                     !data.bio ? 'Add a short bio' : null,
                     data.skills.length < 3 ? 'Add at least 3 skills' : null,
-                    data.openTo.length === 0 ? 'Set open-to preferences' : null,
+                    data.openTo.length === 0 ? 'Set role preferences' : null,
                     Object.values(data.socialLinks).filter(Boolean).length === 0 ? 'Add at least 1 social link' : null,
                 ].filter((item): item is string => Boolean(item))
 
@@ -1148,19 +1106,9 @@ export default function OnboardingPage() {
                             experienceLevel={data.experienceLevel}
                             hoursPerWeek={data.hoursPerWeek}
                             openTo={data.openTo}
-                            availabilityStatus={data.availabilityStatus}
                             onExperienceLevelChange={(value) => updateData({ experienceLevel: value }, 'toggle')}
                             onHoursPerWeekChange={(value) => updateData({ hoursPerWeek: value }, 'toggle')}
                             onToggleOpenTo={toggleOpenTo}
-                            onAvailabilityChange={(value) => updateData({ availabilityStatus: value }, 'toggle')}
-                            customOpenTo={customOpenTo}
-                            customOpenToError={customOpenToError}
-                            onCustomOpenToChange={(value) => {
-                                setCustomOpenTo(value)
-                                setCustomOpenToError(null)
-                            }}
-                            onAddCustomOpenTo={addCustomOpenTo}
-                            enableCustomOpenTo={ONBOARDING_FEATURE_FLAGS.enableCustomOpenTo}
                             headline={data.headline}
                             bio={data.bio}
                             location={data.location}
@@ -1197,7 +1145,6 @@ export default function OnboardingPage() {
                 {step === 3 && (
                     <Suspense fallback={<div className="h-96 w-full animate-pulse bg-zinc-50 dark:bg-zinc-900 rounded-xl" />}>
                         <Step3Skills
-                            skillOptions={SKILL_SUGGESTIONS.map((s) => ({ value: s, label: s }))}
                             interestOptions={INTEREST_SUGGESTIONS.map((i) => ({ value: i, label: i }))}
                             selectedSkills={selectedSkills}
                             selectedInterests={selectedInterests}
@@ -1219,9 +1166,8 @@ export default function OnboardingPage() {
                                 { label: '@' + data.username, value: data.fullName },
                                 { label: 'Visibility', value: data.visibility },
                                 { label: 'Messages', value: data.messagePrivacy },
-                                { label: 'Availability', value: data.availabilityStatus },
                                 { label: 'Skills', value: `${data.skills.length} selected` },
-                                { label: 'Open to', value: `${data.openTo.length} preferences` },
+                                { label: 'Open to Roles', value: `${data.openTo.length} preferences` },
                                 { label: 'Social links', value: `${filledSocialLinks.length} connected` },
                             ]}
                             error={error}
