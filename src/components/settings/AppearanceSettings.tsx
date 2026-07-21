@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useTheme, useAppearance } from "@/components/providers/theme-provider";
-import { Moon, Sun, Monitor, Type, Zap, RotateCcw } from "lucide-react";
+import { Check, Moon, Sun, Monitor, Type, Zap, RotateCcw } from "lucide-react";
 import { SettingsPageHeader } from "@/components/settings/ui/SettingsPageHeader";
 import {
   ACCENT_PALETTES,
@@ -26,8 +26,6 @@ export default function AppearanceSettings() {
   } = useAppearance();
 
   const [mounted, setMounted] = useState(false);
-  type AccentColorValue = Parameters<typeof setAccentColor>[0];
-  type DensityValue = Parameters<typeof setDensity>[0];
 
   useEffect(() => {
     setMounted(true);
@@ -171,7 +169,7 @@ export default function AppearanceSettings() {
             <button
               key={accent.id}
               type="button"
-              onClick={() => setAccentColor(accent.id as AccentColorValue)}
+              onClick={() => setAccentColor(accent.id)}
               title={accent.label}
               data-testid={`appearance-accent-${accent.id}`}
               className={`
@@ -189,18 +187,7 @@ export default function AppearanceSettings() {
               />
               {accentColor === accent.id && (
                 <span className="absolute inset-0 flex items-center justify-center text-white">
-                  <svg
-                    width="20"
-                    height="20"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="3"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <polyline points="20 6 9 17 4 12" />
-                  </svg>
+                  <Check className="h-5 w-5" strokeWidth={3} />
                 </span>
               )}
             </button>
@@ -249,7 +236,7 @@ export default function AppearanceSettings() {
             <button
               key={densityId}
               type="button"
-              onClick={() => setDensity(densityId as DensityValue)}
+              onClick={() => setDensity(densityId as keyof typeof DENSITY_LABELS)}
               data-testid={`appearance-density-${densityId}`}
               className={`
                                 p-3 rounded-lg border text-left transition-all duration-200
@@ -288,22 +275,7 @@ export default function AppearanceSettings() {
             This also respects your device accessibility preference.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => setReduceMotion(!reduceMotion)}
-          data-testid="appearance-reduce-motion-toggle"
-          className={`
-                        relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2
-                        ${reduceMotion ? "bg-primary" : "bg-zinc-200 dark:bg-zinc-700"}
-                    `}
-        >
-          <span
-            className={`
-                            inline-block h-4 w-4 transform rounded-full bg-white dark:bg-zinc-900 transition-transform
-                            ${reduceMotion ? "translate-x-6" : "translate-x-1"}
-                        `}
-          />
-        </button>
+        <input type="checkbox" checked={reduceMotion} onChange={(event) => setReduceMotion(event.target.checked)} data-testid="appearance-reduce-motion-toggle" className="h-5 w-5 accent-primary" aria-label="Reduce motion" />
       </section>
 
       <p className="text-xs text-zinc-500 dark:text-zinc-400">
