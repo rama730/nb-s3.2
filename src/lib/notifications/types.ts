@@ -70,7 +70,6 @@ export type NotificationQuietHours = {
 export type NotificationDeliveryPreferences = {
     browser: boolean;
     push: boolean;
-    emailDigest: boolean;
 };
 
 export type NotificationPreferences = Record<NotificationPreferenceCategory, boolean> & {
