@@ -4,6 +4,7 @@ import path from "node:path";
 const REPO_ROOT = process.cwd();
 const ALLOWED_SUPABASE_CHANNEL_FILES = new Set([
   "src/lib/realtime/subscriptions.ts",
+  "src/lib/realtime/presence-client.ts",
 ]);
 
 function toPosix(filePath: string) {
