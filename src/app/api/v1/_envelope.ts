@@ -10,6 +10,8 @@ export type ApiErrorCode =
   | "NOT_SUPPORTED"
   | "INTERNAL_ERROR"
   | "CURRENT_PASSWORD_INVALID"
+  | "LEAKED_PASSWORD"
+  | "PASSWORD_SAFETY_UNAVAILABLE"
   | "PASSWORD_CHANGE_FAILED"
   | "SESSION_REVOKE_FAILED"
   | "STEP_UP_REQUIRED"
@@ -19,7 +21,8 @@ export type ApiErrorCode =
   | "DB_ERROR"
   | "DB_UNAVAILABLE"
   | "READINESS_DEGRADED"
-  | "UNAVAILABLE";
+  | "UNAVAILABLE"
+  | "FILE_LOCKED";
 
 export function jsonSuccess<T>(
   data?: T,
