@@ -9,7 +9,7 @@ import {
     normalizeAndValidateMimeType,
     PROJECT_UPLOAD_MAX_FILE_BYTES,
 } from '@/lib/upload/security';
-import { createUploadIntent, createUploadIntents, finalizeUploadIntent, cleanupExpiredUploadIntents } from '@/lib/upload/upload-intents';
+import { createUploadIntent, createUploadIntents } from '@/lib/upload/upload-intents';
 
 const MAX_BATCH_UPLOAD_KEYS = 200;
 
@@ -208,67 +208,5 @@ export async function getBatchUploadUrls(
         }
         console.error('Batch presigned URL error:', e);
         return { error: 'Internal server error' };
-    }
-}
-
-export async function finalizeProjectUploadAction(input: {
-    uploadIntentId?: string;
-    storageKey?: string;
-    projectId: string;
-}): Promise<{ success: true; storageKey: string; uploadIntentId: string } | { success: false; error: string }> {
-    try {
-        const authClient = await createClient();
-        const { data: { user } } = await authClient.auth.getUser();
-        if (!user) {
-            return { success: false, error: 'Unauthorized' };
-        }
-
-        await assertProjectUploadAccess(input.projectId, user.id);
-        const intent = await finalizeUploadIntent({
-            intentId: input.uploadIntentId,
-            storageKey: input.storageKey,
-            bucket: 'project-files',
-            userId: user.id,
-            projectId: input.projectId,
-            expectedScope: 'project_file',
-            expectedKind: 'file',
-        });
-
-        return { success: true, storageKey: intent.storageKey, uploadIntentId: intent.id };
-    } catch (error) {
-        logger.error('upload.project.finalize_failed', {
-            module: 'upload',
-            projectId: input.projectId,
-            uploadIntentId: input.uploadIntentId ?? null,
-            storageKey: input.storageKey ?? null,
-            error: error instanceof Error ? error.message : String(error),
-        });
-        return { success: false, error: 'Failed to finalize upload' };
-    }
-}
-
-export async function cleanupExpiredProjectUploadIntentsAction(): Promise<{
-    success: true;
-    removedObjects: number;
-    expiredIntents: number;
-} | {
-    success: false;
-    error: string;
-}> {
-    try {
-        const authClient = await createClient();
-        const { data: { user } } = await authClient.auth.getUser();
-        if (!user) {
-            return { success: false, error: 'Unauthorized' };
-        }
-
-        const result = await cleanupExpiredUploadIntents();
-        return { success: true, ...result };
-    } catch (error) {
-        logger.error('upload.project.cleanup_failed', {
-            module: 'upload',
-            error: error instanceof Error ? error.message : String(error),
-        });
-        return { success: false, error: 'Failed to clean expired uploads' };
     }
 }
