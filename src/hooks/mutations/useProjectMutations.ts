@@ -24,6 +24,7 @@ export function useToggleProjectFollow() {
         onSuccess: (_, { userId }) => {
             queryClient.invalidateQueries({ queryKey: queryKeys.hub.userFollowedProjects(userId) });
             queryClient.invalidateQueries({ queryKey: queryKeys.hub.projectsSimpleRoot() });
+            queryClient.invalidateQueries({ queryKey: queryKeys.globalSearch.hubRoot() });
         },
     });
 }
