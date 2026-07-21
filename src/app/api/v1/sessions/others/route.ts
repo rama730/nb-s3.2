@@ -15,7 +15,8 @@ import { getLatestPasswordChangeAt, recordSecurityEvent } from "@/lib/security/a
 import { getVerifiedTotpFactors, listSecurityMfaFactors } from "@/lib/security/mfa";
 import { countRemainingRecoveryCodes } from "@/lib/security/recovery-codes";
 import { countOtherActiveSessions } from "@/lib/security/session-activity";
-import { resolveSecurityStepUp, type SecurityStepUpMethod } from "@/lib/security/step-up";
+import { resolveSecurityStepUp } from "@/lib/security/step-up";
+import { buildSecurityStepUpMethods } from "@/lib/security/step-up-methods";
 
 export async function DELETE(request: Request) {
   const startedAt = Date.now();
@@ -77,11 +78,12 @@ export async function DELETE(request: Request) {
     const remainingRecoveryCodes = countRemainingRecoveryCodes(
       (await getProtectedRecoveryCodes(user.id, { authorized: true }))?.securityRecoveryCodes ?? [],
     );
-    const availableMethods: SecurityStepUpMethod[] = [];
-    if (hasVerifiedTotp) availableMethods.push("totp");
-    if (remainingRecoveryCodes > 0) availableMethods.push("recovery_code");
     const passwordLastChangedAt = await getLatestPasswordChangeAt(user.id);
-    if (resolvePasswordCredentialState(user, passwordLastChangedAt)) availableMethods.push("password");
+    const availableMethods = buildSecurityStepUpMethods({
+      hasTotp: hasVerifiedTotp,
+      hasRecoveryCodes: remainingRecoveryCodes > 0,
+      hasPassword: resolvePasswordCredentialState(user, passwordLastChangedAt),
+    });
 
     if (availableMethods.length > 0) {
       const stepUp = await resolveSecurityStepUp(user.id, availableMethods);
