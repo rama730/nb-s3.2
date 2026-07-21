@@ -2,22 +2,19 @@
 
 This runbook turns the remaining 7 operational hardening items into an executable flow.
 
-## 1. Apply and verify the workspace counter migration
+## 1. Apply and verify database migrations
 
-Check only:
+Check migration sources:
 
 ```bash
-npm run db:check:workspace-counters
+npm run check:db:migration-sources
 ```
 
 Apply and verify:
 
 ```bash
-npm run db:apply:workspace-counters
+npm run db:setup
 ```
-
-Artifact:
-- `reports/stability/db/workspace-counters.json`
 
 Exit criteria:
 - all four `profiles.workspace_*_count` columns exist
@@ -84,7 +81,6 @@ Supported suites:
 - `authenticated-shells`
 - `workspace-bootstrap`
 - `messages-reconnect-storm`
-- `presence-room-fanout`
 - `worker-isolation`
 
 If you only want a subset:
@@ -174,7 +170,7 @@ Statuses:
 ## Recommended order
 
 ```bash
-npm run db:apply:workspace-counters
+npm run db:setup
 npm run check:stability-env -- --target=staging --strict
 npm run check:stability-release -- --target=staging --include-e2e
 npm run run:load-suite -- --base-url=https://staging.example.com --auth-cookie="..."
