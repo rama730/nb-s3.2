@@ -1,7 +1,7 @@
 {
   "dashboard": "NB Workspace Extension Runtime",
   "owner": "workspace-platform",
-  "lastReviewed": "2026-06-20",
+  "lastReviewed": "2026-07-02",
   "metrics": [
     {
       "name": "extension.auth_code.exchange",
@@ -65,6 +65,38 @@
         {
           "name": "extension-upload-finalize-latency",
           "condition": "p95_10m > 5000ms",
+          "severity": "ticket"
+        }
+      ]
+    },
+    {
+      "name": "extension.recovery.intent",
+      "type": "histogram",
+      "groupBy": ["projectId", "success"],
+      "slo": {
+        "successRate": ">= 99%",
+        "p95DurationMs": "<= 750"
+      },
+      "alerts": [
+        {
+          "name": "extension-recovery-intent-failures",
+          "condition": "failure_rate_10m > 2%",
+          "severity": "ticket"
+        }
+      ]
+    },
+    {
+      "name": "extension.recovery.finalize",
+      "type": "histogram",
+      "groupBy": ["projectId", "success"],
+      "slo": {
+        "successRate": ">= 99%",
+        "p95DurationMs": "<= 2500"
+      },
+      "alerts": [
+        {
+          "name": "extension-recovery-finalize-failures",
+          "condition": "failure_rate_10m > 2%",
           "severity": "ticket"
         }
       ]
