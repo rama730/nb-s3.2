@@ -6,6 +6,7 @@ import { consumeRateLimit } from "@/lib/security/rate-limit";
 import { validateCsrf } from "@/lib/security/csrf";
 import { getTrustedRequestIp } from "@/lib/security/request-ip";
 import { getPasswordPolicyResult } from "@/lib/security/password-policy";
+import { isLeakedPassword } from "@/lib/security/leaked-password";
 import { resolveSupabasePublicEnv } from "@/lib/supabase/env";
 import { resolveSupabaseServerCookieOptions } from "@/lib/supabase/cookie-options";
 import { getRequestId, jsonError, jsonSuccess, logApiRoute } from "@/app/api/v1/_shared";
@@ -118,6 +119,30 @@ export async function POST(request: Request) {
       errorCode: "BAD_REQUEST",
     });
     return jsonError(passwordPolicy.error || "Password does not meet security requirements.", 400, "BAD_REQUEST");
+  }
+
+  try {
+    if (await isLeakedPassword(parsed.data.password)) {
+      logApiRoute(request, {
+        requestId,
+        action: "auth.signup.post",
+        startedAt,
+        success: false,
+        status: 400,
+        errorCode: "LEAKED_PASSWORD",
+      });
+      return jsonError(
+        "This password has appeared in a data breach. Choose a different password.",
+        400,
+        "LEAKED_PASSWORD",
+      );
+    }
+  } catch {
+    return jsonError(
+      "Password safety check is temporarily unavailable. Please try again.",
+      503,
+      "PASSWORD_SAFETY_UNAVAILABLE",
+    );
   }
 
   try {
