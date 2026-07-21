@@ -1,14 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
-import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Loader2, Users, FileStack, RefreshCw } from "lucide-react";
 import { getDocDraftContributorsAction } from "@/app/actions/project/doc";
-import { UserAvatar } from "@/components/ui/UserAvatar";
 import { StackedAvatars } from "@/components/ui/StackedAvatars";
 
 export interface ProjectDocPublishModalProps {
@@ -96,10 +93,10 @@ export function ProjectDocPublishModal({ projectId, open, onOpenChange, onPublis
 
                         {/* Change Summary */}
                         <div className="grid gap-2">
-                            <Label htmlFor="changeSummary" className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
+                            <label htmlFor="changeSummary" className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
                                 What changed? <span className="text-zinc-400 font-normal">(Optional)</span>
-                            </Label>
-                            <Textarea
+                            </label>
+                            <textarea
                                 id="changeSummary"
                                 placeholder="Briefly describe the updates for the version history..."
                                 value={changeSummary}
@@ -107,7 +104,7 @@ export function ProjectDocPublishModal({ projectId, open, onOpenChange, onPublis
                                 disabled={isPublishing}
                                 maxLength={500}
                                 rows={3}
-                                className="resize-none rounded-xl bg-white dark:bg-zinc-950 focus-visible:ring-1 focus-visible:ring-blue-500"
+                                className="flex min-h-16 w-full rounded-xl border border-input bg-white px-3 py-2 text-base shadow-xs outline-none transition-[color,box-shadow] placeholder:text-muted-foreground focus-visible:border-ring   disabled:cursor-not-allowed disabled:opacity-50 md:text-sm dark:bg-zinc-950"
                             />
                         </div>
 
