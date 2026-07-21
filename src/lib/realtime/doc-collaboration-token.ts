@@ -41,10 +41,7 @@ function fromBase64Url(value: string) {
 }
 
 function resolveDocCollaborationTokenSecret() {
-  const secret =
-    process.env.DOC_COLLABORATION_TOKEN_SECRET?.trim()
-    || process.env.PRESENCE_TOKEN_SECRET?.trim()
-    || "";
+  const secret = process.env.DOC_COLLABORATION_TOKEN_SECRET?.trim() || "";
   if (secret) return secret;
   throw new MissingDocCollaborationSecretError();
 }
