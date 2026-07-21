@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg
+   width="512"
+   height="512"
+   viewBox="0 0 512 512"
+   version="1.1"
+   id="svg1"
+   xml:space="preserve"
+   xmlns:xlink="http://www.w3.org/1999/xlink"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg"><defs
+     id="defs1"><linearGradient
+       id="linearGradient1"><stop
+         style="stop-color:#134881;stop-opacity:1;"
+         offset="0.49919227"
+         id="stop3" /><stop
+         style="stop-color:#082b45;stop-opacity:1;"
+         offset="1"
+         id="stop4" /></linearGradient><linearGradient
+       xlink:href="#linearGradient1"
+       id="linearGradient4"
+       x1="30.18787"
+       y1="160.14848"
+       x2="481.81219"
+       y2="351.85165"
+       gradientUnits="userSpaceOnUse" /></defs><g
+     id="layer1"><circle
+       style="fill:url(#linearGradient4);fill-opacity:1;stroke:#858585;stroke-width:8;stroke-dasharray:none;stroke-opacity:1"
+       id="path1"
+       cx="256.00003"
+       cy="256.00006"
+       r="241.31339" /><g
+       id="g2"
+       transform="translate(116,116)">
+	<path
+   fill="#134881"
+   d="M 280,27.343 C 280,12.252 267.748,0 252.656,0 H 27.346 C 12.254,0 0,12.252 0,27.343 V 252.654 C 0,267.746 12.254,280 27.346,280 H 252.657 C 267.748,280 280,267.746 280,252.654 Z"
+   id="path1-0"
+   style="fill:none" />
+	
+		<radialGradient
+   id="SVGID_1_"
+   cx="-103.7661"
+   cy="259.2822"
+   r="2.3202"
+   gradientTransform="matrix(122.3514,0,0,-122.3514,12899.205,31698.982)"
+   gradientUnits="userSpaceOnUse">
+		<stop
+   offset="0"
+   style="stop-color:#6BE1FB"
+   id="stop1" />
+		<stop
+   offset="1"
+   style="stop-color:#38BDFA"
+   id="stop2" />
+	</radialGradient>
+	<path
+   fill="url(#SVGID_1_)"
+   d="m 259.495,248.639 c -0.048,5.996 -4.931,10.853 -10.938,10.853 H 138.174 L 90.992,177.769 H 259.495 Z M 20.511,248.553 V 200.57 L 124.469,20.507 h 40.627 l -87.825,152.123 50.147,86.861 h -95.97 c -6.037,0 -10.937,-4.901 -10.937,-10.938 z m 133.21,-80.104 h -41.075 c -4.587,0 -8.824,-2.406 -11.114,-6.379 -2.296,-3.97 -2.296,-8.864 0,-12.834 l 20.547,-35.594 z M 248.558,20.507 c 6.007,0 10.89,4.856 10.938,10.854 v 137.088 h -95.014 l -37.025,-64.12 48.394,-83.822 z"
+   id="path2"
+   style="fill:url(#SVGID_1_)" />
+</g></g></svg>
