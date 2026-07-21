@@ -2,12 +2,12 @@ import { db } from '@/lib/db';
 import { projects, projectFollows, projectOpenRoles, profiles, projectMembers } from '@/lib/db/schema';
 import { eq, desc, sql, and, isNull, ne, or } from 'drizzle-orm';
 import { cache } from 'react';
+import { isLooseUuid } from '@/lib/validations/uuid';
 
 export const getProjectDetails = cache(async (rawProjectId: string) => {
     const projectId = decodeURIComponent(rawProjectId).trim();
 
-    // UUID Regex
-    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(projectId);
+    const isUuid = isLooseUuid(projectId);
 
     try {
         const conditions = isUuid ? eq(projects.id, projectId) : eq(projects.slug, projectId);
