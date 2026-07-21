@@ -7,24 +7,6 @@ import { profiles } from '@/lib/db/schema'
 import { createClient } from '@/lib/supabase/server'
 
 /**
- * One-time setup: Create trigger for auto-creating profiles
- * Run this once via an API route or server action
- */
-export async function setupDatabase(): Promise<{ success: boolean; message: string }> {
-    try {
-        await db
-            .select({ id: profiles.id })
-            .from(profiles)
-            .limit(1)
-
-        return { success: true, message: 'Database is ready!' }
-    } catch (error) {
-        console.error('Setup error:', error)
-        return { success: false, message: 'Setup failed' }
-    }
-}
-
-/**
  * Ensure user has a profile (called after login)
  */
 export async function ensureUserProfile(): Promise<{ success: boolean; hasProfile: boolean }> {
