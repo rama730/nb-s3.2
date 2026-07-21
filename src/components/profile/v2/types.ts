@@ -40,7 +40,6 @@ export interface ProfilePageData {
     connectionStatus: ConnectionState
     privacyRelationship: ProfilePrivacyRelationship
     lockedShell?: boolean
-    projects?: any[] // Project type
     collaborationSummary?: ProfileCollaborationSummary
 }
 
