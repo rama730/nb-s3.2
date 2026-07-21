@@ -5,7 +5,6 @@ Last updated: 2026-04-08
 This matrix maps the standards registry to docs, CI scripts, rollout stage, and exception handling.
 
 Typed source of truth:
-- [rules.ts](/Users/chrama/Downloads/nb-s3/src/lib/standards/rules.ts)
 
 ## Rule Matrix
 
@@ -56,5 +55,5 @@ Typed source of truth:
 - Identity/avatar presentation: [identity.ts](/Users/chrama/Downloads/nb-s3/src/lib/ui/identity.ts) and [UserAvatar.tsx](/Users/chrama/Downloads/nb-s3/src/components/ui/UserAvatar.tsx)
 - Status/lifecycle config: [status-config.ts](/Users/chrama/Downloads/nb-s3/src/lib/ui/status-config.ts)
 - Profile display defaults: [display.ts](/Users/chrama/Downloads/nb-s3/src/lib/profile/display.ts) and [normalize-profile.ts](/Users/chrama/Downloads/nb-s3/src/lib/utils/normalize-profile.ts)
-- Relationship actions: [person-card-model.ts](/Users/chrama/Downloads/nb-s3/src/components/people/person-card-model.ts)
+- Relationship actions: dedicated discovery, request, and network rows under `src/components/people`.
 - Import filters: [import-filters.ts](/Users/chrama/Downloads/nb-s3/src/lib/import/import-filters.ts)
