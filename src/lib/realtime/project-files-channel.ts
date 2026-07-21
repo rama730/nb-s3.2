@@ -10,7 +10,12 @@ import { logger } from '@/lib/logger'
 export interface ProjectFilesChannelOptions {
     projectId: string
     onTaskLinkChange: (event: { nodeId: string; type: 'INSERT' | 'DELETE' }) => void
-    onFileVersionChange: (event: { nodeId: string; newVersion: number }) => void
+    onFileVersionChange: (event: {
+        nodeId: string
+        newVersion?: number
+        type: 'INSERT' | 'UPDATE' | 'DELETE'
+    }) => void
+    onFileLeaseChange?: () => void
     onStatus?: (status: REALTIME_SUBSCRIBE_STATES) => void
 }
 
@@ -45,7 +50,9 @@ const activeChannelIds = new Set<string>()
  *
  * 1. `task_node_links` — INSERT / DELETE events (filtered by project via
  *    client-side node ownership check since the table lacks a project_id column).
- * 2. `file_versions` — INSERT events for version bumps.
+ * 2. `file_versions` — INSERT / UPDATE / DELETE events. Consumers reconcile
+ *    the complete active node so its version, bytes, timestamp, and uploader
+ *    attribution cannot drift apart.
  *
  * Implements exponential backoff reconnect on CHANNEL_ERROR / TIMED_OUT,
  * starting at 800 ms and capping at 10 s — matching the task-resource channel
@@ -58,7 +65,7 @@ export function subscribeProjectFilesChannel(
     supabase: SupabaseClient,
     options: ProjectFilesChannelOptions,
 ): RealtimeChannel {
-    const { projectId, onTaskLinkChange, onFileVersionChange, onStatus } = options
+    const { projectId, onTaskLinkChange, onFileVersionChange, onFileLeaseChange, onStatus } = options
 
     // Budget enforcement
     if (activeChannelIds.size >= MAX_BACKGROUND_CHANNELS) {
@@ -112,16 +119,21 @@ export function subscribeProjectFilesChannel(
     }
 
     function handleFileVersionPayload(payload: DbRealtimePayload) {
-        if (payload.eventType !== 'INSERT') return
+        const eventType = payload.eventType
+        if (eventType !== 'INSERT' && eventType !== 'UPDATE' && eventType !== 'DELETE') return
 
-        const record = payload.new as Record<string, unknown> | undefined
+        const record = (eventType === 'DELETE' ? payload.old : payload.new) as Record<string, unknown> | undefined
         if (!record) return
 
         const nodeId = record.node_id as string | undefined
-        const version = record.version as number | undefined
-        if (!nodeId || version == null) return
+        if (!nodeId) return
+        const parsedVersion = Number(record.version)
 
-        onFileVersionChange({ nodeId, newVersion: version })
+        onFileVersionChange({
+            nodeId,
+            type: eventType,
+            ...(Number.isFinite(parsedVersion) ? { newVersion: parsedVersion } : {}),
+        })
     }
 
     function openChannel() {
@@ -144,9 +156,15 @@ export function subscribeProjectFilesChannel(
                     handler: handleTaskLinkPayload,
                 },
                 {
-                    event: 'INSERT',
+                    event: '*',
                     table: 'file_versions',
                     handler: handleFileVersionPayload,
+                },
+                {
+                    event: '*',
+                    table: 'project_node_locks',
+                    filter: `project_id=eq.${projectId}`,
+                    handler: () => onFileLeaseChange?.(),
                 },
             ],
             onStatus: (status) => {
