@@ -1,11 +1,10 @@
 'use client';
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import Image from 'next/image';
 import { formatDistanceToNow } from 'date-fns';
-import { Archive, Bell, BellOff, MessageSquare, Search } from 'lucide-react';
+import { Archive, Bell, BellOff, MessageSquare } from 'lucide-react';
 import { Virtuoso } from 'react-virtuoso';
-import { useDebouncedValue } from '@/hooks/useDebouncedValue';
+import { useDebounce } from 'use-debounce';
 import { useSwipeAction } from '@/hooks/useSwipeAction';
 import { useAuth } from '@/hooks/useAuth';
 import { useOnlineUsers } from '@/hooks/useOnlineUsers';
@@ -33,7 +32,6 @@ interface ConversationListV2Props {
     hasMore: boolean;
     typingUsersByConversation?: Record<string, TypingUser[]>;
     searchQuery?: string;
-    onSearchQueryChange?: (value: string) => void;
     onSelectConversation: (conversationId: string) => void;
     onLoadMore: () => void;
     onVisibleConversationIdsChange?: (conversationIds: string[]) => void;
@@ -67,7 +65,6 @@ export function ConversationListV2({
     hasMore,
     typingUsersByConversation,
     searchQuery,
-    onSearchQueryChange,
     onSelectConversation,
     onLoadMore,
     onVisibleConversationIdsChange,
@@ -81,9 +78,8 @@ export function ConversationListV2({
     const highlightedConversationId = useMessagesV2UiStore((state) => state.highlightedConversationId);
     const setHighlightedConversationId = useMessagesV2UiStore((state) => state.setHighlightedConversationId);
     const isPopup = surface === 'popup';
-    const [internalSearchQuery, setInternalSearchQuery] = useState('');
-    const effectiveSearch = searchQuery ?? internalSearchQuery;
-    const debouncedSearch = useDebouncedValue(effectiveSearch, 300);
+    const effectiveSearch = searchQuery ?? '';
+    const [debouncedSearch] = useDebounce(effectiveSearch, 300);
     const visibleKeyRef = useRef('');
     const [visibleRange, setVisibleRange] = useState(() => ({
         startIndex: 0,
