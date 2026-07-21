@@ -22,7 +22,6 @@ export function ProfileTabs({
     return (
         <div
             className={cn(
-                // Sticky positioning: Use both var and fallback for safety. z-30 to be safe.
                 'sticky z-30 -mx-4 sm:mx-0 px-4 sm:px-0 transition-all duration-200',
                 className
             )}
