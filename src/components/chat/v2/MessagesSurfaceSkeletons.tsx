@@ -1,6 +1,5 @@
 'use client';
 
-import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
 
 interface InboxListSkeletonV2Props {
@@ -31,8 +30,8 @@ export function InboxListSkeletonV2({
                 )}>
                     <div className="rounded-2xl border border-zinc-200/80 bg-white/90 p-1 shadow-[0_1px_2px_rgba(15,23,42,0.03)] dark:border-zinc-800 dark:bg-zinc-900/90">
                         <div className="flex items-center gap-3 rounded-[18px] bg-zinc-50 px-3 py-2.5 dark:bg-zinc-950">
-                            <Skeleton className="h-4 w-4 rounded-full" />
-                            <Skeleton className={cn(isPopup ? 'w-32' : 'w-36', 'h-4 rounded-full')} />
+                            <div className={cn("bg-accent animate-pulse rounded-md", "h-4 w-4 rounded-full")} />
+                            <div className={cn("bg-accent animate-pulse rounded-md", cn(isPopup ? 'w-32' : 'w-36', 'h-4 rounded-full'))} />
                         </div>
                     </div>
                 </div>
@@ -47,38 +46,19 @@ export function InboxListSkeletonV2({
                                 isPopup ? 'min-h-[74px] py-3' : 'min-h-[80px] py-3.5',
                             )}
                         >
-                            <Skeleton className={cn(isPopup ? 'h-11 w-11' : 'h-12 w-12', 'shrink-0 rounded-full')} />
+                            <div className={cn("bg-accent animate-pulse rounded-md", cn(isPopup ? 'h-11 w-11' : 'h-12 w-12', 'shrink-0 rounded-full'))} />
                             <div className="min-w-0 flex-1 space-y-2">
                                 <div className="flex items-center justify-between gap-3">
-                                    <Skeleton className={cn(isPopup ? 'h-4 w-24' : 'h-4 w-28', 'rounded-full')} />
-                                    <Skeleton className="h-3 w-11 rounded-full" />
+                                    <div className={cn("bg-accent animate-pulse rounded-md", cn(isPopup ? 'h-4 w-24' : 'h-4 w-28', 'rounded-full'))} />
+                                    <div className={cn("bg-accent animate-pulse rounded-md", "h-3 w-11 rounded-full")} />
                                 </div>
-                                <Skeleton className={cn(isPopup ? 'h-3.5 w-[72%]' : 'h-3.5 w-[78%]', 'rounded-full')} />
-                                <Skeleton className={cn(isPopup ? 'h-3 w-[34%]' : 'h-3 w-[38%]', 'rounded-full')} />
+                                <div className={cn("bg-accent animate-pulse rounded-md", cn(isPopup ? 'h-3.5 w-[72%]' : 'h-3.5 w-[78%]', 'rounded-full'))} />
+                                <div className={cn("bg-accent animate-pulse rounded-md", cn(isPopup ? 'h-3 w-[34%]' : 'h-3 w-[38%]', 'rounded-full'))} />
                             </div>
                         </div>
                     </div>
                 ))}
             </div>
-        </div>
-    );
-}
-
-export function ConversationHeaderSkeletonV2({ surface = 'page' }: { surface?: 'page' | 'popup' }) {
-    const isPopup = surface === 'popup';
-    return (
-        <div className={cn(
-            'flex items-center justify-between border-b border-zinc-100 bg-white dark:border-zinc-800 dark:bg-zinc-950',
-            isPopup ? 'px-3 py-3' : 'px-5 py-4',
-        )}>
-            <div className="flex min-w-0 items-center gap-3">
-                <Skeleton className={cn(isPopup ? 'h-9 w-9' : 'h-10 w-10', 'rounded-full')} />
-                <div className="space-y-2">
-                    <Skeleton className="h-4 w-28 rounded-full" />
-                    <Skeleton className="h-3 w-20 rounded-full" />
-                </div>
-            </div>
-            <Skeleton className="h-8 w-8 rounded-full" />
         </div>
     );
 }
@@ -111,16 +91,16 @@ export function ThreadSkeletonV2({
                 )}>
                     <div className="flex items-center justify-between gap-3">
                         <div className="flex min-w-0 items-center gap-3">
-                            {isPopup ? <Skeleton className="h-8 w-8 rounded-full" /> : null}
-                            <Skeleton className={cn(isPopup ? 'h-9 w-9' : 'h-10 w-10', 'rounded-full')} />
+                            {isPopup ? <div className={cn("bg-accent animate-pulse rounded-md", "h-8 w-8 rounded-full")} /> : null}
+                            <div className={cn("bg-accent animate-pulse rounded-md", cn(isPopup ? 'h-9 w-9' : 'h-10 w-10', 'rounded-full'))} />
                             <div className="min-w-0 space-y-2">
-                                <Skeleton className={cn(isPopup ? 'h-4 w-24' : 'h-4 w-32', 'rounded-full')} />
-                                <Skeleton className={cn(isPopup ? 'h-3 w-20' : 'h-3 w-24', 'rounded-full')} />
+                                <div className={cn("bg-accent animate-pulse rounded-md", cn(isPopup ? 'h-4 w-24' : 'h-4 w-32', 'rounded-full'))} />
+                                <div className={cn("bg-accent animate-pulse rounded-md", cn(isPopup ? 'h-3 w-20' : 'h-3 w-24', 'rounded-full'))} />
                             </div>
                         </div>
                         <div className="flex items-center gap-2">
-                            <Skeleton className={cn('rounded-full', isPopup ? 'h-8 w-14' : 'h-9 w-16')} />
-                            {!isPopup ? <Skeleton className="h-9 w-9 rounded-full" /> : null}
+                            <div className={cn("bg-accent animate-pulse rounded-md", cn('rounded-full', isPopup ? 'h-8 w-14' : 'h-9 w-16'))} />
+                            {!isPopup ? <div className={cn("bg-accent animate-pulse rounded-md", "h-9 w-9 rounded-full")} /> : null}
                         </div>
                     </div>
                 </div>
@@ -132,7 +112,7 @@ export function ThreadSkeletonV2({
             )}>
                 <div className="flex h-full min-h-0 flex-col">
                     <div className="flex justify-center">
-                        <Skeleton className={cn('rounded-full', isPopup ? 'h-5 w-16' : 'h-6 w-20')} />
+                        <div className={cn("bg-accent animate-pulse rounded-md", cn('rounded-full', isPopup ? 'h-5 w-16' : 'h-6 w-20'))} />
                     </div>
                     <div className={cn(
                         'flex min-h-0 flex-1 flex-col justify-end',
@@ -147,20 +127,18 @@ export function ThreadSkeletonV2({
                                 >
                                     <div className={cn('flex items-start gap-2 max-w-[70%]', isOwn ? 'flex-row-reverse' : 'flex-row')}>
                                         {!isOwn ? (
-                                            <Skeleton className="h-8 w-8 shrink-0 rounded-full bg-zinc-200/60 dark:bg-zinc-800" />
+                                            <div className={cn("bg-accent animate-pulse rounded-md", "h-8 w-8 shrink-0 rounded-full bg-zinc-200/60 dark:bg-zinc-800")} />
                                         ) : null}
                                         <div className={cn('flex flex-col space-y-1', isOwn ? 'items-end' : 'items-start')}>
-                                            <Skeleton
-                                                className={cn(
+                                            <div className={cn("bg-accent animate-pulse rounded-md", cn(
                                                     'rounded-2xl',
                                                     isOwn
                                                         ? 'rounded-br-[4px] bg-primary/20 dark:bg-primary/25'
                                                         : 'rounded-bl-[4px] bg-zinc-200/60 dark:bg-zinc-800',
                                                     row.bubble,
-                                                )}
-                                            />
+                                                ))} />
                                             <div className={cn('flex', isOwn ? 'justify-end' : 'justify-start')}>
-                                                <Skeleton className={cn('h-3 rounded-full bg-zinc-200/40 dark:bg-zinc-800/40', row.meta)} />
+                                                <div className={cn("bg-accent animate-pulse rounded-md", cn('h-3 rounded-full bg-zinc-200/40 dark:bg-zinc-800/40', row.meta))} />
                                             </div>
                                         </div>
                                     </div>
@@ -181,9 +159,9 @@ export function ThreadSkeletonV2({
                         isPopup ? 'p-1.5' : 'p-2',
                     )}>
                         <div className="flex items-end gap-2">
-                            <Skeleton className={cn('rounded-full', isPopup ? 'h-9 w-9' : 'h-10 w-10')} />
-                            <Skeleton className={cn('flex-1 rounded-[22px]', isPopup ? 'h-[42px]' : 'h-[44px]')} />
-                            <Skeleton className={cn('rounded-full', isPopup ? 'h-9 w-9' : 'h-10 w-10')} />
+                            <div className={cn("bg-accent animate-pulse rounded-md", cn('rounded-full', isPopup ? 'h-9 w-9' : 'h-10 w-10'))} />
+                            <div className={cn("bg-accent animate-pulse rounded-md", cn('flex-1 rounded-[22px]', isPopup ? 'h-[42px]' : 'h-[44px]'))} />
+                            <div className={cn("bg-accent animate-pulse rounded-md", cn('rounded-full', isPopup ? 'h-9 w-9' : 'h-10 w-10'))} />
                         </div>
                     </div>
                 </div>
