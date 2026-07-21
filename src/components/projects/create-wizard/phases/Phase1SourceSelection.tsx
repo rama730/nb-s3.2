@@ -20,6 +20,7 @@ import {
 } from '@/lib/github/import-client';
 import type { GithubImportRepoItem } from '@/lib/github/import-types';
 import { areSealedImportTokensEqual, getSealedImportTokenFingerprint } from '@/lib/github/import-token-state';
+import { SkillList } from '@/components/skills/SkillList';
 
 
 type SourceType = 'scratch' | 'github' | 'upload';
@@ -190,6 +191,7 @@ export default function Phase1SourceSelection({
     const [hasGithubRepoAccess, setHasGithubRepoAccess] = useState(false);
     const [isLoadingAuth, setIsLoadingAuth] = useState(true);
     const [ghUsername, setGhUsername] = useState<string | null>(null);
+    const [githubAccountUnavailable, setGithubAccountUnavailable] = useState(false);
 
     const [repoPickerOpen, setRepoPickerOpen] = useState(false);
     const [repoQuery, setRepoQuery] = useState('');
@@ -358,6 +360,7 @@ export default function Phase1SourceSelection({
                     setHasGithubRepoAccess(Boolean(sealedImportTokenFingerprint));
                     setGhUsername(null);
                     setRepoRefreshRequired(false);
+                    setGithubAccountUnavailable(false);
                     clearGithubOAuthPending();
                     return;
                 }
@@ -365,6 +368,7 @@ export default function Phase1SourceSelection({
                 setHasGithubRepoAccess(result.repoAccess);
                 setRepoRefreshRequired(result.refreshRequired);
                 setGhUsername(result.username);
+                setGithubAccountUnavailable(result.accountHealth.state === 'unavailable');
                 if (result.repoAccess || !oauthPending) {
                     clearGithubOAuthPending();
                 }
@@ -382,6 +386,7 @@ export default function Phase1SourceSelection({
                 setHasGithubRepoAccess(Boolean(sealedImportTokenFingerprint));
                 setGhUsername(null);
                 setRepoRefreshRequired(false);
+                setGithubAccountUnavailable(false);
                 clearGithubOAuthPending();
             } finally {
                 if (!cancelled && !willRetry) {
@@ -1065,6 +1070,11 @@ export default function Phase1SourceSelection({
                                             <Loader2 className="h-3.5 w-3.5 animate-spin" />
                                             Checking access
                                         </span>
+                                    ) : githubAccountUnavailable && hasGithubIdentity ? (
+                                        <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 dark:bg-amber-950/30 px-2.5 py-1 text-[11px] font-semibold text-amber-700 dark:text-amber-300">
+                                            <CircleHelp className="h-3.5 w-3.5" />
+                                            Account unavailable
+                                        </span>
                                     ) : repoRefreshRequired && hasGithubIdentity ? (
                                         <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 dark:bg-amber-950/30 px-2.5 py-1 text-[11px] font-semibold text-amber-700 dark:text-amber-300">
                                             <CircleHelp className="h-3.5 w-3.5" />
@@ -1154,16 +1164,24 @@ export default function Phase1SourceSelection({
                                 {repoRefreshRequired && hasGithubIdentity && !showResolvedSummary && (
                                     <div className="rounded-2xl border border-amber-200 dark:border-amber-900/50 bg-amber-50/70 dark:bg-amber-900/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">
                                         <div className="flex flex-wrap items-center justify-between gap-3">
-                                            <span>
-                                                GitHub access needs a quick refresh before repository browsing can resume.
-                                            </span>
-                                            <button
-                                                type="button"
-                                                onClick={handleConnectGithub}
-                                                disabled={isConnectingGithub}
-                                                className="inline-flex items-center gap-2 rounded-full border border-amber-300 dark:border-amber-700 px-3 py-1.5 text-xs font-semibold text-amber-800 dark:text-amber-200"
-                                            >
-                                                {isConnectingGithub ? (
+                                            <span>{githubAccountUnavailable
+                                                ? "The linked GitHub account may have been renamed, suspended, or deleted. Replace it in Settings before browsing private repositories."
+                                                : "GitHub access needs a quick refresh before repository browsing can resume."}</span>
+                                            {githubAccountUnavailable ? (
+                                                <a
+                                                    href="/settings?tab=integrations"
+                                                    className="inline-flex items-center gap-2 rounded-full border border-amber-300 dark:border-amber-700 px-3 py-1.5 text-xs font-semibold text-amber-800 dark:text-amber-200"
+                                                >
+                                                    Review connection
+                                                </a>
+                                            ) : (
+                                                <button
+                                                    type="button"
+                                                    onClick={handleConnectGithub}
+                                                    disabled={isConnectingGithub}
+                                                    className="inline-flex items-center gap-2 rounded-full border border-amber-300 dark:border-amber-700 px-3 py-1.5 text-xs font-semibold text-amber-800 dark:text-amber-200"
+                                                >
+                                                    {isConnectingGithub ? (
                                                     <>
                                                         <Loader2 className="h-3.5 w-3.5 animate-spin" />
                                                         Refreshing access
@@ -1173,8 +1191,9 @@ export default function Phase1SourceSelection({
                                                         <RefreshCcw className="h-3.5 w-3.5" />
                                                         Refresh access
                                                     </>
-                                                )}
-                                            </button>
+                                                    )}
+                                                </button>
+                                            )}
                                         </div>
                                     </div>
                                 )}
@@ -1483,16 +1502,7 @@ export default function Phase1SourceSelection({
                                                         Analyzing repository...
                                                     </div>
                                                 ) : analysisResult && analysisResult.technologies.length > 0 ? (
-                                                    <div className="mt-4 flex flex-wrap gap-2">
-                                                        {analysisResult.technologies.map((tech) => (
-                                                            <span
-                                                                key={tech}
-                                                                className="rounded-full bg-primary/10 dark:bg-primary/20 px-3 py-1 text-xs font-medium text-primary"
-                                                            >
-                                                                {tech}
-                                                            </span>
-                                                        ))}
-                                                    </div>
+                                                    <SkillList skills={analysisResult.technologies} size="sm" className="mt-4" />
                                                 ) : (
                                                     <div className="mt-4 text-sm text-zinc-500 dark:text-zinc-400">
                                                         No stack details detected yet for this repository.
@@ -1712,16 +1722,7 @@ export default function Phase1SourceSelection({
                                         </div>
                                     )}
                                     {analysisResult.technologies.length > 0 && (
-                                        <div className="flex flex-wrap gap-2">
-                                            {analysisResult.technologies.map((tech) => (
-                                                <span
-                                                    key={tech}
-                                                    className="rounded-full bg-primary/10 dark:bg-primary/20 px-3 py-1 text-xs font-medium text-primary"
-                                                >
-                                                    {tech}
-                                                </span>
-                                            ))}
-                                        </div>
+                                        <SkillList skills={analysisResult.technologies} size="sm" />
                                     )}
                                 </div>
                             ) : (
