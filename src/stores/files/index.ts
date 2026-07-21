@@ -1,9 +1,3 @@
-// TODO(perf): Consolidate 7 slices into 4 logical domains:
-// - explorerSlice + filesSlice → explorerSlice
-// - workspaceSlice + uiSlice → workspaceSlice
-// - editorSlice + locksSlice → editorSlice
-// - gitSlice (keep standalone)
-// This reduces cross-slice coordination complexity and onboarding time.
 "use client";
 
 import { create } from "zustand";
@@ -18,11 +12,17 @@ import {
 } from "./types";
 import { createExplorerSlice } from "./explorerSlice";
 import { createWorkspaceSlice } from "./workspaceSlice";
-import { createFilesSlice } from "./filesSlice";
 import { createEditorSlice } from "./editorSlice";
-import { createLocksSlice } from "./locksSlice";
 import { createGitSlice } from "./gitSlice";
-import { createUiSlice } from "./uiSlice";
+
+let _storageWorker: Worker | null = null;
+function getStorageWorker() {
+  if (typeof window === "undefined") return null;
+  if (!_storageWorker) {
+    _storageWorker = new Worker(new URL("./dbWorker.ts", import.meta.url));
+  }
+  return _storageWorker;
+}
 
 export const useFilesWorkspaceStore = create<FilesWorkspaceState>()(
   persist(
@@ -44,11 +44,8 @@ export const useFilesWorkspaceStore = create<FilesWorkspaceState>()(
 
       ...createExplorerSlice(set, get, api),
       ...createWorkspaceSlice(set, get, api),
-      ...createFilesSlice(set, get, api),
       ...createEditorSlice(set, get, api),
-      ...createLocksSlice(set, get, api),
       ...createGitSlice(set, get, api),
-      ...createUiSlice(set, get, api),
     }),
     {
       name: "files-workspace-v3",
@@ -121,6 +118,23 @@ export const useFilesWorkspaceStore = create<FilesWorkspaceState>()(
           byProjectId: mergedByProjectId,
         };
       },
+      storage: {
+        getItem: async (name) => {
+          if (typeof window === "undefined") return null;
+          const { get } = await import("idb-keyval");
+          return await get(name);
+        },
+        setItem: (name, value) => {
+          if (typeof window !== "undefined") {
+            getStorageWorker()?.postMessage({ type: "set", key: name, value });
+          }
+        },
+        removeItem: (name) => {
+          if (typeof window !== "undefined") {
+            getStorageWorker()?.postMessage({ type: "del", key: name });
+          }
+        },
+      },
     }
   )
 );
@@ -136,8 +150,6 @@ export const useFilesActions = () =>
       markChildrenLoaded: s.markChildrenLoaded,
       toggleExpanded: s.toggleExpanded,
       setSelectedNode: s.setSelectedNode,
-      closeTab: s.closeTab,
-      setActiveTab: s.setActiveTab,
     }))
   );
 
