@@ -6,7 +6,8 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { motion, AnimatePresence } from "framer-motion";
 import { LifecycleEditor } from "@/components/projects/LifecycleEditor";
-import { ProjectRolesEditor, normalizeProjectRoleFormValues } from "@/components/projects/settings/ProjectRolesEditor";
+import { ProjectRolesEditor } from "@/components/projects/settings/ProjectRolesEditor";
+import { normalizeProjectRoleFormValues } from "@/lib/projects/project-roles-form";
 import {
     Layout, FileText, Layers, Users, X, Sparkles,
     Check, Info, ChevronRight, CheckCircle
@@ -16,6 +17,7 @@ import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import { updateProject } from "@/app/actions/project";
 import { useReducedMotionPreference } from "@/components/providers/theme-provider";
+import { SkillPicker } from "@/components/skills/SkillPicker";
 
 // --- Types & Schema ---
 
@@ -141,8 +143,6 @@ export default function EditProjectModal({ project, isOpen, onClose, onSaved }: 
 
     const [deletedRoleIds, setDeletedRoleIds] = useState<string[]>([]);
 
-    // Tech Stack Input State
-    const [techInput, setTechInput] = useState("");
     const technologies = watch("skills");
     
     // Tag Input State
@@ -287,7 +287,7 @@ export default function EditProjectModal({ project, isOpen, onClose, onSaved }: 
                                                     <label className="block text-sm font-medium mb-1.5 ">Project Title</label>
                                                     <input
                                                         {...register("title")}
-                                                        className="w-full px-4 py-3 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-transparent focus:ring-2 focus:ring-indigo-500/20 outline-none transition-all"
+                                                        className="w-full px-4 py-3 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-transparent   outline-none transition-all"
                                                         placeholder="e.g. NextGen CRM"
                                                     />
                                                     {errors.title && <p className="text-red-500 text-sm mt-1">{errors.title.message}</p>}
@@ -296,7 +296,7 @@ export default function EditProjectModal({ project, isOpen, onClose, onSaved }: 
                                                     <label className="block text-sm font-medium mb-1.5">Tagline</label>
                                                     <input
                                                         {...register("shortDescription")}
-                                                        className="w-full px-4 py-3 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-transparent focus:ring-2 focus:ring-indigo-500/20 outline-none transition-all"
+                                                        className="w-full px-4 py-3 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-transparent   outline-none transition-all"
                                                         placeholder="A brief pitch for your project..."
                                                     />
                                                     {errors.shortDescription && <p className="text-red-500 text-sm mt-1">{errors.shortDescription.message}</p>}
@@ -313,7 +313,7 @@ export default function EditProjectModal({ project, isOpen, onClose, onSaved }: 
                                                 <textarea
                                                     {...register("description")}
                                                     onInput={(e: any) => adjustHeight(e)}
-                                                    className="w-full px-4 py-3 min-h-[150px] rounded-xl border border-zinc-200 dark:border-zinc-700 bg-transparent focus:ring-2 focus:ring-indigo-500/20 outline-none transition-all resize-none"
+                                                    className="w-full px-4 py-3 min-h-[150px] rounded-xl border border-zinc-200 dark:border-zinc-700 bg-transparent   outline-none transition-all resize-none"
                                                     placeholder="Tell the full story of your project..."
                                                 />
                                             </div>
@@ -323,7 +323,7 @@ export default function EditProjectModal({ project, isOpen, onClose, onSaved }: 
                                                     <textarea
                                                         {...register("problemStatement")}
                                                         onInput={(e: any) => adjustHeight(e)}
-                                                        className="w-full px-4 py-3 min-h-[100px] rounded-xl border border-zinc-200 dark:border-zinc-700 bg-transparent focus:ring-2 focus:ring-indigo-500/20 outline-none transition-all resize-none"
+                                                        className="w-full px-4 py-3 min-h-[100px] rounded-xl border border-zinc-200 dark:border-zinc-700 bg-transparent   outline-none transition-all resize-none"
                                                         placeholder="What problem are you solving?"
                                                     />
                                                 </div>
@@ -332,7 +332,7 @@ export default function EditProjectModal({ project, isOpen, onClose, onSaved }: 
                                                     <textarea
                                                         {...register("solutionStatement")}
                                                         onInput={(e: any) => adjustHeight(e)}
-                                                        className="w-full px-4 py-3 min-h-[100px] rounded-xl border border-zinc-200 dark:border-zinc-700 bg-transparent focus:ring-2 focus:ring-indigo-500/20 outline-none transition-all resize-none"
+                                                        className="w-full px-4 py-3 min-h-[100px] rounded-xl border border-zinc-200 dark:border-zinc-700 bg-transparent   outline-none transition-all resize-none"
                                                         placeholder="How does your project solve it?"
                                                     />
                                                 </div>
@@ -345,30 +345,7 @@ export default function EditProjectModal({ project, isOpen, onClose, onSaved }: 
                                         <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-300">
                                             {/* Tech Stack */}
                                             <div>
-                                                <label className="block text-sm font-medium mb-2">Technology Stack</label>
-                                                <div className="p-4 rounded-xl border border-zinc-200 dark:border-zinc-700 min-h-[100px] bg-zinc-50/30 dark:bg-zinc-800/20">
-                                                    <div className="flex flex-wrap gap-2 mb-3">
-                                                        {technologies.map((tech) => (
-                                                            <span key={tech} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-zinc-100 dark:bg-zinc-700 text-sm border border-zinc-200 dark:border-zinc-600">
-                                                                {tech}
-                                                                <button
-                                                                    type="button"
-                                                                    onClick={() => setValue("skills", technologies.filter(t => t !== tech))}
-                                                                    className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
-                                                                >
-                                                                    <X className="w-3.5 h-3.5" />
-                                                                </button>
-                                                            </span>
-                                                        ))}
-                                                    </div>
-                                                    <input
-                                                        value={techInput}
-                                                        onChange={(e) => setTechInput(e.target.value)}
-                                                        onKeyDown={(e) => handleKeyDown(e, techInput, setTechInput, technologies, "skills")}
-                                                        placeholder="Type technology (e.g. React) and press Enter..."
-                                                        className="w-full bg-transparent outline-none text-sm placeholder:text-zinc-400"
-                                                    />
-                                                </div>
+                                                <SkillPicker value={technologies} onChange={(next) => setValue("skills", next, { shouldDirty: true, shouldValidate: true })} label="Project skills and technologies" />
                                             </div>
 
                                             {/* Tags */}
@@ -432,6 +409,7 @@ export default function EditProjectModal({ project, isOpen, onClose, onSaved }: 
                                         <ProjectRolesEditor
                                             fields={roleFields}
                                             register={register}
+                                            control={control}
                                             errors={errors}
                                             disabled={isPending}
                                             className="animate-in fade-in slide-in-from-bottom-2 duration-300"
