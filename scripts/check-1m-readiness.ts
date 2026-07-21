@@ -31,12 +31,7 @@ function decideStatus(input: {
 
     const reconnectStorm = input.loadResults.find((result) => result.suite === 'messages-reconnect-storm')
     if (reconnectStorm && (reconnectStorm.p95Ms ?? 0) > 900) {
-        recommendations.push('Validate the dedicated presence service under reconnect-storm load before claiming 1M headroom.')
-    }
-
-    const presenceFanout = input.loadResults.find((result) => result.suite === 'presence-room-fanout')
-    if (presenceFanout && presenceFanout.ok === false) {
-        recommendations.push('Validate the dedicated presence service deployment, token route, and Redis pub/sub health before broad rollout.')
+        recommendations.push('Validate Supabase Realtime channel and reconnect capacity before claiming 1M headroom.')
     }
 
     const workerIsolation = input.loadResults.find((result) => result.suite === 'worker-isolation')
