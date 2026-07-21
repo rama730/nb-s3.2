@@ -1,16 +1,27 @@
+import crypto from "crypto";
+import mime from "mime-types";
+
 import { requireAuthenticatedUser, jsonSuccess, jsonError } from "@/app/api/v1/_shared";
 import { db } from "@/lib/db";
-import { projectNodes, projectNodeLocks, profiles, fileVersions } from "@/lib/db/schema";
-import { eq, and, isNull, gt } from "drizzle-orm";
+import { projectNodes, fileVersions } from "@/lib/db/schema";
+import { eq, and, isNull } from "drizzle-orm";
 import { getProjectFileContent } from "@/app/actions/files/content";
-import { recordNodeEvent } from "@/lib/files/internal-helpers";
+import { applyFileRevision } from "@/lib/files/apply-file-revision";
+import { isFileRevisionMode, normalizeRevisionComment, parseFileRevisionMode } from "@/lib/files/revision-policy";
 import { createAdminClient } from "@/lib/supabase/server";
-import { buildProjectFileKey, parseProjectFileKey } from "@/lib/storage/project-file-key";
+import { parseProjectFileKey } from "@/lib/storage/project-file-key";
 import { getProjectAccessById } from "@/lib/data/project-access";
 import { logger } from "@/lib/logger";
 import { checkIdempotencyKey, saveIdempotencyResult } from "@/lib/security/idempotency";
 import { recordExtensionMetric } from "@/lib/extension/observability";
-import crypto from "crypto";
+import {
+  assertNoExtensionWriteConflict,
+  buildExtensionRevisionStorageKey,
+  extensionRevisionConflictResponse,
+  extensionRevisionData,
+  parseExtensionLeaseHeaders,
+  resolveWritableExtensionFile,
+} from "@/app/api/v1/extension/_file-revision";
 
 export async function GET(request: Request) {
   try {
@@ -168,6 +179,9 @@ export async function PUT(request: Request) {
     if (!user) {
       return jsonError("Not authenticated", 401, "UNAUTHORIZED");
     }
+    if (!authResult.extensionSessionId) {
+      return jsonError("An active extension device session is required", 401, "UNAUTHORIZED");
+    }
 
     const { searchParams } = new URL(request.url);
     const projectId = searchParams.get("projectId")?.trim();
@@ -175,14 +189,6 @@ export async function PUT(request: Request) {
 
     if (!projectId || !path) {
       return jsonError("Missing projectId or path", 400, "BAD_REQUEST");
-    }
-
-    const access = await getProjectAccessById(projectId, user.id);
-    if (!access.project) {
-      return jsonError("Project not found", 404, "NOT_FOUND");
-    }
-    if (!access.canWrite) {
-      return jsonError("Forbidden", 403, "FORBIDDEN");
     }
 
     const idempotencyScope = `${user.id}:${projectId}:${path}`;
@@ -198,69 +204,38 @@ export async function PUT(request: Request) {
     }
 
     const savePayload = await readExtensionSavePayload(request);
-
-    // 1. Find the node
-    const node = await db.query.projectNodes.findFirst({
-      where: and(
-        eq(projectNodes.projectId, projectId),
-        eq(projectNodes.path, path),
-        eq(projectNodes.type, "file"),
-        isNull(projectNodes.deletedAt)
-      )
-    });
-
-    if (!node) {
-      return jsonError("File node not found", 404, "NOT_FOUND");
+    const revisionModeHeader = request.headers.get("x-nb-revision-mode")?.trim();
+    if (revisionModeHeader && !isFileRevisionMode(revisionModeHeader)) {
+      return jsonError("Invalid revision mode", 400, "BAD_REQUEST");
     }
+    const revisionMode = parseFileRevisionMode(revisionModeHeader);
+    const revisionComment = normalizeRevisionComment(
+      request.headers.get("x-nb-revision-comment"),
+    );
+    const parsedLease = parseExtensionLeaseHeaders(request);
+    if (parsedLease.response) return parsedLease.response;
+
+    const resolved = await resolveWritableExtensionFile(projectId, path, user.id);
+    if (resolved.response) return resolved.response;
+    const node = resolved.node!;
 
     const baseVersionHeader = request.headers.get("x-nb-base-version")?.trim();
     const baseHashHeader = request.headers.get("x-nb-base-hash")?.trim();
-    const currentVersion = await db.query.fileVersions.findFirst({
-      where: and(
-        eq(fileVersions.nodeId, node.id),
-        eq(fileVersions.version, node.currentVersion)
-      ),
-      columns: { contentHash: true },
-    });
     const baseVersion = baseVersionHeader ? Number(baseVersionHeader) : null;
-    if (baseVersion !== null && Number.isFinite(baseVersion) && baseVersion !== node.currentVersion) {
-      return jsonError("File changed on the server. Refresh before saving again.", 409, "CONFLICT");
-    }
-    if (baseHashHeader && currentVersion?.contentHash && baseHashHeader !== currentVersion.contentHash) {
-      return jsonError("File content changed on the server. Refresh before saving again.", 409, "CONFLICT");
-    }
-
-    // 2. Lock check: query project_node_locks to ensure no active lock conflict exists
-    const activeLock = await db.query.projectNodeLocks.findFirst({
-      where: and(
-        eq(projectNodeLocks.projectId, projectId),
-        eq(projectNodeLocks.nodeId, node.id),
-        gt(projectNodeLocks.expiresAt, new Date())
-      )
+    const validBaseVersion = baseVersion !== null && Number.isFinite(baseVersion) ? baseVersion : null;
+    const conflict = await assertNoExtensionWriteConflict({
+      node,
+      baseVersion: validBaseVersion,
+      baseHash: baseHashHeader || null,
     });
+    if (conflict) return conflict;
 
-    if (activeLock && activeLock.lockedBy !== user.id) {
-      const lockHolder = await db.query.profiles.findFirst({
-        where: eq(profiles.id, activeLock.lockedBy),
-        columns: { fullName: true }
-      });
-      return jsonError(
-        `File is locked by ${lockHolder?.fullName || "another collaborator"}.`,
-        423,
-        "CONFLICT"
-      );
-    }
-
-    // 3. Prepare upload metadata
+    // Prepare upload metadata. Lease ownership is checked in the same
+    // transaction as the revision write below.
     const contentHash = crypto.createHash("sha256").update(savePayload.buffer).digest("hex");
     const size = savePayload.buffer.byteLength;
 
-    const ext = path.split(".").pop()?.toLowerCase();
-    const extensionSuffix = ext && /^[a-z0-9]+$/.test(ext) ? `.${ext}` : "";
-    const s3Key = buildProjectFileKey(
-      projectId,
-      `nodes/${node.id}/versions/${contentHash}-${crypto.randomUUID()}${extensionSuffix}`
-    );
+    const s3Key = buildExtensionRevisionStorageKey(projectId, node.id, path, contentHash);
     const mimeType = savePayload.mimeType || inferMimeType(path);
 
     // 4. Upload to S3 storage via admin Supabase client
@@ -277,63 +252,50 @@ export async function PUT(request: Request) {
       return jsonError(`Storage upload failed: ${uploadError.message}`, 500, "INTERNAL_ERROR");
     }
 
-    // 5. Atomic db updates inside transaction
-    const result = await db.transaction(async (tx) => {
-      const current = await tx.query.projectNodes.findFirst({
-        where: eq(projectNodes.id, node.id),
-        columns: { currentVersion: true }
-      });
-      const nextVersion = (current?.currentVersion ?? 1) + 1;
-
-      const [versionRow] = await tx
-        .insert(fileVersions)
-        .values({
-          nodeId: node.id,
-          version: nextVersion,
-          s3Key: s3Key,
-          size: size,
-          mimeType: mimeType,
-          contentHash: contentHash,
-          uploadedBy: user.id,
-        })
-        .returning();
-
-      const [updatedNode] = await tx
-        .update(projectNodes)
-        .set({
-          s3Key: s3Key,
-          size: size,
-          mimeType: mimeType,
-          currentVersion: nextVersion,
-          syncStatus: "merged",
-          updatedAt: new Date()
-        })
-        .where(eq(projectNodes.id, node.id))
-        .returning();
-
-      const eventResult = await recordNodeEvent(projectId, user.id, node.id, "extension_file_saved", {
-        version: nextVersion,
+    let result;
+    try {
+      result = await applyFileRevision({
+        projectId,
+        nodeId: node.id,
+        actorUserId: user.id,
+        storageKey: s3Key,
         size,
         mimeType,
-        hash: contentHash,
-      }, tx);
+        contentHash,
+        mode: revisionMode,
+        comment: revisionComment,
+        baseVersion: validBaseVersion,
+        baseHash: baseHashHeader || null,
+        lease: parsedLease.lease!,
+        eventType: "extension_file_saved",
+        eventMetadata: {
+          transfer: "inline",
+          operationId: request.headers.get("idempotency-key"),
+        },
+        syncStatus: "merged",
+      });
+    } catch (error) {
+      await adminClient.storage.from("project-files").remove([s3Key]).catch(() => null);
+      const conflictResponse = extensionRevisionConflictResponse(error);
+      if (conflictResponse) return conflictResponse;
+      throw error;
+    }
 
-      return { node: updatedNode!, version: versionRow!, event: eventResult.event, sequenceNumber: eventResult.sequenceNumber };
-    });
-
-    const successData = {
-      success: true,
-      nodeId: result.node.id,
-      version: result.version.version,
-      size: result.node.size,
-      mimeType: result.node.mimeType,
-      contentHash,
-      syncStatus: result.node.syncStatus,
-      sequenceNumber: result.sequenceNumber,
-      updatedAt: result.node.updatedAt?.toISOString?.() ?? result.node.updatedAt,
-    };
+    const successData = { success: true, ...extensionRevisionData(result, contentHash) };
     const successBody = JSON.stringify({ success: true, data: successData });
     await saveIdempotencyResult(request, "extension.file.put", successBody, idempotencyCheck.lockToken, idempotencyScope);
+
+    recordExtensionMetric("extension.file.save", {
+      action: "save",
+      success: true,
+      userId: user.id,
+      projectId,
+      nodeId: result.node.id,
+      path,
+      sizeBytes: size,
+      revisionMode: result.mode,
+      versionIncremented: result.versionIncremented,
+    });
 
     return jsonSuccess(successData);
   } catch (error) {
@@ -341,7 +303,7 @@ export async function PUT(request: Request) {
       error: error instanceof Error ? error.message : String(error)
     });
     return jsonError(
-      error instanceof Error ? error.message : "Failed to save file content",
+      "Failed to save file revision. Refresh the file and try again.",
       500,
       "INTERNAL_ERROR"
     );
@@ -376,19 +338,5 @@ async function readExtensionSavePayload(request: Request): Promise<{ buffer: Buf
 }
 
 function inferMimeType(path: string) {
-  const ext = path.split(".").pop()?.toLowerCase();
-  if (ext === "json") return "application/json";
-  if (ext === "js" || ext === "jsx") return "application/javascript";
-  if (ext === "md" || ext === "mdx") return "text/markdown";
-  if (ext === "css") return "text/css";
-  if (ext === "html") return "text/html";
-  if (ext === "svg") return "image/svg+xml";
-  if (ext === "png") return "image/png";
-  if (ext === "jpg" || ext === "jpeg") return "image/jpeg";
-  if (ext === "gif") return "image/gif";
-  if (ext === "webp") return "image/webp";
-  if (ext === "pdf") return "application/pdf";
-  if (ext === "zip") return "application/zip";
-  if (ext === "ts" || ext === "tsx" || ext === "txt" || ext === "yml" || ext === "yaml" || ext === "toml" || ext === "sql" || ext === "sh") return "text/plain";
-  return "application/octet-stream";
+  return mime.lookup(path) || "application/octet-stream";
 }
