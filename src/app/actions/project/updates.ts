@@ -19,6 +19,9 @@ import { revalidatePath } from "next/cache";
 import { after } from "next/server";
 
 import { db } from "@/lib/db";
+import { toIsoString } from "@/lib/utils/date";
+import { parsePositiveInteger } from "@/lib/utils/number";
+import { isLooseUuid } from "@/lib/validations/uuid";
 import {
     profiles,
     profileProjectContributionStages,
@@ -185,13 +188,6 @@ type ProjectUpdateAccess = {
     canManage: boolean;
 };
 
-function toIsoString(value: Date | string | null | undefined) {
-    if (!value) return null;
-    if (value instanceof Date) return value.toISOString();
-    const date = new Date(value);
-    return Number.isNaN(date.getTime()) ? null : date.toISOString();
-}
-
 function encodeUpdateCursor(row: { isPinned: boolean; createdAt: Date | string; id: string }) {
     const payload: ProjectUpdateCursor = {
         pinned: Boolean(row.isPinned),
@@ -292,12 +288,18 @@ async function readProjectRoleTitleMap(projectId: string, userIds: Array<string 
             roleTitle: profileProjectContributionStages.roleTitle,
         })
         .from(profileProjectContributionStages)
+        .innerJoin(
+            profileProjectContributions,
+            eq(profileProjectContributions.id, profileProjectContributionStages.contributionId),
+        )
         .where(and(
             eq(profileProjectContributionStages.projectId, projectId),
             inArray(profileProjectContributionStages.profileId, ids),
             isNull(profileProjectContributionStages.deletedAt),
             isNull(profileProjectContributionStages.endedAt),
-            eq(profileProjectContributionStages.visibility, "public"),
+            isNull(profileProjectContributions.deletedAt),
+            isNull(profileProjectContributions.endedAt),
+            eq(profileProjectContributions.visibility, "public"),
         ))
         .orderBy(
             sql`${profileProjectContributionStages.verifiedAt} DESC NULLS LAST`,
@@ -426,7 +428,7 @@ function projectTaskHref(project: { id: string; slug: string | null }, taskId: s
 }
 
 function projectSprintHref(project: { id: string; slug: string | null }, sprintId: string) {
-    return `${projectBaseHref(project)}/sprints/${encodeURIComponent(sprintId)}`;
+    return `${projectBaseHref(project)}?tab=sprints&sprintId=${encodeURIComponent(sprintId)}`;
 }
 
 function encodeProjectNodePath(row: { path: string | null; name: string }) {
@@ -485,7 +487,7 @@ export async function resolveProjectUpdateMentionTargetAction(projectId: string,
         }
 
         if (kind === "task") {
-            const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+            const isUuid = isLooseUuid(id);
             let taskQuery;
             if (isUuid) {
                 taskQuery = db
@@ -502,8 +504,8 @@ export async function resolveProjectUpdateMentionTargetAction(projectId: string,
                 const dashIndex = id.lastIndexOf("-");
                 if (dashIndex !== -1) {
                     const projectKey = id.slice(0, dashIndex);
-                    const taskNum = parseInt(id.slice(dashIndex + 1), 10);
-                    if (projectKey && !isNaN(taskNum)) {
+                    const taskNum = Number(id.slice(dashIndex + 1));
+                    if (projectKey && Number.isInteger(taskNum)) {
                         taskQuery = db
                             .select({
                                 id: tasks.id,
@@ -532,7 +534,7 @@ export async function resolveProjectUpdateMentionTargetAction(projectId: string,
         }
 
         if (kind === "sprint") {
-            const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+            const isUuid = isLooseUuid(id);
             if (!isUuid) return { success: false as const, error: projectUpdateTargetUnavailableMessage(kind) };
 
             const [sprint] = await db
@@ -544,8 +546,7 @@ export async function resolveProjectUpdateMentionTargetAction(projectId: string,
             return { success: true as const, href: projectSprintHref(access.project, sprint.id), kind };
         }
 
-        const isNodeUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
-        if (!isNodeUuid) return { success: false as const, error: projectUpdateTargetUnavailableMessage(kind) };
+        if (!isLooseUuid(id)) return { success: false as const, error: projectUpdateTargetUnavailableMessage(kind) };
 
         const [node] = await db
             .select({
@@ -1170,11 +1171,6 @@ export async function readProjectUpdateContextOptionsAction(projectId: string, i
         });
         return { success: false as const, error: "Failed to load project update context.", data: { task: [], sprint: [], file: [] } };
     }
-}
-
-function parsePositiveInteger(value: unknown) {
-    const numeric = typeof value === "number" ? value : Number(value);
-    return Number.isFinite(numeric) && numeric > 0 ? Math.trunc(numeric) : null;
 }
 
 function projectUpdateMediaRoute(projectId: string, storageKey: string) {
