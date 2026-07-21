@@ -1,37 +1,4 @@
-// Task 7.1 — `QuickOpenDialog` for the Files tab v3 (GitHub redesign).
-//
-// Extracted from the QuickOpen portion of
-// `src/components/projects/v2/workspace/WorkspaceModalsHost.tsx`. The legacy
-// host is deleted in Task 13 once the flag ramp completes; until then both
-// implementations coexist (see design.md § Migration and Rollout).
-//
-// The ⌘P / Ctrl+P global shortcut that toggles `open` lives in
-// `FilesTabRoot` (Task 8.1). This dialog only renders when `open === true`
-// and reports close intent back through `onOpenChange`. Input state is
-// controlled by the parent (`query` + `onQueryChange`) so the root can
-// clear it when the shortcut closes the dialog.
-//
-// Requirements covered here (per tasks.md § 7.1):
-//   - Req 9.1 (close path — the open/toggle path is in FilesTabRoot)
-//   - Req 9.2 Empty query → up to 20 Recents (most-recent first); empty
-//     indicator when Recents list is empty
-//   - Req 9.3 Non-empty query (1–256 chars) → 200 ms-debounced fuzzy rank
-//     by name + path, up to 50 results; no-results indicator when empty
-//   - Req 9.4 ArrowDown / ArrowUp wrap + scroll focused into view
-//   - Req 9.5 Enter / click → `navigateTo(file.id)` + close
-//   - Req 9.6 Selected-node-gone → inline dialog error, dialog stays open,
-//     `currentLocation` unchanged
-//   - Req 9.7 Escape closes + discards input, `currentLocation` unchanged
-//
-// Design notes:
-// * The pure helpers `buildNodePathMap` and `rankFuzzyResults` are exported
-//   so Task 7.2 unit tests can exercise the ranking contract without
-//   mounting React. The fuzzy scoring exactly mirrors the legacy
-//   implementation in `WorkspaceShell.tsx` so behaviour is preserved under
-//   the flag ramp.
-// * `useNavigateTo` is the single write path to `currentLocationId` — no
-//   other navigation mutation happens in this component (see design.md
-//   § useNavigateTo / only write path).
+// Quick-open: parent owns ⌘P/open/query, this dialog owns debounced file search.
 
 "use client";
 
@@ -93,7 +60,7 @@ export function buildNodePathMap(
 /**
  * Fuzzy-rank file nodes by name + path against a lower-cased query.
  *
- * Scoring matches the legacy QuickOpen memo in `WorkspaceShell.tsx`:
+ * Scoring matches the legacy Quick Open ranking:
  *   - exact name match: +500
  *   - name startsWith : +300
  *   - name includes   : +180
@@ -189,7 +156,6 @@ export function QuickOpenDialog({
   const rawQuery = debouncedQuery.trim();
   const rawQueryLower = rawQuery.toLowerCase();
   const showRecents = rawQueryLower.length === 0;
-  const queryOverflow = rawQueryLower.length > MAX_QUERY_LEN;
 
   // ── Results ────────────────────────────────────────────────────────
   const results: ProjectNode[] = useMemo(() => {
@@ -207,11 +173,9 @@ export function QuickOpenDialog({
       }
       return out;
     }
-    if (queryOverflow) return []; // Req 9.3 upper-bound guard.
     return rankFuzzyResults(fileNodes, nodePathById, rawQueryLower, MAX_RESULTS);
   }, [
     showRecents,
-    queryOverflow,
     rawQueryLower,
     recents,
     nodesById,
@@ -231,7 +195,6 @@ export function QuickOpenDialog({
   const safeActiveIndex =
     results.length === 0 ? 0 : Math.min(activeIndex, results.length - 1);
 
-  const listRef = useRef<HTMLDivElement | null>(null);
   const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   useEffect(() => {
     if (!open) return;
@@ -371,7 +334,6 @@ export function QuickOpenDialog({
         ) : null}
         <div
           id="files-tab-quick-open-listbox"
-          ref={listRef}
           className="max-h-[60vh] overflow-auto divide-y divide-zinc-200 dark:divide-zinc-800"
           role="listbox"
         >
