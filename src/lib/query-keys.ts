@@ -24,6 +24,7 @@ export const queryKeys = {
   },
   connections: {
     root: () => ["connections"] as const,
+    pending: () => ["connections", "pending"] as const,
   },
   messages: {
     conversations: () => ["chat", "conversations"] as const,
@@ -80,6 +81,27 @@ export const queryKeys = {
       ["profile", "project-invite-options", userId] as const,
     stats: (userId: string) => ["profile", "stats", userId] as const,
   },
+  globalSearch: {
+    root: () => ["global-search"] as const,
+    previewsRoot: () => ["global-search", "previews"] as const,
+    hubRoot: () => ["global-search", "previews", "hub"] as const,
+    peopleRoot: () => ["global-search", "previews", "people"] as const,
+    projectRoot: () => ["global-search", "previews", "project"] as const,
+    preview: (
+      context: "hub" | "people" | "project" | "settings" | "messages" | "generic",
+      peopleScope: "discover" | "network",
+      projectIdentifier: string | null,
+      query: string,
+    ) =>
+      [
+        "global-search",
+        "previews",
+        context,
+        peopleScope,
+        projectIdentifier,
+        query,
+      ] as const,
+  },
   project: {
     root: () => ["project"] as const,
     byId: (projectId: string) => ["project", projectId] as const,
@@ -90,8 +112,10 @@ export const queryKeys = {
         ["project", projectId, "detail", "shell"] as const,
       tasksRoot: (projectId: string) =>
         ["project", projectId, "detail", "tasks"] as const,
-      tasks: (projectId: string, scope: ProjectTaskScope = "all") =>
-        ["project", projectId, "detail", "tasks", scope] as const,
+      tasks: (projectId: string, scope: ProjectTaskScope = "all", search = "") =>
+        search
+          ? (["project", projectId, "detail", "tasks", scope, search] as const)
+          : (["project", projectId, "detail", "tasks", scope] as const),
       sprintTasksRoot: (projectId: string) =>
         ["project", projectId, "detail", "sprint-tasks"] as const,
       sprintTasks: (projectId: string, sprintId: string) =>
@@ -315,7 +339,6 @@ export const queryKeys = {
   },
   settings: {
     root: () => ["settings"] as const,
-    bootstrap: () => ["settings", "bootstrap"] as const,
     accountDeletion: () => ["settings", "account", "deletion-status"] as const,
     notifications: () => ["settings", "notifications"] as const,
     security: () => ["settings", "security"] as const,
@@ -323,8 +346,6 @@ export const queryKeys = {
     integrations: () => ["settings", "integrations"] as const,
     extensionSessions: () =>
       ["settings", "integrations", "extension-sessions"] as const,
-    mfaFactors: () => ["settings", "security", "mfa-factors"] as const,
-    loginHistory: () => ["settings", "security", "login-history"] as const,
   },
   notifications: {
     root: () => ["notifications"] as const,
