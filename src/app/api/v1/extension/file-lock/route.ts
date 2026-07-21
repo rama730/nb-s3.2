@@ -1,22 +1,46 @@
-import { requireAuthenticatedUser, jsonError, jsonSuccess } from "@/app/api/v1/_shared";
+import { and, eq, isNull } from "drizzle-orm";
+import { z } from "zod";
+
+import { jsonError, jsonSuccess } from "@/app/api/v1/_shared";
+import {
+  fileLeaseErrorResponse,
+  leaseCredentialsSchema,
+  leaseTtlMsSchema,
+  requireFileLeaseUser,
+  ttlMsToSeconds,
+} from "@/app/api/v1/_file-lease-route";
 import { db } from "@/lib/db";
-import { profiles, projectNodeLocks, projectNodes } from "@/lib/db/schema";
+import { projectNodes } from "@/lib/db/schema";
 import { getProjectAccessById } from "@/lib/data/project-access";
-import { and, eq, gt, isNull } from "drizzle-orm";
-import { logger } from "@/lib/logger";
+import {
+  acquireFileLease,
+  releaseFileLease,
+  renewFileLease,
+} from "@/lib/files/file-lock-service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-async function resolveEditableNode(projectId: string, path: string, userId: string) {
-  if (!projectId || !path) {
-    return { error: jsonError("Missing projectId or path", 400, "BAD_REQUEST") };
-  }
+const baseSchema = z.object({
+  projectId: z.string().uuid(),
+  path: z.string().min(1).max(2_048),
+  clientSessionId: z.string().uuid(),
+});
 
+const acquireSchema = baseSchema.extend({
+  action: z.literal("acquire").optional().default("acquire"),
+  ttlMs: leaseTtlMsSchema.optional(),
+});
+
+const ownedSchema = baseSchema.extend({
+  action: z.enum(["renew", "release"]),
+  ttlMs: leaseTtlMsSchema.optional(),
+}).merge(leaseCredentialsSchema.omit({ sessionId: true }));
+
+async function resolveEditableNode(projectId: string, path: string, userId: string) {
   const access = await getProjectAccessById(projectId, userId);
   if (!access.project) return { error: jsonError("Project not found", 404, "NOT_FOUND") };
   if (!access.canWrite) return { error: jsonError("Forbidden", 403, "FORBIDDEN") };
-
   const node = await db.query.projectNodes.findFirst({
     where: and(
       eq(projectNodes.projectId, projectId),
@@ -24,109 +48,74 @@ async function resolveEditableNode(projectId: string, path: string, userId: stri
       eq(projectNodes.type, "file"),
       isNull(projectNodes.deletedAt),
     ),
-    columns: { id: true, projectId: true, path: true },
+    columns: { id: true },
   });
-
   if (!node) return { error: jsonError("File not found", 404, "NOT_FOUND") };
   return { node };
 }
 
 export async function POST(request: Request) {
   try {
-    const authResult = await requireAuthenticatedUser();
-    if (authResult.response) return authResult.response;
-    const user = authResult.user;
-    if (!user) return jsonError("Not authenticated", 401, "UNAUTHORIZED");
-
-    const body = await request.json().catch(() => ({}));
-    const projectId = typeof body.projectId === "string" ? body.projectId.trim() : "";
-    const path = typeof body.path === "string" ? body.path.trim() : "";
-    const ttlMs = Math.max(30_000, Math.min(180_000, Number(body.ttlMs || 90_000)));
-    const resolved = await resolveEditableNode(projectId, path, user.id);
+    const auth = await requireFileLeaseUser(request, { extensionSession: true });
+    if (auth.response) return auth.response;
+    const body = await request.json().catch(() => null);
+    const action = body && typeof body.action === "string" ? body.action : "acquire";
+    const parsed = action === "acquire" ? acquireSchema.safeParse(body) : ownedSchema.safeParse(body);
+    if (!parsed.success) return jsonError("Invalid file lease request", 400, "BAD_REQUEST");
+    const resolved = await resolveEditableNode(parsed.data.projectId, parsed.data.path, auth.user.id);
     if (resolved.error) return resolved.error;
-    const node = resolved.node!;
 
-    const now = new Date();
-    const expiresAt = new Date(now.getTime() + ttlMs);
-    const activeLock = await db.query.projectNodeLocks.findFirst({
-      where: and(
-        eq(projectNodeLocks.nodeId, node.id),
-        gt(projectNodeLocks.expiresAt, now),
-      ),
-    });
-
-    if (activeLock && activeLock.lockedBy !== user.id) {
-      const holder = await db.query.profiles.findFirst({
-        where: eq(profiles.id, activeLock.lockedBy),
-        columns: { fullName: true, username: true },
+    if (parsed.data.action === "acquire") {
+      const lease = await acquireFileLease({
+        projectId: parsed.data.projectId,
+        nodeId: resolved.node!.id,
+        userId: auth.user.id,
+        sessionId: parsed.data.clientSessionId,
+        clientKind: "vscode",
+        deviceSessionId: auth.extensionSessionId,
+        ttlSeconds: ttlMsToSeconds(parsed.data.ttlMs),
       });
-      return jsonError(
-        `File is locked by ${holder?.fullName || holder?.username || "another collaborator"}.`,
-        423,
-        "CONFLICT",
-      );
+      return jsonSuccess(lease);
     }
 
-    await db
-      .insert(projectNodeLocks)
-      .values({
-        nodeId: node.id,
-        projectId,
-        lockedBy: user.id,
-        acquiredAt: now,
-        expiresAt,
-      })
-      .onConflictDoUpdate({
-        target: projectNodeLocks.nodeId,
-        set: {
-          projectId,
-          lockedBy: user.id,
-          acquiredAt: now,
-          expiresAt,
+    if (parsed.data.action === "renew") {
+      const lease = await renewFileLease({
+        projectId: parsed.data.projectId,
+        nodeId: resolved.node!.id,
+        userId: auth.user.id,
+        credentials: {
+          leaseId: parsed.data.leaseId,
+          sessionId: parsed.data.clientSessionId,
+          fencingToken: parsed.data.fencingToken,
         },
+        ttlSeconds: ttlMsToSeconds(parsed.data.ttlMs),
       });
+      return jsonSuccess(lease);
+    }
 
-    return jsonSuccess({
-      nodeId: node.id,
-      expiresAt: expiresAt.toISOString(),
+    const released = await releaseFileLease({
+      projectId: parsed.data.projectId,
+      nodeId: resolved.node!.id,
+      userId: auth.user.id,
+      credentials: {
+        leaseId: parsed.data.leaseId,
+        sessionId: parsed.data.clientSessionId,
+        fencingToken: parsed.data.fencingToken,
+      },
     });
+    return jsonSuccess({ released, nodeId: resolved.node!.id });
   } catch (error) {
-    logger.error("[api/v1/extension/file-lock] Failed to acquire lock", {
-      error: error instanceof Error ? error.message : String(error),
+    return fileLeaseErrorResponse(error, "Failed to update file lease", {
+      route: "[api/v1/extension/file-lock]",
     });
-    return jsonError("Failed to acquire file lock", 500, "INTERNAL_ERROR");
   }
 }
 
 export async function DELETE(request: Request) {
-  try {
-    const authResult = await requireAuthenticatedUser();
-    if (authResult.response) return authResult.response;
-    const user = authResult.user;
-    if (!user) return jsonError("Not authenticated", 401, "UNAUTHORIZED");
-
-    const body = await request.json().catch(() => ({}));
-    const projectId = typeof body.projectId === "string" ? body.projectId.trim() : "";
-    const path = typeof body.path === "string" ? body.path.trim() : "";
-    const resolved = await resolveEditableNode(projectId, path, user.id);
-    if (resolved.error) return resolved.error;
-    const node = resolved.node!;
-
-    await db
-      .delete(projectNodeLocks)
-      .where(
-        and(
-          eq(projectNodeLocks.nodeId, node.id),
-          eq(projectNodeLocks.projectId, projectId),
-          eq(projectNodeLocks.lockedBy, user.id),
-        ),
-      );
-
-    return jsonSuccess({ released: true, nodeId: node.id });
-  } catch (error) {
-    logger.error("[api/v1/extension/file-lock] Failed to release lock", {
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return jsonError("Failed to release file lock", 500, "INTERNAL_ERROR");
-  }
+  const body = await request.json().catch(() => null);
+  return POST(new Request(request.url, {
+    method: "POST",
+    headers: request.headers,
+    body: JSON.stringify({ ...(body || {}), action: "release" }),
+  }));
 }
