@@ -1,6 +1,5 @@
-import { createClient } from '@/lib/supabase/server'
 import { isAdminUser } from '@/lib/security/admin'
-import { enforceRouteLimit, getRequestId, jsonSuccess, jsonError, logApiRoute } from '@/app/api/v1/_shared'
+import { enforceRouteLimit, getRequestId, jsonSuccess, jsonError, logApiRoute, requireAuthenticatedUser } from '@/app/api/v1/_shared'
 
 export async function GET(request: Request) {
     const startedAt = Date.now()
@@ -19,8 +18,20 @@ export async function GET(request: Request) {
         return limitResponse;
     }
 
-    const supabase = await createClient()
-    const { data: { user } } = await supabase.auth.getUser()
+    const auth = await requireAuthenticatedUser()
+    const user = auth.user
+
+    if (auth.response || !user) {
+        logApiRoute(request, {
+            requestId,
+            action: 'cleanupOrphan.get',
+            startedAt,
+            status: 401,
+            success: false,
+            errorCode: 'UNAUTHORIZED',
+        })
+        return auth.response ?? jsonError('Not authenticated', 401, 'UNAUTHORIZED')
+    }
 
     if (!isAdminUser(user)) {
         logApiRoute(request, {
