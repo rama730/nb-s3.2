@@ -64,12 +64,7 @@ const REPORT_PATH = path.join(ARTIFACTS_DIR, "files-tab-removal-audit.json");
 // Legacy subtree: references here are expected and allowed until Task 13.4.
 const LEGACY_PREFIX = "src/components/projects/v2/workspace/";
 
-// Additional "legacy-by-association" files — these live outside the workspace/
-// prefix but are only consumed by `WorkspaceShell` / legacy UI, so they go
-// away in Task 13. Classify their references as `allowed-legacy`.
-const LEGACY_SATELLITES = new Set<string>([
-  "src/hooks/useWorkspaceShellState.ts",
-]);
+const LEGACY_SATELLITES = new Set<string>();
 
 // Files that declare or re-export the store slice APIs themselves. A hit
 // inside one of these is just the slice declaring / barrel-exporting its own
@@ -78,12 +73,9 @@ const STORE_DECLARATION_FILES = new Set<string>([
   "src/stores/files/types.ts",
   "src/stores/files/index.ts",
   "src/stores/files/workspaceSlice.ts",
-  "src/stores/files/uiSlice.ts",
   "src/stores/files/explorerSlice.ts",
   "src/stores/files/editorSlice.ts",
-  "src/stores/files/locksSlice.ts",
   "src/stores/files/gitSlice.ts",
-  "src/stores/files/filesSlice.ts",
   "src/stores/files/selectors.ts",
   "src/stores/filesWorkspaceStore.ts",
 ]);
@@ -127,7 +119,7 @@ interface PriorityGroup {
   targets: Array<FileTarget | MethodTarget>;
 }
 
-/** Convert `src/lib/runner/backend.ts` → `@/lib/runner/backend`. */
+/** Convert `src/path/to/file.ts` → `@/path/to/file`. */
 function toAlias(p: string): string {
   const withoutSrc = p.replace(/^src\//, "@/");
   return withoutSrc.replace(/\.(ts|tsx)$/, "");
@@ -138,122 +130,6 @@ function fileTarget(p: string): FileTarget {
 }
 
 const PRIORITY_GROUPS: PriorityGroup[] = [
-  {
-    id: 1,
-    name: "Runner",
-    requirements: "Req 15.3, 16.1",
-    targets: [
-      fileTarget("src/lib/runner/backend.ts"),
-      fileTarget("src/lib/runner/browser-sandbox.ts"),
-      fileTarget("src/lib/runner/contracts.ts"),
-      fileTarget("src/lib/runner/javascript.ts"),
-      fileTarget("src/lib/runner/local-analyzer.ts"),
-      fileTarget("src/lib/runner/prefs.ts"),
-      fileTarget("src/lib/runner/pyodide.ts"),
-      fileTarget("src/lib/runner/router.ts"),
-      fileTarget("src/lib/runner/runFile.ts"),
-      fileTarget("src/lib/runner/sql.ts"),
-      fileTarget("src/lib/runner/types.ts"),
-      fileTarget("src/lib/runner/typescript.ts"),
-      fileTarget("src/app/actions/parseStderrToProblems.ts"),
-    ],
-  },
-  {
-    id: 2,
-    name: "Bottom Panel",
-    requirements: "Req 15.1–15.2, 16.2",
-    targets: [
-      fileTarget("src/components/projects/v2/panels/BottomPanel.tsx"),
-      fileTarget("src/components/projects/v2/panels/RunTab.tsx"),
-      fileTarget("src/components/projects/v2/panels/OutputTab.tsx"),
-      fileTarget("src/components/projects/v2/panels/ProblemsTab.tsx"),
-      fileTarget("src/components/projects/v2/panels/RunnerStatusStrip.tsx"),
-      fileTarget("src/components/projects/v2/panels/ansiParser.ts"),
-    ],
-  },
-  {
-    id: 3,
-    name: "Workspace Shell",
-    requirements: "Req 15.4, 15.8–15.13, 16.2–16.3, 21.5",
-    targets: [
-      fileTarget("src/components/projects/v2/workspace/useCursorPresence.ts"),
-      fileTarget("src/components/projects/v2/workspace/cursorProtocol.ts"),
-      fileTarget("src/components/projects/v2/workspace/useLintOnEdit.ts"),
-      fileTarget(
-        "src/components/projects/v2/workspace/useWorkspaceLayoutState.ts",
-      ),
-      fileTarget(
-        "src/components/projects/v2/workspace/WorkspaceTabManager.ts",
-      ),
-      fileTarget("src/components/projects/v2/workspace/WorkspacePaneHost.tsx"),
-      fileTarget(
-        "src/components/projects/v2/workspace/WorkspaceBottomPanelHost.tsx",
-      ),
-      fileTarget(
-        "src/components/projects/v2/workspace/KeyboardShortcuts.tsx",
-      ),
-      fileTarget(
-        "src/components/projects/v2/workspace/WorkspaceGitToolbar.tsx",
-      ),
-      fileTarget(
-        "src/components/projects/v2/workspace/WorkspaceSearchReplace.tsx",
-      ),
-      fileTarget("src/components/projects/v2/workspace/WorkspaceKeyboard.ts"),
-      fileTarget(
-        "src/components/projects/v2/workspace/WorkspaceLockManager.ts",
-      ),
-      fileTarget(
-        "src/components/projects/v2/workspace/WorkspaceAutoSave.ts",
-      ),
-      fileTarget(
-        "src/components/projects/v2/workspace/useWorkspaceLifecycle.ts",
-      ),
-      fileTarget(
-        "src/components/projects/v2/workspace/useWorkspaceUiState.ts",
-      ),
-      fileTarget("src/components/projects/v2/workspace/useWorkspacePane.ts"),
-      fileTarget("src/components/projects/v2/workspace/EditorPane.tsx"),
-      fileTarget("src/components/projects/v2/workspace/StatusBar.tsx"),
-      fileTarget(
-        "src/components/projects/v2/workspace/WorkspaceSyncOverlay.tsx",
-      ),
-      fileTarget("src/components/projects/v2/workspace/WorkspaceShell.tsx"),
-      fileTarget(
-        "src/components/projects/v2/workspace/indexQueueRuntime.ts",
-      ),
-      fileTarget(
-        "src/components/projects/v2/workspace/WorkspaceModalsHost.tsx",
-      ),
-    ],
-  },
-  {
-    id: 4,
-    name: "Explorer sub-features",
-    requirements: "Req 15.15–15.18, 12.3",
-    targets: [
-      fileTarget("src/components/projects/v2/explorer/OutlinePanel.tsx"),
-      fileTarget(
-        "src/components/projects/v2/explorer/SourceControlPanel.tsx",
-      ),
-      fileTarget(
-        "src/components/projects/v2/explorer/ExplorerInsightsHost.tsx",
-      ),
-      fileTarget(
-        "src/components/projects/v2/explorer/ExplorerCommandPalette.tsx",
-      ),
-      fileTarget(
-        "src/components/projects/v2/explorer/ExplorerBatchOps.tsx",
-      ),
-      fileTarget(
-        "src/components/projects/v2/explorer/MultiFileDiffDialog.tsx",
-      ),
-      fileTarget("src/components/projects/v2/explorer/ExplorerShell.tsx"),
-      // Replaced structurally by MetadataStrip; scheduled for deletion.
-      fileTarget(
-        "src/components/projects/v2/preview/AssetMetadataPanel.tsx",
-      ),
-    ],
-  },
   {
     id: 5,
     name: "Store Slice Methods",
@@ -272,22 +148,22 @@ const PRIORITY_GROUPS: PriorityGroup[] = [
       { kind: "store-method", slice: "workspaceSlice", name: "moveTabToPane" },
       { kind: "store-method", slice: "workspaceSlice", name: "pruneGhostTabs" },
 
-      // uiSlice — bottom panel + search/replace + command palette
-      { kind: "store-method", slice: "uiSlice", name: "toggleBottomPanel" },
-      { kind: "store-method", slice: "uiSlice", name: "setBottomPanelTab" },
-      { kind: "store-method", slice: "uiSlice", name: "setBottomPanelHeight" },
-      { kind: "store-method", slice: "uiSlice", name: "setLastExecutionOutput" },
-      { kind: "store-method", slice: "uiSlice", name: "setLastExecutionSettingsHref" },
-      { kind: "store-method", slice: "uiSlice", name: "setStdinInputText" },
-      { kind: "store-method", slice: "uiSlice", name: "setProblems" },
-      { kind: "store-method", slice: "uiSlice", name: "clearProblems" },
-      { kind: "store-method", slice: "uiSlice", name: "applyQuickFix" },
-      { kind: "store-method", slice: "uiSlice", name: "pushCommandToHistory" },
-      { kind: "store-method", slice: "uiSlice", name: "setSidebarWidth" },
-      { kind: "store-method", slice: "uiSlice", name: "toggleZenMode" },
-      { kind: "store-method", slice: "uiSlice", name: "setSearchReplaceOpen" },
-      { kind: "store-method", slice: "uiSlice", name: "setCommandPaletteOpen" },
-      { kind: "store-method", slice: "uiSlice", name: "setOutputFilterMode" },
+      // workspaceSlice — bottom panel + search/replace + command palette
+      { kind: "store-method", slice: "workspaceSlice", name: "toggleBottomPanel" },
+      { kind: "store-method", slice: "workspaceSlice", name: "setBottomPanelTab" },
+      { kind: "store-method", slice: "workspaceSlice", name: "setBottomPanelHeight" },
+      { kind: "store-method", slice: "workspaceSlice", name: "setLastExecutionOutput" },
+      { kind: "store-method", slice: "workspaceSlice", name: "setLastExecutionSettingsHref" },
+      { kind: "store-method", slice: "workspaceSlice", name: "setStdinInputText" },
+      { kind: "store-method", slice: "workspaceSlice", name: "setProblems" },
+      { kind: "store-method", slice: "workspaceSlice", name: "clearProblems" },
+      { kind: "store-method", slice: "workspaceSlice", name: "applyQuickFix" },
+      { kind: "store-method", slice: "workspaceSlice", name: "pushCommandToHistory" },
+      { kind: "store-method", slice: "workspaceSlice", name: "setSidebarWidth" },
+      { kind: "store-method", slice: "workspaceSlice", name: "toggleZenMode" },
+      { kind: "store-method", slice: "workspaceSlice", name: "setSearchReplaceOpen" },
+      { kind: "store-method", slice: "workspaceSlice", name: "setCommandPaletteOpen" },
+      { kind: "store-method", slice: "workspaceSlice", name: "setOutputFilterMode" },
 
       // explorerSlice — saved views
       { kind: "store-method", slice: "explorerSlice", name: "saveCurrentView" },
@@ -300,9 +176,9 @@ const PRIORITY_GROUPS: PriorityGroup[] = [
       { kind: "store-method", slice: "editorSlice", name: "requestScrollTo" },
       { kind: "store-method", slice: "editorSlice", name: "clearScrollRequest" },
 
-      // locksSlice — writes only; reads stay
-      { kind: "store-method", slice: "locksSlice", name: "setLock" },
-      { kind: "store-method", slice: "locksSlice", name: "clearLock" },
+      // editorSlice — locks/events live with editor state
+      { kind: "store-method", slice: "editorSlice", name: "setLock" },
+      { kind: "store-method", slice: "editorSlice", name: "clearLock" },
 
       // gitSlice — sync/commit/branches/lastSync/clearState
       { kind: "store-method", slice: "gitSlice", name: "setGitSyncStatus" },
@@ -565,7 +441,7 @@ function fileImportsWorkspaceStore(relFile: string): boolean {
 // ---------------------------------------------------------------------------
 
 function auditFileTarget(target: FileTarget, tool: SearchTool): TargetReport {
-  // Search the `@/...` alias (e.g. `@/lib/runner/backend`). Consumers almost
+  // Search the `@/...` alias. Consumers almost
   // always import via the alias; bare relative imports land in sibling files
   // which are themselves priority-3 deletions and therefore allowed-self.
   // Path-shaped queries use fixed-string matching (no word boundary).
@@ -593,10 +469,8 @@ function auditFileTarget(target: FileTarget, tool: SearchTool): TargetReport {
  */
 const SLICE_PATHS: Record<string, string> = {
   workspaceSlice: "src/stores/files/workspaceSlice.ts",
-  uiSlice: "src/stores/files/uiSlice.ts",
   explorerSlice: "src/stores/files/explorerSlice.ts",
   editorSlice: "src/stores/files/editorSlice.ts",
-  locksSlice: "src/stores/files/locksSlice.ts",
   gitSlice: "src/stores/files/gitSlice.ts",
 };
 
@@ -705,11 +579,11 @@ test("removal-audit: catalogs references for every to-be-deleted module and stor
     `unexpected searchTool: ${tool}`,
   );
 
-  // Every priority group from design § Removal Plan is represented.
+  // Every remaining priority group from the removal plan is represented.
   assert.deepEqual(
     priorityReports.map((g) => g.id),
-    [1, 2, 3, 4, 5],
-    "all 5 Removal Plan priorities must appear in the audit report",
+    PRIORITY_GROUPS.map((g) => g.id),
+    "all configured Removal Plan priorities must appear in the audit report",
   );
 
   // Every file in the SELF_DELETION_FILES set exists in one of the file
