@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, useMemo } from "react";
 import dynamic from "next/dynamic";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { ProjectAnalyticsTabId } from "@/lib/projects/analytics";
-import { useProjectAnalyticsMembers, useProjectAnalyticsOverview } from "@/hooks/hub/useProjectAnalyticsData";
+import { useProjectAnalyticsOverview } from "@/hooks/hub/useProjectAnalyticsData";
 import {
     ANALYTICS_DATE_RANGE_OPTIONS,
     ANALYTICS_TAB_COPY,
@@ -12,7 +12,6 @@ import {
     AnalyticsLoadingState,
     AnalyticsShellCard,
     defaultAnalyticsContext,
-    isAnalyticsContextDefault,
 } from "@/components/projects/analytics/AnalyticsShared";
 
 const AnalyticsMembers = dynamic(
@@ -87,26 +86,15 @@ export default function AnalyticsTab({ projectId, project }: AnalyticsTabProps) 
         setSelectedMemberId(currentSelectedMemberFromUrl);
     }, [currentSelectedMemberFromUrl]);
 
-    const [context, setContext] = useState(() => {
-        return {
+    const context = useMemo(
+        () => ({
             memberId: initialContextMember,
             source: initialSource && isAnalyticsSource(initialSource) ? initialSource : defaultAnalyticsContext.source,
             dateRange: initialDateRange && isAnalyticsDateRange(initialDateRange) ? initialDateRange : defaultAnalyticsContext.dateRange,
-        };
-    });
-    const [memberFilterOpen, setMemberFilterOpen] = useState(true);
-    const overviewQuery = useProjectAnalyticsOverview(projectId, context);
-    const membersQuery = useProjectAnalyticsMembers(projectId, null, memberFilterOpen);
-    const selectedContextMember = membersQuery.data?.find((member) => member.person.id === context.memberId) ?? null;
-
-    // Resolve selectedMemberId (username or UUID) to actual UUID for query
-    const resolvedMemberId = useMemo(() => {
-        if (!selectedMemberId) return null;
-        const found = membersQuery.data?.find(
-            (m) => m.person.username === selectedMemberId || m.person.id === selectedMemberId
-        );
-        return found?.person.id ?? selectedMemberId;
-    }, [selectedMemberId, membersQuery.data]);
+        }),
+        [initialContextMember, initialDateRange, initialSource],
+    );
+    const overviewQuery = useProjectAnalyticsOverview(projectId, context, activeTab === "overview");
 
     useEffect(() => {
         const params = new URLSearchParams(searchParams.toString());
@@ -141,20 +129,20 @@ export default function AnalyticsTab({ projectId, project }: AnalyticsTabProps) 
                     </AnalyticsShellCard>
                 );
             }
-            return <AnalyticsOverview overview={overviewQuery.data} context={context} memberName={selectedContextMember?.person.name ?? null} />;
+            return <AnalyticsOverview overview={overviewQuery.data} context={context} memberName={null} />;
         }
         if (activeTab === "members") {
             return (
                 <AnalyticsMembers
                     projectId={projectId}
                     context={context}
-                    selectedMemberId={resolvedMemberId}
+                    selectedMemberId={selectedMemberId}
                     onSelectMember={(idOrUsername) => setSelectedMemberId(idOrUsername)}
                     onBack={() => setSelectedMemberId(null)}
                 />
             );
         }
-        return <AnalyticsTimeline projectId={projectId} context={context} onContextChange={setContext} />;
+        return <AnalyticsTimeline projectId={projectId} context={context} />;
     };
 
     return (
