@@ -3,10 +3,11 @@
 import Link from "next/link";
 import { Sparkles } from "lucide-react";
 
-export default function Logo() {
+export default function Logo({ href = "/" }: { href?: string }) {
     return (
         <Link
-            href="/"
+            href={href}
+            prefetch={false}
             className="flex items-center gap-2 group"
             aria-label="Navigate to home"
         >
