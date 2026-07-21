@@ -3,6 +3,7 @@ import { onboardingError, type OnboardingError } from '@/lib/onboarding/errors'
 import { logger } from '@/lib/logger'
 import { getUsernameAvailability } from '@/lib/usernames/service'
 import { normalizeUsername } from '@/lib/validations/username'
+import { positiveIntegerOr } from '@/lib/utils/number'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
 export type UsernameAvailabilityResult = {
@@ -13,23 +14,17 @@ export type UsernameAvailabilityResult = {
     error?: OnboardingError
 }
 
-function parsePositiveInt(value: string | undefined, fallback: number) {
-    const parsed = Number(value)
-    if (!Number.isFinite(parsed) || parsed <= 0) return fallback
-    return Math.floor(parsed)
-}
-
 export function getUsernameCheckRateLimitConfig() {
     return {
-        limit: parsePositiveInt(process.env.ONBOARDING_USERNAME_CHECK_LIMIT, 30),
-        windowSeconds: parsePositiveInt(process.env.ONBOARDING_USERNAME_CHECK_WINDOW_SECONDS, 60),
-        ipLimit: parsePositiveInt(process.env.ONBOARDING_USERNAME_CHECK_IP_LIMIT, 80),
-        fingerprintLimit: parsePositiveInt(process.env.ONBOARDING_USERNAME_CHECK_FINGERPRINT_LIMIT, 50),
+        limit: positiveIntegerOr(process.env.ONBOARDING_USERNAME_CHECK_LIMIT, 30),
+        windowSeconds: positiveIntegerOr(process.env.ONBOARDING_USERNAME_CHECK_WINDOW_SECONDS, 60),
+        ipLimit: positiveIntegerOr(process.env.ONBOARDING_USERNAME_CHECK_IP_LIMIT, 80),
+        fingerprintLimit: positiveIntegerOr(process.env.ONBOARDING_USERNAME_CHECK_FINGERPRINT_LIMIT, 50),
         // SEC-H2: anonymous users get a much tighter daily enumeration cap so a
         // patient attacker cannot chew through tens of thousands of usernames
         // over a 24 h window by staying within the per-minute limits.
-        anonDailyLimit: parsePositiveInt(process.env.ONBOARDING_USERNAME_CHECK_ANON_DAILY_LIMIT, 500),
-        anonDailyWindowSeconds: parsePositiveInt(
+        anonDailyLimit: positiveIntegerOr(process.env.ONBOARDING_USERNAME_CHECK_ANON_DAILY_LIMIT, 500),
+        anonDailyWindowSeconds: positiveIntegerOr(
             process.env.ONBOARDING_USERNAME_CHECK_ANON_DAILY_WINDOW_SECONDS,
             24 * 60 * 60,
         ),
