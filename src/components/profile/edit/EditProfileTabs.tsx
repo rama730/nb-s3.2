@@ -1,22 +1,38 @@
 "use client";
 
-import { useState } from "react";
+import { toast } from "sonner";
+import { useId, useState } from "react";
 import Image from "next/image";
-import { Loader2, Camera, Plus, X, Trash2, CheckCircle2, AlertTriangle, Briefcase, Calendar, Link as LinkIcon, Code, Github } from "lucide-react";
-import { motion, AnimatePresence } from "framer-motion";
+import dynamic from "next/dynamic";
+import { Loader2, Camera, Plus, X, Trash2, CheckCircle2, AlertTriangle, Briefcase, Calendar, Link as LinkIcon, Code, Github, ChevronDown } from "lucide-react";
 import { createProfileImageUploadUrlAction, finalizeProfileImageUploadAction } from "@/app/actions/profile";
-import { useToast } from "@/components/ui-custom/Toast";
-import Input from "@/components/ui-custom/Input";
-import { Label } from "@/components/ui-custom/Label";
-import Button from "@/components/ui-custom/Button";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { sanitizeUsernameInput } from "@/lib/validations/username";
 import { useUsernameAvailability } from "@/hooks/useUsernameAvailability";
 import { PROFILE_LIMITS } from "@/lib/validations/profile";
 import { uploadToSupabaseSignedUrl } from "@/lib/upload/supabase-signed-upload-client";
+import {
+    EXPERIENCE_LEVEL_OPTIONS,
+    ROLE_PREFERENCE_OPTIONS,
+    WEEKLY_CAPACITY_OPTIONS,
+    getRolePreferences,
+    replaceRolePreferences,
+} from "@/lib/profile/role-preferences";
+import {
+    contributionEntryChanged,
+    createExternalContributionDraft,
+    type ContributionEditorEntry,
+} from "@/lib/profile/contribution-editor";
 
-export type EditProfileSection = "general" | "experience" | "education" | "skills" | "social";
+const SkillPicker = dynamic(() => import("@/components/skills/SkillPicker").then((mod) => mod.SkillPicker), {
+    ssr: false,
+    loading: () => <div className="h-24 rounded-xl bg-zinc-100 dark:bg-zinc-900" />,
+});
+
+export type EditProfileSection = "general" | "experience" | "education" | "skills" | "social" | "opportunity";
 
 interface EditProfileTabsProps {
     profile: any;
@@ -24,7 +40,12 @@ interface EditProfileTabsProps {
     section: EditProfileSection;
     onSectionChange: (section: EditProfileSection) => void;
     onChange: (updates: any) => void;
-    projects?: any[];
+    contributionErrors?: Record<string, string>;
+    contributionsSaving?: boolean;
+    contributionsLoadingMore?: boolean;
+    contributionHasMore?: boolean;
+    contributionTotal?: number;
+    onLoadMoreContributions?: () => void;
 }
 
 export function EditProfileTabs({
@@ -33,11 +54,14 @@ export function EditProfileTabs({
     section,
     onSectionChange,
     onChange,
-    projects = [],
+    contributionErrors = {},
+    contributionsSaving = false,
+    contributionsLoadingMore = false,
+    contributionHasMore = false,
+    contributionTotal = 0,
+    onLoadMoreContributions,
 }: EditProfileTabsProps) {
-    const { showToast } = useToast();
     const [avatarUploading, setAvatarUploading] = useState(false);
-    const [bannerUploading, setBannerUploading] = useState(false);
 
     const { status: usernameStatus, message: usernameMessage } = useUsernameAvailability({
         value: profile.username,
@@ -49,21 +73,17 @@ export function EditProfileTabs({
         onChange({ ...profile, [key]: value });
     };
 
-    const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>, type: "avatar" | "banner") => {
+    const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file) return;
 
-        if (type === "avatar") {
-            setAvatarUploading(true);
-        } else {
-            setBannerUploading(true);
-        }
+        setAvatarUploading(true);
 
         try {
             const uploadSession = await createProfileImageUploadUrlAction({
                 mimeType: file.type || "application/octet-stream",
                 sizeBytes: file.size,
-                kind: type,
+                kind: "avatar",
             });
             if (!uploadSession.success) {
                 throw new Error(uploadSession.error || "Failed to prepare image upload");
@@ -79,17 +99,13 @@ export function EditProfileTabs({
             }
 
             const cacheBustedUrl = `${finalized.publicUrl}?t=${Date.now()}`;
-            updateForm(type === "avatar" ? "avatarUrl" : "bannerUrl", cacheBustedUrl);
-            showToast(`${type === "avatar" ? "Avatar" : "Banner"} updated`, "success");
+            updateForm("avatarUrl", cacheBustedUrl);
+            toast.success("Avatar updated");
         } catch (error: any) {
             const message = error?.message || "Unknown error";
-            showToast(`Failed to upload ${type}: ${message}`, "error");
+            toast.error(`Failed to upload avatar: ${message}`);
         } finally {
-            if (type === "avatar") {
-                setAvatarUploading(false);
-            } else {
-                setBannerUploading(false);
-            }
+            setAvatarUploading(false);
         }
     };
 
@@ -118,6 +134,9 @@ export function EditProfileTabs({
                     <TabsTrigger value="social" className="w-full justify-start px-3 py-2 text-sm font-medium data-[state=active]:bg-zinc-100 dark:data-[state=active]:bg-zinc-800 data-[state=active]:shadow-none rounded-lg text-zinc-600 data-[state=active]:text-zinc-900 dark:text-zinc-400 dark:data-[state=active]:text-zinc-100">
                         Social Presence
                     </TabsTrigger>
+                    <TabsTrigger value="opportunity" className="w-full justify-start px-3 py-2 text-sm font-medium data-[state=active]:bg-zinc-100 dark:data-[state=active]:bg-zinc-800 data-[state=active]:shadow-none rounded-lg text-zinc-600 data-[state=active]:text-zinc-900 dark:text-zinc-400 dark:data-[state=active]:text-zinc-100">
+                        Role Preferences
+                    </TabsTrigger>
                 </TabsList>
             </div>
 
@@ -139,7 +158,7 @@ export function EditProfileTabs({
                                         <label className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex flex-col items-center justify-center cursor-pointer transition-opacity text-white">
                                             {avatarUploading ? <Loader2 className="w-6 h-6 animate-spin mb-1" /> : <Camera className="w-6 h-6 mb-1" />}
                                             <span className="text-xs font-medium">{avatarUploading ? "Uploading..." : "Change"}</span>
-                                            <input type="file" accept="image/*" className="hidden" onChange={(e) => handleImageUpload(e, "avatar")} disabled={avatarUploading} />
+                                            <input type="file" accept="image/*" className="hidden" onChange={handleImageUpload} disabled={avatarUploading} />
                                         </label>
                                     </div>
                                     <div className="flex flex-col">
@@ -152,7 +171,7 @@ export function EditProfileTabs({
                             <div className="grid gap-6">
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                     <div>
-                                        <Label htmlFor="profile-full-name">Full Name</Label>
+                                        <label htmlFor="profile-full-name" className="text-sm font-medium leading-none">Full Name</label>
                                         <Input
                                             id="profile-full-name"
                                             name="fullName"
@@ -165,7 +184,7 @@ export function EditProfileTabs({
                                         />
                                     </div>
                                     <div>
-                                        <Label htmlFor="profile-username">Username</Label>
+                                        <label htmlFor="profile-username" className="text-sm font-medium leading-none">Username</label>
                                         <div className="relative mt-1.5">
                                             <Input
                                                 id="profile-username"
@@ -177,8 +196,8 @@ export function EditProfileTabs({
                                                 value={profile.username ?? ""}
                                                 onChange={handleUsernameChange}
                                                 className={cn(
-                                                    usernameStatus === "invalid" && "border-red-500 focus:ring-red-500",
-                                                    usernameStatus === "valid" && "border-green-500 focus:ring-green-500",
+                                                    usernameStatus === "invalid" && "border-red-500 ",
+                                                    usernameStatus === "valid" && "border-green-500 ",
                                                 )}
                                             />
                                             {usernameStatus === "checking" ? (
@@ -218,7 +237,7 @@ export function EditProfileTabs({
                                 </div>
 
                                 <div>
-                                    <Label htmlFor="profile-headline">Headline</Label>
+                                    <label htmlFor="profile-headline" className="text-sm font-medium leading-none">Headline</label>
                                         <Input
                                             id="profile-headline"
                                             name="headline"
@@ -231,21 +250,21 @@ export function EditProfileTabs({
                                 </div>
 
                                 <div>
-                                    <Label htmlFor="profile-bio">Bio</Label>
+                                    <label htmlFor="profile-bio" className="text-sm font-medium leading-none">Bio</label>
                                         <textarea
                                             id="profile-bio"
                                             name="bio"
                                             maxLength={PROFILE_LIMITS.bioMax}
                                             value={profile.bio ?? ""}
                                             onChange={(e) => updateForm("bio", e.target.value)}
-                                            className="w-full mt-1.5 min-h-[100px] rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500"
+                                            className="w-full mt-1.5 min-h-[100px] rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent px-3 py-2 text-sm outline-none  "
                                             placeholder="Tell your story..."
                                     />
                                 </div>
 
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                     <div>
-                                        <Label htmlFor="profile-location" className="text-zinc-600 dark:text-zinc-400">Location</Label>
+                                        <label htmlFor="profile-location" className="text-zinc-600 dark:text-zinc-400">Location</label>
                                         <Input
                                             id="profile-location"
                                             name="location"
@@ -257,7 +276,7 @@ export function EditProfileTabs({
                                         />
                                     </div>
                                     <div>
-                                        <Label htmlFor="profile-website" className="text-zinc-600 dark:text-zinc-400">Website</Label>
+                                        <label htmlFor="profile-website" className="text-zinc-600 dark:text-zinc-400">Website</label>
                                         <Input
                                             id="profile-website"
                                             name="website"
@@ -272,26 +291,6 @@ export function EditProfileTabs({
                                     </div>
                                 </div>
 
-                                <div>
-                                    <Label className="text-zinc-600 dark:text-zinc-400">Availability Status</Label>
-                                    <div className="flex flex-wrap gap-2 mt-2">
-                                        {["available", "busy", "focusing", "offline"].map((status) => (
-                                            <button
-                                                key={status}
-                                                type="button"
-                                                onClick={() => updateForm("availabilityStatus", status)}
-                                                className={cn(
-                                                    "px-3 py-1.5 rounded-full text-xs font-medium border transition-colors",
-                                                    profile.availabilityStatus === status
-                                                        ? "bg-indigo-50 border-indigo-200 text-indigo-700 dark:bg-indigo-900/30 dark:border-indigo-800 dark:text-indigo-300"
-                                                        : "bg-white border-zinc-200 text-zinc-600 hover:bg-zinc-50 dark:bg-zinc-900 dark:border-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-800",
-                                                )}
-                                            >
-                                                {status.charAt(0).toUpperCase() + status.slice(1)}
-                                            </button>
-                                        ))}
-                                    </div>
-                                </div>
                             </div>
                         </div>
                     </TabsContent>
@@ -300,13 +299,14 @@ export function EditProfileTabs({
                         <h2 className="text-xl font-semibold text-zinc-900 dark:text-white">Project Contributions</h2>
                         <ProjectContributionsList
                             items={profile.experience ?? []}
+                            originalItems={profile.contributionBase ?? []}
                             onChange={(items) => updateForm("experience", items)}
-                            projects={projects}
-                            profile={profile}
-                            onTechStackAdd={(tags) => {
-                                const newSkills = [...new Set([...(profile.skills || []), ...tags])];
-                                updateForm("skills", newSkills);
-                            }}
+                            errors={contributionErrors}
+                            saving={contributionsSaving}
+                            loadingMore={contributionsLoadingMore}
+                            hasMore={contributionHasMore}
+                            total={contributionTotal}
+                            onLoadMore={onLoadMoreContributions}
                         />
                     </TabsContent>
 
@@ -327,304 +327,401 @@ export function EditProfileTabs({
                             onChange={(links) => updateForm("socialLinks", links)}
                         />
                     </TabsContent>
+
+                    <TabsContent value="opportunity" className="space-y-6 mt-0">
+                        <h2 className="text-xl font-semibold text-zinc-900 dark:text-white">Role Preferences</h2>
+                        <RolePreferencesEditor profile={profile} onChange={onChange} />
+                    </TabsContent>
                 </div>
             </div>
         </Tabs>
     );
 }
 
-function ProjectContributionsList({ items, onChange, projects = [], profile, onTechStackAdd }: { items: any[]; onChange: (items: any[]) => void; projects?: any[]; profile?: any; onTechStackAdd?: (tags: string[]) => void }) {
-    const handleAdd = (isPlatform: boolean) => {
-        onChange([...items, {
-            id: crypto.randomUUID(),
-            company: "",
-            title: "",
-            startDate: "",
-            endDate: "",
-            projectUrl: "",
-            repoUrl: "",
-            techTags: "",
-            description: "",
-            currentlyActive: false,
-            isPlatform
-        }]);
-    };
+function RolePreferencesEditor({ profile, onChange }: { profile: any; onChange: (updates: any) => void }) {
+    const selectedRoles = new Set(getRolePreferences(profile.openTo))
+    const hasPreferences = selectedRoles.size > 0 || Boolean(profile.experienceLevel) || Boolean(profile.hoursPerWeek) || (profile.openToCustomRoles && profile.openToCustomRoles.length > 0) || (profile.preferredCategories && profile.preferredCategories.length > 0)
+    const [customRoleInput, setCustomRoleInput] = useState("");
 
-    const updateItem = (index: number, updates: any) => {
-        const next = [...items];
-        next[index] = { ...next[index], ...updates };
-        
-        // If updating tech tags, we can extract them
-        if (updates.techTags && typeof updates.techTags === 'string') {
-            const parsedTags = updates.techTags.split(",").map((s: string) => s.trim()).filter(Boolean);
-            if (parsedTags.length > 0 && onTechStackAdd) {
-                onTechStackAdd(parsedTags);
-            }
+    const toggleRole = (role: string) => {
+        const next = new Set(selectedRoles)
+        if (next.has(role as any)) next.delete(role as any)
+        else next.add(role as any)
+        onChange({
+            ...profile,
+            openTo: replaceRolePreferences(profile.openTo, [...next]),
+        })
+    }
+
+    const customRoles = profile.openToCustomRoles || [];
+    const categories = profile.preferredCategories || [];
+
+    const handleAddCustomRole = () => {
+        const trimmed = customRoleInput.trim();
+        if (trimmed && !customRoles.includes(trimmed)) {
+            onChange({
+                ...profile,
+                openToCustomRoles: [...customRoles, trimmed],
+            });
         }
-        
-        onChange(next);
+        setCustomRoleInput("");
     };
 
-    const handleDelete = (index: number) => {
-        const next = [...items];
-        next.splice(index, 1);
-        onChange(next);
+    const handleRemoveCustomRole = (role: string) => {
+        onChange({
+            ...profile,
+            openToCustomRoles: customRoles.filter((r: string) => r !== role),
+        });
     };
+
+    const toggleCategory = (category: string) => {
+        const next = new Set(categories);
+        if (next.has(category)) {
+            next.delete(category);
+        } else {
+            next.add(category);
+        }
+        onChange({
+            ...profile,
+            preferredCategories: [...next],
+        });
+    };
+
+    const ROLE_CATEGORIES = ["Engineering", "Design", "Product", "Growth"] as const;
 
     return (
-        <div className="space-y-10">
-            <div className="flex justify-between items-center">
-                <h3 className="text-sm font-medium text-zinc-900 dark:text-zinc-100">Your Contributions</h3>
-                <div className="flex gap-2">
-                    <Button type="button" variant="outline" size="sm" onClick={() => handleAdd(true)}>
-                        <Plus className="w-4 h-4 mr-1" /> Add Platform Project
-                    </Button>
-                    <Button type="button" variant="ghost" size="sm" onClick={() => handleAdd(false)}>
-                        Add External Project
-                    </Button>
+        <section aria-labelledby="role-preferences-heading" className="space-y-6">
+            <div>
+                <p className="text-sm text-zinc-500 dark:text-zinc-400">
+                    Define the custom roles, commitment levels, and categories visitors should see on your builder profile.
+                </p>
+            </div>
+
+            <div className="space-y-3">
+                <label className="text-zinc-700 dark:text-zinc-300 font-medium">Standard Availability Type</label>
+                <div className="flex flex-wrap gap-2" role="group" aria-label="Role types">
+                    {ROLE_PREFERENCE_OPTIONS.map((option) => {
+                        const selected = selectedRoles.has(option.value)
+                        return (
+                            <button
+                                key={option.value}
+                                type="button"
+                                aria-pressed={selected}
+                                onClick={() => toggleRole(option.value)}
+                                className={cn(
+                                    "rounded-full border px-3 py-1.5 text-xs font-medium transition-colors",
+                                    selected
+                                        ? "border-indigo-200 bg-indigo-50 text-indigo-700 dark:border-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-300"
+                                        : "border-zinc-200 bg-white text-zinc-600 hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800",
+                                )}
+                            >
+                                {option.label}
+                            </button>
+                        )
+                    })}
                 </div>
             </div>
 
-            <div className="space-y-12">
-                {items.map((item, index) => {
-                    const checkboxId = `experience-current-${item.id || index}`;
-                    
+            <div className="space-y-3">
+                <label className="text-zinc-700 dark:text-zinc-300 font-medium">Role Categories</label>
+                <div className="flex flex-wrap gap-2" role="group" aria-label="Role categories">
+                    {ROLE_CATEGORIES.map((category) => {
+                        const selected = categories.includes(category);
+                        return (
+                            <button
+                                key={category}
+                                type="button"
+                                aria-pressed={selected}
+                                onClick={() => toggleCategory(category)}
+                                className={cn(
+                                    "rounded-full border px-3 py-1.5 text-xs font-medium transition-colors",
+                                    selected
+                                        ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300"
+                                        : "border-zinc-200 bg-white text-zinc-600 hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800",
+                                )}
+                            >
+                                {category}
+                            </button>
+                        );
+                    })}
+                </div>
+            </div>
+
+            <div className="space-y-3">
+                <label className="text-zinc-700 dark:text-zinc-300 font-medium">Custom Role Desired Titles</label>
+                <div className="flex gap-2">
+                    <Input
+                        value={customRoleInput}
+                        onChange={(e) => setCustomRoleInput(e.target.value)}
+                        placeholder="e.g. Next.js Developer, Rust Dev"
+                        onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                                e.preventDefault();
+                                handleAddCustomRole();
+                            }
+                        }}
+                        className="flex-1"
+                    />
+                    <Button type="button" onClick={handleAddCustomRole}>Add</Button>
+                </div>
+                {customRoles.length > 0 && (
+                    <div className="flex flex-wrap gap-2 pt-1">
+                        {customRoles.map((role: string) => (
+                            <span
+                                key={role}
+                                className="inline-flex items-center gap-1.5 rounded-full bg-zinc-100 px-3 py-1 text-xs font-medium text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700"
+                            >
+                                {role}
+                                <button
+                                    type="button"
+                                    onClick={() => handleRemoveCustomRole(role)}
+                                    className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
+                                >
+                                    <X className="h-3 w-3" />
+                                </button>
+                            </span>
+                        ))}
+                    </div>
+                )}
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+                <label className="space-y-2 text-sm text-zinc-600 dark:text-zinc-400">
+                    <span>Experience level</span>
+                    <select
+                        value={profile.experienceLevel ?? ''}
+                        onChange={(event) => onChange({ ...profile, experienceLevel: event.target.value || null })}
+                        className="h-10 w-full rounded-xl border border-zinc-200 bg-white px-3 text-sm text-zinc-900 outline-none   dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-100"
+                    >
+                        <option value="">Not specified</option>
+                        {EXPERIENCE_LEVEL_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                    </select>
+                </label>
+                <label className="space-y-2 text-sm text-zinc-600 dark:text-zinc-400">
+                    <span>Weekly capacity</span>
+                    <select
+                        value={profile.hoursPerWeek ?? ''}
+                        onChange={(event) => onChange({ ...profile, hoursPerWeek: event.target.value || null })}
+                        className="h-10 w-full rounded-xl border border-zinc-200 bg-white px-3 text-sm text-zinc-900 outline-none   dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-100"
+                    >
+                        <option value="">Not specified</option>
+                        {WEEKLY_CAPACITY_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                    </select>
+                </label>
+            </div>
+
+            {hasPreferences ? (
+                <button
+                    type="button"
+                    onClick={() => onChange({
+                        ...profile,
+                        openTo: replaceRolePreferences(profile.openTo, []),
+                        openToCustomRoles: [],
+                        preferredCategories: [],
+                        experienceLevel: null,
+                        hoursPerWeek: null,
+                    })}
+                    className="text-sm font-medium text-zinc-500 hover:text-rose-600 dark:text-zinc-400 dark:hover:text-rose-400"
+                >
+                    Clear role preferences
+                </button>
+            ) : null}
+        </section>
+    )
+}
+
+function ProjectContributionsList({
+    items = [],
+    originalItems = [],
+    onChange,
+    errors = {},
+    saving = false,
+    loadingMore = false,
+    hasMore = false,
+    total = 0,
+    onLoadMore,
+}: {
+    items: ContributionEditorEntry[];
+    originalItems: ContributionEditorEntry[];
+    onChange: (items: ContributionEditorEntry[]) => void;
+    errors?: Record<string, string>;
+    saving?: boolean;
+    loadingMore?: boolean;
+    hasMore?: boolean;
+    total?: number;
+    onLoadMore?: () => void;
+}) {
+    const [expandedKey, setExpandedKey] = useState<string | null>(null);
+    const accordionId = useId().replace(/:/g, "");
+    const originalById = new Map(originalItems.map((item) => [item.draftId, item]));
+
+    const updateItem = (draftId: string, updates: Partial<ContributionEditorEntry>) => {
+        onChange(items.map((item) => item.draftId === draftId ? { ...item, ...updates } : item));
+    };
+
+    const handleAddExternal = () => {
+        const draft = createExternalContributionDraft();
+        onChange([...items, draft]);
+        setExpandedKey(draft.draftId);
+    };
+
+    const handleDeleteExternal = (draftId: string) => {
+        onChange(items.filter((item) => item.draftId !== draftId));
+        setExpandedKey((current) => current === draftId ? null : current);
+    };
+
+    return (
+        <div className="space-y-6">
+            <div className="flex items-center justify-between gap-4">
+                <div>
+                    <h3 className="text-sm font-medium text-zinc-900 dark:text-zinc-100">Your contributions</h3>
+                    <p className="mt-1 text-xs text-zinc-500">
+                        Open one project at a time. Platform project names and roles come from the project team.
+                        {total > 0 ? ` Showing ${Math.min(items.length, total)} of ${total}.` : ""}
+                    </p>
+                </div>
+                <Button type="button" variant="outline" size="sm" onClick={handleAddExternal}>
+                    <Plus className="mr-1 h-4 w-4" /> Add external project
+                </Button>
+            </div>
+
+            {items.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-zinc-300 px-5 py-8 text-center dark:border-zinc-700">
+                    <p className="text-sm font-medium text-zinc-800 dark:text-zinc-200">No project contributions yet</p>
+                    <p className="mt-1 text-xs text-zinc-500">Platform contributions appear after you join a project. You can also add an external project.</p>
+                </div>
+            ) : null}
+
+            <div className="space-y-3">
+                {items.map((item) => {
+                    const isPublic = item.visibility === "public";
+                    const isExpanded = expandedKey === item.draftId;
+                    const panelId = `${accordionId}-contribution-${item.draftId}`;
+                    const isDirty = contributionEntryChanged(item, originalById.get(item.draftId));
+                    const itemError = errors[item.draftId];
                     return (
-                        <div key={item.id || index} className="space-y-5 relative">
-                            <div className="flex justify-between items-center pb-2 border-b border-zinc-200 dark:border-zinc-800">
-                                <h4 className="font-semibold text-zinc-900 dark:text-white">Project {index + 1}</h4>
-                                <Button type="button" variant="ghost" size="sm" onClick={() => handleDelete(index)} className="text-zinc-500 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 h-8 px-2">
-                                    <Trash2 className="w-4 h-4 mr-1.5" /> Remove
-                                </Button>
-                            </div>
+                        <div key={item.draftId} className="overflow-hidden rounded-2xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950/40">
+                            <button
+                                type="button"
+                                aria-expanded={isExpanded}
+                                aria-controls={panelId}
+                                onClick={() => setExpandedKey((current) => current === item.draftId ? null : item.draftId)}
+                                className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left transition-colors hover:bg-zinc-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-500 dark:hover:bg-zinc-900/60"
+                            >
+                                <span className="min-w-0">
+                                    <span className="block truncate font-semibold text-zinc-900 dark:text-white">{item.projectTitle || "Untitled external project"}</span>
+                                    <span className="mt-1 block truncate text-xs text-zinc-500">{item.roleTitle || "Role not specified"}</span>
+                                </span>
+                                <span className="flex shrink-0 items-center gap-2">
+                                    {itemError ? <span className="text-xs font-medium text-red-600 dark:text-red-400">Needs attention</span> : null}
+                                    {!itemError && saving && isDirty ? <span className="text-xs font-medium text-indigo-600 dark:text-indigo-400">Saving…</span> : null}
+                                    {!itemError && !saving && isDirty ? <span className="text-xs font-medium text-amber-600 dark:text-amber-400">Unsaved</span> : null}
+                                    {!isPublic ? <span className="text-xs text-zinc-500">Private</span> : null}
+                                    <ChevronDown className={`h-4 w-4 text-zinc-500 transition-transform ${isExpanded ? "rotate-180" : ""}`} aria-hidden="true" />
+                                </span>
+                            </button>
 
-                            {item.isPlatform && (
-                                <div className="bg-indigo-50/50 dark:bg-indigo-900/10 p-4 rounded-xl border border-indigo-100 dark:border-indigo-800/30">
-                                    <Label htmlFor={`proj-select-${index}`} className="text-indigo-700 dark:text-indigo-300 flex items-center gap-2 mb-2 font-semibold">
-                                        <Briefcase className="w-4 h-4" />
-                                        Link an Existing Platform Project
-                                    </Label>
-                                    <select
-                                        id={`proj-select-${index}`}
-                                        className="w-full h-11 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-950 px-3 text-sm outline-none focus:ring-2 focus:ring-indigo-500 transition-shadow"
-                                        value={item.projectId || ""}
-                                        onChange={(e) => {
-                                            const pid = e.target.value;
-                                            if (!pid) {
-                                                updateItem(index, { projectId: "" });
-                                                return;
-                                            }
-                                            const proj = projects?.find(p => p.id === pid);
-                                            if (proj) {
-                                                let startDateStr = "";
-                                                if (proj.joinedAt) {
-                                                    const d = new Date(proj.joinedAt);
-                                                    startDateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-                                                } else if (proj.createdAt) {
-                                                    const d = new Date(proj.createdAt);
-                                                    startDateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-                                                }
-                                                updateItem(index, {
-                                                    projectId: proj.id,
-                                                    company: proj.title || "",
-                                                    title: proj.userRole || "Contributor",
-                                                    startDate: startDateStr,
-                                                    projectUrl: proj.url || "",
-                                                    repoUrl: "",
-                                                    techTags: (proj.skills || []).join(", "),
-                                                });
-                                            }
-                                        }}
-                                    >
-                                        <option value="">-- Choose a project --</option>
-                                        {projects?.map(p => (
-                                            <option key={p.id} value={p.id}>{p.title}</option>
-                                        ))}
-                                    </select>
-                                </div>
-                            )}
+                            {isExpanded ? (
+                                <div id={panelId} className="space-y-5 border-t border-zinc-200 p-5 dark:border-zinc-800">
+                                    {itemError ? (
+                                        <p role="alert" aria-live="assertive" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">
+                                            {itemError}
+                                        </p>
+                                    ) : null}
+                                    {item.kind === "external" ? (
+                                        <div className="flex justify-end">
+                                            <Button type="button" variant="ghost" size="sm" onClick={() => handleDeleteExternal(item.draftId)} className="h-8 px-2 text-zinc-500 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-950/30">
+                                                <Trash2 className="mr-1.5 h-4 w-4" /> Remove
+                                            </Button>
+                                        </div>
+                                    ) : null}
 
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <div>
-                                    <Label htmlFor={`org-${index}`} className="flex items-center gap-1.5 text-zinc-600 dark:text-zinc-400">
-                                        <Briefcase className="w-3.5 h-3.5" /> Project Name
-                                    </Label>
-                                    <Input
-                                        id={`org-${index}`}
-                                        maxLength={80}
-                                        value={item.company || ""}
-                                        onChange={(e) => updateItem(index, { company: e.target.value })}
-                                        className="mt-1.5 bg-zinc-50 dark:bg-zinc-900 focus:bg-white dark:focus:bg-zinc-950 transition-colors h-10"
-                                        placeholder="e.g. Supabase, Vercel"
-                                    />
-                                </div>
-                                <div>
-                                    <Label htmlFor={`role-${index}`} className="flex items-center gap-1.5 text-zinc-600 dark:text-zinc-400">
-                                        <Code className="w-3.5 h-3.5" /> Your Role
-                                    </Label>
-                                    <Input
-                                        id={`role-${index}`}
-                                        maxLength={80}
-                                        value={item.title || ""}
-                                        onChange={(e) => updateItem(index, { title: e.target.value })}
-                                        className="mt-1.5 bg-zinc-50 dark:bg-zinc-900 focus:bg-white dark:focus:bg-zinc-950 transition-colors h-10"
-                                        placeholder="e.g. Core Maintainer, Creator"
-                                    />
-                                </div>
-                            </div>
-
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <div>
-                                    <Label htmlFor={`start-date-${index}`} className="flex items-center gap-1.5 text-zinc-600 dark:text-zinc-400">
-                                        <Calendar className="w-3.5 h-3.5" /> Start Date
-                                    </Label>
-                                    <Input
-                                        id={`start-date-${index}`}
-                                        type="date"
-                                        value={item.startDate || ""}
-                                        onChange={(e) => updateItem(index, { startDate: e.target.value })}
-                                        className="mt-1.5 bg-zinc-50 dark:bg-zinc-900 focus:bg-white dark:focus:bg-zinc-950 transition-colors h-10 text-zinc-900 dark:text-zinc-100"
-                                    />
-                                </div>
-                                <div>
-                                    <Label htmlFor={`end-date-${index}`} className="flex items-center gap-1.5 text-zinc-600 dark:text-zinc-400">
-                                        <Calendar className="w-3.5 h-3.5" /> End Date
-                                    </Label>
-                                    <div className="relative mt-1.5">
-                                        <Input
-                                            id={`end-date-${index}`}
-                                            type={item.currentlyActive ? "text" : "date"}
-                                            disabled={Boolean(item.currentlyActive)}
-                                            value={item.currentlyActive ? "Present" : (item.endDate || "")}
-                                            onChange={(e) => updateItem(index, { endDate: e.target.value })}
-                                            className={item.currentlyActive ? "h-10 text-emerald-600 font-medium bg-emerald-50 dark:bg-emerald-900/10 border-emerald-200 dark:border-emerald-800" : "h-10 bg-zinc-50 dark:bg-zinc-900 focus:bg-white dark:focus:bg-zinc-950 transition-colors text-zinc-900 dark:text-zinc-100"}
-                                        />
+                                    <div className="flex items-center justify-between rounded-xl border border-zinc-100 bg-zinc-50 p-4 dark:border-zinc-800/30 dark:bg-zinc-900/50">
+                                        <div className="space-y-0.5">
+                                            <span className="text-sm font-semibold text-zinc-900 dark:text-white">Show publicly on profile</span>
+                                            <p className="text-xs text-zinc-500">Off keeps this contribution visible only to you.</p>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            role="switch"
+                                            aria-checked={isPublic}
+                                            aria-label={`${isPublic ? "Hide" : "Show"} ${item.projectTitle || "project contribution"} on profile`}
+                                            onClick={() => updateItem(item.draftId, { visibility: isPublic ? "private" : "public" })}
+                                            className={`${isPublic ? "bg-indigo-600" : "bg-zinc-200 dark:bg-zinc-800"} relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent outline-none transition-colors focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2`}
+                                        >
+                                            <span aria-hidden="true" className={`${isPublic ? "translate-x-5" : "translate-x-0"} pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow transition`} />
+                                        </button>
                                     </div>
-                                    <div className="flex items-center gap-2 mt-2 ml-1">
-                                        <input
-                                            type="checkbox"
-                                            id={checkboxId}
-                                            checked={Boolean(item.currentlyActive)}
-                                            onChange={(e) => updateItem(index, {
-                                                currentlyActive: e.target.checked,
-                                                endDate: e.target.checked ? "" : item.endDate || "",
-                                            })}
-                                            className="w-4 h-4 rounded border-zinc-300 text-indigo-600 focus:ring-indigo-500"
-                                        />
-                                        <label htmlFor={checkboxId} className="text-xs font-medium text-zinc-600 dark:text-zinc-400 cursor-pointer">
-                                            I am currently working on this
-                                        </label>
+
+                                    {item.kind === "platform" ? (
+                                        <dl className="grid grid-cols-1 gap-4 rounded-xl bg-zinc-50 p-4 md:grid-cols-2 dark:bg-zinc-900/50">
+                                            <div><dt className="text-xs text-zinc-500">Project</dt><dd className="mt-1 text-sm font-medium text-zinc-900 dark:text-zinc-100">{item.projectTitle}</dd></div>
+                                            <div><dt className="text-xs text-zinc-500">Your role</dt><dd className="mt-1 text-sm font-medium text-zinc-900 dark:text-zinc-100">{item.roleTitle}</dd></div>
+                                        </dl>
+                                    ) : (
+                                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                            <div>
+                                                <label htmlFor={`${panelId}-project`} className="flex items-center gap-1.5 text-zinc-600 dark:text-zinc-400"><Briefcase className="h-3.5 w-3.5" /> Project name</label>
+                                                <Input id={`${panelId}-project`} maxLength={120} value={item.projectTitle} onChange={(event) => updateItem(item.draftId, { projectTitle: event.target.value })} className="mt-1.5 h-10" />
+                                            </div>
+                                            <div>
+                                                <label htmlFor={`${panelId}-role`} className="flex items-center gap-1.5 text-zinc-600 dark:text-zinc-400"><Code className="h-3.5 w-3.5" /> Your role</label>
+                                                <Input id={`${panelId}-role`} maxLength={120} value={item.roleTitle} onChange={(event) => updateItem(item.draftId, { roleTitle: event.target.value })} className="mt-1.5 h-10" />
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                        <div>
+                                            <label htmlFor={`${panelId}-start`} className="flex items-center gap-1.5 text-zinc-600 dark:text-zinc-400"><Calendar className="h-3.5 w-3.5" /> Joined</label>
+                                            <Input id={`${panelId}-start`} type="month" value={item.startedAt} onChange={(event) => updateItem(item.draftId, { startedAt: event.target.value })} className="mt-1.5 h-10" />
+                                        </div>
+                                        <div>
+                                            <label htmlFor={`${panelId}-end`} className="flex items-center gap-1.5 text-zinc-600 dark:text-zinc-400"><Calendar className="h-3.5 w-3.5" /> Ended (optional)</label>
+                                            <Input id={`${panelId}-end`} type="month" value={item.endedAt} onChange={(event) => updateItem(item.draftId, { endedAt: event.target.value })} className="mt-1.5 h-10" />
+                                        </div>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                        {item.kind === "external" ? (
+                                            <div>
+                                                <label htmlFor={`${panelId}-url`} className="flex items-center gap-1.5 text-zinc-600 dark:text-zinc-400"><LinkIcon className="h-3.5 w-3.5" /> Project URL</label>
+                                                <Input id={`${panelId}-url`} type="url" value={item.projectUrl} onChange={(event) => updateItem(item.draftId, { projectUrl: event.target.value })} className="mt-1.5 h-10" placeholder="https://" />
+                                            </div>
+                                        ) : <div />}
+                                        <div>
+                                            <label htmlFor={`${panelId}-repo`} className="flex items-center gap-1.5 text-zinc-600 dark:text-zinc-400"><Github className="h-3.5 w-3.5" /> Repository URL</label>
+                                            <Input id={`${panelId}-repo`} type="url" value={item.repositoryUrl} onChange={(event) => updateItem(item.draftId, { repositoryUrl: event.target.value })} className="mt-1.5 h-10" placeholder="https://github.com/..." />
+                                        </div>
+                                    </div>
+
+                                    <SkillPicker value={item.skills} onChange={(skills) => updateItem(item.draftId, { skills })} maxSkills={20} label="Skills & tools" description="Choose the skills demonstrated in this contribution." placeholder="Search skills" />
+
+                                    <div>
+                                        <label htmlFor={`${panelId}-summary`} className="text-zinc-600 dark:text-zinc-400">Contribution summary</label>
+                                        <textarea id={`${panelId}-summary`} maxLength={2000} className="mt-1.5 min-h-[96px] w-full resize-none rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm outline-none focus:bg-white dark:border-zinc-800 dark:bg-zinc-900 dark:focus:bg-zinc-950" value={item.summary} onChange={(event) => updateItem(item.draftId, { summary: event.target.value })} placeholder="What did you build, improve, or lead?" />
                                     </div>
                                 </div>
-                            </div>
-
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <div>
-                                    <Label htmlFor={`proj-url-${index}`} className="flex items-center gap-1.5 text-zinc-600 dark:text-zinc-400">
-                                        <LinkIcon className="w-3.5 h-3.5" /> Project URL
-                                    </Label>
-                                    <Input
-                                        id={`proj-url-${index}`}
-                                        type={item.projectId ? "text" : "url"}
-                                        readOnly={!!item.projectId}
-                                        disabled={!!item.projectId}
-                                        value={item.projectUrl || ""}
-                                        onChange={(e) => updateItem(index, { projectUrl: e.target.value })}
-                                        className="mt-1.5 bg-zinc-50 dark:bg-zinc-900 focus:bg-white dark:focus:bg-zinc-950 transition-colors h-10 disabled:opacity-70 disabled:bg-zinc-100 dark:disabled:bg-zinc-800/50"
-                                        placeholder="https://"
-                                    />
-                                </div>
-                                <div>
-                                    <Label htmlFor={`repo-url-${index}`} className="flex items-center gap-1.5 text-zinc-600 dark:text-zinc-400">
-                                        <Github className="w-3.5 h-3.5" /> Repository URL
-                                    </Label>
-                                    <Input
-                                        id={`repo-url-${index}`}
-                                        type="url"
-                                        value={item.repoUrl || ""}
-                                        onChange={(e) => updateItem(index, { repoUrl: e.target.value })}
-                                        className="mt-1.5 bg-zinc-50 dark:bg-zinc-900 focus:bg-white dark:focus:bg-zinc-950 transition-colors h-10"
-                                        placeholder="https://github.com/..."
-                                    />
-                                </div>
-                            </div>
-
-                            <div>
-                                <Label htmlFor={`tech-tags-${index}`} className="flex items-center gap-1.5 text-zinc-600 dark:text-zinc-400">
-                                    <Code className="w-3.5 h-3.5" /> Tech Stack
-                                </Label>
-                                <Input
-                                    id={`tech-tags-${index}`}
-                                    value={typeof item.techTags === 'string' ? item.techTags : (item.techTags || []).join(', ')}
-                                    onChange={(e) => updateItem(index, { techTags: e.target.value })}
-                                    className="mt-1.5 bg-zinc-50 dark:bg-zinc-900 focus:bg-white dark:focus:bg-zinc-950 transition-colors h-10"
-                                    placeholder="React, TypeScript, Tailwind"
-                                />
-                                <p className="text-[11px] text-zinc-400 mt-1 ml-1">Comma separated</p>
-                            </div>
-
-                            <div>
-                                <Label htmlFor={`description-${index}`} className="text-zinc-600 dark:text-zinc-400">Description</Label>
-                                <textarea
-                                    id={`description-${index}`}
-                                    maxLength={500}
-                                    className="w-full mt-1.5 min-h-[80px] rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 focus:bg-white dark:focus:bg-zinc-950 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-indigo-500 transition-all resize-none"
-                                    value={item.description || ""}
-                                    onChange={(e) => updateItem(index, { description: e.target.value })}
-                                    placeholder="Briefly describe your contributions..."
-                                />
-                            </div>
+                            ) : null}
                         </div>
                     );
                 })}
             </div>
+
+            {hasMore && onLoadMore ? (
+                <div className="flex justify-center border-t border-zinc-200 pt-4 dark:border-zinc-800">
+                    <Button type="button" variant="outline" size="sm" onClick={onLoadMore} disabled={loadingMore || saving}>
+                        {loadingMore ? <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" /> : null}
+                        {loadingMore ? "Loading contributions…" : "Load more contributions"}
+                    </Button>
+                </div>
+            ) : null}
         </div>
     );
 }
 
 function SkillsEditor({ skills, onChange }: { skills: string[]; onChange: (skills: string[]) => void }) {
-    const [input, setInput] = useState("");
-
-    const handleAdd = (event?: React.FormEvent) => {
-        event?.preventDefault();
-        const value = input.trim();
-        if (!value || skills.includes(value)) return;
-        onChange([...skills, value]);
-        setInput("");
-    };
-
-    const remove = (skill: string) => onChange(skills.filter((entry) => entry !== skill));
-
-    return (
-        <div className="space-y-4">
-            <Label htmlFor="profile-skill-input">Skills & Expertise</Label>
-            <div className="flex flex-wrap gap-2 min-h-[40px]">
-                {skills.map((skill) => (
-                    <span key={skill} className="inline-flex items-center px-3 py-1 rounded-full bg-zinc-100 dark:bg-zinc-800 text-sm text-zinc-700 dark:text-zinc-300">
-                        {skill}
-                        <button type="button" onClick={() => remove(skill)} className="ml-2 hover:text-red-500"><X className="w-3 h-3" /></button>
-                    </span>
-                ))}
-            </div>
-            <div className="flex gap-2">
-                <Input
-                    id="profile-skill-input"
-                    name="skill"
-                    maxLength={PROFILE_LIMITS.listItemMax}
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    onKeyDown={(event) => {
-                        if (event.key === "Enter") {
-                            event.preventDefault();
-                            handleAdd();
-                        }
-                    }}
-                    placeholder="Add a skill (e.g. React, Design)..."
-                />
-                <Button type="button" onClick={() => handleAdd()} disabled={!input.trim()}>Add</Button>
-            </div>
-        </div>
-    );
+    return <SkillPicker value={skills} onChange={onChange} maxSkills={25} />;
 }
 
 function SocialLinksEditor({ links, onChange }: { links: Record<string, string>; onChange: (links: Record<string, string>) => void }) {
