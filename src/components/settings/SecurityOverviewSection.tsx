@@ -1,26 +1,12 @@
 "use client";
 
-import type { ComponentType } from "react";
 import { KeyRound, ShieldCheck, LockKeyhole, MonitorSmartphone } from "lucide-react";
 import { SettingsSectionCard } from "@/components/settings/ui/SettingsSectionCard";
 import type { SecurityData } from "@/lib/types/settingsTypes";
-import {
-    getActiveSessionsSummary,
-    getAuthenticatorSummary,
-    getPasswordSummary,
-    getRecoveryCodesSummary,
-    getRecommendedSecurityStep,
-} from "@/lib/settings/security-overview";
 
 type SecurityOverviewSectionProps = {
     securityData: SecurityData | undefined;
     hasPassword: boolean;
-};
-
-type OverviewStat = {
-    label: string;
-    value: string;
-    icon: ComponentType<{ className?: string }>;
 };
 
 export default function SecurityOverviewSection({
@@ -33,33 +19,35 @@ export default function SecurityOverviewSection({
     const activeSessions = securityData?.sessions.length ?? 0;
     const recoveryCodesConfigured = securityData?.recoveryCodes.configured ?? false;
     const remainingRecoveryCodes = securityData?.recoveryCodes.remainingCount ?? 0;
-    const recommendedStep = getRecommendedSecurityStep({
-        hasAuthenticatorApp,
-        hasRecoveryCodes: recoveryCodesConfigured,
-        remainingRecoveryCodes,
-        activeSessions,
-        hasPassword,
-    });
+    const recommendedStep = !hasAuthenticatorApp
+        ? "Set up an authenticator app"
+        : !recoveryCodesConfigured || remainingRecoveryCodes <= 0
+            ? "Generate recovery codes"
+            : !hasPassword
+                ? "Set a password"
+                : activeSessions > 1
+                    ? "Review active sessions"
+                    : "Your primary sign-in protections are set up";
 
-    const stats: OverviewStat[] = [
+    const stats = [
         {
             label: "Authenticator app",
-            value: getAuthenticatorSummary(hasAuthenticatorApp),
+            value: hasAuthenticatorApp ? "On" : "Off",
             icon: ShieldCheck,
         },
         {
             label: "Password",
-            value: getPasswordSummary(hasPassword),
+            value: hasPassword ? "Available" : "Not set",
             icon: LockKeyhole,
         },
         {
             label: "Recovery codes",
-            value: getRecoveryCodesSummary(recoveryCodesConfigured, remainingRecoveryCodes),
+            value: !recoveryCodesConfigured ? "Not generated" : `${remainingRecoveryCodes} remaining`,
             icon: KeyRound,
         },
         {
             label: "Active sessions",
-            value: getActiveSessionsSummary(activeSessions),
+            value: activeSessions === 1 ? "1 session" : activeSessions > 1 ? `${activeSessions} sessions` : "No sessions",
             icon: MonitorSmartphone,
         },
     ];
