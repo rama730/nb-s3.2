@@ -7,24 +7,27 @@ import { Plus } from 'lucide-react'
 interface CardProps {
     title: string
     icon?: React.ReactNode
-    children?: React.ReactNode // Make children optional
+    children?: React.ReactNode
     className?: string
     action?: React.ReactNode
     onAdd?: () => void
     addLabel?: string
+    density?: 'default' | 'compact'
+    id?: string
 }
 
-export function Card({ title, icon, children, className, action, onAdd, addLabel }: CardProps) {
+export function Card({ title, icon, children, className, action, onAdd, addLabel, density = 'default', id }: CardProps) {
     const headingId = useId()
     return (
         <section
             aria-labelledby={headingId}
+            id={id}
             className={cn('rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-sm', className)}
         >
-            <div className="px-5 py-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between">
+            <div className="border-b border-zinc-200 px-5 py-4 dark:border-zinc-800 flex items-center justify-between">
                 <div className="flex items-center gap-2">
                     {icon ? <span className="text-zinc-500 dark:text-zinc-400">{icon}</span> : null}
-                    <h2 id={headingId} className="font-semibold text-lg text-zinc-900 dark:text-zinc-100">{title}</h2>
+                    <h2 id={headingId} className={cn("font-semibold text-zinc-900 dark:text-zinc-100", density === 'compact' ? 'text-sm' : 'text-lg')}>{title}</h2>
                 </div>
                 <div className="flex items-center gap-2">
                     {action}
