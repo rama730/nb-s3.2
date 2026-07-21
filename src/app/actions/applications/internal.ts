@@ -14,12 +14,14 @@ import {
     profiles,
     messageWorkflowItems
 } from '@/lib/db/schema';
-import { eq, and, sql, or, inArray, desc, lt } from 'drizzle-orm';
+import { eq, and, sql, or, inArray, desc, lt, exists, isNull } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 import { createClient } from '@/lib/supabase/server';
 import { revalidatePath } from 'next/cache';
 import { consumeRateLimit } from '@/lib/security/rate-limit';
-import { trackApplicationEvent } from '@/lib/observability/applications';
-import { runInFlightDeduped } from '@/lib/async/inflight-dedupe';
+import { trackApplicationEvent } from '@/lib/telemetry/otlp';
+import { runInFlightDeduped } from '@/lib/utils/inflight-dedupe';
+import { toIsoString as toISODate } from '@/lib/utils/date';
 import {
     APPLICATION_DECISION_REASON_TEMPLATES,
     normalizeApplicationDecisionReason,
@@ -30,7 +32,7 @@ import {
     normalizeApplicationMessageText,
     resolveLifecycleStatus,
 } from '@/lib/applications/utils';
-import type { ApplicationCoreStatus, ApplicationLifecycleStatusWithNone } from '@/lib/applications/status';
+import type { ApplicationCoreStatus } from '@/lib/applications/status';
 import { isApplicationReviewerRole } from '@/lib/applications/authorization';
 import { enqueueProjectNotificationEvent } from '@/lib/notifications/project-events';
 import type {
@@ -61,6 +63,14 @@ const APPLICATION_APPLY_COOLDOWN_GLOBAL_SECONDS = 8;
 const APPLICATION_LIST_DEFAULT_LIMIT = 20;
 const APPLICATION_LIST_MAX_LIMIT = 100;
 const APPLICATION_LIST_MAX_OFFSET = 100_000;
+
+function messageMetadataText(key: string) {
+    return sql<string>`${messages.metadata}->>${key}`;
+}
+
+function nullableMessageMetadataText(key: string) {
+    return sql<string | null>`${messages.metadata}->>${key}`;
+}
 
 function normalizeApplicationListPagination(limit: unknown, offset: unknown) {
     const rawLimit = typeof limit === 'number' ? limit : Number(limit);
@@ -106,10 +116,6 @@ function normalizeCursorPaginationInput(
     } catch {
         return { safeLimit, cursor: null };
     }
-}
-
-function encodeApplicationCursor(row: { createdAt: Date; id: string }): string {
-    return Buffer.from(`${row.createdAt.toISOString()}:::${row.id}`, 'utf8').toString('base64');
 }
 
 interface CompoundCursor {
@@ -229,12 +235,6 @@ function resolveDecisionMessage(
     return APPLICATION_DECISION_REASON_TEMPLATES[reasonKey];
 }
 
-function toISODate(value: Date | string | null | undefined) {
-    if (!value) return null;
-    const date = value instanceof Date ? value : new Date(value);
-    return Number.isNaN(date.getTime()) ? null : date.toISOString();
-}
-
 function applicationActorSnapshot(user: { user_metadata?: Record<string, unknown> | null }) {
     return {
         actorName: (user.user_metadata?.full_name as string | undefined) ?? (user.user_metadata?.username as string | undefined) ?? null,
@@ -263,7 +263,7 @@ async function enqueueApplicationReceivedBestEffort(params: {
             eventKey: "applications.received",
             title: `${params.actorName || "Someone"} applied to ${params.projectTitle || "your project"}`,
             body: params.roleTitle ? `Role: ${params.roleTitle}` : params.projectTitle ? `Project: ${params.projectTitle}` : "New application received",
-            href: `/people?tab=applications&applicationId=${encodeURIComponent(params.applicationId)}`,
+            href: `/people?tab=requests&applicationId=${encodeURIComponent(params.applicationId)}`,
             entityRefs: {
                 applicationId: params.applicationId,
                 projectId: params.projectId,
@@ -318,7 +318,7 @@ async function enqueueApplicationDecisionBestEffort(params: {
             body: params.projectTitle ? `Project: ${params.projectTitle}` : null,
             href: params.conversationId
                 ? `/messages?conversationId=${encodeURIComponent(params.conversationId)}`
-                : `/people?tab=applications&applicationId=${encodeURIComponent(params.applicationId)}`,
+                : `/people?tab=requests&applicationId=${encodeURIComponent(params.applicationId)}`,
             entityRefs: {
                 applicationId: params.applicationId,
                 conversationId: params.conversationId ?? null,
@@ -368,7 +368,7 @@ async function enqueueApplicationWithdrawnBestEffort(params: {
             eventKey: "applications.withdrawn",
             title: `${params.actorName || "Someone"} withdrew an application`,
             body: params.roleTitle ? `Role: ${params.roleTitle}` : params.projectTitle ? `Project: ${params.projectTitle}` : "Application withdrawn",
-            href: `/people?tab=applications&applicationId=${encodeURIComponent(params.applicationId)}`,
+            href: `/people?tab=requests&applicationId=${encodeURIComponent(params.applicationId)}`,
             entityRefs: {
                 applicationId: params.applicationId,
                 projectId: params.projectId,
@@ -475,16 +475,16 @@ async function getDecisionMetadataMap(applicationIds: string[]) {
         const chunk = normalizedIds.slice(i, i + CHUNK_SIZE);
         const rows = await db
             .select({
-                applicationId: sql<string>`metadata->>'applicationId'`,
-                reasonCode: sql<string | null>`metadata->>'reasonCode'`,
-                decisionAt: sql<string | null>`metadata->>'decisionAt'`,
+                applicationId: messageMetadataText('applicationId'),
+                reasonCode: nullableMessageMetadataText('reasonCode'),
+                decisionAt: nullableMessageMetadataText('decisionAt'),
                 createdAt: messages.createdAt,
             })
             .from(messages)
             .where(
                 and(
-                    eq(sql<string>`metadata->>'kind'`, 'application_decision'),
-                    inArray(sql<string>`metadata->>'applicationId'`, chunk),
+                    eq(messageMetadataText('kind'), 'application_decision'),
+                    inArray(messageMetadataText('applicationId'), chunk),
                 ),
             )
             .orderBy(desc(messages.createdAt));
@@ -584,55 +584,6 @@ async function ensureAcceptedConnectionInternal(tx: any, userA: string, userB: s
     await applyConnectionsCountDelta(tx, [userA, userB], 1);
 }
 
-async function ensureProjectGroupConversationIdInternal(
-    tx: any,
-    projectId: string,
-    ownerId: string
-): Promise<string> {
-    const locked = await tx.execute(sql`
-        SELECT conversation_id
-        FROM ${projects}
-        WHERE id = ${projectId}
-        FOR UPDATE
-    `);
-    const row = Array.from(locked)[0] as { conversation_id: string | null } | undefined;
-    if (row?.conversation_id) {
-        return row.conversation_id;
-    }
-
-    const [conversation] = await tx
-        .insert(conversations)
-        .values({ type: 'project_group' })
-        .returning({ id: conversations.id });
-
-    await tx
-        .update(projects)
-        .set({ conversationId: conversation.id, updatedAt: new Date() })
-        .where(eq(projects.id, projectId));
-
-    const members = await tx
-        .select({ userId: projectMembers.userId })
-        .from(projectMembers)
-        .where(eq(projectMembers.projectId, projectId));
-
-    const participantIds = new Set<string>([ownerId]);
-    members.forEach((member: { userId: string }) => participantIds.add(member.userId));
-
-    await tx
-        .insert(conversationParticipants)
-        .values(
-            Array.from(participantIds).map((userId) => ({
-                conversationId: conversation.id,
-                userId,
-            }))
-        )
-        .onConflictDoNothing({
-            target: [conversationParticipants.conversationId, conversationParticipants.userId],
-        });
-
-    return conversation.id;
-}
-
 // ============================================================================
 // INTERNAL HELPER: Send application message to chat (no re-auth needed)
 // ============================================================================
@@ -674,20 +625,39 @@ async function getOrCreateDmConversationIdInternal(
 
     // 2. Fallback: Check for legacy conversation (missing from dm_pairs)
     // Find a 'dm' conversation where BOTH users are participants
-    const legacyConversation = await tx.execute(sql`
-        SELECT c.id 
-        FROM ${conversations} c
-        WHERE c.type = 'dm'
-        AND EXISTS (
-            SELECT 1 FROM ${conversationParticipants} cp1
-            WHERE cp1.conversation_id = c.id AND cp1.user_id = ${userA}
+    const participantA = alias(conversationParticipants, 'legacy_dm_participant_a');
+    const participantB = alias(conversationParticipants, 'legacy_dm_participant_b');
+    const legacyConversation = await tx
+        .select({ id: conversations.id })
+        .from(conversations)
+        .where(
+            and(
+                eq(conversations.type, 'dm'),
+                exists(
+                    tx
+                        .select({ conversationId: participantA.conversationId })
+                        .from(participantA)
+                        .where(
+                            and(
+                                eq(participantA.conversationId, conversations.id),
+                                eq(participantA.userId, userA)
+                            )
+                        )
+                ),
+                exists(
+                    tx
+                        .select({ conversationId: participantB.conversationId })
+                        .from(participantB)
+                        .where(
+                            and(
+                                eq(participantB.conversationId, conversations.id),
+                                eq(participantB.userId, userB)
+                            )
+                        )
+                )
+            )
         )
-        AND EXISTS (
-            SELECT 1 FROM ${conversationParticipants} cp2
-            WHERE cp2.conversation_id = c.id AND cp2.user_id = ${userB}
-        )
-        LIMIT 1
-    `);
+        .limit(1);
 
     if (legacyConversation.length > 0) {
         const foundId = legacyConversation[0].id;
@@ -759,19 +729,23 @@ async function sendApplicationMessageInternal(
         )
         .limit(1);
 
-    const [legacyApplicationMessage] = existingByClientId
-        ? [null]
-        : await tx.execute(sql`
-            SELECT id, metadata
-            FROM ${messages}
-            WHERE conversation_id = ${conversationId}
-              AND sender_id = ${applicantId}
-              AND deleted_at IS NULL
-              AND metadata->>'kind' = 'application'
-              AND metadata->>'applicationId' = ${applicationId}
-            ORDER BY created_at DESC
-            LIMIT 1
-        `);
+    const legacyApplicationMessages = existingByClientId
+        ? []
+        : await tx
+            .select({ id: messages.id, metadata: messages.metadata })
+            .from(messages)
+            .where(
+                and(
+                    eq(messages.conversationId, conversationId),
+                    eq(messages.senderId, applicantId),
+                    isNull(messages.deletedAt),
+                    eq(messageMetadataText('kind'), 'application'),
+                    eq(messageMetadataText('applicationId'), applicationId)
+                )
+            )
+            .orderBy(desc(messages.createdAt))
+            .limit(1);
+    const legacyApplicationMessage = legacyApplicationMessages[0] ?? null;
 
     const existingMessage = existingByClientId || legacyApplicationMessage || null;
     const baseMetadata = {
@@ -1023,23 +997,30 @@ async function syncCanonicalApplicationMessageDecisionInternal(
     if (!conversationId) return;
 
     const nowIso = new Date().toISOString();
-    const updated = await tx.execute(sql`
-        UPDATE ${messages}
-        SET metadata = jsonb_set(
-            jsonb_set(
-                COALESCE(metadata, '{}'::jsonb),
-                '{status}',
-                to_jsonb(${status}::text)
-            ),
-            '{eventVersion}',
-            '2'::jsonb
+    const updated = await tx
+        .update(messages)
+        .set({
+            metadata: sql`
+                jsonb_set(
+                    jsonb_set(
+                        COALESCE(${messages.metadata}, '{}'::jsonb),
+                        '{status}',
+                        to_jsonb(${status}::text)
+                    ),
+                    '{eventVersion}',
+                    '2'::jsonb
+                )
+            `,
+        })
+        .where(
+            and(
+                eq(messages.conversationId, conversationId),
+                isNull(messages.deletedAt),
+                eq(messageMetadataText('kind'), 'application'),
+                eq(messageMetadataText('applicationId'), applicationId)
+            )
         )
-        WHERE conversation_id = ${conversationId}
-          AND deleted_at IS NULL
-          AND metadata->>'kind' = 'application'
-          AND metadata->>'applicationId' = ${applicationId}
-        RETURNING id, metadata
-    `);
+        .returning({ id: messages.id, metadata: messages.metadata });
 
     if (updated.length > 0) {
         const message = updated[0];
@@ -1346,6 +1327,8 @@ export async function applyToRoleAction(
                             .set({
                                 roleId,
                                 message: trimmedMessage,
+                                applyingProjectId: options?.applyingProjectId || null,
+                                applyingProjectRole: options?.applyingProjectRole || null,
                                 updatedAt: new Date(),
                             })
                             .where(eq(roleApplications.id, existingApp.id));
@@ -1416,6 +1399,8 @@ export async function applyToRoleAction(
                         applicantId: user.id,
                         creatorId: project.ownerId,
                         message: trimmedMessage,
+                        applyingProjectId: options?.applyingProjectId || null,
+                        applyingProjectRole: options?.applyingProjectRole || null,
                         status: 'pending'
                     })
                     .returning({ id: roleApplications.id });
@@ -2385,12 +2370,8 @@ export async function getMyApplicationsAction(
 // ============================================================================
 // GET INCOMING APPLICATIONS (for Creator - Connections > Requests tab)
 // ============================================================================
-// ============================================================================
-// GET INCOMING APPLICATIONS (for Creator - Connections > Requests tab)
-// ============================================================================
 export async function getIncomingApplicationsAction(
-    paginationOrLimit: ApplicationCursorPaginationInput | number = APPLICATION_LIST_DEFAULT_LIMIT,
-    offset: number = 0
+    pagination: ApplicationCursorPaginationInput = { limit: APPLICATION_LIST_DEFAULT_LIMIT }
 ) {
     try {
         const supabase = await createClient();
@@ -2407,25 +2388,20 @@ export async function getIncomingApplicationsAction(
             };
         }
 
-        const legacyMode = typeof paginationOrLimit === 'number';
-        const { safeLimit, safeOffset } = legacyMode
-            ? normalizeApplicationListPagination(paginationOrLimit, offset)
-            : normalizeApplicationListPagination(paginationOrLimit.limit, 0);
+        const { safeLimit } = normalizeApplicationListPagination(pagination.limit, 0);
 
         let cursorDate: Date | undefined;
         let cursorId: string | undefined;
 
-        if (!legacyMode) {
-            const compCursor = parseCompoundCursor(paginationOrLimit.cursor);
-            if (compCursor) {
-                cursorDate = compCursor.createdAt;
-                cursorId = compCursor.id;
-            } else {
-                const oldCursorResult = normalizeCursorPaginationInput(paginationOrLimit);
-                if (oldCursorResult.cursor) {
-                    cursorDate = oldCursorResult.cursor.createdAt;
-                    cursorId = oldCursorResult.cursor.id;
-                }
+        const compCursor = parseCompoundCursor(pagination.cursor);
+        if (compCursor) {
+            cursorDate = compCursor.createdAt;
+            cursorId = compCursor.id;
+        } else {
+            const oldCursorResult = normalizeCursorPaginationInput(pagination);
+            if (oldCursorResult.cursor) {
+                cursorDate = oldCursorResult.cursor.createdAt;
+                cursorId = oldCursorResult.cursor.id;
             }
         }
 
@@ -2474,7 +2450,7 @@ export async function getIncomingApplicationsAction(
             },
             columns: { id: true, projectId: true, status: true, createdAt: true, conversationId: true },
             orderBy: (apps, { desc }) => [desc(apps.createdAt), desc(apps.id)],
-            limit: legacyMode ? safeOffset + safeLimit + 1 : safeLimit + 1,
+            limit: safeLimit + 1,
         });
 
         const invites = await db.query.messageWorkflowItems.findMany({
@@ -2497,7 +2473,7 @@ export async function getIncomingApplicationsAction(
                 conversationId: true,
             },
             orderBy: (items, { desc }) => [desc(items.createdAt), desc(items.id)],
-            limit: legacyMode ? safeOffset + safeLimit + 1 : safeLimit + 1,
+            limit: safeLimit + 1,
         });
 
         const mappedApps = roleApps.map((app) => ({
@@ -2562,15 +2538,11 @@ export async function getIncomingApplicationsAction(
             return b.id.localeCompare(a.id);
         });
 
-        const sliced = legacyMode
-            ? combined.slice(safeOffset, safeOffset + safeLimit)
-            : combined.slice(0, safeLimit);
-        const hasMore = legacyMode
-            ? combined.length > safeOffset + safeLimit
-            : combined.length > safeLimit;
+        const sliced = combined.slice(0, safeLimit);
+        const hasMore = combined.length > safeLimit;
 
         let nextCursor = null;
-        if (!legacyMode && hasMore && sliced.length > 0) {
+        if (hasMore && sliced.length > 0) {
             const lastItem = sliced[sliced.length - 1]!;
             nextCursor = encodeCompoundCursor(lastItem._source, lastItem.createdAt, lastItem.id);
         }
@@ -3001,140 +2973,6 @@ export async function getApplicationRequestHistory(limit: number = 80): Promise<
     } catch (error) {
         console.error('Failed to load application request history:', error);
         return { success: false, items: [], error: 'Failed to load history' };
-    }
-}
-
-// ============================================================================
-// PROPOSE ROLE CHANGE (Reviewer/Lead only)
-// ============================================================================
-export async function proposeApplicationRoleChangeAction(
-    applicationId: string,
-    newRoleId: string,
-    message?: string,
-    options?: ApplicationActionOptions
-): Promise<ApplicationActionResult> {
-    const traceId = resolveApplicationTraceId('propose', 'anon', applicationId, options);
-    try {
-        const supabase = await createClient();
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) {
-            return toApplicationFailure(traceId, 'UNAUTHORIZED', 'Unauthorized');
-        }
-
-        const proposeRate = await consumeRateLimit(`applications:propose:${user.id}`, 20, 60);
-        if (!proposeRate.allowed) {
-            return toApplicationFailure(traceId, 'RATE_LIMITED', 'Too many requests. Please wait a moment.');
-        }
-
-        const application = await db.query.roleApplications.findFirst({
-            where: eq(roleApplications.id, applicationId),
-            with: {
-                project: { columns: { title: true, slug: true, ownerId: true } },
-                role: { columns: { title: true, role: true } },
-            },
-            columns: {
-                id: true,
-                applicantId: true,
-                projectId: true,
-                roleId: true,
-                status: true,
-                creatorId: true,
-                conversationId: true,
-            },
-        });
-
-        if (!application) return toApplicationFailure(traceId, 'NOT_FOUND', 'Application not found');
-
-        if (application.applicantId === user.id) {
-            return toApplicationFailure(traceId, 'FORBIDDEN', 'You cannot propose a role change for your own application');
-        }
-
-        const canReview = await canReviewProjectApplicationInternal(
-            db,
-            application.projectId,
-            user.id,
-            application.project?.ownerId || application.creatorId
-        );
-        if (!canReview) {
-            return toApplicationFailure(traceId, 'FORBIDDEN', 'Only project owner or admins can propose role changes');
-        }
-
-        if (application.status !== 'pending' && application.status !== 'proposed') {
-            return toApplicationFailure(traceId, 'INVALID_STATE', 'Only pending applications can have role changes proposed');
-        }
-
-        const newRole = await db.query.projectOpenRoles.findFirst({
-            where: and(
-                eq(projectOpenRoles.id, newRoleId),
-                eq(projectOpenRoles.projectId, application.projectId)
-            ),
-        });
-
-        if (!newRole) {
-            return toApplicationFailure(traceId, 'ROLE_NOT_FOUND', 'Proposed role not found for this project');
-        }
-
-        if (newRole.filled >= newRole.count) {
-            return toApplicationFailure(traceId, 'ROLE_FULL', 'The proposed role is already filled');
-        }
-
-        await db.transaction(async (tx) => {
-            await tx
-                .update(roleApplications)
-                .set({
-                    status: 'proposed',
-                    proposedRoleId: newRoleId,
-                    decisionBy: user.id,
-                    updatedAt: new Date(),
-                })
-                .where(eq(roleApplications.id, applicationId));
-
-            await syncCanonicalApplicationMessageDecisionInternal(tx, {
-                applicationId,
-                conversationId: application.conversationId,
-                status: 'proposed',
-                decisionBy: user.id,
-                reason: 'role_proposed_by_reviewer',
-                applicationTraceId: traceId,
-            });
-
-            if (application.conversationId) {
-                await sendApplicationStatusUpdateInternal(
-                    tx,
-                    application.conversationId,
-                    user.id,
-                    applicationId,
-                    application.projectId,
-                    application.roleId || "",
-                    application.project?.title || 'Project',
-                    newRole.title || newRole.role || 'Proposed Role',
-                    'proposed',
-                    (message || '').trim() || `I think your profile fits our ${newRole.title || newRole.role} role better.`,
-                    'role_proposed_by_reviewer',
-                    traceId,
-                    application.role?.title || application.role?.role || 'Original Role'
-                );
-            }
-        });
-
-        const slugOrId = application.project?.slug || application.projectId;
-        revalidatePath(`/projects/${slugOrId}`);
-        revalidatePath('/messages');
-        revalidatePath('/people');
-
-        trackApplicationEvent('apply_proposed', {
-            applicationId,
-            projectId: application.projectId,
-            roleId: application.roleId || undefined,
-            actorId: user.id,
-            source: 'messages',
-            applicationTraceId: traceId,
-        });
-
-        return toApplicationSuccess(traceId, { applicationId });
-    } catch (error) {
-        console.error('Failed to propose role change:', error);
-        return toApplicationFailure(traceId, 'INTERNAL_ERROR', 'Failed to propose role change');
     }
 }
 
