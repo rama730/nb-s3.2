@@ -4,6 +4,7 @@ import { Project } from '@/types/hub';
 import { X, ChevronLeft, ChevronRight, ExternalLink } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useReducedMotionPreference } from '@/components/providers/theme-provider';
+import { SkillList } from '@/components/skills/SkillList';
 
 interface ProjectQuickViewProps {
     project: Project | null;
@@ -111,13 +112,7 @@ export default function ProjectQuickView({
                                                     </span>
                                                 </div>
                                                 {role.skills && role.skills.length > 0 && (
-                                                    <div className="flex flex-wrap gap-1 mt-1">
-                                                        {role.skills.map((skill) => (
-                                                            <span key={skill} className="text-[10px] px-1.5 py-0.5 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded text-zinc-500 dark:text-zinc-400">
-                                                                {skill}
-                                                            </span>
-                                                        ))}
-                                                    </div>
+                                                    <SkillList skills={role.skills} maxVisible={6} size="sm" className="mt-1" />
                                                 )}
                                             </div>
                                         );
@@ -132,16 +127,7 @@ export default function ProjectQuickView({
                                 <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">
                                     Technologies
                                 </h3>
-                                <div className="flex flex-wrap gap-2">
-                                    {project.skills.map((tech) => (
-                                        <span
-                                            key={tech}
-                                            className="px-3 py-1 bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 rounded-lg text-sm"
-                                        >
-                                            {tech}
-                                        </span>
-                                    ))}
-                                </div>
+                                <SkillList skills={project.skills} maxVisible={12} />
                             </div>
                         )}
                     </div>
