@@ -10,15 +10,17 @@
 //   on the node is strictly greater than the `currentVersion` before the
 //   restore. Formally: `restoreVersion(v) => node.currentVersion' > node.currentVersion`.
 //
-// The server action `restoreFileVersion` always computes
-// `nextVersion = (current.currentVersion ?? 1) + 1`, inserts a new
-// file_versions row at that version, and updates the node's currentVersion.
+// The server action `restoreFileVersion` appends through the canonical revision
+// service. Allocation uses the highest retained history row, not merely the
+// active pointer, and updates the node's currentVersion to that new row.
 // This property verifies that the monotonicity invariant holds for arbitrary
 // sequences of restore operations starting from any valid initial version.
 
 import test from "node:test";
 import fc from "fast-check";
 import assert from "node:assert/strict";
+
+import { nextFileRevisionNumber } from "../../../../src/lib/files/revision-policy";
 
 // ---------------------------------------------------------------------------
 // Model of restoreVersion logic (mirrors src/app/actions/files/versions.ts)
@@ -30,8 +32,8 @@ import assert from "node:assert/strict";
  *
  * Returns the new currentVersion after the restore.
  */
-function modelRestoreVersion(currentVersion: number, _targetVersion: number): number {
-  return (currentVersion ?? 1) + 1;
+function modelRestoreVersion(currentVersion: number, highestVersion: number): number {
+  return nextFileRevisionNumber(currentVersion, highestVersion);
 }
 
 // ---------------------------------------------------------------------------
@@ -70,7 +72,7 @@ test("Property 4: Restore Monotonicity — restoreVersion(v) => node.currentVers
           const targetVersion = ((rawTarget - 1) % currentVersion) + 1;
 
           // Apply the restore model
-          const newVersion = modelRestoreVersion(currentVersion, targetVersion);
+          const newVersion = modelRestoreVersion(currentVersion, currentVersion);
 
           // Assert strict monotonicity: new version > previous version
           assert.ok(
@@ -87,4 +89,8 @@ test("Property 4: Restore Monotonicity — restoreVersion(v) => node.currentVers
     ),
     { numRuns: 100 },
   );
+});
+
+test("Property 4 regression: restoring from a legacy lower active pointer appends after retained history", () => {
+  assert.equal(modelRestoreVersion(1, 10), 11);
 });
