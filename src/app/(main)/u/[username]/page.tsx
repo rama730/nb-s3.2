@@ -7,6 +7,7 @@ import { resolvePublicUsernameRoute } from '@/lib/usernames/service';
 import { buildRouteMetadata, DEFAULT_ROUTE_OG_IMAGE } from '@/lib/metadata/route-metadata';
 import { getViewerAuthContext } from '@/lib/server/viewer-context';
 import { buildProfileMetadataDescription, buildPublicProfileTitle } from '@/lib/profile/display';
+import { getProfileProjectsWithOpenRolesAction } from '@/app/actions/project';
 
 export const dynamic = 'force-dynamic';
 export const dynamicParams = true; // Allow new profiles to be generated on demand
@@ -74,15 +75,10 @@ export async function generateMetadata({ params }: { params: Promise<{ username:
 
 async function ResolvedPublicProfile({
     params,
-    searchParams,
 }: {
     params: Promise<{ username: string }>;
-    searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }) {
     const { username } = await params;
-    const resolvedSearchParams = (await searchParams) ?? {};
-    const viewerPreviewMode =
-        typeof resolvedSearchParams.viewer === 'string' && resolvedSearchParams.viewer === 'visitor';
 
     const decodedUsername = decodeUsernameParam(username);
     if (!decodedUsername) {
@@ -97,13 +93,19 @@ async function ResolvedPublicProfile({
         permanentRedirect(`/u/${encodeURIComponent(route.currentUsername)}`);
     }
 
-    const viewerAuth = viewerPreviewMode ? null : await getViewerAuthContext();
-    const data = await getProfileDetails(route.currentUsername, {
-        viewerUser: viewerAuth?.user ?? null,
-    });
+    const viewerAuth = await getViewerAuthContext();
+    const data = await getProfileDetails(route.currentUsername, { viewerUser: viewerAuth.user ?? null });
 
     if (data.privacyStatus === 'not_found' || !data.profile) {
         notFound();
+    }
+
+    const openRolesProjects = await getProfileProjectsWithOpenRolesAction(data.profile.id);
+
+    let viewerHasOpenRoles = false;
+    if (viewerAuth?.user && viewerAuth.user.id !== data.profile.id) {
+        const viewerProjects = await getProfileProjectsWithOpenRolesAction(viewerAuth.user.id);
+        viewerHasOpenRoles = viewerProjects.length > 0;
     }
 
     return (
@@ -115,19 +117,17 @@ async function ResolvedPublicProfile({
             connectionStatus={data.connectionStatus}
             privacyRelationship={data.privacyRelationship}
             lockedShell={data.lockedShell}
-            projects={data.projects}
             collaborationSummary={data.collaborationSummary}
-            viewerPreviewMode={viewerPreviewMode}
+            initialOpenRolesProjects={openRolesProjects}
+            viewerHasOpenRoles={viewerHasOpenRoles}
         />
     );
 }
 
 export default function PublicProfilePage({
     params,
-    searchParams,
 }: {
     params: Promise<{ username: string }>;
-    searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }) {
     return (
         <div
@@ -135,7 +135,7 @@ export default function PublicProfilePage({
             className="h-full min-h-0 overflow-hidden app-scroll app-scroll-y app-scroll-gutter bg-zinc-50 dark:bg-black"
         >
             <Suspense fallback={<div className="h-full flex items-center justify-center animate-pulse text-zinc-500">Loading profile...</div>}>
-                <ResolvedPublicProfile params={params} searchParams={searchParams} />
+                <ResolvedPublicProfile params={params} />
             </Suspense>
         </div>
     );
