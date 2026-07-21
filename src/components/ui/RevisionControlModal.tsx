@@ -101,7 +101,7 @@ export function RevisionControlModal({
               placeholder="E.g., Updated section 4 layout improvements..."
               value={comment}
               onChange={(e) => setComment(e.target.value)}
-              className="w-full text-xs p-2 rounded border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 text-zinc-800 dark:text-zinc-200 focus:outline-none focus:ring-1 focus:ring-indigo-500 resize-none"
+              className="w-full text-xs p-2 rounded border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 text-zinc-800 dark:text-zinc-200 focus:outline-none   resize-none"
             />
           </div>
         )}
