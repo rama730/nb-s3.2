@@ -14,6 +14,8 @@
 
 "use client";
 
+import { toast } from "sonner";
+
 import * as React from "react";
 import {
   FilePlus2,
@@ -32,7 +34,6 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
 } from "@/components/ui/dropdown-menu";
-import { useToast } from "@/components/ui-custom/Toast";
 import type { ProjectNode } from "@/lib/db/schema";
 import { filesFeatureFlags } from "@/lib/features/files";
 import { cn } from "@/lib/utils";
@@ -73,6 +74,13 @@ const EMPTY_GIT_CHANGED_FILES: readonly {
   status: GitChangeStatus;
 }[];
 
+function showFilesToast(message: string, type: "success" | "error" | "info" | "warning" = "info") {
+  if (type === "success") toast.success(message);
+  else if (type === "error") toast.error(message);
+  else if (type === "warning") toast.warning(message);
+  else toast.info(message);
+}
+
 // ─── Public API ──────────────────────────────────────────────────────
 
 export interface FolderListViewProps {
@@ -80,15 +88,6 @@ export interface FolderListViewProps {
   /** `null` means "project root". */
   folderId: string | null;
   canEdit: boolean;
-  /** Display name used by dialogs. */
-  projectName?: string;
-  /**
-   * Whether the tab is currently active. Forwarded to `useExplorerBoot` to
-   * gate fetches. Defaults to `true` so standalone mounts (tests) fetch.
-   */
-  isActive?: boolean;
-  /** Sync status surfaced to `useExplorerBoot`. */
-  syncStatus?: string;
   className?: string;
 }
 
@@ -98,13 +97,8 @@ export function FolderListView({
   projectId,
   folderId,
   canEdit,
-  projectName: _projectName,
-  isActive = true,
-  syncStatus,
   className,
 }: FolderListViewProps): React.JSX.Element {
-  const { showToast } = useToast();
-
   // ── Store selectors ───────────────────────────────────────────────
   const nodesById = useFilesWorkspaceStore(
     (s) => s.byProjectId[projectId]?.nodesById || EMPTY_OBJECT,
@@ -118,9 +112,6 @@ export function FolderListView({
   const favorites = useFilesWorkspaceStore(
     (s) => s.byProjectId[projectId]?.favorites || EMPTY_OBJECT,
   ) as Record<string, boolean>;
-  const recents = useFilesWorkspaceStore(
-    (s) => s.byProjectId[projectId]?.recents || EMPTY_ARRAY,
-  ) as string[];
   const selectedFolderId = useFilesWorkspaceStore(
     (s) => s.byProjectId[projectId]?.selectedFolderId ?? null,
   );
@@ -193,7 +184,6 @@ export function FolderListView({
     setMoveDialog,
     renameState,
     setRenameState,
-    openCreate,
     openCreateInFolder,
     confirmCreate,
     openFolderUpload,
@@ -224,7 +214,7 @@ export function FolderListView({
     setSelectedNodeIds,
     loadFolderContent,
     onOpenFile: (node) => navigateTo(node.id),
-    showToast,
+    showToast: showFilesToast,
     recordOperation,
   });
 
@@ -238,7 +228,7 @@ export function FolderListView({
     upsertNodes,
     loadFolderContent,
     toggleExpanded,
-    showToast,
+    showToast: showFilesToast,
     recordOperation,
   });
 
@@ -258,11 +248,6 @@ export function FolderListView({
     },
     [projectId, toggleFavorite],
   );
-
-  // HTML5 drag bookkeeping — purely a local pair of callbacks; the
-  // actual move is serialized by `useExplorerDragDrop.handleDropOnFolder`.
-  const noopDragStart = React.useCallback((_id: string) => {}, []);
-  const noopDragEnd = React.useCallback(() => {}, []);
 
   // ── Context-menu portal state (preserved — Q5 keep) ───────────────
   const [contextMenuState, setContextMenuState] = React.useState<{
@@ -297,15 +282,15 @@ export function FolderListView({
         className,
       )}
     >
-      <FolderListHeader projectId={projectId} />
+      <FolderListHeader />
 
       <div className="flex-1 min-h-0 overflow-y-auto">
         {folder.status === "loading" ? (
-          <FolderListLoading projectId={projectId} />
+          <FolderListLoading />
         ) : folder.status === "error" ? (
-          <FolderListError projectId={projectId} onRetry={folder.retry} />
+          <FolderListError onRetry={folder.retry} />
         ) : sortedChildren.length === 0 ? (
-          <FolderListEmpty projectId={projectId} />
+          <FolderListEmpty />
         ) : (
           <div role="rowgroup">
             {sortedChildren.map((node) => {
@@ -326,8 +311,6 @@ export function FolderListView({
                   onNavigate={navigateTo}
                   onToggleFavorite={handleToggleFavorite}
                   onContextMenu={handleContextMenu}
-                  onDragStart={noopDragStart}
-                  onDragEnd={noopDragEnd}
                   onDropOnFolder={handleDropOnFolder}
                   onDesktopFileDrop={canEdit ? handleDesktopFileDrop : undefined}
                 />
@@ -471,24 +454,6 @@ export function FolderListView({
         confirmMove={async () => {
           await confirmMove();
         }}
-        // Quick Open is owned by FilesTabRoot (Task 7.1).
-        quickOpen={{ open: false, query: "" }}
-        setQuickOpen={() => {}}
-        // Command palette is removed in v3 (Req 15.11).
-        commandPalette={{ open: false, query: "" }}
-        setCommandPalette={() => {}}
-        selectedNode={selectedNode}
-        storeSelectedNodeIds={storeSelectedNodeIds}
-        nodesById={nodesById}
-        recents={recents}
-        handleSelect={(node) => navigateTo(node.id)}
-        openCreate={openCreate}
-        openRename={openRename}
-        openMove={openMove}
-        openDelete={openDelete}
-        toggleFavorite={toggleFavorite}
-        getNodePath={(node) => buildNodePath(nodesById, node)}
-        mode="default"
       />
     </div>
   );
@@ -497,21 +462,3 @@ export function FolderListView({
 export default FolderListView;
 
 // ─── Internal helpers ────────────────────────────────────────────────
-
-function buildNodePath(
-  nodesById: Record<string, ProjectNode>,
-  node: ProjectNode | null | undefined,
-): string {
-  if (!node) return "";
-  const parts: string[] = [node.name];
-  let cursor = node.parentId;
-  let guard = 0;
-  while (cursor && guard < 256) {
-    const parent = nodesById[cursor];
-    if (!parent) break;
-    parts.unshift(parent.name);
-    cursor = parent.parentId;
-    guard += 1;
-  }
-  return parts.join("/");
-}
