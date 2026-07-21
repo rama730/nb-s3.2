@@ -1,5 +1,4 @@
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+import { isUuid } from "@/lib/validations/uuid";
 
 export const LEGACY_PROJECT_FILES_PREFIX = "projects";
 
@@ -47,7 +46,7 @@ export function parseProjectFileKey(key: string): ParsedProjectFileKey | null {
   if (!firstPart) return null;
 
   // Canonical: <projectId>/<path...>
-  if (UUID_RE.test(firstPart)) {
+  if (isUuid(firstPart)) {
     const relativePath = parts.slice(1).join("/");
     if (hasUnsafePathSegment(relativePath)) return null;
     return {
@@ -59,7 +58,7 @@ export function parseProjectFileKey(key: string): ParsedProjectFileKey | null {
 
   // Legacy: projects/<projectId>/<path...>
   const secondPart = parts[1];
-  if (firstPart === LEGACY_PROJECT_FILES_PREFIX && parts.length >= 3 && secondPart && UUID_RE.test(secondPart)) {
+  if (firstPart === LEGACY_PROJECT_FILES_PREFIX && parts.length >= 3 && secondPart && isUuid(secondPart)) {
     const relativePath = parts.slice(2).join("/");
     if (hasUnsafePathSegment(relativePath)) return null;
     return {
