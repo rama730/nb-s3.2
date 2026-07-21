@@ -15,16 +15,15 @@ import {
     messageHiddenForUsers,
     messageEditLogs,
     profiles,
-    connections,
     projectMembers,
     projects,
     roleApplications,
-    tasks,
 } from '@/lib/db/schema';
 import { createClient, createAdminClient } from '@/lib/supabase/server';
+import { getAuthUser } from '@/lib/supabase/auth-user';
 import { eq, and, asc, desc, lt, lte, gt, ne, isNull, inArray, sql, or } from 'drizzle-orm';
 import { consumeRateLimit } from '@/lib/security/rate-limit';
-import { runInFlightDeduped } from '@/lib/async/inflight-dedupe';
+import { runInFlightDeduped } from '@/lib/utils/inflight-dedupe';
 import { resolvePrivacyRelationship } from '@/lib/privacy/resolver';
 import { recordPrivacyReadEvent } from '@/lib/privacy/audit';
 import {
@@ -39,7 +38,12 @@ import {
     getStructuredMessageSearchKind,
 } from '@/lib/messages/structured';
 import { buildConversationParticipantPreview } from '@/lib/messages/preview-authority';
+import {
+    conversationNeedsPreviewRefresh,
+    refreshConversationParticipantPreviews,
+} from '@/lib/messages/preview-refresh';
 import { buildMessageAttachmentAccessUrl } from '@/lib/messages/attachment-access';
+import { resolveAttachmentStoragePath } from '@/lib/messages/attachment-storage-path';
 import {
     MESSAGE_MEDIA_PREVIEW_MAX_WIDTH,
     normalizeMediaDimensions,
@@ -61,6 +65,7 @@ import {
     normalizeAndValidateMimeType,
     validateUploadedFileMagicBytes,
 } from '@/lib/upload/security';
+import { isUuid } from '@/lib/validations/uuid';
 
 // ============================================================================
 // TYPES
@@ -137,16 +142,6 @@ export interface SendMessageResult {
     deduped?: boolean;
 }
 
-// ============================================================================
-// HELPER: Get authenticated user
-// ============================================================================
-
-async function getAuthUser() {
-    const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    return user;
-}
-
 async function getConversationMembershipId(
     conversationId: string,
     userId: string,
@@ -218,7 +213,6 @@ const MESSAGE_EDIT_WINDOW_MINUTES = 15;
 const MAX_MESSAGE_CONTENT_LENGTH = 4000;
 const MAX_SEARCH_TEXT_QUERY_LENGTH = 256;
 const SEARCH_CONTROL_CHARS_REGEX = /[\u0000-\u001F\u007F]/g;
-const UUID_V4_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 type ReplyPreview = NonNullable<MessageWithSender['replyTo']>;
 
@@ -841,73 +835,6 @@ export async function hydrateConversationLastMessageDeliveryMetadata<
     });
 }
 
-async function conversationNeedsPreviewRefresh(
-    conversationId: string,
-    messageId: string,
-) {
-    const [row] = await db
-        .select({ id: conversationParticipants.id })
-        .from(conversationParticipants)
-        .where(
-            and(
-                eq(conversationParticipants.conversationId, conversationId),
-                eq(conversationParticipants.lastMessageId, messageId),
-            ),
-        )
-        .limit(1);
-
-    return Boolean(row);
-}
-
-async function refreshConversationParticipantPreviews(conversationId: string) {
-    const participants = await db
-        .select({
-            id: conversationParticipants.id,
-            userId: conversationParticipants.userId,
-        })
-        .from(conversationParticipants)
-        .where(eq(conversationParticipants.conversationId, conversationId));
-
-    await Promise.all(participants.map(async (participant) => {
-        const [latestMessage] = await db
-            .select({
-                id: messages.id,
-                content: messages.content,
-                type: messages.type,
-                metadata: messages.metadata,
-                createdAt: messages.createdAt,
-                senderId: messages.senderId,
-            })
-            .from(messages)
-            .where(
-                and(
-                    eq(messages.conversationId, conversationId),
-                    isNull(messages.deletedAt),
-                    sql`NOT EXISTS (
-                        SELECT 1
-                        FROM ${messageHiddenForUsers} h
-                        WHERE h.message_id = ${messages.id}
-                          AND h.user_id = ${participant.userId}
-                    )`,
-                ),
-            )
-            .orderBy(desc(messages.createdAt), desc(messages.id))
-            .limit(1);
-
-        await db
-            .update(conversationParticipants)
-            .set(buildConversationParticipantPreview(
-                latestMessage
-                    ? {
-                        ...latestMessage,
-                        metadata: latestMessage.metadata as Record<string, unknown> | null,
-                    }
-                    : null,
-            ))
-            .where(eq(conversationParticipants.id, participant.id));
-    }));
-}
-
 async function readLatestVisibleConversationPreview(
     conversationId: string,
     userId: string,
@@ -1152,28 +1079,6 @@ function buildImageThumbnailUrl(signedUrl: string): string {
         + `&width=${MESSAGE_MEDIA_PREVIEW_MAX_WIDTH}&resize=contain&format=origin`;
 }
 
-function extractStoragePathFromAttachmentUrl(url: string | null | undefined): string | null {
-    if (!url) return null;
-    try {
-        const parsed = new URL(url);
-        const pathMarkers = [
-            '/object/sign/chat-attachments/',
-            '/render/image/sign/chat-attachments/',
-        ];
-
-        for (const marker of pathMarkers) {
-            const markerIndex = parsed.pathname.indexOf(marker);
-            if (markerIndex < 0) continue;
-            const encodedPath = parsed.pathname.slice(markerIndex + marker.length);
-            return decodeURIComponent(encodedPath);
-        }
-
-        return null;
-    } catch {
-        return null;
-    }
-}
-
 async function resolveSignedAttachmentUrls(paths: string[]): Promise<Map<string, string>> {
     const uniquePaths = Array.from(new Set(paths.filter(Boolean)));
     if (uniquePaths.length === 0) return new Map();
@@ -1232,10 +1137,6 @@ async function hydrateAttachmentUrls(attachmentRows: AttachmentRowForResolution[
             height: attachment.height,
         };
     });
-}
-
-function resolveAttachmentStoragePath(input: { storagePath?: string | null; url?: string | null }) {
-    return input.storagePath || extractStoragePathFromAttachmentUrl(input.url || null);
 }
 
 async function normalizeUploadedAttachmentsForCommit(
@@ -1461,7 +1362,7 @@ export async function getConversations(
         const parsedCursorAt = cursorAtRaw ? new Date(cursorAtRaw) : cursor ? new Date(cursor) : undefined;
         const cursorAt = parsedCursorAt && !Number.isNaN(parsedCursorAt.getTime()) ? parsedCursorAt : undefined;
         const cursorConversationId =
-            cursorConversationIdRaw && UUID_V4_REGEX.test(cursorConversationIdRaw)
+            cursorConversationIdRaw && isUuid(cursorConversationIdRaw)
                 ? cursorConversationIdRaw
                 : undefined;
         const safeLimit = Math.max(1, Math.min(limit, 100));
@@ -1597,140 +1498,6 @@ export async function getConversations(
     } catch (error) {
         console.error('Error fetching conversations:', error);
         return { success: false, error: 'Failed to fetch conversations' };
-    }
-}
-
-// ============================================================================
-// GET SINGLE CONVERSATION DETAILS (SSOT HYDRATION)
-// ============================================================================
-
-export async function getConversationById(
-    conversationId: string
-): Promise<{ success: boolean; error?: string; conversation?: ConversationWithDetails }> {
-    try {
-        const user = await getAuthUser();
-        if (!user) return { success: false, error: 'Not authenticated' };
-        return await runInFlightDeduped(`messages:conversation:${user.id}:${conversationId}`, async () => {
-
-        const membership = await db
-            .select({
-                unreadCount: conversationParticipants.unreadCount,
-                archivedAt: conversationParticipants.archivedAt,
-                muted: conversationParticipants.muted,
-                lastMessageId: conversationParticipants.lastMessageId,
-                lastMessagePreview: conversationParticipants.lastMessagePreview,
-                lastMessageSenderId: conversationParticipants.lastMessageSenderId,
-                lastMessageType: conversationParticipants.lastMessageType,
-                lastMessageAt: conversationParticipants.lastMessageAt,
-                lastReadAt: conversationParticipants.lastReadAt,
-                lastReadMessageId: conversationParticipants.lastReadMessageId,
-            })
-            .from(conversationParticipants)
-            .where(
-                and(
-                    eq(conversationParticipants.conversationId, conversationId),
-                    eq(conversationParticipants.userId, user.id)
-                )
-            )
-            .limit(1);
-
-        if (membership.length === 0) {
-            return { success: false, error: 'Access denied' };
-        }
-
-        const detailsRows = await db.execute<{
-            id: string;
-            type: string;
-            updated_at: Date;
-        }>(sql`
-            SELECT 
-                c.id,
-                c.type,
-                c.updated_at
-            FROM ${conversations} c
-            WHERE c.id = ${conversationId}
-            LIMIT 1
-        `);
-
-        const details = Array.from(detailsRows)[0];
-        if (!details) return { success: false, error: 'Conversation not found' };
-        if (details.type === 'project_group') {
-            return { success: false, error: 'Unsupported conversation type' };
-        }
-
-        const participants = await db
-            .select({
-                id: profiles.id,
-                username: profiles.username,
-                fullName: profiles.fullName,
-                avatarUrl: profiles.avatarUrl,
-            })
-            .from(conversationParticipants)
-            .innerJoin(profiles, eq(profiles.id, conversationParticipants.userId))
-            .where(
-                and(
-                    eq(conversationParticipants.conversationId, conversationId),
-                    ne(conversationParticipants.userId, user.id)
-                )
-            );
-
-        if (details.type === 'dm') {
-            const otherParticipantId = participants[0]?.id ?? null;
-            if (!otherParticipantId) {
-                return { success: false, error: 'Conversation not found' };
-            }
-            const readability = await assertDirectMessageReadable(user.id, otherParticipantId);
-            if (!readability.ok) {
-                return { success: false, error: readability.error || 'Conversation not found' };
-            }
-            await recordPrivacyReadEvent({
-                subjectUserId: otherParticipantId,
-                viewerUserId: user.id,
-                eventType: 'conversation_opened',
-                route: 'messaging.conversation',
-                metadata: { conversationId },
-            });
-        }
-
-        const baseConversation: ConversationWithDetails = {
-            id: details.id,
-            type: details.type as 'dm' | 'group' | 'project_group',
-            updatedAt: membership[0]!.lastMessageAt || details.updated_at || new Date(),
-            lifecycleState: membership[0]!.archivedAt ? 'archived' : membership[0]!.lastMessageId ? 'active' : 'draft',
-            muted: Boolean(membership[0]!.muted),
-            participants: participants.map((participant) => ({
-                id: participant.id,
-                username: participant.username,
-                fullName: participant.fullName,
-                avatarUrl: participant.avatarUrl,
-            })),
-            lastMessage: membership[0]!.lastMessageId
-                ? {
-                    id: membership[0]!.lastMessageId,
-                    content: membership[0]!.lastMessagePreview,
-                    senderId: membership[0]!.lastMessageSenderId,
-                    createdAt: membership[0]!.lastMessageAt || details.updated_at || new Date(),
-                    type: membership[0]!.lastMessageType,
-                }
-                : null,
-            unreadCount: membership[0]!.unreadCount || 0,
-            lastReadAt: membership[0]!.lastReadAt ?? null,
-            lastReadMessageId: membership[0]!.lastReadMessageId ?? null,
-        };
-        const [reconciledConversation] = await reconcileConversationLastMessagePreviews(user.id, [baseConversation]);
-        const [conversation] = await hydrateConversationLastMessageDeliveryMetadata(
-            user.id,
-            [reconciledConversation ?? baseConversation],
-        );
-
-        return {
-            success: true,
-            conversation,
-        };
-        });
-    } catch (error) {
-        console.error('Error fetching conversation by id:', error);
-        return { success: false, error: 'Failed to fetch conversation' };
     }
 }
 
@@ -2143,269 +1910,22 @@ export async function sendMessage(
         clientMessageId?: string;
         replyToMessageId?: string | null;
         contextChips?: MessageContextChip[];
+        messageType?: 'text' | 'image' | 'video' | 'file';
     }
 ): Promise<SendMessageResult> {
-    try {
-        const user = await getAuthUser();
-        if (!user) return { success: false, error: 'Not authenticated' };
-        const { allowed: msgRlOk } = await consumeRateLimit(`msg:${user.id}`, 120, 60);
-        if (!msgRlOk) return { success: false, error: 'Rate limit exceeded' };
-        const clientMessageId = options?.clientMessageId?.trim() || undefined;
-        const replyToMessageId = options?.replyToMessageId?.trim() || undefined;
-        const contextChips = options?.contextChips ?? [];
-
-        // Verify user is participant
-        const participantMembershipId = await getConversationMembershipId(conversationId, user.id);
-
-        if (!participantMembershipId) {
-            return { success: false, error: 'Not a participant of this conversation' };
-        }
-
-        const [conversationRecord] = await db
-            .select({ type: conversations.type })
-            .from(conversations)
-            .where(eq(conversations.id, conversationId))
-            .limit(1);
-
-        if (!conversationRecord) {
-            return { success: false, error: 'Conversation not found' };
-        }
-
-        if (conversationRecord.type === 'dm') {
-            const [otherParticipant] = await db
-                .select({ userId: conversationParticipants.userId })
-                .from(conversationParticipants)
-                .where(
-                    and(
-                        eq(conversationParticipants.conversationId, conversationId),
-                        ne(conversationParticipants.userId, user.id)
-                    )
-                )
-                .limit(1);
-
-            if (!otherParticipant) {
-                return { success: false, error: 'Invalid conversation participants' };
-            }
-
-            const permission = await isDirectMessagingAllowed(user.id, otherParticipant.userId);
-            if (!permission.allowed) {
-                return { success: false, error: permission.error || 'Messaging is not allowed' };
-            }
-
-            const { allowed: targetRlOk } = await consumeDirectMessageTargetRateLimit(user.id, otherParticipant.userId);
-            if (!targetRlOk) {
-                return { success: false, error: 'You are messaging this user too quickly. Please slow down.' };
-            }
-        }
-
-        // Validate content
-        if (!content?.trim() && (!attachmentIds || attachmentIds.length === 0)) {
-            return { success: false, error: 'Message cannot be empty' };
-        }
-        if ((content?.trim() || '').length > MAX_MESSAGE_CONTENT_LENGTH) {
-            return { success: false, error: `Message too long. Maximum is ${MAX_MESSAGE_CONTENT_LENGTH} characters.` };
-        }
-
-        if (attachmentIds && attachmentIds.length > 0) {
-            const ownershipCheck = await validateAttachmentOwnershipForConversation(
-                user.id,
-                conversationId,
-                attachmentIds
-            );
-            if (!ownershipCheck.ok) {
-                return { success: false, error: ownershipCheck.error };
-            }
-        }
-
-        const normalizedContent = content?.trim() || '';
-        const mentions = extractMessageMentions(normalizedContent);
-        const replyPreview = await validateReplyTarget(
-            conversationId,
-            user.id,
-            replyToMessageId
-        );
-
-        const existing = await findExistingMessageByClientKey(conversationId, user.id, clientMessageId);
-        if (existing) {
-            const [senderProfile] = await db
-                .select({
-                    id: profiles.id,
-                    username: profiles.username,
-                    fullName: profiles.fullName,
-                    avatarUrl: profiles.avatarUrl,
-                })
-                .from(profiles)
-                .where(eq(profiles.id, user.id))
-                .limit(1);
-
-            return {
-                success: true,
-                deduped: true,
-                message: {
-                    id: existing.id,
-                    conversationId: existing.conversationId,
-                    senderId: existing.senderId,
-                    replyTo: existing.replyToMessageId
-                        ? (await getReplyPreviewMap(conversationId, user.id, [existing.replyToMessageId])).get(existing.replyToMessageId) || null
-                        : null,
-                    clientMessageId: existing.clientMessageId,
-                    content: existing.content,
-                    type: existing.type as MessageWithSender['type'],
-                    metadata: withDeliveryMetadata(existing.metadata as Record<string, unknown>, 'sent'),
-                    createdAt: existing.createdAt,
-                    editedAt: existing.editedAt,
-                    deletedAt: existing.deletedAt,
-                    sender: senderProfile || null,
-                    attachments: [],
-                },
-            };
-        }
-
-        // Use transaction for atomic message send and response hydration.
-        const { newMessage, senderProfile } = await db.transaction(async (tx) => {
-            const [msg] = await tx
-                .insert(messages)
-                .values({
-                    conversationId,
-                    senderId: user.id,
-                    replyToMessageId: replyToMessageId || null,
-                    clientMessageId: clientMessageId || null,
-                    content: content?.trim() || null,
-                    type,
-                    metadata: withDeliveryMetadata(
-                        withMessageContextChipsMetadata({
-                            version: 3,
-                            ...(clientMessageId ? { clientMessageId } : {}),
-                            ...(replyToMessageId ? { replyToMessageId } : {}),
-                            ...(mentions.mentionedUsernames.length > 0
-                                ? { mentionedUsernames: mentions.mentionedUsernames }
-                                : {}),
-                            ...(mentions.mentionRoles.length > 0
-                                ? { mentionRoles: mentions.mentionRoles }
-                                : {}),
-                            ...(normalizedContent.includes('```') ? { hasCode: true } : {}),
-                        }, contextChips),
-                        'sent',
-                    ),
-                })
-                .returning();
-
-            const [profile] = await tx
-                .select({
-                    id: profiles.id,
-                    username: profiles.username,
-                    fullName: profiles.fullName,
-                    avatarUrl: profiles.avatarUrl,
-                })
-                .from(profiles)
-                .where(eq(profiles.id, user.id))
-                .limit(1);
-
-            return { newMessage: msg, senderProfile: profile };
-        });
-
-        const recipients = await db
-            .select({
-                userId: conversationParticipants.userId,
-                muted: conversationParticipants.muted,
-            })
-            .from(conversationParticipants)
-            .where(
-                and(
-                    eq(conversationParticipants.conversationId, conversationId),
-                    ne(conversationParticipants.userId, user.id),
-                    isNull(conversationParticipants.archivedAt),
-                ),
-            );
-
-        try {
-            await emitMessageBurstNotifications({
-                recipients,
-                actorUserId: user.id,
-                actorName: senderProfile?.fullName ?? senderProfile?.username ?? null,
-                actorAvatarUrl: senderProfile?.avatarUrl ?? null,
-                conversationId,
-                previewText: normalizedContent || (attachmentIds?.length ? 'Sent an attachment' : 'Sent a message'),
-            });
-        } catch (error) {
-            logger.error('messages.notification_emit_failed', {
-                module: 'messaging',
-                conversationId,
-                actorUserId: user.id,
-                count: recipients.length,
-                error: error instanceof Error ? error.message : String(error),
-            });
-        }
-
-        return {
-            success: true,
-            message: {
-                id: newMessage!.id,
-                conversationId: newMessage!.conversationId,
-                senderId: newMessage!.senderId,
-                replyTo: replyPreview,
-                clientMessageId: newMessage!.clientMessageId,
-                content: newMessage!.content,
-                type: newMessage!.type as MessageWithSender['type'],
-                metadata: withDeliveryMetadata(newMessage!.metadata as Record<string, unknown>, 'sent'),
-                createdAt: newMessage!.createdAt,
-                editedAt: newMessage!.editedAt,
-                deletedAt: newMessage!.deletedAt,
-                sender: senderProfile || null,
-                attachments: [],
-            },
-        };
-    } catch (error) {
-        console.error('Error sending message:', error);
-        try {
-            const user = await getAuthUser();
-            const existing = user
-                ? await findExistingMessageByClientKey(
-                    conversationId,
-                    user.id,
-                    options?.clientMessageId
-                )
-                : null;
-            if (existing) {
-                const viewerId = user!.id;
-                const [senderProfile] = await db
-                    .select({
-                        id: profiles.id,
-                        username: profiles.username,
-                        fullName: profiles.fullName,
-                        avatarUrl: profiles.avatarUrl,
-                    })
-                    .from(profiles)
-                    .where(eq(profiles.id, viewerId))
-                    .limit(1);
-
-                return {
-                    success: true,
-                    deduped: true,
-                    message: {
-                        id: existing.id,
-                        conversationId: existing.conversationId,
-                        senderId: existing.senderId,
-                        replyTo: existing.replyToMessageId
-                            ? (await getReplyPreviewMap(conversationId, viewerId, [existing.replyToMessageId])).get(existing.replyToMessageId) || null
-                            : null,
-                        clientMessageId: existing.clientMessageId,
-                        content: existing.content,
-                        type: existing.type as MessageWithSender['type'],
-                        metadata: withDeliveryMetadata(existing.metadata as Record<string, unknown>, 'sent'),
-                        createdAt: existing.createdAt,
-                        editedAt: existing.editedAt,
-                        deletedAt: existing.deletedAt,
-                        sender: senderProfile || null,
-                        attachments: [],
-                    },
-                };
-            }
-        } catch {
-            // Ignore fallback failures, surface canonical error below.
-        }
-        return { success: false, error: 'Failed to send message' };
+    if (attachmentIds && attachmentIds.length > 0) {
+        return { success: false, error: 'Legacy attachment ids are no longer supported. Please upload attachments before sending.' };
     }
+
+    return sendMessageWithAttachments(
+        conversationId,
+        content,
+        [],
+        {
+            ...options,
+            messageType: type,
+        },
+    );
 }
 
 // ============================================================================
@@ -3788,6 +3308,7 @@ export async function sendMessageWithAttachments(
         clientMessageId?: string;
         replyToMessageId?: string | null;
         contextChips?: MessageContextChip[];
+        messageType?: 'text' | 'image' | 'video' | 'file';
     }
 ): Promise<SendMessageResult> {
     try {
@@ -3910,7 +3431,7 @@ export async function sendMessageWithAttachments(
         const committedAttachments = normalizedCommit.attachments;
 
         // Determine message type based on attachments
-        let messageType: 'text' | 'image' | 'video' | 'file' = 'text';
+        let messageType: 'text' | 'image' | 'video' | 'file' = options?.messageType ?? 'text';
         if (committedAttachments.length > 0) {
             const primaryAttachment = committedAttachments[0]!;
             messageType = primaryAttachment.type;
