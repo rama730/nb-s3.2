@@ -45,7 +45,7 @@ export default function RadioCardGroup({
             className={cn(
               'relative flex items-start gap-3 rounded-[var(--onb-radius-radio-card)] px-4 py-[14px] text-left transition-[border-color,background-color] duration-150',
               'min-h-[44px]',
-              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
+              'focus-visible:outline-none   ',
               isSelected
                 ? 'border-2 border-primary bg-primary/5'
                 : 'border border-border bg-card hover:border-primary/40'
