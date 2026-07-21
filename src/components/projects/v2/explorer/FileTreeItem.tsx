@@ -18,7 +18,7 @@ export interface FileTreeItemContext {
     expandedFolderIds: Record<string, boolean>;
     favorites: Record<string, boolean>;
     taskLinkCounts: Record<string, number>;
-    locksByNodeId: Record<string, { lockedBy: string; lockedByName?: string | null; expiresAt: number }>;
+    locksByNodeId: Record<string, { lockedBy: string; lockedByName?: string | null; clientKind?: "web" | "vscode"; expiresAt: number }>;
     mode: "default" | "select";
     canEdit: boolean;
     projectName?: string; // For empty state
@@ -201,9 +201,9 @@ export function FileTreeItem({
                   {lock ? (
                     <span
                       className="text-[9px] px-1 rounded-sm bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300 flex-shrink-0 font-mono"
-                      title={`Locked by ${lock.lockedByName?.trim() || "collaborator"}`}
+                      title={`Being edited ${lock.clientKind === "vscode" ? "in VS Code " : ""}by ${lock.lockedByName?.trim() || "a collaborator"}`}
                     >
-                      lock
+                      {lock.clientKind === "vscode" ? "VS Code" : "editing"}
                     </span>
                   ) : null}
                   {linkCount > 0 ? (
