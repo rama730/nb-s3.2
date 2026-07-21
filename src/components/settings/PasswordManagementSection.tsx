@@ -1,19 +1,19 @@
 "use client";
 
+import { toast } from "sonner";
 import type { FormEvent } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
-import Button from "@/components/ui-custom/Button";
-import Input from "@/components/ui-custom/Input";
-import { Label } from "@/components/ui-custom/Label";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { SettingsSectionCard } from "@/components/settings/ui/SettingsSectionCard";
 import { PasswordStrengthMeter } from "@/components/settings/PasswordStrengthMeter";
 import SecurityStepUpDialog from "@/components/settings/SecurityStepUpDialog";
-import { useToast } from "@/components/ui-custom/Toast";
 import { useChangePassword } from "@/hooks/useSettingsQueries";
 import { queryKeys } from "@/lib/query-keys";
 import { getPasswordPolicyResult, PASSWORD_MIN_LENGTH } from "@/lib/security/password-policy";
+import type { SecurityData } from "@/lib/types/settingsTypes";
 
 type SecurityStepUpMethod = "totp" | "recovery_code";
 
@@ -22,19 +22,14 @@ type PasswordManagementSectionProps = {
   lastChangedAt?: string;
   availableStepUpMethods: SecurityStepUpMethod[];
   primaryTotpFactorId?: string;
-  onPasswordConfigured?: () => void;
 };
-
-const RECENT_STEP_UP_VERIFICATION_WINDOW_MS = 15_000;
 
 export default function PasswordManagementSection({
   hasPassword,
   lastChangedAt,
   availableStepUpMethods,
   primaryTotpFactorId,
-  onPasswordConfigured,
 }: PasswordManagementSectionProps) {
-  const { showToast } = useToast();
   const queryClient = useQueryClient();
   const changePasswordMutation = useChangePassword();
   const [isEditing, setIsEditing] = useState(false);
@@ -42,8 +37,6 @@ export default function PasswordManagementSection({
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [stepUpOpen, setStepUpOpen] = useState(false);
-  const [formattedLastChanged, setFormattedLastChanged] = useState<string | null>(null);
-  const lastStepUpVerificationAtRef = useRef<number | null>(null);
 
   const isChangingPassword = changePasswordMutation.isPending;
   const title = hasPassword ? "Change password" : "Set a password";
@@ -55,6 +48,7 @@ export default function PasswordManagementSection({
     ? `Prefer a strong password with at least ${PASSWORD_MIN_LENGTH} characters.`
     : `Add a strong password with at least ${PASSWORD_MIN_LENGTH} characters if you want email sign-in available on this account.`;
   const passwordPolicy = getPasswordPolicyResult(newPassword);
+  const formattedLastChanged = lastChangedAt ? new Date(lastChangedAt).toLocaleString() : null;
 
   const resetForm = () => {
     setCurrentPassword("");
@@ -62,43 +56,25 @@ export default function PasswordManagementSection({
     setConfirmPassword("");
   };
 
-  useEffect(() => {
-    if (!lastChangedAt) {
-      setFormattedLastChanged(null);
-      return;
-    }
-
-    setFormattedLastChanged(new Date(lastChangedAt).toLocaleString());
-  }, [lastChangedAt]);
-
-  const hasRecentStepUpVerification = () => (
-    lastStepUpVerificationAtRef.current !== null
-    && Date.now() - lastStepUpVerificationAtRef.current < RECENT_STEP_UP_VERIFICATION_WINDOW_MS
-  );
-
   const submitPasswordChange = async () => {
     const result = await changePasswordMutation.mutateAsync({ currentPassword, newPassword });
     if (!result.success) {
       const errorCode = "errorCode" in result ? result.errorCode : undefined;
       if (errorCode === "STEP_UP_REQUIRED") {
-        if (hasRecentStepUpVerification()) {
-          lastStepUpVerificationAtRef.current = null;
-          showToast("Verification could not be confirmed. Please try again.", "error");
-          return;
-        }
         setStepUpOpen(true);
         return;
       }
-      lastStepUpVerificationAtRef.current = null;
-      showToast(result.message || "Failed to update password", "error");
+      toast.error(result.message || "Failed to update password");
       return;
     }
 
-    lastStepUpVerificationAtRef.current = null;
-    showToast(hasPassword ? "Password updated successfully" : "Password added successfully", "success");
+    toast.success(hasPassword ? "Password updated successfully" : "Password added successfully");
     resetForm();
     setIsEditing(false);
-    onPasswordConfigured?.();
+    queryClient.setQueryData<SecurityData>(queryKeys.settings.security(), (current) => current ? {
+      ...current,
+      password: { ...current.password, hasPassword: true, lastChangedAt: new Date().toISOString() },
+    } : current);
     await queryClient.invalidateQueries({ queryKey: queryKeys.settings.security() });
   };
 
@@ -106,12 +82,12 @@ export default function PasswordManagementSection({
     event.preventDefault();
 
     if (newPassword !== confirmPassword) {
-      showToast("Passwords do not match", "error");
+      toast.error("Passwords do not match");
       return;
     }
 
     if (!passwordPolicy.ok) {
-      showToast(passwordPolicy.error || "Password does not meet security requirements", "error");
+      toast.error(passwordPolicy.error || "Password does not meet security requirements");
       return;
     }
 
@@ -150,7 +126,7 @@ export default function PasswordManagementSection({
           <form onSubmit={(event) => void handlePasswordSubmit(event)} className="space-y-4">
             {hasPassword ? (
               <div className="space-y-2">
-                <Label htmlFor="current-password">Current password</Label>
+                <label htmlFor="current-password" className="text-sm font-medium leading-none">Current password</label>
                 <Input
                   id="current-password"
                   type="password"
@@ -164,7 +140,7 @@ export default function PasswordManagementSection({
 
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="space-y-2">
-                <Label htmlFor="new-password">New password</Label>
+                <label htmlFor="new-password" className="text-sm font-medium leading-none">New password</label>
                 <Input
                   id="new-password"
                   type="password"
@@ -173,11 +149,11 @@ export default function PasswordManagementSection({
                   required
                   disabled={isChangingPassword}
                 />
-                <PasswordStrengthMeter password={newPassword} />
+                <PasswordStrengthMeter password={newPassword} result={passwordPolicy} />
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="confirm-password">Confirm new password</Label>
+                <label htmlFor="confirm-password" className="text-sm font-medium leading-none">Confirm new password</label>
                 <Input
                   id="confirm-password"
                   type="password"
@@ -231,7 +207,6 @@ export default function PasswordManagementSection({
         availableMethods={availableStepUpMethods}
         factorId={primaryTotpFactorId}
         onVerified={async () => {
-          lastStepUpVerificationAtRef.current = Date.now();
           await submitPasswordChange();
         }}
       />
