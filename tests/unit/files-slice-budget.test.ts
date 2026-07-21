@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import type { ProjectNode } from "../../src/lib/db/schema";
-import { enforceNodesBudget } from "../../src/stores/files/filesSlice";
+import { enforceNodesBudget } from "../../src/stores/files/explorerSlice";
 
 function makeNode(id: string, updatedAtMs: number): ProjectNode {
   return {
