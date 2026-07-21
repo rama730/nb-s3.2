@@ -1,5 +1,4 @@
 import type { NotificationPreferences } from "@/lib/notifications/types";
-import type { AppearanceSnapshot } from "@/lib/theme/appearance";
 
 // Settings types
 export type { NotificationPreferences };
@@ -113,7 +112,6 @@ export interface PrivacyActivityEntry {
 export interface PrivacyPreviewState {
   profileVisibility: string;
   interactionPermissions: string;
-  visitorProfileHref?: string | null;
 }
 
 export interface PrivacyData {
@@ -126,7 +124,40 @@ export interface PrivacyData {
 
 export type IntegrationsAuthProvider = "google" | "github" | "email";
 export type IntegrationsAuthProviderState = "primary" | "linked" | "not_linked";
-export type ExternalServiceStatus = "connected" | "available" | "not_connected";
+export type ExternalServiceStatus =
+  | "connected"
+  | "available"
+  | "action_required"
+  | "not_connected";
+
+export type ExternalAccountHealthState =
+  | "available"
+  | "unavailable"
+  | "unknown"
+  | "not_linked";
+
+export type ExternalAccountHealthReason =
+  | "verified"
+  | "not_found"
+  | "rate_limited"
+  | "forbidden"
+  | "provider_error"
+  | "network_error"
+  | "invalid_response"
+  | "missing_username"
+  | "not_linked";
+
+export interface ExternalAccountHealth {
+  state: ExternalAccountHealthState;
+  reason: ExternalAccountHealthReason;
+  checkedAt: string | null;
+  profile?: {
+    username: string;
+    fullName: string | null;
+    avatarUrl: string | null;
+    profileUrl: string;
+  } | null;
+}
 
 export interface AuthConnectionMethod {
   provider: IntegrationsAuthProvider;
@@ -134,60 +165,21 @@ export interface AuthConnectionMethod {
   state: IntegrationsAuthProviderState;
   detail: string;
   secondaryDetail?: string | null;
-  lastUsedAt?: string | null;
-  verificationState?: "verified" | "not_verified" | null;
 }
 
-export interface ConnectedProject {
-  id: string;
-  title: string;
-  repoUrl: string;
-  defaultBranch: string;
-  lastSyncAt: string | null;
-  lastCommitSha: string | null;
-  syncStatus: "pending" | "cloning" | "indexing" | "ready" | "failed";
-  syncPhase?: string | null;
-  syncProgress?: { total: number; processed: number; percentage: number; message?: string } | null;
-}
-
-export interface ServiceIntegrationConnection {
-  id: "github";
-  label: string;
+export interface GithubServiceConnection {
   status: ExternalServiceStatus;
   summary: string;
   detail: string;
   usageCount: number;
   lastUsedAt?: string | null;
   githubUsername?: string | null;
-  githubAvatarUrl?: string | null;
-  githubFullName?: string | null;
-  projects?: ConnectedProject[];
-  canUnlink?: boolean;
 }
 
 export interface IntegrationsData {
-  createdWith: IntegrationsAuthProvider | null;
-  createdWithLabel: string;
-  emailAddress?: string | null;
-  emailVerified: boolean;
-  linkedCount: number;
-  additionalLinkedCount: number;
   summary: string;
-  recommendedNextStep: string;
-  infoNote: string;
-  capabilities: {
-    canEnableEmailSignIn: boolean;
-    canLinkAdditionalProvider: boolean;
-    canUnlinkGoogle: boolean;
-    canUnlinkGithub: boolean;
-  };
   authConnections: AuthConnectionMethod[];
-  externalServices: ServiceIntegrationConnection[];
-}
-
-export interface SecurityStepUpCapabilitiesData {
-  availableMethods: Array<"totp" | "recovery_code" | "password">;
-  primaryTotpFactorId?: string;
+  githubService: GithubServiceConnection;
 }
 
 export interface AccountDeletionStatusData {
@@ -221,20 +213,4 @@ export interface ExtensionSessionsData {
   sessions: ExtensionSessionData[];
   hasMore: boolean;
   nextCursor: string | null;
-}
-
-export interface SettingsAppearanceBootstrapData {
-  userId: string;
-  snapshot: AppearanceSnapshot | null;
-}
-
-export interface SettingsBootstrapData {
-  fetchedAt: string;
-  accountDeletion?: AccountDeletionStatusData;
-  notifications?: NotificationPreferences;
-  privacy?: PrivacyData;
-  security?: SecurityData;
-  integrations?: IntegrationsData;
-  extensionSessions?: ExtensionSessionsData;
-  appearance?: SettingsAppearanceBootstrapData;
 }
