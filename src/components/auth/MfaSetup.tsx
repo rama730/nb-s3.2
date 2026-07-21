@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import Image from "next/image";
 import {
   CheckCircle2,
@@ -9,14 +9,12 @@ import {
   Download,
   KeyRound,
   Loader2,
-  Printer,
   Shield,
   ShieldCheck,
   Trash2,
 } from "lucide-react";
-import Button from "@/components/ui-custom/Button";
-import Input from "@/components/ui-custom/Input";
-import { Label } from "@/components/ui-custom/Label";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Dialog,
   DialogContent,
@@ -67,15 +65,13 @@ function formatRecoveryCodesForExport(codes: string[]): string {
 }
 
 export function MfaSetup({ initialFactors, recoveryCodes }: MfaSetupProps) {
-  const hasInitialFactors = Array.isArray(initialFactors);
   const queryClient = useQueryClient();
-  const supabase = useMemo(() => createSupabaseBrowserClient(), []);
+  const [supabase] = useState(() => createSupabaseBrowserClient());
 
   const [enrolling, setEnrolling] = useState(false);
   const [verifying, setVerifying] = useState(false);
   const [protectedActionPending, setProtectedActionPending] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
-  const [friendlyName, setFriendlyName] = useState("Authenticator app");
   const [verificationCode, setVerificationCode] = useState("");
   const [pendingFactor, setPendingFactor] = useState<PendingTotpFactor | null>(null);
   const [unenrollId, setUnenrollId] = useState<string | null>(null);
@@ -83,55 +79,38 @@ export function MfaSetup({ initialFactors, recoveryCodes }: MfaSetupProps) {
   const [protectedAction, setProtectedAction] = useState<ProtectedAction>(null);
   const [revealedRecoveryCodes, setRevealedRecoveryCodes] = useState<RevealedRecoveryCodes | null>(null);
 
-  const refreshSecurity = useCallback(async () => {
+  const refreshSecurity = async () => {
     await queryClient.invalidateQueries({ queryKey: queryKeys.settings.security() });
-  }, [queryClient]);
+  };
 
-  const { data: factors = initialFactors ?? [], isLoading: factorsLoading, refetch: refetchFactors } = useQuery<MfaFactor[]>({
-    queryKey: queryKeys.settings.mfaFactors(),
-    queryFn: async () => {
-      const res = await fetch("/api/v1/auth/mfa/factors");
-      if (!res.ok) throw new Error("Failed to load MFA settings");
-      const json = await res.json();
-      return json?.data?.factors || [];
-    },
-    initialData: hasInitialFactors ? initialFactors : undefined,
-  });
-
-  const loading = !hasInitialFactors && factorsLoading;
-
-  const verifiedFactors = useMemo(() => factors.filter((factor) => factor.type === "totp" && factor.status === "verified"), [factors]);
-  const pendingFactors = useMemo(() => factors.filter((factor) => factor.type === "totp" && factor.status === "unverified"), [factors]);
+  const factors = initialFactors ?? [];
+  const verifiedFactors = factors.filter((factor) => factor.type === "totp" && factor.status === "verified");
+  const pendingFactors = factors.filter((factor) => factor.type === "totp" && factor.status === "unverified");
   const primaryVerifiedFactor = verifiedFactors[0] ?? null;
   const hasVerifiedFactor = verifiedFactors.length > 0;
 
-  const protectedMethods = useMemo(() => {
-    const methods: Array<"totp" | "recovery_code"> = [];
-    if (primaryVerifiedFactor) methods.push("totp");
-    if ((recoveryCodes?.remainingCount ?? 0) > 0) methods.push("recovery_code");
-    return methods;
-  }, [primaryVerifiedFactor, recoveryCodes?.remainingCount]);
+  const protectedMethods: Array<"totp" | "recovery_code"> = [
+    ...(primaryVerifiedFactor ? ["totp" as const] : []),
+    ...((recoveryCodes?.remainingCount ?? 0) > 0 ? ["recovery_code" as const] : []),
+  ];
 
-  const cleanupPendingFactor = useCallback(async (factorId: string) => {
+  const cleanupPendingFactor = async (factorId: string) => {
     try {
       await supabase.auth.mfa.unenroll({ factorId });
     } catch {
-      // Best effort cleanup so abandoned setups do not leave stale unverified factors behind.
     }
-  }, [supabase]);
+  };
 
-  const resetSetupDialog = useCallback(() => {
-    setFriendlyName("Authenticator app");
+  const resetSetupDialog = () => {
     setVerificationCode("");
     setPendingFactor(null);
     setEnrolling(false);
     setVerifying(false);
-  }, []);
+  };
 
-  const handleSetupOpenChange = useCallback(async (open: boolean) => {
+  const handleSetupOpenChange = async (open: boolean) => {
     if (!open && pendingFactor && !verifying) {
       await cleanupPendingFactor(pendingFactor.id);
-      void refetchFactors();
       await refreshSecurity();
     }
 
@@ -140,7 +119,7 @@ export function MfaSetup({ initialFactors, recoveryCodes }: MfaSetupProps) {
     }
 
     setSetupOpen(open);
-  }, [cleanupPendingFactor, refetchFactors, pendingFactor, refreshSecurity, resetSetupDialog, verifying]);
+  };
 
   const handleEnroll = async () => {
     setEnrolling(true);
@@ -149,7 +128,7 @@ export function MfaSetup({ initialFactors, recoveryCodes }: MfaSetupProps) {
 
       const result = await supabase.auth.mfa.enroll({
         factorType: "totp",
-        friendlyName: friendlyName.trim() || "Authenticator app",
+        friendlyName: "Authenticator app",
         issuer: "NB S3",
       });
 
@@ -170,7 +149,7 @@ export function MfaSetup({ initialFactors, recoveryCodes }: MfaSetupProps) {
     }
   };
 
-  const handleGenerateRecoveryCodes = useCallback(async (mode: "initial" | "regenerate") => {
+  const handleGenerateRecoveryCodes = async (mode: "initial" | "regenerate") => {
     const response = await fetch("/api/v1/auth/mfa/recovery-codes", {
       method: "POST",
       headers: {
@@ -189,7 +168,7 @@ export function MfaSetup({ initialFactors, recoveryCodes }: MfaSetupProps) {
       generatedAt: typeof json?.data?.generatedAt === "string" ? json.data.generatedAt : undefined,
     });
     await refreshSecurity();
-  }, [refreshSecurity]);
+  };
 
   const handleVerify = async () => {
     if (!pendingFactor) return;
@@ -214,7 +193,6 @@ export function MfaSetup({ initialFactors, recoveryCodes }: MfaSetupProps) {
       toast.success("Authenticator app enabled");
       resetSetupDialog();
       setSetupOpen(false);
-      await refetchFactors();
       await refreshSecurity();
 
       try {
@@ -233,7 +211,7 @@ export function MfaSetup({ initialFactors, recoveryCodes }: MfaSetupProps) {
     }
   };
 
-  const executeProtectedAction = useCallback(async (action: ProtectedAction) => {
+  const executeProtectedAction = async (action: ProtectedAction) => {
     if (!action) return;
 
     setProtectedActionPending(true);
@@ -248,7 +226,6 @@ export function MfaSetup({ initialFactors, recoveryCodes }: MfaSetupProps) {
           throw new Error(json?.message || `Failed to remove MFA factor (${res.status})`);
         }
 
-        queryClient.setQueryData(queryKeys.settings.mfaFactors(), (old: MfaFactor[] | undefined) => old?.filter((factor) => factor.id !== action.factorId) ?? []);
         toast.success("Authenticator app removed");
       }
 
@@ -257,7 +234,6 @@ export function MfaSetup({ initialFactors, recoveryCodes }: MfaSetupProps) {
         toast.success("Recovery codes regenerated");
       }
 
-      await refetchFactors();
       await refreshSecurity();
       setProtectedAction(null);
       setUnenrollId(null);
@@ -266,7 +242,7 @@ export function MfaSetup({ initialFactors, recoveryCodes }: MfaSetupProps) {
     } finally {
       setProtectedActionPending(false);
     }
-  }, [handleGenerateRecoveryCodes, refetchFactors, refreshSecurity]);
+  };
 
   const handleCopySecret = async () => {
     if (!pendingFactor) return;
@@ -302,32 +278,6 @@ export function MfaSetup({ initialFactors, recoveryCodes }: MfaSetupProps) {
     URL.revokeObjectURL(url);
   };
 
-  const handlePrintRecoveryCodes = () => {
-    if (!revealedRecoveryCodes) return;
-    const printWindow = window.open("", "_blank", "noopener,noreferrer,width=720,height=640");
-    if (!printWindow) {
-      toast.error("Could not open the print dialog on this device");
-      return;
-    }
-    const recoveryCodesText = formatRecoveryCodesForExport(revealedRecoveryCodes.codes);
-    const pre = printWindow.document.createElement("pre");
-    pre.textContent = recoveryCodesText;
-    printWindow.document.body.innerHTML = "";
-    printWindow.document.body.appendChild(pre);
-    printWindow.document.close();
-    printWindow.focus();
-    printWindow.print();
-  };
-
-  if (loading) {
-    return (
-      <div className="flex items-center gap-2 text-sm text-zinc-500">
-        <Loader2 className="h-4 w-4 animate-spin" />
-        Loading authenticator settings...
-      </div>
-    );
-  }
-
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-3">
@@ -347,11 +297,10 @@ export function MfaSetup({ initialFactors, recoveryCodes }: MfaSetupProps) {
         </p>
       </div>
 
-      {verifiedFactors.length > 0 ? (
+      {primaryVerifiedFactor ? (
         <div className="space-y-2">
-          {verifiedFactors.map((factor) => (
             <div
-              key={factor.id}
+              key={primaryVerifiedFactor.id}
               className="flex items-center justify-between rounded-xl border border-zinc-200 p-3 dark:border-zinc-800"
             >
               <div className="flex items-center gap-3">
@@ -360,23 +309,22 @@ export function MfaSetup({ initialFactors, recoveryCodes }: MfaSetupProps) {
                 </div>
                 <div>
                   <div className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
-                    {factor.friendly_name || "Authenticator app"}
+                    Authenticator app
                   </div>
                   <div className="text-xs text-zinc-500 dark:text-zinc-400">
-                    Added {factor.created_at ? new Date(factor.created_at).toLocaleDateString() : "recently"}
+                    Added {primaryVerifiedFactor.created_at ? new Date(primaryVerifiedFactor.created_at).toLocaleDateString() : "recently"}
                   </div>
                 </div>
               </div>
               <Button
                 variant="ghost"
                 size="sm"
-                aria-label={`Remove ${factor.friendly_name || "authenticator app"}`}
-                onClick={() => setUnenrollId(factor.id)}
+                aria-label="Remove authenticator app"
+                onClick={() => setUnenrollId(primaryVerifiedFactor.id)}
               >
                 <Trash2 className="h-4 w-4 text-red-500" />
               </Button>
             </div>
-          ))}
         </div>
       ) : (
         <p className="text-sm text-zinc-500 dark:text-zinc-400">
@@ -433,11 +381,11 @@ export function MfaSetup({ initialFactors, recoveryCodes }: MfaSetupProps) {
         </div>
       )}
 
-      <div className="flex flex-wrap gap-3">
+      {!hasVerifiedFactor ? <div className="flex flex-wrap gap-3">
         <Button onClick={() => setSetupOpen(true)}>
-          {hasVerifiedFactor ? "Add another authenticator" : "Set up authenticator app"}
+          Set up authenticator app
         </Button>
-      </div>
+      </div> : null}
 
       <Dialog open={setupOpen} onOpenChange={(open) => { void handleSetupOpenChange(open); }}>
         <DialogContent className="sm:max-w-xl">
@@ -453,21 +401,7 @@ export function MfaSetup({ initialFactors, recoveryCodes }: MfaSetupProps) {
           </DialogHeader>
 
           {!pendingFactor ? (
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="mfa-friendly-name">Name</Label>
-                <Input
-                  id="mfa-friendly-name"
-                  value={friendlyName}
-                  onChange={(event) => setFriendlyName(event.target.value)}
-                  placeholder="Authenticator app"
-                  disabled={enrolling}
-                />
-              </div>
-              <p className="text-sm text-zinc-500 dark:text-zinc-400">
-                When setup is confirmed, you will receive 10 one-time recovery codes to store safely.
-              </p>
-            </div>
+            <p className="text-sm text-zinc-500 dark:text-zinc-400">When setup is confirmed, you will receive 10 one-time recovery codes to store safely.</p>
           ) : (
             <div className="space-y-4">
               <div className="grid gap-4 sm:grid-cols-[200px_minmax(0,1fr)]">
@@ -500,14 +434,14 @@ export function MfaSetup({ initialFactors, recoveryCodes }: MfaSetupProps) {
                       variant="outline"
                       size="sm"
                       className="mt-3"
-                      leftIcon={<Copy className="h-3.5 w-3.5" />}
                       onClick={handleCopySecret}
                     >
+                      <Copy className="h-3.5 w-3.5" />
                       Copy secret
                     </Button>
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="mfa-verification-code">6-digit code</Label>
+                    <label htmlFor="mfa-verification-code" className="text-sm font-medium leading-none">6-digit code</label>
                     <Input
                       id="mfa-verification-code"
                       inputMode="numeric"
@@ -588,14 +522,13 @@ export function MfaSetup({ initialFactors, recoveryCodes }: MfaSetupProps) {
               ))}
             </div>
             <div className="flex flex-wrap gap-3">
-              <Button type="button" variant="outline" size="sm" leftIcon={<Copy className="h-4 w-4" />} onClick={() => void handleCopyRecoveryCodes()}>
+              <Button type="button" variant="outline" size="sm" onClick={() => void handleCopyRecoveryCodes()}>
+                <Copy className="h-4 w-4" />
                 Copy
               </Button>
-              <Button type="button" variant="outline" size="sm" leftIcon={<Download className="h-4 w-4" />} onClick={handleDownloadRecoveryCodes}>
+              <Button type="button" variant="outline" size="sm" onClick={handleDownloadRecoveryCodes}>
+                <Download className="h-4 w-4" />
                 Download .txt
-              </Button>
-              <Button type="button" variant="outline" size="sm" leftIcon={<Printer className="h-4 w-4" />} onClick={handlePrintRecoveryCodes}>
-                Print
               </Button>
             </div>
           </div>
