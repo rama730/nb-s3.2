@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Briefcase, Clock3, Info, Link2, Loader2, Sparkles, Users } from "lucide-react";
 import { toast } from "sonner";
 import { applyToRoleAction } from "@/app/actions/applications";
+import { useAuth } from "@/lib/hooks/use-auth";
 import { logger } from "@/lib/logger";
 import { get, set, del } from "idb-keyval";
 import {
@@ -14,6 +15,7 @@ import {
     DialogHeader,
     DialogTitle,
 } from "@/components/ui/dialog";
+import { SkillList } from "@/components/skills/SkillList";
 
 type ProjectRef = {
     id: string;
@@ -35,9 +37,10 @@ interface ApplyRoleModalProps {
     isOpen: boolean;
     onClose: () => void;
     onSuccess?: () => void;
-    project: ProjectRef;
-    roles: ProjectRole[];
+    project?: ProjectRef;
+    roles?: ProjectRole[];
     preselectedRoleId?: string;
+    candidateProjects?: { id: string; title: string; slug?: string | null; openRoles: ProjectRole[] }[];
 }
 
 const MAX_MESSAGE_LENGTH = 1200;
@@ -110,7 +113,9 @@ export default function ApplyRoleModal({
     project,
     roles,
     preselectedRoleId,
+    candidateProjects,
 }: ApplyRoleModalProps) {
+    const [selectedProjectId, setSelectedProjectId] = useState("");
     const [roleId, setRoleId] = useState("");
     const [message, setMessage] = useState("");
     const [portfolioUrl, setPortfolioUrl] = useState("");
@@ -118,14 +123,54 @@ export default function ApplyRoleModal({
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [keyboardInset, setKeyboardInset] = useState(0);
     const [roleSearch, setRoleSearch] = useState("");
+
+    const { user } = useAuth();
+
+    const currentProject = useMemo(() => {
+        if (project) return project;
+        if (candidateProjects) {
+            return candidateProjects.find(p => p.id === selectedProjectId) || null;
+        }
+        return null;
+    }, [project, candidateProjects, selectedProjectId]) as any;
+
+    const currentRoles = useMemo(() => {
+        if (roles) return roles;
+        return currentProject?.openRoles || [];
+    }, [roles, currentProject]);
+
+    useEffect(() => {
+        if (isOpen) {
+            if (project?.id) {
+                setSelectedProjectId(project.id);
+            } else if (candidateProjects && candidateProjects.length > 0 && !selectedProjectId) {
+                setSelectedProjectId(candidateProjects[0]!.id);
+            }
+        }
+    }, [isOpen, project?.id, candidateProjects, selectedProjectId]);
+
+    useEffect(() => {
+        if (isOpen && preselectedRoleId) {
+            if (candidateProjects) {
+                const found = candidateProjects.find(p => p.openRoles.some(r => r.id === preselectedRoleId));
+                if (found) {
+                    setSelectedProjectId(found.id);
+                    setRoleId(preselectedRoleId);
+                }
+            } else {
+                setRoleId(preselectedRoleId);
+            }
+        }
+    }, [isOpen, preselectedRoleId, candidateProjects]);
+
     const [showAllRoles, setShowAllRoles] = useState(false);
     const messageRef = useRef<HTMLTextAreaElement | null>(null);
     const hasUserSelectedRole = useRef(false);
     const lastLineCount = useRef(0);
-    const draftStorageKey = useMemo(() => `apply-role-draft:${project.id}`, [project.id]);
+    const draftStorageKey = useMemo(() => `apply-role-draft:${currentProject?.id || selectedProjectId || 'select'}`, [currentProject?.id, selectedProjectId]);
 
     const roleOptions = useMemo(() => {
-        return (roles || []).map((role) => {
+        return (currentRoles || []).map((role: ProjectRole) => {
             const total = Number(role.count || 0);
             const filled = Number(role.filled || 0);
             const remaining = Math.max(0, total - filled);
@@ -137,12 +182,12 @@ export default function ApplyRoleModal({
                 disabled: remaining <= 0,
             };
         });
-    }, [roles]);
+    }, [currentRoles]);
 
     const filteredRoles = useMemo(() => {
         const query = roleSearch.trim().toLowerCase();
         if (!query) return roleOptions;
-        return roleOptions.filter((role) =>
+        return roleOptions.filter((role: any) =>
             getRoleLabel(role).toLowerCase().includes(query)
         );
     }, [roleOptions, roleSearch]);
@@ -152,8 +197,8 @@ export default function ApplyRoleModal({
             return filteredRoles;
         }
         const initial = filteredRoles.slice(0, 5);
-        if (roleId && !initial.some((r) => r.id === roleId)) {
-            const selected = filteredRoles.find((r) => r.id === roleId);
+        if (roleId && !initial.some((r: any) => r.id === roleId)) {
+            const selected = filteredRoles.find((r: any) => r.id === roleId);
             if (selected) {
                 initial.push(selected);
             }
@@ -162,7 +207,7 @@ export default function ApplyRoleModal({
     }, [filteredRoles, showAllRoles, roleSearch, roleId]);
 
     const selectedRole = useMemo(() => {
-        return roleOptions.find((role) => role.id === roleId) || null;
+        return roleOptions.find((role: any) => role.id === roleId) || null;
     }, [roleId, roleOptions]);
 
     const messageWordCount = useMemo(() => {
@@ -189,7 +234,7 @@ export default function ApplyRoleModal({
         if (hasUserSelectedRole.current) return;
 
         const preselected = preselectedRoleId
-            ? roleOptions.find((role) => role.id === preselectedRoleId && !role.disabled)
+            ? roleOptions.find((role: any) => role.id === preselectedRoleId && !role.disabled)
             : null;
 
         if (preselected) {
@@ -197,7 +242,7 @@ export default function ApplyRoleModal({
             return;
         }
 
-        const firstOpenRole = roleOptions.find((role) => !role.disabled);
+        const firstOpenRole = roleOptions.find((role: any) => !role.disabled);
         setRoleId(firstOpenRole?.id || "");
     }, [isOpen, preselectedRoleId, roleOptions]);
 
@@ -217,12 +262,12 @@ export default function ApplyRoleModal({
                 }
                 if (!preselectedRoleId && parsed.roleId) {
                     // Stale draft role ID check: verify role exists and is not disabled
-                    const isValidRole = roleOptions.some((r) => r.id === parsed.roleId && !r.disabled);
+                    const isValidRole = roleOptions.some((r: any) => r.id === parsed.roleId && !r.disabled);
                     if (isValidRole) {
                         hasUserSelectedRole.current = true;
                         setRoleId(parsed.roleId);
                     } else {
-                        const firstOpenRole = roleOptions.find((role) => !role.disabled);
+                        const firstOpenRole = roleOptions.find((role: any) => !role.disabled);
                         setRoleId(firstOpenRole?.id || "");
                     }
                 }
@@ -356,6 +401,11 @@ export default function ApplyRoleModal({
     };
 
     const handleSubmit = async () => {
+        if (!currentProject) {
+            toast.error("Please select a project first");
+            return;
+        }
+
         if (!roleId) {
             toast.error("Select a role before submitting");
             return;
@@ -385,11 +435,11 @@ export default function ApplyRoleModal({
         }
 
         const startedAt = performance.now();
-        const requestId = `apply-submit:${project.id}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
+        const requestId = `apply-submit:${currentProject.id}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
         setIsSubmitting(true);
         try {
             const finalMessageHash = await sha256(finalMessage);
-            const idempotencyKey = `apply:${project.id}:${roleId}:${finalMessageHash}`;
+            const idempotencyKey = `apply:${currentProject.id}:${roleId}:${finalMessageHash}`;
             
             // Introduce a 15-second client-side submission timeout race
             let timeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -400,7 +450,11 @@ export default function ApplyRoleModal({
             });
 
             const result = await Promise.race([
-                applyToRoleAction(project.id, roleId, finalMessage, { idempotencyKey }),
+                applyToRoleAction(currentProject.id, roleId, finalMessage, {
+                    idempotencyKey,
+                    applyingProjectId: null,
+                    applyingProjectRole: null,
+                }),
                 timeoutPromise
             ]);
 
@@ -411,7 +465,7 @@ export default function ApplyRoleModal({
                 const durationMs = Math.round(performance.now() - startedAt);
                 logger.metric("applications.apply.result", {
                     module: "project-apply-modal",
-                    projectId: project.id,
+                    projectId: currentProject.id,
                     roleId,
                     idempotencyKey,
                     applicationTraceId: result.applicationTraceId || null,
@@ -422,7 +476,7 @@ export default function ApplyRoleModal({
                 });
                 logger.metric("project.detail.application.submit", {
                     interaction: "application.submit",
-                    projectId: project.id,
+                    projectId: currentProject.id,
                     roleId,
                     applicationTraceId: result.applicationTraceId || null,
                     requestId,
@@ -437,7 +491,7 @@ export default function ApplyRoleModal({
             const durationMs = Math.round(performance.now() - startedAt);
             logger.metric("applications.apply.result", {
                 module: "project-apply-modal",
-                projectId: project.id,
+                projectId: currentProject.id,
                 roleId,
                 idempotencyKey,
                 applicationTraceId: result.applicationTraceId || null,
@@ -449,7 +503,7 @@ export default function ApplyRoleModal({
             });
             logger.metric("project.detail.application.submit", {
                 interaction: "application.submit",
-                projectId: project.id,
+                projectId: currentProject.id,
                 roleId,
                 applicationTraceId: result.applicationTraceId || null,
                 applicationId: result.applicationId || null,
@@ -465,7 +519,7 @@ export default function ApplyRoleModal({
             const durationMs = Math.round(performance.now() - startedAt);
             logger.metric("project.detail.application.submit", {
                 interaction: "application.submit",
-                projectId: project.id,
+                projectId: currentProject.id,
                 roleId,
                 requestId,
                 durationMs,
@@ -497,7 +551,7 @@ export default function ApplyRoleModal({
                             <div className="min-w-0">
                                 <DialogTitle className="text-base sm:text-lg">Apply to Join</DialogTitle>
                                 <DialogDescription className="mt-1 text-xs text-zinc-500 dark:text-zinc-400 sm:text-sm">
-                                    Submit a focused application for <span className="font-semibold text-zinc-700 dark:text-zinc-200">{project.title}</span>.
+                                    Submit a focused application {currentProject ? <>for <span className="font-semibold text-zinc-700 dark:text-zinc-200">{currentProject.title}</span></> : "to join a project"}.
                                 </DialogDescription>
                             </div>
                         </div>
@@ -516,12 +570,16 @@ export default function ApplyRoleModal({
                                         placeholder="Search roles..."
                                         value={roleSearch}
                                         onChange={(e) => setRoleSearch(e.target.value)}
-                                        className="w-full text-xs px-2.5 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-950 focus:outline-none focus:border-primary/60 focus:ring-1 focus:ring-primary/20"
+                                        className="w-full text-xs px-2.5 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-950 focus:outline-none focus:border-primary/60  "
                                     />
                                 )}
                             </div>
                             <div className="min-h-0 divide-y divide-zinc-100 dark:divide-zinc-800/60 overflow-y-auto px-2 py-1">
-                                {visibleRoles.map((role) => {
+                                {visibleRoles.length === 0 ? (
+                                    <div className="p-5 text-center text-xs text-zinc-550 dark:text-zinc-450">
+                                        {!selectedProjectId ? "Select a project first." : "No open roles in this project."}
+                                    </div>
+                                ) : visibleRoles.map((role: any) => {
                                     const isActive = role.id === roleId;
                                     return (
                                         <button
@@ -567,6 +625,31 @@ export default function ApplyRoleModal({
                         </aside>
 
                         <section className="min-h-0 sm:col-span-7 sm:flex sm:flex-col">
+                            {candidateProjects && candidateProjects.length > 0 && (
+                                <div className="border-b border-zinc-200 px-3 py-3.5 dark:border-zinc-800 sm:px-5">
+                                    <label htmlFor="apply-project-select" className="mb-1 block text-xs font-semibold text-zinc-655 dark:text-zinc-355">
+                                        Project
+                                    </label>
+                                    <select
+                                        id="apply-project-select"
+                                        value={selectedProjectId}
+                                        onChange={(e) => {
+                                            setSelectedProjectId(e.target.value);
+                                            setRoleId("");
+                                        }}
+                                        className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-950 focus:outline-none focus:border-primary/60  "
+                                        disabled={isSubmitting}
+                                    >
+                                        <option value="">Select a project...</option>
+                                        {candidateProjects.map((p) => (
+                                            <option key={p.id} value={p.id}>
+                                                {p.title}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+                            )}
+
                             <div className="border-b border-zinc-200 px-3 py-2.5 dark:border-zinc-800 sm:hidden">
                                 <label htmlFor="apply-role-mobile" className="mb-1 block text-xs font-semibold text-zinc-600 dark:text-zinc-300">
                                     Role
@@ -578,11 +661,11 @@ export default function ApplyRoleModal({
                                         hasUserSelectedRole.current = true;
                                         setRoleId(event.target.value);
                                     }}
-                                    className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-950 focus:outline-none focus:border-primary/60 focus:ring-2 focus:ring-primary/20"
+                                    className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-950 focus:outline-none focus:border-primary/60  "
                                     disabled={isSubmitting}
                                 >
                                     {roleOptions.length === 0 && <option value="">No open roles</option>}
-                                    {roleOptions.map((role) => (
+                                    {roleOptions.map((role: any) => (
                                         <option key={role.id} value={role.id} disabled={role.disabled}>
                                             {getRoleLabel(role)}{role.disabled ? " (Filled)" : ` (${role.remaining} open)`}
                                         </option>
@@ -604,13 +687,7 @@ export default function ApplyRoleModal({
                                             <p className="text-xs text-zinc-500 dark:text-zinc-400 mb-2">{selectedRole.description}</p>
                                         )}
                                         {!!selectedRole.skills?.length && (
-                                            <div className="flex flex-wrap gap-1.5">
-                                                {selectedRole.skills.slice(0, 6).map((skill) => (
-                                                    <span key={skill} className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 border border-zinc-200/60 dark:border-zinc-700/60 transition-colors">
-                                                        {skill}
-                                                    </span>
-                                                ))}
-                                            </div>
+                                            <SkillList skills={selectedRole.skills} maxVisible={6} size="sm" />
                                         )}
                                     </div>
                                 ) : (
@@ -618,6 +695,8 @@ export default function ApplyRoleModal({
                                         No available role to apply right now.
                                     </div>
                                 )}
+
+
 
                                 <div className="space-y-2">
                                     <label htmlFor="apply-message" className="text-sm font-semibold text-zinc-800 dark:text-zinc-200">
@@ -630,7 +709,7 @@ export default function ApplyRoleModal({
                                         onChange={(event) => setMessage(event.target.value.slice(0, MAX_MESSAGE_LENGTH))}
                                         placeholder="Describe your relevant skills, your execution style, and how you will contribute in the first week."
                                         rows={6}
-                                        className="w-full max-h-[200px] min-h-[112px] resize-none rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm transition-colors focus:border-primary/60 focus:ring-2 focus:ring-primary/20 dark:border-zinc-700 dark:bg-zinc-950 dark:focus:border-primary/50 dark:focus:ring-primary/20 focus:outline-none"
+                                        className="w-full max-h-[200px] min-h-[112px] resize-none rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm transition-colors focus:border-primary/60   dark:border-zinc-700 dark:bg-zinc-950 dark:focus:border-primary/50 dark: focus:outline-none"
                                         disabled={isSubmitting}
                                     />
                                     <div className="flex items-center justify-between">
@@ -680,7 +759,7 @@ export default function ApplyRoleModal({
                                             value={portfolioUrl}
                                             onChange={(event) => setPortfolioUrl(event.target.value)}
                                             placeholder="https://..."
-                                            className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm focus:border-primary/60 focus:ring-2 focus:ring-primary/20 dark:border-zinc-700 dark:bg-zinc-950 dark:focus:border-primary/50 dark:focus:ring-primary/20 focus:outline-none"
+                                            className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm focus:border-primary/60   dark:border-zinc-700 dark:bg-zinc-950 dark:focus:border-primary/50 dark: focus:outline-none"
                                             disabled={isSubmitting}
                                         />
                                     </div>
@@ -693,7 +772,7 @@ export default function ApplyRoleModal({
                                             value={availability}
                                             onChange={(event) => setAvailability(event.target.value)}
                                             placeholder="e.g. 15 hrs/week, evenings"
-                                            className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm focus:border-primary/60 focus:ring-2 focus:ring-primary/20 dark:border-zinc-700 dark:bg-zinc-950 dark:focus:border-primary/50 dark:focus:ring-primary/20 focus:outline-none"
+                                            className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm focus:border-primary/60   dark:border-zinc-700 dark:bg-zinc-950 dark:focus:border-primary/50 dark: focus:outline-none"
                                             disabled={isSubmitting}
                                         />
                                     </div>
