@@ -1,6 +1,5 @@
 import { z } from 'zod'
 import {
-    ONBOARDING_AVAILABILITY_VALUES,
     ONBOARDING_EXPERIENCE_LEVEL_VALUES,
     ONBOARDING_GENDER_VALUES,
     ONBOARDING_HOURS_PER_WEEK_VALUES,
@@ -9,6 +8,7 @@ import {
     ONBOARDING_VISIBILITY_VALUES,
 } from '@/lib/onboarding/contracts'
 import { normalizeUsername, validateUsername } from '@/lib/validations/username'
+import { getRolePreferences } from '@/lib/profile/role-preferences'
 
 const MAX_HEADLINE_CHARS = 120
 const MAX_BIO_CHARS = 500
@@ -107,13 +107,13 @@ const dedupeNormalized = (items: string[]) => {
 const openToSchema = z
     .array(tagItemSchema)
     .transform(dedupeNormalized)
+    .transform(getRolePreferences)
     .refine((items) => items.length <= MAX_OPEN_TO_ITEMS, {
         message: `Open-to must have ${MAX_OPEN_TO_ITEMS} items or fewer`,
     })
     .optional()
     .default([])
 
-const availabilityStatusSchema = z.enum(ONBOARDING_AVAILABILITY_VALUES)
 const messagePrivacySchema = z.enum(ONBOARDING_MESSAGE_PRIVACY_VALUES)
 const experienceLevelSchema = z.enum(ONBOARDING_EXPERIENCE_LEVEL_VALUES)
 const hoursPerWeekSchema = z.enum(ONBOARDING_HOURS_PER_WEEK_VALUES)
@@ -186,7 +186,6 @@ export const onboardingPayloadSchema = z.object({
         .optional()
         .default([]),
     openTo: openToSchema,
-    availabilityStatus: availabilityStatusSchema.optional().default('available'),
     messagePrivacy: messagePrivacySchema.optional().default('connections'),
     socialLinks: socialLinksSchema,
     experienceLevel: experienceLevelSchema.optional(),
