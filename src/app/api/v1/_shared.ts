@@ -161,7 +161,7 @@ export async function requireAuthenticatedUser() {
             updated_at: session.lastSeenAt.toISOString(),
           } as any;
 
-          return { supabase, user: mockUser, response: null };
+          return { supabase, user: mockUser, extensionSessionId: session.id, response: null };
         }
       }
     }
@@ -179,10 +179,16 @@ export async function requireAuthenticatedUser() {
     return {
       supabase,
       user: null as User | null,
+      extensionSessionId: null as string | null,
       response: jsonError("Not authenticated", 401, "UNAUTHORIZED"),
     };
   }
-  return { supabase, user, response: null as ReturnType<typeof jsonError> | null };
+  return {
+    supabase,
+    user,
+    extensionSessionId: null as string | null,
+    response: null as ReturnType<typeof jsonError> | null,
+  };
 }
 
 export async function withTimeout<T>(
