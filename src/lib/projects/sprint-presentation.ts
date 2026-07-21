@@ -2,41 +2,19 @@ import {
   buildSprintFilterCounts,
   type SprintCompareMetric,
   type SprintCompareSummary,
-  type SprintDetailPayload,
   type SprintDrawerPreview,
   type SprintHealthSummary,
   type SprintListItem,
-  type SprintRouteState,
   type SprintTimelineFilter,
-  type SprintTimelineMode,
   type SprintTimelineRow,
-  type SprintViewPreference,
   type SprintVisibleCounts,
 } from "@/lib/projects/sprint-detail";
 
-export type SprintGroupedTimelineItem = {
-  taskRow: Extract<SprintTimelineRow, { kind: "task" }>;
-  fileRows: Extract<SprintTimelineRow, { kind: "file" }>[];
-  fileVersionRows: Extract<SprintTimelineRow, { kind: "file_version" }>[];
+export type SprintTimelineViewModel = {
+  mode: "chronological";
+  rows: SprintTimelineRow[];
+  visibleCounts: SprintVisibleCounts;
 };
-
-export type SprintTimelineViewModel =
-  | {
-      mode: "chronological" | "files";
-      rows: SprintTimelineRow[];
-      groups: [];
-      kickoff: null;
-      closeout: null;
-      visibleCounts: SprintVisibleCounts;
-    }
-  | {
-      mode: "grouped";
-      rows: [];
-      groups: SprintGroupedTimelineItem[];
-      kickoff: Extract<SprintTimelineRow, { kind: "kickoff" }> | null;
-      closeout: Extract<SprintTimelineRow, { kind: "closeout" }> | null;
-      visibleCounts: SprintVisibleCounts;
-    };
 
 function toSprintTimelineTimestamp(value: string | null | undefined) {
   if (!value) return Number.NEGATIVE_INFINITY;
@@ -65,13 +43,6 @@ function toMetric(current: number, previous: number | null, higherIsBetter: bool
   };
 }
 
-function normalizeFilterForMode(mode: SprintTimelineMode, filter: SprintTimelineFilter): SprintTimelineFilter {
-  if (mode === "files" && filter === "files") {
-    return "all";
-  }
-  return filter;
-}
-
 function getSprintBaselineTimestamp(sprint: SprintListItem) {
   return toSprintTimelineTimestamp(
     sprint.startDate ??
@@ -80,50 +51,6 @@ function getSprintBaselineTimestamp(sprint: SprintListItem) {
       sprint.updatedAt ??
       null,
   );
-}
-
-function getFileRowsForFilter(
-  rows: SprintTimelineRow[],
-  filter: "all" | "blocked" | "completed",
-): SprintTimelineRow[] {
-  return rows.filter((row) => {
-    if (row.kind === "kickoff" || row.kind === "closeout") return true;
-    if (row.kind !== "file" && row.kind !== "file_version") return false;
-    if (filter === "blocked") return row.task.status === "blocked";
-    if (filter === "completed") return row.task.status === "done";
-    return true;
-  });
-}
-
-export function getSprintFiltersForMode(mode: SprintTimelineMode): SprintTimelineFilter[] {
-  if (mode === "files") {
-    return ["all", "blocked", "completed"];
-  }
-  return ["all", "work", "blocked", "completed", "files"];
-}
-
-export function resolveSprintViewState(input: {
-  routeState: SprintRouteState;
-  preference: SprintViewPreference | null;
-}): {
-  mode: SprintTimelineMode;
-  filter: SprintTimelineFilter;
-} {
-  const mode = input.routeState.hasExplicitMode
-    ? input.routeState.mode
-    : input.preference?.mode ?? "chronological";
-
-  const candidateFilter = input.routeState.hasExplicitFilter
-    ? input.routeState.filter
-    : input.preference?.filter ?? "all";
-
-  const normalizedFilter = normalizeFilterForMode(mode, candidateFilter);
-  const allowedFilters = new Set(getSprintFiltersForMode(mode));
-
-  return {
-    mode,
-    filter: allowedFilters.has(normalizedFilter) ? normalizedFilter : "all",
-  };
 }
 
 export function buildSprintCompareSummary(input: {
@@ -185,50 +112,24 @@ export function buildSprintDrawerPreviews(rows: SprintTimelineRow[]): SprintDraw
   const seen = new Set<string>();
 
   for (const row of rows) {
-    if (row.kind === "task") {
-      const key = `task:${row.task.id}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      previews.push({
-        type: "task",
-        id: row.task.id,
-        title: row.task.taskNumber ? `NB-${row.task.taskNumber} · ${row.task.title}` : row.task.title,
-        subtitle: row.task.description?.trim() || "Task detail",
-        occurredAt: row.occurredAt,
-        badgeText: row.task.status,
-      });
-      continue;
-    }
-
+    if (row.kind !== "task") continue;
+    const key = `task:${row.task.id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    previews.push({
+      type: "task",
+      id: row.task.id,
+      title: row.task.taskNumber ? `NB-${row.task.taskNumber} · ${row.task.title}` : row.task.title,
+      subtitle: row.task.description?.trim() || "Task detail",
+      occurredAt: row.occurredAt,
+      badgeText: row.task.status,
+    });
   }
 
   return previews;
 }
 
-export function buildSprintVisibleCounts(
-  rows: SprintTimelineRow[],
-  mode: SprintTimelineMode,
-): SprintVisibleCounts {
-  if (mode === "files") {
-    const fileRows = rows.filter((row) => row.kind === "file");
-    return {
-      all: fileRows.length,
-      blocked: fileRows.filter((row) => row.kind === "file" && row.task.status === "blocked").length,
-      completed: fileRows.filter((row) => row.kind === "file" && row.task.status === "done").length,
-    };
-  }
-
-  if (mode === "grouped") {
-    const taskRows = rows.filter((row): row is Extract<SprintTimelineRow, { kind: "task" }> => row.kind === "task");
-    return {
-      all: taskRows.length,
-      work: taskRows.length,
-      blocked: taskRows.filter((row) => row.task.status === "blocked").length,
-      completed: taskRows.filter((row) => row.task.status === "done").length,
-      files: taskRows.filter((row) => row.task.linkedFileCount > 0).length,
-    };
-  }
-
+export function buildSprintVisibleCounts(rows: SprintTimelineRow[]): SprintVisibleCounts {
   const taskRows = rows.filter((row): row is Extract<SprintTimelineRow, { kind: "task" }> => row.kind === "task");
   const fileRows = rows.filter((row): row is Extract<SprintTimelineRow, { kind: "file" }> => row.kind === "file");
   return buildSprintFilterCounts({
@@ -241,112 +142,20 @@ export function buildSprintVisibleCounts(
 
 export function buildSprintTimelineViewModel(input: {
   rows: SprintTimelineRow[];
-  mode: SprintTimelineMode;
   filter: SprintTimelineFilter;
 }): SprintTimelineViewModel {
-  const normalizedFilter = normalizeFilterForMode(input.mode, input.filter);
-
-  if (input.mode === "files") {
-    const fileFilter = normalizedFilter === "blocked" || normalizedFilter === "completed" ? normalizedFilter : "all";
-    return {
-      mode: "files",
-      rows: getFileRowsForFilter(input.rows, fileFilter),
-      groups: [],
-      kickoff: null,
-      closeout: null,
-      visibleCounts: buildSprintVisibleCounts(input.rows, "files"),
-    };
-  }
-
-  if (input.mode === "grouped") {
-    const kickoff = input.rows.find((row): row is Extract<SprintTimelineRow, { kind: "kickoff" }> => row.kind === "kickoff");
-    const closeout = [...input.rows].reverse().find((row): row is Extract<SprintTimelineRow, { kind: "closeout" }> => row.kind === "closeout");
-    const filesByTaskId = new Map<string, Extract<SprintTimelineRow, { kind: "file" }>[]>();
-    const fileVersionsByTaskId = new Map<string, Extract<SprintTimelineRow, { kind: "file_version" }>[]>();
-
-    for (const row of input.rows) {
-      if (row.kind === "file") {
-        const current = filesByTaskId.get(row.task.id) ?? [];
-        current.push(row);
-        filesByTaskId.set(row.task.id, current);
-      } else if (row.kind === "file_version") {
-        const current = fileVersionsByTaskId.get(row.task.id) ?? [];
-        current.push(row);
-        fileVersionsByTaskId.set(row.task.id, current);
-      }
-    }
-
-    const groups = input.rows
-      .filter((row): row is Extract<SprintTimelineRow, { kind: "task" }> => row.kind === "task")
-      .filter((row) => {
-        if (normalizedFilter === "blocked") return row.task.status === "blocked";
-        if (normalizedFilter === "completed") return row.task.status === "done";
-        if (normalizedFilter === "files") return (filesByTaskId.get(row.task.id) ?? []).length > 0;
-        return true;
-      })
-      .map((taskRow) => ({
-        taskRow,
-        fileRows: filesByTaskId.get(taskRow.task.id) ?? [],
-        fileVersionRows: fileVersionsByTaskId.get(taskRow.task.id) ?? [],
-      }));
-
-    return {
-      mode: "grouped",
-      rows: [],
-      groups,
-      kickoff: kickoff ?? null,
-      closeout: closeout ?? null,
-      visibleCounts: buildSprintVisibleCounts(input.rows, "grouped"),
-    };
-  }
-
-  const chronologicalRows = input.rows.filter((row) => {
+  const rows = input.rows.filter((row) => {
     if (row.kind === "kickoff" || row.kind === "closeout") return true;
-    if (normalizedFilter === "files") return row.kind === "file" || row.kind === "file_version";
-    if (normalizedFilter === "work") return row.kind === "task";
-    if (normalizedFilter === "blocked") return row.kind === "task" && row.task.status === "blocked";
-    if (normalizedFilter === "completed") return row.kind === "task" && row.task.status === "done";
+    if (input.filter === "files") return row.kind === "file" || row.kind === "file_version";
+    if (input.filter === "work") return row.kind === "task";
+    if (input.filter === "blocked") return row.kind === "task" && row.task.status === "blocked";
+    if (input.filter === "completed") return row.kind === "task" && row.task.status === "done";
     return true;
   });
 
   return {
     mode: "chronological",
-    rows: chronologicalRows,
-    groups: [],
-    kickoff: null,
-    closeout: null,
-    visibleCounts: buildSprintVisibleCounts(input.rows, "chronological"),
-  };
-}
-
-export function buildSprintShellSlice(payload: SprintDetailPayload) {
-  return {
-    projectId: payload.projectId,
-    projectSlug: payload.projectSlug,
-    sprints: payload.sprints,
-    selectedSprintId: payload.selectedSprintId,
-    permissions: payload.permissions,
-    timelineMode: payload.timelineMode,
-  };
-}
-
-export function buildSprintSummarySlice(payload: SprintDetailPayload) {
-  return {
-    projectId: payload.projectId,
-    selectedSprintId: payload.selectedSprintId,
-    summary: payload.summary,
-    compareSummary: payload.compareSummary,
-    filterCounts: payload.filterCounts,
-  };
-}
-
-export function buildSprintTimelineSlice(payload: SprintDetailPayload) {
-  return {
-    projectId: payload.projectId,
-    selectedSprintId: payload.selectedSprintId,
-    rows: payload.rows,
-    drawerPreviews: payload.drawerPreviews,
-    nextCursor: payload.nextCursor,
-    hasMore: payload.hasMore,
+    rows,
+    visibleCounts: buildSprintVisibleCounts(input.rows),
   };
 }
