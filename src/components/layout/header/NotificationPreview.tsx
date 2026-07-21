@@ -12,7 +12,7 @@ import {
     DropdownMenuSeparator,
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ROUTES } from "@/constants/routes";
+import { settingsTabHref } from "@/constants/routes";
 import type {
     NotificationItem,
     NotificationMuteScope,
@@ -39,6 +39,7 @@ type NotificationPreviewProps = {
     hasMore: boolean;
     isLoadingMore: boolean;
     isRealtimeHealthy: boolean;
+    isMarkingAllRead: boolean;
     onOpenChange: (open: boolean) => void;
     onFilterChange: (filter: NotificationTrayFilter) => void;
     onOpenItem: (item: NotificationItem) => Promise<unknown>;
@@ -63,6 +64,7 @@ export default function NotificationPreview(props: NotificationPreviewProps) {
         hasMore,
         isLoadingMore,
         isRealtimeHealthy,
+        isMarkingAllRead,
         onOpenChange,
         onFilterChange,
         onOpenItem,
@@ -142,9 +144,9 @@ export default function NotificationPreview(props: NotificationPreviewProps) {
                                 variant="ghost"
                                 size="sm"
                                 onClick={() => void onMarkAllRead()}
-                                disabled={unreadCount === 0}
+                                disabled={unreadCount === 0 || isMarkingAllRead}
                             >
-                                Mark all read
+                                {isMarkingAllRead ? "Marking read..." : "Mark all read"}
                             </Button>
                             <DropdownMenu modal={false}>
                                 <DropdownMenuTrigger asChild>
@@ -173,7 +175,7 @@ export default function NotificationPreview(props: NotificationPreviewProps) {
                                 </DropdownMenuContent>
                             </DropdownMenu>
                             <Link
-                                href={`${ROUTES.SETTINGS}/notifications`}
+                                href={settingsTabHref("notifications")}
                                 className="rounded-md p-2 text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
                                 aria-label="Notification settings"
                             >
@@ -181,12 +183,15 @@ export default function NotificationPreview(props: NotificationPreviewProps) {
                             </Link>
                         </div>
                     </div>
-                    <div className="mt-3 grid grid-cols-2 rounded-xl bg-zinc-100 p-1 dark:bg-zinc-900">
+                    <div className="mt-3 grid grid-cols-2 rounded-xl bg-zinc-100 p-1 dark:bg-zinc-900" role="tablist" aria-label="Notification filter">
                         {FILTERS.map((filter) => (
                             <button
                                 key={filter.id}
                                 type="button"
-                                aria-pressed={activeFilter === filter.id}
+                                role="tab"
+                                id={`notifications-filter-${filter.id}`}
+                                aria-selected={activeFilter === filter.id}
+                                aria-controls="notifications-filter-panel"
                                 onClick={() => onFilterChange(filter.id)}
                                 className={cn(
                                     "min-h-10 rounded-lg px-3 py-2 text-xs font-semibold transition-colors sm:min-h-0 sm:py-1.5",
@@ -200,7 +205,7 @@ export default function NotificationPreview(props: NotificationPreviewProps) {
                         ))}
                     </div>
                 </div>
-                <div className="min-h-0 flex-1 overflow-y-auto">
+                <div id="notifications-filter-panel" role="tabpanel" aria-labelledby={`notifications-filter-${activeFilter}`} className="min-h-0 flex-1 overflow-y-auto">
                     {isLoading ? (
                         <div className="space-y-3 px-4 py-6">
                             {[0, 1, 2].map((index) => (
