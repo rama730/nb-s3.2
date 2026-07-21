@@ -1,8 +1,8 @@
 "use client";
 
-import dynamic from "next/dynamic";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
+import { useDebounce } from "use-debounce";
 import {
     ChevronDown,
     ChevronUp,
@@ -74,15 +74,6 @@ type PendingMediaUpload = {
     error: string | null;
 };
 
-function useDebouncedValue<T>(value: T, delayMs: number) {
-    const [debounced, setDebounced] = useState(value);
-    useEffect(() => {
-        const timer = setTimeout(() => setDebounced(value), delayMs);
-        return () => clearTimeout(timer);
-    }, [delayMs, value]);
-    return debounced;
-}
-
 function isProjectContextPanel(panel: ComposerPanel): panel is ProjectUpdateContextKind {
     return panel === "task" || panel === "sprint" || panel === "file";
 }
@@ -103,21 +94,6 @@ function assignLegacyContextRef(
     else refs.fileId = id;
 }
 
-function selectedContextFromRefs(
-    refs: ProjectUpdateEntityRefs,
-    options: Record<ProjectUpdateContextKind, ProjectUpdateContextOption[]>,
-) {
-    const byKind = (kind: ProjectUpdateContextKind) => {
-        const id = refs[refKeyForContextKind(kind)];
-        return id ? options[kind].find((option) => option.id === id) ?? null : null;
-    };
-    return {
-        task: byKind("task"),
-        sprint: byKind("sprint"),
-        file: byKind("file"),
-    };
-}
-
 function hasEntityReferences(refs: ProjectUpdateEntityRefs) {
     return Boolean(
         normalizeProjectUpdateReferences(refs.references).length > 0 ||
@@ -128,10 +104,6 @@ function hasEntityReferences(refs: ProjectUpdateEntityRefs) {
             refs.roleId ||
             refs.milestoneId,
     );
-}
-
-function referenceKey(option: Pick<ProjectUpdateContextOption, "kind" | "id">) {
-    return `${option.kind}:${option.id}`;
 }
 
 function formatFileSize(bytes: number | null | undefined) {
@@ -260,10 +232,9 @@ export function ProjectUpdateComposer({
     const editorRef = useRef<{ insertTextAtCursor: (t: string) => void } | null>(null);
 
     const [contextQuery, setContextQuery] = useState("");
-    const debouncedContextQuery = useDebouncedValue(contextQuery, 250);
+    const [debouncedContextQuery] = useDebounce(contextQuery, 250);
     const [mediaUrl, setMediaUrl] = useState("");
     const [mediaLabel, setMediaLabel] = useState("");
-    const [selectedContextCache, setSelectedContextCache] = useState<Record<string, ProjectUpdateContextOption>>({});
     const draftStorageKey = useMemo(() => projectUpdateDraftStorageKey(projectId, currentUserId), [currentUserId, projectId]);
     const lastSavedDraftRef = useRef<string | null>(null);
 
@@ -292,29 +263,7 @@ export function ProjectUpdateComposer({
     });
     const contextOptions = contextOptionsQuery.data ?? EMPTY_CONTEXT_OPTIONS;
     const activeContextOptions = activeContextKind ? contextOptions[activeContextKind] : [];
-    const selectedContext = useMemo(() => {
-        const fromOptions = selectedContextFromRefs(entityRefs, contextOptions);
-        const fromCache = (kind: ProjectUpdateContextKind) => {
-            const id = entityRefs[refKeyForContextKind(kind)];
-            const cached = id ? selectedContextCache[`${kind}:${id}`] : null;
-            return id && cached?.id === id ? cached : null;
-        };
-        return {
-            task: fromOptions.task ?? fromCache("task"),
-            sprint: fromOptions.sprint ?? fromCache("sprint"),
-            file: fromOptions.file ?? fromCache("file"),
-        };
-    }, [contextOptions, entityRefs, selectedContextCache]);
-    const selectedReferences = useMemo(() => {
-        const fromReferences = normalizedReferences.flatMap((reference) => {
-            const byOptions = contextOptions[reference.kind].find((option) => option.id === reference.id);
-            const cached = selectedContextCache[`${reference.kind}:${reference.id}`];
-            return byOptions ?? cached ?? [];
-        });
-        if (fromReferences.length > 0) return fromReferences;
-        return Object.values(selectedContext).filter((option): option is ProjectUpdateContextOption => Boolean(option));
-    }, [contextOptions, normalizedReferences, selectedContext, selectedContextCache]);
-    const hasMeaningfulUpdate = Boolean(content.trim() || normalizedReferences.length > 0 || selectedReferences.length > 0 || media.length > 0);
+    const hasMeaningfulUpdate = Boolean(content.trim() || normalizedReferences.length > 0 || media.length > 0);
     const disabled = !hasMeaningfulUpdate || hasPendingUploads || remaining < 0 || isPosting;
 
     const draftQuery = useQuery({
@@ -567,11 +516,7 @@ export function ProjectUpdateComposer({
         setActivePanel((current) => current === panel ? null : panel as ComposerPanel);
     };
 
-    const addContextReference = (
-        kind: ProjectUpdateContextKind,
-        id: string,
-        option?: ProjectUpdateContextOption,
-    ) => {
+    const addContextReference = (kind: ProjectUpdateContextKind, id: string) => {
         setEntityRefs((current) => {
             const references = normalizeProjectUpdateReferences([
                 ...(current.references ?? []),
@@ -581,9 +526,6 @@ export function ProjectUpdateComposer({
             assignLegacyContextRef(next, kind, id);
             return next;
         });
-        if (option) {
-            setSelectedContextCache((current) => ({ ...current, [referenceKey(option)]: option }));
-        }
     };
 
     const selectContext = (option: ProjectUpdateContextOption) => {
@@ -595,29 +537,6 @@ export function ProjectUpdateComposer({
             editorRef.current.insertTextAtCursor(refText);
         }
         setActivePanel(null);
-    };
-
-    const removeContext = (option: ProjectUpdateContextOption) => {
-        const pluralKind = option.kind === "task" ? "tasks" : option.kind === "sprint" ? "sprints" : "files";
-        const regex = new RegExp(`\\{%\\s*ref\\.${pluralKind}\\s+id="${option.id}"(?:\\s+label="[^"]*")?\\s*%\\}`, "gi");
-        const nextContent = content.replace(regex, "").replace(/\s+/g, " ").trim();
-        setContent(nextContent);
-
-        setEntityRefs((current) => {
-            const references = normalizeProjectUpdateReferences(current.references)
-                .filter((reference) => !(reference.kind === option.kind && reference.id === option.id));
-            const next: ProjectUpdateEntityRefs = { ...current, references };
-            if (current[refKeyForContextKind(option.kind)] === option.id) {
-                const replacement = references.find((reference) => reference.kind === option.kind);
-                assignLegacyContextRef(next, option.kind, replacement?.id ?? null);
-            }
-            return next;
-        });
-        setSelectedContextCache((current) => {
-            const next = { ...current };
-            delete next[referenceKey(option)];
-            return next;
-        });
     };
 
     const removeMedia = (index: number) => {
@@ -755,7 +674,6 @@ export function ProjectUpdateComposer({
     const resetAfterPost = () => {
         setContent("");
         setEntityRefs(EMPTY_REFS);
-        setSelectedContextCache({});
         setMedia([]);
         pendingMediaUploads.forEach((item) => URL.revokeObjectURL(item.previewUrl));
         setPendingMediaUploads([]);
@@ -891,7 +809,7 @@ export function ProjectUpdateComposer({
                     <button
                         type="button"
                         onClick={() => setExpanded(true)}
-                        className="block min-h-11 w-[calc(100%-32px)] rounded-lg px-0 text-left transition-colors hover:bg-zinc-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 dark:hover:bg-zinc-900/40"
+                        className="block min-h-11 w-[calc(100%-32px)] rounded-lg px-0 text-left transition-colors hover:bg-zinc-50 focus:outline-none   dark:hover:bg-zinc-900/40"
                         aria-expanded={expanded}
                     >
                         <span className={cn(
@@ -929,8 +847,6 @@ export function ProjectUpdateComposer({
 
                 {expanded && (media.length > 0 || pendingMediaUploads.length > 0) ? (
                     <div className="mt-3 space-y-2">
-                        {/* We no longer render structured context attachments list below the editor in the composer */}
-                        {(() => { const _unused = selectedReferences; return null; })()}
                         {pendingMediaUploads.map((item) => (
                             <ProjectUpdateMediaFrame
                                 key={item.id}
@@ -1081,14 +997,7 @@ export function ProjectUpdateComposer({
                         if (editorRef.current) {
                             editorRef.current.insertTextAtCursor(refText);
                         }
-                        addContextReference("file", node.id, {
-                            kind: "file",
-                            id: node.id,
-                            label: normalizedLabel,
-                            description: node.path || "",
-                            href: "",
-                            status: node.mimeType || "",
-                        });
+                        addContextReference("file", node.id);
                     });
                 }}
             />
