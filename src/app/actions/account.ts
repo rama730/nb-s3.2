@@ -11,11 +11,13 @@ import {
     collections,
     accountDeletions,
     profileAuditEvents,
+    profileProjectContributions,
+    profileContributionSkills,
+    skills,
     projectFollows,
     projectNodeEvents,
 } from "@/lib/db/schema";
 import { createClient } from '@/lib/supabase/server';
-import { isAdminUser } from '@/lib/security/admin';
 import { eq, or, and, inArray, isNull, sql, desc, ne } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { queueCounterRefreshBestEffort } from '@/lib/workspace/counter-buffer';
@@ -27,8 +29,6 @@ import { resolveSecurityStepUp } from '@/lib/security/step-up';
 import { enqueueProjectNotificationEvent } from '@/lib/notifications/project-events';
 import { z } from 'zod';
 
-const UUID_RE =
-    /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 const ACCOUNT_DELETE_CONFIRM_TEXT = 'DELETE';
 const GRACE_PERIOD_DAYS = 30;
 const CONFIRMATION_TOKEN_EXPIRY_HOURS = 1;
@@ -688,7 +688,6 @@ export async function exportAccountData(): Promise<{
                 website: profiles.website,
                 skills: profiles.skills,
                 interests: profiles.interests,
-                experience: profiles.experience,
                 education: profiles.education,
                 openTo: profiles.openTo,
                 socialLinks: profiles.socialLinks,
@@ -699,6 +698,80 @@ export async function exportAccountData(): Promise<{
             .from(profiles)
             .where(eq(profiles.id, userId))
             .limit(1);
+
+        const contributionRows = await readDb
+            .select({
+                id: profileProjectContributions.id,
+                projectId: profileProjectContributions.projectId,
+                externalKey: profileProjectContributions.externalKey,
+                projectTitle: profileProjectContributions.projectTitle,
+                platformProjectTitle: projects.title,
+                roleTitle: profileProjectContributions.roleTitle,
+                summary: profileProjectContributions.summary,
+                projectUrl: profileProjectContributions.projectUrl,
+                repositoryUrl: profileProjectContributions.repositoryUrl,
+                startedAt: profileProjectContributions.startedAt,
+                endedAt: profileProjectContributions.endedAt,
+                visibility: profileProjectContributions.visibility,
+                version: profileProjectContributions.version,
+                source: profileProjectContributions.source,
+                skillName: skills.name,
+                skillOrder: profileContributionSkills.displayOrder,
+            })
+            .from(profileProjectContributions)
+            .leftJoin(projects, eq(projects.id, profileProjectContributions.projectId))
+            .leftJoin(profileContributionSkills, eq(profileContributionSkills.contributionId, profileProjectContributions.id))
+            .leftJoin(skills, eq(skills.id, profileContributionSkills.skillId))
+            .where(and(
+                eq(profileProjectContributions.profileId, userId),
+                isNull(profileProjectContributions.deletedAt),
+            ))
+            .orderBy(desc(profileProjectContributions.updatedAt), profileContributionSkills.displayOrder)
+            .limit(100_000);
+
+        const contributionExport = Array.from(contributionRows.reduce((byId, row) => {
+            let contribution = byId.get(row.id);
+            if (!contribution) {
+                contribution = {
+                    id: row.id,
+                    kind: row.projectId ? 'platform' : 'external',
+                    projectId: row.projectId,
+                    externalKey: row.externalKey,
+                    projectTitle: row.platformProjectTitle || row.projectTitle,
+                    roleTitle: row.roleTitle,
+                    summary: row.summary,
+                    projectUrl: row.projectUrl,
+                    repositoryUrl: row.repositoryUrl,
+                    startedAt: row.startedAt,
+                    endedAt: row.endedAt,
+                    visibility: row.visibility,
+                    version: row.version,
+                    source: row.source,
+                    skills: [] as string[],
+                };
+                byId.set(row.id, contribution);
+            }
+            if (row.skillName && !contribution.skills.includes(row.skillName)) {
+                contribution.skills.push(row.skillName);
+            }
+            return byId;
+        }, new Map<string, {
+            id: string;
+            kind: string;
+            projectId: string | null;
+            externalKey: string | null;
+            projectTitle: string | null;
+            roleTitle: string | null;
+            summary: string | null;
+            projectUrl: string | null;
+            repositoryUrl: string | null;
+            startedAt: Date | null;
+            endedAt: Date | null;
+            visibility: string;
+            version: number;
+            source: string;
+            skills: string[];
+        }>()).values());
 
         await new Promise(resolve => setTimeout(resolve, 10)); // yield to event loop
 
@@ -803,6 +876,7 @@ export async function exportAccountData(): Promise<{
         const exportData = {
             exportedAt: new Date().toISOString(),
             profile,
+            projectContributions: contributionExport,
             projects: userProjects,
             // SEC-L1: exporting the raw counterparty UUID leaks an internal
             // identifier that the data subject does not need and that could be
@@ -1032,82 +1106,5 @@ export async function getTransferableProjects(): Promise<{
     } catch (error) {
         logger.error('account.transferable-projects.failed', { module: 'account', error: error instanceof Error ? error.message : String(error) });
         return { success: false, error: 'Failed to get transferable projects' };
-    }
-}
-
-// ============================================================================
-// ADMIN: CLEANUP ORPHANED PROFILE
-// ============================================================================
-
-/**
- * Clean up orphaned profiles (profiles that exist in DB but not in Auth).
- * This is an admin-only function for maintenance.
- */
-export async function cleanupOrphanedProfile(profileId: string): Promise<{ success: boolean; error?: string }> {
-    try {
-        const supabase = await createClient();
-        const { data: { user } } = await supabase.auth.getUser();
-
-        if (!user) {
-            return { success: false, error: 'Not authenticated' };
-        }
-        if (!isAdminUser(user)) {
-            return { success: false, error: 'Forbidden' };
-        }
-        if (!UUID_RE.test(profileId)) {
-            return { success: false, error: 'Invalid profile id' };
-        }
-
-        // First, check if the profile exists (explicit selection)
-        const [profile] = await db.select({ id: profiles.id }).from(profiles).where(eq(profiles.id, profileId)).limit(1);
-
-        if (!profile) {
-            return { success: false, error: 'Profile not found' };
-        }
-
-        const affectedConnectionRows = await db
-            .select({
-                requesterId: connections.requesterId,
-                addresseeId: connections.addresseeId,
-            })
-            .from(connections)
-            .where(
-                or(
-                    eq(connections.requesterId, profileId),
-                    eq(connections.addresseeId, profileId)
-                )
-            );
-
-        const affectedUserIds = affectedConnectionRows
-            .flatMap((row) => [
-                row.requesterId === profileId ? null : row.requesterId,
-                row.addresseeId === profileId ? null : row.addresseeId,
-            ])
-            .filter((id): id is string => id !== null);
-
-        await db.transaction(async (tx) => {
-            // Delete associated data
-            await tx.delete(projects).where(eq(projects.ownerId, profileId));
-            await tx.delete(connections).where(
-                or(
-                    eq(connections.requesterId, profileId),
-                    eq(connections.addresseeId, profileId)
-                )
-            );
-
-            // Delete the profile
-            await tx.delete(profileAuditEvents).where(eq(profileAuditEvents.userId, profileId));
-            await tx.delete(profiles).where(eq(profiles.id, profileId));
-        });
-
-        if (affectedUserIds.length > 0) {
-            await queueCounterRefreshBestEffort(affectedUserIds);
-        }
-
-        revalidatePath('/people');
-        return { success: true };
-    } catch (error) {
-        logger.error('account.cleanup.failed', { module: 'account', error: error instanceof Error ? error.message : String(error) });
-        return { success: false, error: 'Failed to cleanup profile' };
     }
 }
