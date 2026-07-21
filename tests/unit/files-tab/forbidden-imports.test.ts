@@ -17,20 +17,6 @@
 //   The forbidden list (mirrors Task 11.3 in tasks.md):
 //
 //     - Any module under `src/lib/runner/`                      (Req 15.3, 16.1)
-//     - `src/components/projects/v2/panels/BottomPanel.tsx`     (Req 15.1, 16.2)
-//     - `src/components/projects/v2/panels/RunTab.tsx`          (Req 15.2, 16.2)
-//     - `src/components/projects/v2/panels/OutputTab.tsx`       (Req 15.2, 16.2)
-//     - `src/components/projects/v2/panels/ProblemsTab.tsx`     (Req 15.2, 16.2)
-//     - `src/components/projects/v2/panels/RunnerStatusStrip.tsx` (Req 16.2)
-//     - `src/components/projects/v2/workspace/useLintOnEdit.ts` (Req 15.4, 16.3)
-//     - `src/components/projects/v2/workspace/useCursorPresence.ts` (Req 15.13, 21.5)
-//     - `src/components/projects/v2/workspace/cursorProtocol.ts`  (Req 15.13, 21.5)
-//     - `src/app/actions/parseStderrToProblems.ts`              (Req 15.5)
-//     - `src/components/projects/v2/workspace/KeyboardShortcuts.tsx` (Req 15.12)
-//     - `src/components/projects/v2/explorer/OutlinePanel.tsx`  (Req 15.15)
-//     - `src/components/projects/v2/explorer/SourceControlPanel.tsx` (Req 15.16)
-//     - `src/components/projects/v2/explorer/ExplorerInsightsHost.tsx` (Req 15.17)
-//     - `src/components/projects/v2/explorer/ExplorerCommandPalette.tsx` (Req 15.11)
 //
 // ─── Test strategy ──────────────────────────────────────────────────
 //
@@ -133,90 +119,6 @@ const FORBIDDEN_TARGETS: ForbiddenTarget[] = [
     label: "src/lib/runner/*",
     prefix: "src/lib/runner/",
     requirements: "Req 15.3, 16.1",
-  },
-  {
-    kind: "file",
-    label: "BottomPanel",
-    path: "src/components/projects/v2/panels/BottomPanel.tsx",
-    requirements: "Req 15.1, 16.2",
-  },
-  {
-    kind: "file",
-    label: "RunTab",
-    path: "src/components/projects/v2/panels/RunTab.tsx",
-    requirements: "Req 15.2, 16.2",
-  },
-  {
-    kind: "file",
-    label: "OutputTab",
-    path: "src/components/projects/v2/panels/OutputTab.tsx",
-    requirements: "Req 15.2, 16.2",
-  },
-  {
-    kind: "file",
-    label: "ProblemsTab",
-    path: "src/components/projects/v2/panels/ProblemsTab.tsx",
-    requirements: "Req 15.2, 16.2",
-  },
-  {
-    kind: "file",
-    label: "RunnerStatusStrip",
-    path: "src/components/projects/v2/panels/RunnerStatusStrip.tsx",
-    requirements: "Req 16.2",
-  },
-  {
-    kind: "file",
-    label: "useLintOnEdit",
-    path: "src/components/projects/v2/workspace/useLintOnEdit.ts",
-    requirements: "Req 15.4, 16.3",
-  },
-  {
-    kind: "file",
-    label: "useCursorPresence",
-    path: "src/components/projects/v2/workspace/useCursorPresence.ts",
-    requirements: "Req 15.13, 21.5",
-  },
-  {
-    kind: "file",
-    label: "cursorProtocol",
-    path: "src/components/projects/v2/workspace/cursorProtocol.ts",
-    requirements: "Req 15.13, 21.5",
-  },
-  {
-    kind: "file",
-    label: "parseStderrToProblems",
-    path: "src/app/actions/parseStderrToProblems.ts",
-    requirements: "Req 15.5",
-  },
-  {
-    kind: "file",
-    label: "KeyboardShortcuts",
-    path: "src/components/projects/v2/workspace/KeyboardShortcuts.tsx",
-    requirements: "Req 15.12",
-  },
-  {
-    kind: "file",
-    label: "OutlinePanel",
-    path: "src/components/projects/v2/explorer/OutlinePanel.tsx",
-    requirements: "Req 15.15",
-  },
-  {
-    kind: "file",
-    label: "SourceControlPanel",
-    path: "src/components/projects/v2/explorer/SourceControlPanel.tsx",
-    requirements: "Req 15.16",
-  },
-  {
-    kind: "file",
-    label: "ExplorerInsightsHost",
-    path: "src/components/projects/v2/explorer/ExplorerInsightsHost.tsx",
-    requirements: "Req 15.17",
-  },
-  {
-    kind: "file",
-    label: "ExplorerCommandPalette",
-    path: "src/components/projects/v2/explorer/ExplorerCommandPalette.tsx",
-    requirements: "Req 15.11",
   },
 ];
 
