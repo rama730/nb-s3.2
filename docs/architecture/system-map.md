@@ -1,6 +1,6 @@
 # System Map
 
-Subsystem maps: [Messaging system](./messaging-system.md).
+Subsystem maps: [Messaging system](./messaging-system.md), [market skill catalog](./adr-market-skill-catalog.md), [extension crash recovery](./extension-crash-recovery.md), and [project file leases](./project-file-leases.md).
 
 ## Request Path
 
@@ -30,11 +30,10 @@ Durable invalidation:
 
 Ephemeral collaboration:
 
-- Token issuance: [presence-token route](/Users/chrama/Downloads/nb-s3/src/app/api/realtime/presence-token/route.ts)
-- Browser transport: [presence-client.ts](/Users/chrama/Downloads/nb-s3/src/lib/realtime/presence-client.ts)
-- Dedicated WebSocket service: [services/presence/src/server.ts](/Users/chrama/Downloads/nb-s3/services/presence/src/server.ts)
+- Supabase presence transport: [presence-client.ts](/Users/chrama/Downloads/nb-s3/src/lib/realtime/presence-client.ts)
+- Typing adapter: [usePresenceTyping.ts](/Users/chrama/Downloads/nb-s3/src/hooks/usePresenceTyping.ts)
 
-The boundary is intentional: cursor, typing, and heartbeats never persist into Postgres.
+The boundary is intentional: cursor and typing state never persist into Postgres. The authenticated heartbeat route updates only the profile's coarse `lastActiveAt` timestamp.
 
 ## Worker Path
 
@@ -64,4 +63,4 @@ All three readiness checks run in strict mode. Missing load, capacity, or rollou
 Applied migration checksums are immutable. A changed checksum or a partially applied migration is a hard failure.
 Legacy journal inference and out-of-band schema repairs are disabled by default and require explicit one-time adoption flags.
 
-Domain-facing schema barrels live under `src/lib/db/schema/domains`. New modules should use the narrow identity, projects, files, messaging, or extension barrel; the root schema export remains a legacy compatibility surface.
+Schema tables are exported from `src/lib/db/schema/index.ts`. New modules should import directly from the root schema export so table ownership remains visible in review and static checks.
