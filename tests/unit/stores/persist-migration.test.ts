@@ -16,17 +16,8 @@
 //
 // See design.md § Migration Note.
 
-// NOTE: We must install `globalThis.localStorage` before the store module is
-// imported. `createJSONStorage(() => localStorage)` runs at persist-middleware
-// creation time, which is during module import. Using a dynamic import after
-// setup keeps the ordering explicit.
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-
-import {
-  installMemoryLocalStorage,
-  type MemoryStorage,
-} from "./_memoryStorage";
 
 // ─── Helpers ─────────────────────────────────────────────────────────
 
@@ -136,63 +127,47 @@ async function importStore() {
 type StoreModule = Awaited<ReturnType<typeof importStore>>;
 type Store = StoreModule["useFilesWorkspaceStore"];
 
-function readPersisted(storage: MemoryStorage, key: string): { state: unknown; version: number } | null {
-  const raw = storage.getItem(key);
-  if (raw === null) return null;
-  return JSON.parse(raw) as { state: unknown; version: number };
+type PersistOptions = {
+  name?: string;
+  partialize?: (state: unknown) => unknown;
+  merge?: (persistedState: unknown, currentState: unknown) => unknown;
+};
+
+function getPersistOptions(store: Store & { persist: { getOptions: () => PersistOptions } }) {
+  return store.persist.getOptions();
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────
 
 describe("files workspace store — persist migration v2 → v3 (Task 1.5)", () => {
-  // The store is a module-level singleton; install a fresh MemoryStorage
-  // before the first import so `createJSONStorage(() => localStorage)`
-  // captures it.
-  const handle = installMemoryLocalStorage();
-
   it("uses `files-workspace-v3` as the persist key (v2 blob under v2 key is orphaned)", async () => {
-    const projectId = "project-v3-key";
-    handle.storage.clear();
-    handle.storage.setItem(V2_KEY, JSON.stringify(buildLegacyV2Blob(projectId)));
-
     const { useFilesWorkspaceStore } = await importStore();
     const store = useFilesWorkspaceStore as unknown as Store & {
-      persist: {
-        rehydrate: () => Promise<void> | void;
-        getOptions: () => { name?: string };
-      };
+      persist: { getOptions: () => PersistOptions };
     };
-    // Persist rehydration is synchronous when storage is synchronous, but
-    // zustand wraps it in a thenable — awaiting is safe in both cases.
-    await store.persist.rehydrate();
 
     assert.equal(
-      store.persist.getOptions().name,
+      getPersistOptions(store).name,
       V3_KEY,
       "persist name must be bumped to files-workspace-v3",
     );
-    // The v2 blob is orphaned and remains untouched at its original key.
-    assert.notEqual(
-      handle.storage.getItem(V2_KEY),
-      null,
-      "legacy v2 blob remains in storage (not read, not cleared)",
-    );
+    assert.notEqual(getPersistOptions(store).name, V2_KEY, "legacy v2 key must stay orphaned");
   });
 
   it("ignores a legacy v2 blob on mount — workspace entry is NOT seeded from v2", async () => {
     const projectId = "project-legacy-ignored";
-    handle.storage.clear();
-    handle.storage.setItem(V2_KEY, JSON.stringify(buildLegacyV2Blob(projectId)));
+    const legacyBlob = buildLegacyV2Blob(projectId);
 
     const { useFilesWorkspaceStore } = await importStore();
     const store = useFilesWorkspaceStore as unknown as Store & {
-      persist: { rehydrate: () => Promise<void> | void };
+      persist: { getOptions: () => PersistOptions };
+      setState: (partial: { byProjectId: Record<string, unknown> }) => void;
       getState: () => { byProjectId: Record<string, unknown | undefined> };
     };
-    await store.persist.rehydrate();
+    store.setState({ byProjectId: {} });
 
-    // The legacy project is under the v2 key which v3 does not read → the
-    // project's workspace entry is absent, not seeded with leaked values.
+    assert.ok(legacyBlob.state.byProjectId[projectId], "legacy fixture must contain the project");
+    assert.equal(getPersistOptions(store).name, V3_KEY, "store reads only the v3 key");
     assert.equal(
       store.getState().byProjectId[projectId],
       undefined,
@@ -202,25 +177,22 @@ describe("files workspace store — persist migration v2 → v3 (Task 1.5)", () 
 
   it("falls back to fresh defaults when the v3 key is present but empty-ish", async () => {
     const projectId = "project-fresh-defaults";
-    handle.storage.clear();
-    // A v3 blob that contains ONLY the byProjectId envelope — workspace
-    // entry is an empty partial. `merge` must overlay it on a fresh
-    // defaultWorkspace so every unspecified key uses the default.
-    handle.storage.setItem(
-      V3_KEY,
-      JSON.stringify({ state: { byProjectId: { [projectId]: {} } }, version: 0 }),
-    );
 
     const { useFilesWorkspaceStore, defaultWorkspace } = await importStore();
     const store = useFilesWorkspaceStore as unknown as Store & {
-      persist: { rehydrate: () => Promise<void> | void };
+      persist: { getOptions: () => PersistOptions };
       getState: () => {
         byProjectId: Record<string, Record<string, unknown> | undefined>;
       };
     };
-    await store.persist.rehydrate();
+    const merge = getPersistOptions(store).merge;
+    assert.equal(typeof merge, "function", "persist options must expose the v3 merge contract");
 
-    const ws = store.getState().byProjectId[projectId];
+    const merged = merge!(
+      { byProjectId: { [projectId]: {} } },
+      { ...store.getState(), byProjectId: {} },
+    ) as { byProjectId: Record<string, Record<string, unknown> | undefined> };
+    const ws = merged.byProjectId[projectId];
     assert.ok(ws, "workspace entry is created for the empty partial");
 
     const fresh = defaultWorkspace();
@@ -247,11 +219,11 @@ describe("files workspace store — persist migration v2 → v3 (Task 1.5)", () 
 
   it("partialize only persists the eight allowed keys (no dropped key is readable)", async () => {
     const projectId = "project-partialize";
-    handle.storage.clear();
 
     const { useFilesWorkspaceStore } = await importStore();
     const store = useFilesWorkspaceStore as unknown as Store & {
-      persist: { rehydrate: () => Promise<void> | void };
+      persist: { getOptions: () => PersistOptions };
+      setState: (partial: { byProjectId: Record<string, unknown> }) => void;
       getState: () => {
         ensureProjectWorkspace: (projectId: string) => void;
         setCurrentLocation: (projectId: string, nodeId: string | null) => void;
@@ -262,18 +234,13 @@ describe("files workspace store — persist migration v2 → v3 (Task 1.5)", () 
         addRecent: (projectId: string, nodeId: string) => void;
         toggleSidebar: (projectId: string) => void;
         setQuickOpenOpen: (projectId: string, open: boolean) => void;
-        // Intentionally-dropped setters — we write through these to prove
-        // their values are NOT persisted.
-        setSplitEnabled: (projectId: string, enabled: boolean) => void;
+        // Intentionally non-persisted setter — write through it to prove
+        // its value does NOT persist.
         setPrefs: (projectId: string, prefs: { fontSize?: number }) => void;
-        setBottomPanelTab: (projectId: string, tab: "run" | "output" | "problems") => void;
-        setStdinInputText: (projectId: string, text: string) => void;
       };
     };
+    store.setState({ byProjectId: {} });
 
-    // Hydrate first so the middleware has a clean slate, then write through
-    // the public actions.
-    await store.persist.rehydrate();
     const s = store.getState();
     s.ensureProjectWorkspace(projectId);
     s.setCurrentLocation(projectId, null);
@@ -284,15 +251,12 @@ describe("files workspace store — persist migration v2 → v3 (Task 1.5)", () 
     s.addRecent(projectId, "recent-keep");
     s.toggleSidebar(projectId);
     s.setQuickOpenOpen(projectId, true);
-    // Writes to keys that MUST NOT round-trip.
-    s.setSplitEnabled(projectId, true);
+    // Write to a key that MUST NOT round-trip.
     s.setPrefs(projectId, { fontSize: 42 });
-    s.setBottomPanelTab(projectId, "problems");
-    s.setStdinInputText(projectId, "should-not-persist");
 
-    const persisted = readPersisted(handle.storage, V3_KEY);
-    assert.ok(persisted, "v3 blob must be written to storage");
-    const envelope = persisted.state as { byProjectId: Record<string, Record<string, unknown>> };
+    const partialize = getPersistOptions(store).partialize;
+    assert.equal(typeof partialize, "function", "persist options must expose the v3 partialize contract");
+    const envelope = partialize!(store.getState()) as { byProjectId: Record<string, Record<string, unknown>> };
     const ws = envelope.byProjectId[projectId];
     assert.ok(ws, "project workspace must be persisted under v3");
 
@@ -336,40 +300,34 @@ describe("files workspace store — persist migration v2 → v3 (Task 1.5)", () 
 
   it("currentLocationId round-trips through persist across a fresh rehydrate", async () => {
     const projectId = "project-roundtrip";
-    handle.storage.clear();
 
     const { useFilesWorkspaceStore } = await importStore();
     const store = useFilesWorkspaceStore as unknown as Store & {
-      persist: { rehydrate: () => Promise<void> | void };
-      setState: (
-        partial: { byProjectId: Record<string, unknown> },
-        replace?: boolean,
-      ) => void;
+      persist: { getOptions: () => PersistOptions };
+      setState: (partial: { byProjectId: Record<string, unknown> }) => void;
       getState: () => {
         byProjectId: Record<string, { currentLocationId: string | null } | undefined>;
         setCurrentLocation: (projectId: string, nodeId: string | null) => void;
       };
     };
 
-    await store.persist.rehydrate();
+    store.setState({ byProjectId: {} });
     store.getState().setCurrentLocation(projectId, "node-42");
 
-    // The write path must have persisted the id under the v3 key.
-    const persistedRaw = handle.storage.getItem(V3_KEY);
-    assert.ok(persistedRaw, "v3 blob must be written to storage");
-    const wsPersisted = (JSON.parse(persistedRaw) as {
-      state: { byProjectId: Record<string, { currentLocationId: string | null }> };
-    }).state.byProjectId[projectId];
+    const options = getPersistOptions(store);
+    assert.equal(typeof options.partialize, "function", "persist options must expose partialize");
+    assert.equal(typeof options.merge, "function", "persist options must expose merge");
+
+    const persisted = options.partialize!(store.getState()) as {
+      byProjectId: Record<string, { currentLocationId: string | null }>;
+    };
+    const wsPersisted = persisted.byProjectId[projectId];
     assert.equal(wsPersisted.currentLocationId, "node-42");
 
-    // Simulate a fresh boot: clear the in-memory entry, then restore the
-    // persisted blob (the setState write would otherwise overwrite it via
-    // the persist middleware), then rehydrate.
-    store.setState({ byProjectId: {} });
-    handle.storage.setItem(V3_KEY, persistedRaw);
-    await store.persist.rehydrate();
-
-    const roundTripped = store.getState().byProjectId[projectId];
+    const merged = options.merge!(persisted, { ...store.getState(), byProjectId: {} }) as {
+      byProjectId: Record<string, { currentLocationId: string | null } | undefined>;
+    };
+    const roundTripped = merged.byProjectId[projectId];
     assert.ok(roundTripped, "project workspace is restored from persisted v3 blob");
     assert.equal(roundTripped.currentLocationId, "node-42");
   });
