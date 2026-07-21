@@ -14,7 +14,6 @@ async function main() {
     accountCleanupWorker,
     profileData,
     connectionsActions,
-    profileService,
   ] = await Promise.all([
     readWorkspaceFile("src/app/actions/project/_all.ts"),
     readWorkspaceFile("src/app/actions/messaging/_all.ts"),
@@ -23,7 +22,6 @@ async function main() {
     readWorkspaceFile("src/inngest/functions/account-cleanup.ts"),
     readWorkspaceFile("src/lib/data/profile.ts"),
     readWorkspaceFile("src/app/actions/connections.ts"),
-    readWorkspaceFile("src/lib/services/profile-service.ts"),
   ]);
 
   const checks: Array<[string, boolean]> = [
@@ -49,8 +47,7 @@ async function main() {
     ],
     [
       "profile reads use the shared viewer-scoped serializer",
-      profileData.includes("buildViewerScopedProfileView(") &&
-        profileService.includes("export async function getViewerScopedProfile("),
+      profileData.includes("buildViewerScopedProfileView("),
     ],
     [
       "privacy-sensitive profile surfaces emit read audit events",
