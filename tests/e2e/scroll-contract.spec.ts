@@ -9,7 +9,7 @@ const ROUTES: Array<{ path: string; ready: string; checkHubHeader?: boolean }> =
   { path: "/messages", ready: "[data-scroll-root='route']" },
   { path: "/people", ready: "[data-scroll-root='route']" },
   { path: "/profile", ready: "[data-scroll-root='route']" },
-  { path: "/settings/security", ready: "[data-scroll-root='route']" },
+  { path: "/settings?tab=security", ready: "[data-scroll-root='route']" },
 ];
 
 function visibleRouteRootCount() {
