@@ -20,6 +20,14 @@ const RealtimeContext = createContext<RealtimeContextType>({
     subscribeUserNotifications: () => () => { },
 });
 
+function isLastActiveOnlyProfileEvent(event: UserNotificationEvent) {
+    if (event.kind !== 'profile') return false;
+    const next = (event.payload.new ?? {}) as Record<string, unknown>;
+    const previous = (event.payload.old ?? {}) as Record<string, unknown>;
+    const changed = new Set([...Object.keys(next), ...Object.keys(previous)].filter((key) => next[key] !== previous[key]));
+    return changed.size > 0 && [...changed].every((key) => key === 'last_active_at');
+}
+
 export function RealtimeProvider({ children }: { children: React.ReactNode }) {
     const { user, session, isLoading, refreshProfile } = useAuthContext();
     const [isConnected, setIsConnected] = useState(false);
@@ -27,7 +35,7 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
     const connectionTokenRef = useRef(0);
 
     const handleUserNotification = useCallback((event: UserNotificationEvent) => {
-        if (event.kind === 'profile') {
+        if (event.kind === 'profile' && !isLastActiveOnlyProfileEvent(event)) {
             void refreshProfile();
         }
 
