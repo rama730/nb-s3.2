@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 const KIND_ICON = {
     roles: Users,
     contributors: Users,
-    files: FolderOpen,
+    files: FileText,
     tasks: ListTodo,
     sprints: Timer,
     unknown: AlertTriangle,
