@@ -31,73 +31,7 @@ CREATE TABLE IF NOT EXISTS project_node_events_default PARTITION OF project_node
 CREATE INDEX IF NOT EXISTS project_node_events_project_idx ON project_node_events(project_id, created_at);
 CREATE INDEX IF NOT EXISTS project_node_events_node_idx ON project_node_events(node_id, created_at);
 
-
--- 2. project_run_logs
-CREATE TABLE IF NOT EXISTS project_run_logs (
-    id UUID DEFAULT gen_random_uuid(),
-    session_id UUID NOT NULL REFERENCES project_run_sessions(id),
-    project_id UUID NOT NULL REFERENCES projects(id),
-    stream TEXT DEFAULT 'stdout' NOT NULL,
-    line_number INTEGER DEFAULT 0 NOT NULL,
-    message TEXT NOT NULL,
-    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
-    PRIMARY KEY (id, created_at)
-) PARTITION BY RANGE (created_at);
-
-CREATE TABLE IF NOT EXISTS project_run_logs_2026_01 PARTITION OF project_run_logs FOR VALUES FROM ('2026-01-01') TO ('2026-02-01');
-CREATE TABLE IF NOT EXISTS project_run_logs_2026_02 PARTITION OF project_run_logs FOR VALUES FROM ('2026-02-01') TO ('2026-03-01');
-CREATE TABLE IF NOT EXISTS project_run_logs_2026_03 PARTITION OF project_run_logs FOR VALUES FROM ('2026-03-01') TO ('2026-04-01');
-CREATE TABLE IF NOT EXISTS project_run_logs_2026_04 PARTITION OF project_run_logs FOR VALUES FROM ('2026-04-01') TO ('2026-05-01');
-CREATE TABLE IF NOT EXISTS project_run_logs_2026_05 PARTITION OF project_run_logs FOR VALUES FROM ('2026-05-01') TO ('2026-06-01');
-CREATE TABLE IF NOT EXISTS project_run_logs_2026_06 PARTITION OF project_run_logs FOR VALUES FROM ('2026-06-01') TO ('2026-07-01');
-CREATE TABLE IF NOT EXISTS project_run_logs_2026_07 PARTITION OF project_run_logs FOR VALUES FROM ('2026-07-01') TO ('2026-08-01');
-CREATE TABLE IF NOT EXISTS project_run_logs_2026_08 PARTITION OF project_run_logs FOR VALUES FROM ('2026-08-01') TO ('2026-09-01');
-CREATE TABLE IF NOT EXISTS project_run_logs_2026_09 PARTITION OF project_run_logs FOR VALUES FROM ('2026-09-01') TO ('2026-10-01');
-CREATE TABLE IF NOT EXISTS project_run_logs_2026_10 PARTITION OF project_run_logs FOR VALUES FROM ('2026-10-01') TO ('2026-11-01');
-CREATE TABLE IF NOT EXISTS project_run_logs_2026_11 PARTITION OF project_run_logs FOR VALUES FROM ('2026-11-01') TO ('2026-12-01');
-CREATE TABLE IF NOT EXISTS project_run_logs_2026_12 PARTITION OF project_run_logs FOR VALUES FROM ('2026-12-01') TO ('2027-01-01');
-CREATE TABLE IF NOT EXISTS project_run_logs_default PARTITION OF project_run_logs DEFAULT;
-
-CREATE INDEX IF NOT EXISTS project_run_logs_session_idx ON project_run_logs(session_id, line_number);
-CREATE INDEX IF NOT EXISTS project_run_logs_project_idx ON project_run_logs(project_id, created_at);
-
-
--- 3. project_run_diagnostics
-CREATE TABLE IF NOT EXISTS project_run_diagnostics (
-    id UUID DEFAULT gen_random_uuid(),
-    session_id UUID NOT NULL REFERENCES project_run_sessions(id),
-    project_id UUID NOT NULL REFERENCES projects(id),
-    node_id UUID REFERENCES project_nodes(id) ON DELETE SET NULL,
-    file_path TEXT,
-    line INTEGER,
-    "column" INTEGER,
-    severity TEXT DEFAULT 'error' NOT NULL,
-    source TEXT,
-    code TEXT,
-    message TEXT NOT NULL,
-    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
-    PRIMARY KEY (id, created_at)
-) PARTITION BY RANGE (created_at);
-
-CREATE TABLE IF NOT EXISTS project_run_diagnostics_2026_01 PARTITION OF project_run_diagnostics FOR VALUES FROM ('2026-01-01') TO ('2026-02-01');
-CREATE TABLE IF NOT EXISTS project_run_diagnostics_2026_02 PARTITION OF project_run_diagnostics FOR VALUES FROM ('2026-02-01') TO ('2026-03-01');
-CREATE TABLE IF NOT EXISTS project_run_diagnostics_2026_03 PARTITION OF project_run_diagnostics FOR VALUES FROM ('2026-03-01') TO ('2026-04-01');
-CREATE TABLE IF NOT EXISTS project_run_diagnostics_2026_04 PARTITION OF project_run_diagnostics FOR VALUES FROM ('2026-04-01') TO ('2026-05-01');
-CREATE TABLE IF NOT EXISTS project_run_diagnostics_2026_05 PARTITION OF project_run_diagnostics FOR VALUES FROM ('2026-05-01') TO ('2026-06-01');
-CREATE TABLE IF NOT EXISTS project_run_diagnostics_2026_06 PARTITION OF project_run_diagnostics FOR VALUES FROM ('2026-06-01') TO ('2026-07-01');
-CREATE TABLE IF NOT EXISTS project_run_diagnostics_2026_07 PARTITION OF project_run_diagnostics FOR VALUES FROM ('2026-07-01') TO ('2026-08-01');
-CREATE TABLE IF NOT EXISTS project_run_diagnostics_2026_08 PARTITION OF project_run_diagnostics FOR VALUES FROM ('2026-08-01') TO ('2026-09-01');
-CREATE TABLE IF NOT EXISTS project_run_diagnostics_2026_09 PARTITION OF project_run_diagnostics FOR VALUES FROM ('2026-09-01') TO ('2026-10-01');
-CREATE TABLE IF NOT EXISTS project_run_diagnostics_2026_10 PARTITION OF project_run_diagnostics FOR VALUES FROM ('2026-10-01') TO ('2026-11-01');
-CREATE TABLE IF NOT EXISTS project_run_diagnostics_2026_11 PARTITION OF project_run_diagnostics FOR VALUES FROM ('2026-11-01') TO ('2026-12-01');
-CREATE TABLE IF NOT EXISTS project_run_diagnostics_2026_12 PARTITION OF project_run_diagnostics FOR VALUES FROM ('2026-12-01') TO ('2027-01-01');
-CREATE TABLE IF NOT EXISTS project_run_diagnostics_default PARTITION OF project_run_diagnostics DEFAULT;
-
-CREATE INDEX IF NOT EXISTS project_run_diagnostics_session_idx ON project_run_diagnostics(session_id, severity);
-CREATE INDEX IF NOT EXISTS project_run_diagnostics_project_idx ON project_run_diagnostics(project_id, created_at);
-
-
--- 4. Automated Partition Management
+-- 2. Automated Partition Management
 
 -- Check if pg_cron is available
 -- Requires server config: shared_preload_libraries = 'pg_cron' AND CREATE EXTENSION pg_cron
@@ -113,10 +47,10 @@ BEGIN
 END $$;
 
 -- Create function to build next N months of partitions
-CREATE OR REPLACE FUNCTION create_future_partitions()
-RETURNS void LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION public.create_future_partitions()
+RETURNS void LANGUAGE plpgsql SET search_path = '' AS $$
 DECLARE
-    v_tables text[] := ARRAY['project_node_events', 'project_run_logs', 'project_run_diagnostics'];
+    v_tables text[] := ARRAY['project_node_events'];
     v_table text;
     v_default_table text;
     v_month_offset int;
@@ -159,7 +93,7 @@ BEGIN
         END IF;
 
         IF v_default_attached THEN
-            EXECUTE format('ALTER TABLE %I DETACH PARTITION %I', v_table, v_default_table);
+            EXECUTE format('ALTER TABLE public.%I DETACH PARTITION public.%I', v_table, v_default_table);
         END IF;
 
         BEGIN
@@ -179,7 +113,7 @@ BEGIN
                 ) THEN
                     BEGIN
                         EXECUTE format(
-                            'CREATE TABLE IF NOT EXISTS %I PARTITION OF %I FOR VALUES FROM (%L) TO (%L)',
+                            'CREATE TABLE IF NOT EXISTS public.%I PARTITION OF public.%I FOR VALUES FROM (%L) TO (%L)',
                             v_part_name, v_table, v_start_val, v_end_val
                         );
                         RAISE NOTICE 'Created partition % for %', v_part_name, v_table;
@@ -194,12 +128,12 @@ BEGIN
                 IF v_default_exists THEN
                     EXECUTE format(
                         'WITH moved AS (
-                            DELETE FROM %I
+                            DELETE FROM public.%I
                             WHERE created_at >= %L::timestamptz
                               AND created_at < %L::timestamptz
                             RETURNING *
                         )
-                        INSERT INTO %I
+                        INSERT INTO public.%I
                         SELECT * FROM moved',
                         v_default_table,
                         v_start_val,
@@ -215,13 +149,13 @@ BEGIN
             END LOOP;
 
             IF v_default_attached THEN
-                EXECUTE format('ALTER TABLE %I ATTACH PARTITION %I DEFAULT', v_table, v_default_table);
+                EXECUTE format('ALTER TABLE public.%I ATTACH PARTITION public.%I DEFAULT', v_table, v_default_table);
             END IF;
         EXCEPTION WHEN OTHERS THEN
             -- Best effort re-attach to avoid leaving defaults detached on partial failures.
             IF v_default_attached THEN
                 BEGIN
-                    EXECUTE format('ALTER TABLE %I ATTACH PARTITION %I DEFAULT', v_table, v_default_table);
+                    EXECUTE format('ALTER TABLE public.%I ATTACH PARTITION public.%I DEFAULT', v_table, v_default_table);
                 EXCEPTION WHEN OTHERS THEN
                     RAISE WARNING 'Failed to re-attach default partition % to % after error',
                         v_default_table, v_table;
@@ -234,7 +168,7 @@ END;
 $$;
 
 -- Run the function immediately to ensure we are covered right now.
-SELECT create_future_partitions();
+SELECT public.create_future_partitions();
 
 -- Schedule via pg_cron to run daily shortly after midnight so future partitions
 -- are always created ahead of ingestion windows.
@@ -256,15 +190,15 @@ BEGIN
         END IF;
 
         IF v_job_id IS NULL THEN
-            PERFORM cron.schedule('create_monthly_partitions', v_desired_schedule, 'SELECT create_future_partitions()');
+            PERFORM cron.schedule('create_monthly_partitions', v_desired_schedule, 'SELECT public.create_future_partitions()');
         ELSIF v_job_schedule IS DISTINCT FROM v_desired_schedule THEN
             PERFORM cron.unschedule(v_job_id);
-            PERFORM cron.schedule('create_monthly_partitions', v_desired_schedule, 'SELECT create_future_partitions()');
+            PERFORM cron.schedule('create_monthly_partitions', v_desired_schedule, 'SELECT public.create_future_partitions()');
         END IF;
     END IF;
 END $$;
 
--- 5. Data Integrity Checks (Synced from ORM schema)
+-- 3. Data Integrity Checks (Synced from ORM schema)
 ALTER TABLE "connections" DROP CONSTRAINT IF EXISTS "connections_no_self_check";
 ALTER TABLE "connections" ADD CONSTRAINT "connections_no_self_check" CHECK ("requester_id" <> "addressee_id") NOT VALID;
 ALTER TABLE "connections" VALIDATE CONSTRAINT "connections_no_self_check";
@@ -285,7 +219,7 @@ ALTER TABLE "project_open_roles" DROP CONSTRAINT IF EXISTS "project_open_roles_f
 ALTER TABLE "project_open_roles" ADD CONSTRAINT "project_open_roles_filled_lte_count_check" CHECK ("filled" <= "count") NOT VALID;
 ALTER TABLE "project_open_roles" VALIDATE CONSTRAINT "project_open_roles_filled_lte_count_check";
 
--- 6. Added Profile Fields Synchronization
+-- 4. Added Profile Fields Synchronization
 ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "experience_level" text;
 ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "hours_per_week" text;
 ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "gender_identity" text;
