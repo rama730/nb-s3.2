@@ -32,19 +32,11 @@ export type ActiveResourceType =
 
 export type UserNotificationEvent =
     | { kind: 'profile'; payload: DbRealtimePayload }
-    | { kind: 'conversation_participant'; payload: DbRealtimePayload }
-    | { kind: 'message'; payload: DbRealtimePayload }
-    | { kind: 'message_visibility'; payload: DbRealtimePayload }
-    | { kind: 'task'; payload: DbRealtimePayload }
+    | { kind: 'notification'; payload: DbRealtimePayload }
 
 export type MessagingNotificationEvent =
     | { kind: 'conversation_participant'; payload: DbRealtimePayload }
     | { kind: 'message_visibility'; payload: DbRealtimePayload }
-
-export type NotificationInboxEvent = {
-    kind: 'notification'
-    payload: DbRealtimePayload
-}
 
 export function isRealtimeTerminalStatus(status: REALTIME_SUBSCRIBE_STATES) {
     return (
@@ -134,7 +126,7 @@ export function subscribeUserNotifications(params: {
 
     return subscribeActiveResource({
         supabase,
-        resourceType: 'workspace',
+        resourceType: 'profile',
         resourceId: userId,
         bindings: [
             {
@@ -145,21 +137,9 @@ export function subscribeUserNotifications(params: {
             },
             {
                 event: '*',
-                table: 'conversation_participants',
+                table: 'user_notifications',
                 filter: `user_id=eq.${userId}`,
-                handler: (payload) => onEvent({ kind: 'conversation_participant', payload }),
-            },
-            {
-                event: '*',
-                table: 'message_hidden_for_users',
-                filter: `user_id=eq.${userId}`,
-                handler: (payload) => onEvent({ kind: 'message_visibility', payload }),
-            },
-            {
-                event: '*',
-                table: 'tasks',
-                filter: `assignee_id=eq.${userId}`,
-                handler: (payload) => onEvent({ kind: 'task', payload }),
+                handler: (payload) => onEvent({ kind: 'notification', payload }),
             },
         ],
         onStatus,
@@ -190,30 +170,6 @@ export function subscribeMessagingNotifications(params: {
                 table: 'message_hidden_for_users',
                 filter: `user_id=eq.${userId}`,
                 handler: (payload) => onEvent({ kind: 'message_visibility', payload }),
-            },
-        ],
-        onStatus,
-    })
-}
-
-export function subscribeNotificationInbox(params: {
-    supabase: SupabaseClient
-    userId: string
-    onEvent: (event: NotificationInboxEvent) => void
-    onStatus?: (status: REALTIME_SUBSCRIBE_STATES) => void
-}): RealtimeChannel {
-    const { supabase, userId, onEvent, onStatus } = params
-
-    return subscribeActiveResource({
-        supabase,
-        resourceType: 'workspace',
-        resourceId: `notification-inbox:${userId}`,
-        bindings: [
-            {
-                event: '*',
-                table: 'user_notifications',
-                filter: `user_id=eq.${userId}`,
-                handler: (payload) => onEvent({ kind: 'notification', payload }),
             },
         ],
         onStatus,
