@@ -8,11 +8,12 @@
 
 "use client";
 
+import { toast } from "sonner";
+
 import React, { useCallback, useState } from "react";
 
 import type { ProjectNode } from "@/lib/db/schema";
 import { linkNodeToTask } from "@/app/actions/files/links";
-import { useToast } from "@/components/ui-custom/Toast";
 
 import { V3AttachmentPicker } from "./V3AttachmentPicker";
 
@@ -35,7 +36,6 @@ export function SingleAttachmentPicker({
   onClose,
   existingAttachments,
 }: SingleAttachmentPickerProps): React.JSX.Element | null {
-  const { showToast } = useToast();
   const [isLinking, setIsLinking] = useState(false);
 
   // Track already-attached node IDs so we can filter them from selection
@@ -51,18 +51,18 @@ export function SingleAttachmentPicker({
       setIsLinking(true);
       try {
         await linkNodeToTask(taskId, newNode.id);
-        showToast(`Attached "${newNode.name}" to task.`, "success");
+        toast.success(`Attached "${newNode.name}" to task.`);
         onClose();
       } catch (err) {
         const message =
           err instanceof Error ? err.message : "Failed to attach file";
-        showToast(message, "error");
+        toast.error(message);
         // Keep picker open on failure (Req 9.5 pattern)
       } finally {
         setIsLinking(false);
       }
     },
-    [existingIds, isLinking, taskId, showToast, onClose],
+    [existingIds, isLinking, taskId,onClose],
   );
 
   if (!isOpen) return null;
