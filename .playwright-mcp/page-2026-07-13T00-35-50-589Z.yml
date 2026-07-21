@@ -1,0 +1,46 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e3]:
+    - generic [ref=e4]:
+      - generic [ref=e5]: E
+      - heading "Welcome back" [level=1] [ref=e6]
+      - paragraph [ref=e7]: Sign in to your Edge account
+    - generic [ref=e8]:
+      - generic [ref=e9]:
+        - generic [ref=e10]: Sign in
+        - generic [ref=e11]: Choose your preferred sign in method
+      - generic [ref=e12]:
+        - generic [ref=e13]:
+          - button "Google" [ref=e14] [cursor=pointer]
+          - button "GitHub" [ref=e15] [cursor=pointer]
+        - generic [ref=e16]:
+          - separator [ref=e18]
+          - generic [ref=e19]: or continue with email
+        - generic [ref=e21]:
+          - generic [ref=e22]:
+            - text: Email
+            - textbox "Email" [ref=e27]:
+              - /placeholder: name@example.com
+          - generic [ref=e28]:
+            - generic [ref=e29]:
+              - generic [ref=e30] [cursor=pointer]: Password
+              - link "Forgot password?" [ref=e31] [cursor=pointer]:
+                - /url: /forgot-password
+            - generic [ref=e32]:
+              - textbox "Password" [ref=e33]:
+                - /placeholder: Enter your password
+              - button [ref=e34] [cursor=pointer]
+          - button "Sign in" [ref=e38] [cursor=pointer]
+      - paragraph [ref=e40]:
+        - text: Don't have an account?
+        - link "Sign up" [ref=e41] [cursor=pointer]:
+          - /url: /signup?redirect=%2Fpeople
+    - paragraph [ref=e42]:
+      - text: By continuing, you agree to our
+      - link "Terms of Service" [ref=e43] [cursor=pointer]:
+        - /url: /terms
+      - text: and
+      - link "Privacy Policy" [ref=e44] [cursor=pointer]:
+        - /url: /privacy
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=e50] [cursor=pointer]
+  - alert [ref=e54]
