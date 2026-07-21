@@ -9,7 +9,6 @@ import {
     useQueryClient,
     type InfiniteData,
 } from "@tanstack/react-query";
-import { REALTIME_SUBSCRIBE_STATES } from "@supabase/supabase-js";
 import { toast } from "sonner";
 
 import {
@@ -44,9 +43,8 @@ import type {
     NotificationTrayFilter,
 } from "@/lib/notifications/types";
 import { queryKeys } from "@/lib/query-keys";
-import { isRealtimeTerminalStatus, subscribeNotificationInbox } from "@/lib/realtime/subscriptions";
+import { useRealtime } from "@/components/providers/RealtimeProvider";
 import { useAuth } from "@/lib/hooks/use-auth";
-import { createClient } from "@/lib/supabase/client";
 import { useMessagesV2UiStore } from "@/stores/messagesV2UiStore";
 import { extractMessageBurstConversationId, type MessageAttentionState } from "@/lib/messages/attention";
 
@@ -157,11 +155,11 @@ export function useNotifications(limit: number = DEFAULT_LIMIT) {
     const queryClient = useQueryClient();
     const router = useRouter();
     const pathname = usePathname();
-    const supabase = useMemo(() => createClient(), []);
     const { user, isAuthenticated } = useAuth();
+    const { isConnected, subscribeUserNotifications } = useRealtime();
     const [isTrayOpen, setIsTrayOpen] = useState(false);
     const [activeFilter, setActiveFilter] = useState<NotificationTrayFilter>("unread");
-    const [isRealtimeHealthy, setIsRealtimeHealthy] = useState(true);
+    const [isRealtimeHealthy, setIsRealtimeHealthy] = useState(false);
     const [isIdle, setIsIdle] = useState(false);
     const activePopupConversationId = useMessagesV2UiStore((state) =>
         state.popupOpen && !state.popupMinimized ? state.selectedConversationId : null,
@@ -175,7 +173,9 @@ export function useNotifications(limit: number = DEFAULT_LIMIT) {
     const queueImportantToastRef = useRef<(item: NotificationItem) => void>(() => { });
     const isIdleRef = useRef(false);
     const browserDeliveryEnabledRef = useRef<boolean>(false);
-    const preferencesQuery = useNotificationPreferences();
+    const preferencesQuery = useNotificationPreferences({
+        enabled: Boolean(isAuthenticated && user?.id && isTrayOpen),
+    });
     useEffect(() => {
         isTrayOpenRef.current = isTrayOpen;
     }, [isTrayOpen]);
@@ -229,7 +229,7 @@ export function useNotifications(limit: number = DEFAULT_LIMIT) {
 
     const unreadCountQuery = useQuery<UnreadCounts>({
         queryKey: unreadCountQueryKey,
-        enabled: false,
+        enabled: Boolean(isAuthenticated && user?.id),
         queryFn: async () => {
             const result = await readNotificationUnreadCountAction();
             if (!result.success) {
@@ -426,12 +426,18 @@ export function useNotifications(limit: number = DEFAULT_LIMIT) {
     }, [flushToastQueue]);
 
     useEffect(() => {
+        setIsRealtimeHealthy(isConnected);
+        if (!isConnected) return;
+        void queryClient.invalidateQueries({ queryKey: unreadCountQueryKey });
+        if (isTrayOpenRef.current) {
+            void queryClient.invalidateQueries({ queryKey: notificationsQueryKey });
+        }
+    }, [isConnected, notificationsQueryKey, queryClient, unreadCountQueryKey]);
+
+    useEffect(() => {
         if (!user?.id || !isAuthenticated) return;
-        let disposed = false;
-        const channel = subscribeNotificationInbox({
-            supabase,
-            userId: user.id,
-            onEvent: (event) => {
+        return subscribeUserNotifications((event) => {
+                if (event.kind !== "notification") return;
                 const newItem = normalizeRealtimeNotificationRow(event.payload.eventType === "DELETE" ? null : event.payload.new);
                 const oldItem = normalizeRealtimeNotificationRow(event.payload.old);
                 if (event.payload.eventType === "DELETE") {
@@ -490,36 +496,15 @@ export function useNotifications(limit: number = DEFAULT_LIMIT) {
                         });
                     }
                 }
-            },
-            onStatus: (status) => {
-                if (disposed) return;
-                if (status === REALTIME_SUBSCRIBE_STATES.SUBSCRIBED) {
-                    setIsRealtimeHealthy(true);
-                    void queryClient.invalidateQueries({ queryKey: unreadCountQueryKey });
-                    if (isTrayOpenRef.current) {
-                        void queryClient.invalidateQueries({ queryKey: notificationsQueryKey });
-                    }
-                    return;
-                }
-                if (isRealtimeTerminalStatus(status)) {
-                    setIsRealtimeHealthy(false);
-                }
-            },
-        });
-        return () => {
-            disposed = true;
-            channel.unsubscribe();
-        };
+            });
     }, [
         isAuthenticated,
         adjustUnreadCounts,
         notificationsQueryKey,
         patchNotificationCache,
-        queryClient,
         router,
+        subscribeUserNotifications,
         syncMessageAttentionFromNotification,
-        supabase,
-        unreadCountQueryKey,
         user?.id,
     ]);
 
@@ -801,6 +786,7 @@ export function useNotifications(limit: number = DEFAULT_LIMIT) {
         isIdle,
         hasMore: Boolean(query.hasNextPage),
         isLoadingMore: query.isFetchingNextPage,
+        isMarkingAllRead: markAllReadMutation.isPending,
         activeFilter,
         setActiveFilter,
         isTrayOpen,
@@ -828,6 +814,7 @@ export function useNotifications(limit: number = DEFAULT_LIMIT) {
         isIdle,
         query.hasNextPage,
         query.isFetchingNextPage,
+        markAllReadMutation.isPending,
         activeFilter,
         isTrayOpen,
         openTray,
