@@ -360,7 +360,7 @@ test("updates tab right rail stays a shortcut index instead of a duplicate feed"
     assert.match(railSource, /postingMembers/);
     assert.match(railSource, /latestByAuthor/);
     assert.match(railSource, /updateAuthorRoleLabel/);
-    assert.match(railSource, /updateShortcutTime/);
+    assert.match(railSource, /updateRelativeTime\(update\.createdAt, "long"\)/);
     assert.match(railSource, /truncate text-sm/);
     assert.equal(railSource.includes("RIGHT_RAIL_PREVIEW_LIMIT"), false);
     assert.equal(railSource.includes("View all updates"), false);
@@ -413,7 +413,7 @@ test("project update composer renders structured context and image media before 
     assert.match(composerSource, /PROJECT_UPDATE_ALLOWED_IMAGE_MIME_TYPES/);
     assert.match(composerSource, /PROJECT_UPDATE_MEDIA_MAX_BYTES/);
     assert.match(composerSource, /pendingMediaUploads/);
-    assert.match(composerSource, /selectedReferences/);
+    assert.equal(composerSource.includes("selectedReferences"), false);
     assert.match(composerSource, /normalizeProjectUpdateReferences\(entityRefs\.references\)/);
     assert.match(composerSource, /references: normalizeProjectUpdateReferences\(entityRefs\.references\)/);
     assert.match(composerSource, /ProjectUpdateMediaFrame/);
@@ -490,7 +490,9 @@ test("updates feed and detail render context references and actual images", () =
     assert.match(mediaFrameSource, /Loading media/);
     assert.equal(mediaFrameSource.includes("mx-auto"), false);
     assert.equal(mediaFrameSource.includes("w-fit"), false);
-    assert.match(rendererSource, /UpdateContextIcon/);
+    assert.equal(rendererSource.includes("UpdateContextIcon"), false);
+    assert.match(cardSource, /<ProjectUpdateContent/);
+    assert.match(detailSource, /<ProjectUpdateContent/);
     assert.match(cardSource, /<UpdateContextAndMedia update=\{update\} \/>/);
     assert.match(cardSource, /border-b border-zinc-200 px-1 py-3/);
     assert.match(tabSource, /const UPDATE_CARD_CONTROL_SELECTOR/);
@@ -585,17 +587,16 @@ test("project update backend treats references as first-class linked work", () =
 
 test("project update file mentions survive the dashboard and Files V3 handoff", () => {
     const dashboardSource = readFileSync(path.join(process.cwd(), "src/components/projects/dashboard/ProjectDashboardClient.tsx"), "utf8");
-    const filesWorkspaceSource = readFileSync(path.join(process.cwd(), "src/components/projects/v2/ProjectFilesWorkspace.tsx"), "utf8");
+    const tabsRegistrySource = readFileSync(path.join(process.cwd(), "src/components/projects/dashboard/ProjectTabsRegistry.tsx"), "utf8");
     const filesRootSource = readFileSync(path.join(process.cwd(), "src/components/projects/v2/files-tab/FilesTabRoot.tsx"), "utf8");
 
     assert.match(dashboardSource, /const initialOpenFileId = searchParams\?\.get\('fileId'\) \|\| null/);
     assert.match(dashboardSource, /initialOpenFileId=\{initialOpenFileId\}/);
-    assert.match(filesWorkspaceSource, /initialOpenFileId\?: string \| null/);
-    assert.match(filesWorkspaceSource, /initialOpenFileId: props\.initialOpenFileId \?\? null/);
+    assert.match(tabsRegistrySource, /files-tab\/FilesTabRoot/);
     assert.match(filesRootSource, /initialOpenFileId\?: string \| null/);
     assert.match(filesRootSource, /const navigateToInitialFile = useNavigateTo\(projectId\)/);
     assert.match(filesRootSource, /getNodeMetadataBatch\(projectId, \[initialOpenFileId\], \{ includeBreadcrumbs: true \}\)/);
-    assert.match(filesRootSource, /upsertInitialFileNodes\(projectId, result\.data\.nodes\)/);
+    assert.match(filesRootSource, /upsertNodes\(projectId, result\.data\.nodes\)/);
     assert.match(filesRootSource, /handledInitialFileIdRef/);
     assert.match(filesRootSource, /nodesById\[initialOpenFileId\]\?\.type === "file"/);
     assert.match(filesRootSource, /navigateToInitialFile\(initialOpenFileId\)/);
