@@ -27,8 +27,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { useAuth } from '@/hooks/useAuth';
-import type { MessageWithSender } from '@/app/actions/messaging';
-import { deleteMessageV2, editMessageV2 } from '@/app/actions/messaging/v2';
+import { deleteMessage, editMessage, type MessageWithSender } from '@/app/actions/messaging';
 import { isMessagingPrivateFollowUpsEnabled } from '@/lib/features/messages';
 import { cn } from '@/lib/utils';
 import {
@@ -705,7 +704,7 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
 
         setIsActionLoading(true);
         try {
-            const result = await editMessageV2(message.id, normalized);
+            const result = await editMessage(message.id, normalized);
             if (!result.success) {
                 toast.error(result.error || 'Failed to edit message');
                 return;
@@ -725,7 +724,7 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
     const handleDeleteForMe = useCallback(async () => {
         setIsActionLoading(true);
         try {
-            const result = await deleteMessageV2(message.id, 'me');
+            const result = await deleteMessage(message.id, 'me');
             if (!result.success) {
                 toast.error(result.error || 'Failed to delete message');
                 return;
@@ -741,7 +740,7 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
     const handleUnsendForEveryone = useCallback(async () => {
         setIsActionLoading(true);
         try {
-            const result = await deleteMessageV2(message.id, 'everyone');
+            const result = await deleteMessage(message.id, 'everyone');
             if (!result.success) {
                 toast.error(result.error || 'Failed to unsend message');
                 return;
@@ -845,7 +844,7 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
                                         onChange={(event) => setDraftContent(event.target.value)}
                                         rows={3}
                                         maxLength={4000}
-                                        className="w-full rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 focus:outline-none focus:ring-2 focus:ring-ring dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+                                        className="w-full rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 focus:outline-none   dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
                                     />
                                     <div className="mt-2 flex items-center justify-end gap-2">
                                         <button
@@ -1160,7 +1159,7 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
                                                 error: undefined,
                                             });
                                         }}
-                                        className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[11px] font-medium text-red-500 transition-colors hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 dark:hover:bg-red-950/40"
+                                        className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[11px] font-medium text-red-500 transition-colors hover:bg-red-50 focus-visible:outline-none   dark:hover:bg-red-950/40"
                                         aria-label="Retry sending message"
                                     >
                                         <DeliveryIndicator deliveryState={deliveryState} />
@@ -1319,7 +1318,7 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
                             id={taskProjectSelectId}
                             value={taskProjectId}
                             onChange={(event) => setTaskProjectId(event.target.value)}
-                            className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm outline-none focus:border-primary/30 focus:ring-2 focus:ring-primary/10 dark:border-zinc-800 dark:bg-zinc-950"
+                            className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm outline-none focus:border-primary/30   dark:border-zinc-800 dark:bg-zinc-950"
                         >
                             <option value="">Select project</option>
                             {(catalogQuery.data?.projects || []).map((project) => (
@@ -1340,7 +1339,7 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
                             value={taskDescription}
                             onChange={(event) => setTaskDescription(event.target.value)}
                             rows={4}
-                            className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm outline-none focus:border-primary/30 focus:ring-2 focus:ring-primary/10 dark:border-zinc-800 dark:bg-zinc-950"
+                            className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm outline-none focus:border-primary/30   dark:border-zinc-800 dark:bg-zinc-950"
                         />
                     </div>
                     <div className="grid gap-3 sm:grid-cols-2">
@@ -1350,7 +1349,7 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
                                 id={taskAssigneeSelectId}
                                 value={taskAssigneeId}
                                 onChange={(event) => setTaskAssigneeId(event.target.value)}
-                                className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm outline-none focus:border-primary/30 focus:ring-2 focus:ring-primary/10 dark:border-zinc-800 dark:bg-zinc-950"
+                                className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm outline-none focus:border-primary/30   dark:border-zinc-800 dark:bg-zinc-950"
                             >
                                 <option value="">Unassigned</option>
                                 {(catalogQuery.data?.profiles || []).map((profile) => (
@@ -1366,7 +1365,7 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
                                 id={taskPrioritySelectId}
                                 value={taskPriority}
                                 onChange={(event) => setTaskPriority(event.target.value as typeof taskPriority)}
-                                className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm outline-none focus:border-primary/30 focus:ring-2 focus:ring-primary/10 dark:border-zinc-800 dark:bg-zinc-950"
+                                className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm outline-none focus:border-primary/30   dark:border-zinc-800 dark:bg-zinc-950"
                             >
                                 <option value="low">Low</option>
                                 <option value="medium">Medium</option>
@@ -1419,7 +1418,7 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
                             value={followUpNote}
                             onChange={(event) => setFollowUpNote(event.target.value)}
                             rows={4}
-                            className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm outline-none focus:border-primary/30 focus:ring-2 focus:ring-primary/10 dark:border-zinc-800 dark:bg-zinc-950"
+                            className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm outline-none focus:border-primary/30   dark:border-zinc-800 dark:bg-zinc-950"
                         />
                     </div>
                     <div className="space-y-1.5">
