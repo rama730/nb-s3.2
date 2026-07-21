@@ -7,6 +7,7 @@ import type { MessageWithSender } from '@/app/actions/messaging';
 import type { InboxConversationV2, MessageThreadPageV2, ConversationCapabilityV2 } from '@/app/actions/messaging/v2';
 import {
     clearPendingReadCommitState,
+    getCachedInboxConversationIds,
     getPendingReadCommitState,
     isCachedConversationLastMessage,
     patchConversationLastMessageFromMessage,
@@ -143,6 +144,44 @@ test('patchConversationLastMessageFromMessage updates both thread and inbox prev
     assert.equal(inboxData?.pages[0]?.conversations[0]?.lastMessage?.id, 'message-2');
     assert.equal(threadData?.pages[0]?.conversation.lastMessage?.id, 'message-2');
     assert.equal(isCachedConversationLastMessage(queryClient, 'conversation-1', 'message-2'), true);
+});
+
+test('draft conversation threads stay out of the inbox until a server summary exists', () => {
+    const queryClient = new QueryClient();
+    const draftConversation: InboxConversationV2 = {
+        id: 'draft:user-2',
+        type: 'dm',
+        updatedAt: new Date('2026-04-07T10:00:00.000Z'),
+        lifecycleState: 'draft',
+        muted: false,
+        participants: [
+            {
+                id: 'user-2',
+                username: 'other-user',
+                fullName: 'Other User',
+                avatarUrl: null,
+            },
+        ],
+        lastMessage: null,
+        unreadCount: 0,
+        lastReadAt: null,
+        lastReadMessageId: null,
+        capability: createCapability(),
+    };
+
+    queryClient.setQueryData(queryKeys.messages.v2.thread(draftConversation.id), {
+        pages: [{
+            conversation: draftConversation,
+            capability: draftConversation.capability,
+            messages: [],
+            pinnedMessages: [],
+            hasMore: false,
+            nextCursor: null,
+        }],
+        pageParams: [undefined],
+    });
+
+    assert.deepEqual(getCachedInboxConversationIds(queryClient), []);
 });
 
 test('patchConversationLastMessageFromMessage derives preview text from structured metadata', () => {
