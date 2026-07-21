@@ -175,7 +175,7 @@ export async function requireProjectCapability(
     return { project, role };
 }
 
-export async function ensureProjectGroupConversationIdInternal(
+async function ensureProjectGroupConversationIdInternal(
     executor: ProjectCollaboratorExecutor,
     projectId: string,
     ownerId: string,
