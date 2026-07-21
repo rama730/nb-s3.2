@@ -94,7 +94,7 @@ export function ProjectDocCommandBlock({
             data-readme-highlight-token={highlighted || highlightedTargetId === rootEditorTargetId ? highlightToken ?? undefined : undefined}
             className={cn(
                 "group relative my-4 scroll-mt-28 overflow-hidden rounded-md border border-zinc-200 bg-[#f6f8fa] text-zinc-950 shadow-none outline-none transition-[background-color,border-color,box-shadow] dark:border-zinc-800 dark:bg-[#161b22] dark:text-zinc-100",
-                "focus-visible:ring-2 focus-visible:ring-blue-500/40",
+                " ",
                 highlighted && "border-blue-400 bg-blue-50/80 shadow-[0_0_0_5px_rgba(59,130,246,0.22)] dark:border-blue-500/70 dark:bg-blue-500/20",
             )}
         >
