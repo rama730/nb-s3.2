@@ -14,6 +14,7 @@ import {
 import { revalidatePath } from "next/cache";
 
 import { db } from "@/lib/db";
+import { toIsoString } from "@/lib/utils/date";
 import {
   commentMentions,
   profiles,
@@ -57,13 +58,6 @@ type DiscussionRow = {
   authorUsername: string | null;
   authorAvatarUrl: string | null;
 };
-
-function toIsoString(value: Date | string | null | undefined) {
-  if (!value) return null;
-  if (value instanceof Date) return value.toISOString();
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
-}
 
 function normalizeTaskDiscussionAuthor(row: DiscussionRow): TaskDiscussionAuthor | null {
   if (!row.authorId) return null;
@@ -803,7 +797,3 @@ export async function deleteTaskCommentAction(
     return { success: false as const, error: error?.message || "Failed to delete comment" };
   }
 }
-
-export const createCommentAction = createTaskCommentAction;
-export const toggleCommentLikeAction = toggleTaskCommentLikeAction;
-export const deleteCommentAction = deleteTaskCommentAction;
