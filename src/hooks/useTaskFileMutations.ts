@@ -21,6 +21,7 @@ import {
   type TaskFileResolutionChoice,
 } from "@/lib/projects/task-file-intelligence";
 import { saveFileAsNewVersion } from "@/hooks/useFileVersions";
+import { newClientId } from "@/lib/utils/client-id";
 
 export type TaskFileUploadStatus = {
   id: string;
@@ -32,7 +33,7 @@ export type TaskFileUploadStatus = {
 
 export type TaskFilePendingResolution = {
   id: string;
-  source: "upload" | "existing";
+  source: "upload";
   /**
    * Wave 3: distinguishes file uploads / existing-file attach attempts from
    * folder-drop resolutions. Folders use a different choice set and an
@@ -129,7 +130,6 @@ export function useTaskFileMutations(params: {
   const [unclassifiedUploadCount, setUnclassifiedUploadCount] = useState(0);
   const successTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingUploadJobsRef = useRef<Map<string, UploadJob>>(new Map());
-  const pendingExistingNodesRef = useRef<Map<string, ProjectNode>>(new Map());
   const isUploading = uploadQueue.some((item) => item.status === "uploading");
 
   useEffect(() => {
@@ -219,7 +219,7 @@ export function useTaskFileMutations(params: {
 
     try {
       const fileExt = extOf(job.file.name);
-      const opaque = Math.random().toString(36).slice(2);
+      const opaque = newClientId();
       storagePath = buildProjectFileKey(projectId, `${opaque}${fileExt ? `.${fileExt}` : ""}`);
       const contentType = job.file.type || "application/octet-stream";
 
@@ -313,7 +313,7 @@ export function useTaskFileMutations(params: {
       if (!canEdit) return { success: false as const, error: "Forbidden" };
       notifyError(null);
 
-      const jobId = Math.random().toString(36).slice(2, 9);
+      const jobId = newClientId();
       setUploadQueue((current) => [
         ...current,
         {
@@ -425,7 +425,7 @@ export function useTaskFileMutations(params: {
         // Re-use the existing uploadNewNode pipeline but give it the file
         // under its correct filename (not the relativePath).
         const job: UploadJob = {
-          id: Math.random().toString(36).slice(2, 9),
+          id: newClientId(),
           file:
             entry.file.name === filename
               ? entry.file
@@ -472,7 +472,7 @@ export function useTaskFileMutations(params: {
   const enqueueFolderJob = useCallback(
     async (folder: DroppedFolder) => {
       const resolution = analyzeFolderCandidate(folder);
-      const jobId = Math.random().toString(36).slice(2, 9);
+      const jobId = newClientId();
       setUploadQueue((current) => [
         ...current,
         {
@@ -546,7 +546,7 @@ export function useTaskFileMutations(params: {
 
   const enqueueUploadJob = useCallback(async (file: File) => {
     const job: UploadJob = {
-      id: Math.random().toString(36).slice(2, 9),
+      id: newClientId(),
       file,
     };
 
@@ -608,39 +608,6 @@ export function useTaskFileMutations(params: {
     return { success: true as const };
   }, [canEdit, enqueueUploadJob, notifyError]);
 
-  const attachExisting = useCallback(async (node: ProjectNode) => {
-    if (!canEdit) return { success: false as const, error: "Forbidden" };
-    if (attachments.some((attachment) => attachment.id === node.id)) {
-      return { success: true as const };
-    }
-
-    notifyError(null);
-    const resolution = await analyzeCandidate({ name: node.name, node });
-    if (resolution.requiresPrompt) {
-      pendingExistingNodesRef.current.set(node.id, node);
-      queuePendingResolution({
-        id: node.id,
-        source: "existing",
-        candidateType: "file",
-        candidateName: node.name,
-        candidateNodeId: node.id,
-        candidateNodeName: node.name,
-        resolution,
-        options: resolutionOptionsFor(resolution),
-      });
-      return { success: true as const };
-    }
-
-    try {
-      await finalizeExistingLink(node.id);
-      return { success: true as const };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to attach file";
-      notifyError(message);
-      return { success: false as const, error: message };
-    }
-  }, [analyzeCandidate, attachments, canEdit, finalizeExistingLink, notifyError, queuePendingResolution]);
-
   const unlinkAttachment = useCallback(async (nodeId: string) => {
     if (!canEdit) return { success: false as const, error: "Forbidden" };
 
@@ -673,8 +640,6 @@ export function useTaskFileMutations(params: {
       if (pending.source === "upload") {
         updateStatus(pending.id, { status: "error", error: "Upload canceled" });
         pendingUploadJobsRef.current.delete(pending.id);
-      } else if (pending.candidateNodeId) {
-        pendingExistingNodesRef.current.delete(pending.candidateNodeId);
       }
       return { success: true as const };
     }
@@ -778,23 +743,7 @@ export function useTaskFileMutations(params: {
         return result;
       }
 
-      const existingNode = pending.candidateNodeId
-        ? pendingExistingNodesRef.current.get(pending.candidateNodeId) ?? null
-        : null;
-      if (!existingNode) {
-        throw new Error("The selected file is no longer available");
-      }
-
-      if (choice === "replace") {
-        await finalizeExistingLink(existingNode.id, pending.resolution.matchedNodeId);
-      } else if (choice === "link_existing") {
-        clearPendingWarnings();
-      } else {
-        await finalizeExistingLink(existingNode.id);
-      }
-
-      pendingExistingNodesRef.current.delete(existingNode.id);
-      return { success: true as const };
+      throw new Error("Unsupported file decision");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to resolve file action";
       notifyError(message);
@@ -822,11 +771,9 @@ export function useTaskFileMutations(params: {
     unclassifiedUploadCount,
     uploadFiles,
     uploadFolders,
-    attachExisting,
     unlinkAttachment,
     resolvePendingResolution,
     saveAsNewVersion,
-    clearPendingFileWarnings: clearPendingWarnings,
     downloadAttachment: handleDownload,
   }), [
     uploadQueue,
@@ -836,11 +783,9 @@ export function useTaskFileMutations(params: {
     unclassifiedUploadCount,
     uploadFiles,
     uploadFolders,
-    attachExisting,
     unlinkAttachment,
     resolvePendingResolution,
     saveAsNewVersion,
-    clearPendingWarnings,
     handleDownload,
   ]);
 }
