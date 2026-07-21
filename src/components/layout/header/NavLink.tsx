@@ -21,6 +21,7 @@ export default function NavLink({ href, icon: Icon, label, isActive, badge, ...p
         <Link
             href={href}
             prefetch={false}
+            aria-current={isActive ? "page" : undefined}
             onPointerEnter={(event) => {
                 warmPrefetchRoute(href);
                 onPointerEnter?.(event);
