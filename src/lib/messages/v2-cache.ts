@@ -46,24 +46,6 @@ function normalizeConversationRows(conversations: InboxConversationV2[]) {
     });
 }
 
-function doesLastMessageAdvance(
-    currentLastMessage: InboxConversationV2['lastMessage'] | null | undefined,
-    nextLastMessage: InboxConversationV2['lastMessage'] | null | undefined,
-) {
-    if (!nextLastMessage) return false;
-    if (!currentLastMessage) return true;
-    if (currentLastMessage.id === nextLastMessage.id) return false;
-
-    const currentEpoch = toEpochMs(currentLastMessage.createdAt);
-    const nextEpoch = toEpochMs(nextLastMessage.createdAt);
-    if (nextEpoch <= 0) return false;
-    if (currentEpoch <= 0) return true;
-    if (nextEpoch !== currentEpoch) {
-        return nextEpoch > currentEpoch;
-    }
-    return nextLastMessage.id.localeCompare(currentLastMessage.id) > 0;
-}
-
 function compareConversationReadWatermarks(
     left: Pick<InboxConversationV2, 'lastReadAt' | 'lastReadMessageId'> | null | undefined,
     right: Pick<InboxConversationV2, 'lastReadAt' | 'lastReadMessageId'> | null | undefined,
@@ -428,14 +410,6 @@ export function hideThreadMessageForViewer(
         messages: page.messages.filter((message) => message.id !== messageId),
         pinnedMessages: page.pinnedMessages.filter((message) => message.id !== messageId),
     }));
-}
-
-export function removeThreadMessage(
-    queryClient: QueryClient,
-    conversationId: string,
-    messageId: string,
-) {
-    hideThreadMessageForViewer(queryClient, conversationId, messageId);
 }
 
 export function replaceThreadSnapshot(
