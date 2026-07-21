@@ -15,9 +15,6 @@
 //   * Wrapper uses the prescribed classes
 //     (`flex-1 flex flex-col min-w-0 h-full`) so sidebar collapse
 //     produces a main area at full width (Req 1.7).
-//   * Dev-only surface-disagreement assertion (Req 6.4): present,
-//     gated on `process.env.NODE_ENV !== "production"`, warns when the
-//     breadcrumb terminal id disagrees with the tree highlight id.
 //   * Req 1.8 error indicator is rendered when `currentLocationId` is
 //     set but unresolved.
 
@@ -73,43 +70,15 @@ describe("FilesTabMain — structural contract (Req 1.2, 1.3, 1.5-1.8)", () => {
     assert.match(SRC, /<FileView\s+key=\{location\.id\}/);
   });
 
-  it("imports the real surfaces (BreadcrumbBar, FolderListView, FileView, ancestorChain)", () => {
+  it("imports the real surfaces (BreadcrumbBar, FolderListView, FileView)", () => {
     assert.match(SRC, /from\s+"\.\/breadcrumb\/BreadcrumbBar"/);
     assert.match(SRC, /from\s+"\.\/folder\/FolderListView"/);
     assert.match(SRC, /from\s+"\.\/file\/FileView"/);
-    assert.match(SRC, /from\s+"\.\/navigation"/);
-    assert.match(SRC, /\bancestorChain\b/);
-  });
-});
-
-describe("FilesTabMain — dev-mode surface-disagreement assertion (Req 6.4)", () => {
-  it("runs only in development (`process.env.NODE_ENV !== \"production\"`)", () => {
-    // Either guard form is acceptable; we check both common spellings.
-    const guarded =
-      /process\.env\.NODE_ENV\s*===\s*"production"/.test(SRC) ||
-      /process\.env\.NODE_ENV\s*!==\s*"production"/.test(SRC);
-    assert.ok(
-      guarded,
-      "expected a NODE_ENV production guard around the Req 6.4 assertion",
-    );
   });
 
-  it("compares `ancestorChain(...).at(-1)?.id` to the tree-highlight id", () => {
-    // Exact shape spelled out in the task description. The call may be
-    // split across a local `chain` binding + `.at(-1)` dereference, which
-    // is more readable — accept either the one-liner or the bound form.
-    assert.match(SRC, /ancestorChain\(/);
-    assert.match(SRC, /\.at\(-1\)\?\.id/);
-  });
-
-  it("emits a `console.warn` on mismatch (per Req 6.4)", () => {
-    assert.match(SRC, /console\.warn\(/);
-    // Mention of "disagreement" in the warning so grepping logs is easy.
-    assert.match(SRC, /disagreement/);
-  });
-
-  it("runs the assertion inside a React.useEffect (Rules-of-Hooks-safe)", () => {
-    assert.match(SRC, /React\.useEffect\(/);
+  it("keeps surface disagreement coverage in navigation helper tests, not runtime warnings", () => {
+    assert.doesNotMatch(SRC, /ancestorChain\(/);
+    assert.doesNotMatch(SRC, /tree ⇄ breadcrumb disagreement|console\.warn\("\[files-tab\]/);
   });
 });
 
