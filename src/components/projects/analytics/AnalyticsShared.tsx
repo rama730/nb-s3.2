@@ -6,17 +6,12 @@ import type {
     ProjectAnalyticsInsight,
     ProjectAnalyticsOverview,
     ProjectAnalyticsPerson,
-    ProjectAnalyticsRiskSignal,
     ProjectAnalyticsTimelineEvent,
 } from "@/lib/projects/analytics";
 
 export const ANALYTICS_TAB_COPY = {
     overview: "Overview",
     members: "Members",
-    workflow: "Workflow",
-    sprints: "Sprints",
-    files: "Files",
-    risks: "Risks",
     timeline: "Timeline",
 } as const;
 
@@ -259,15 +254,6 @@ export function AnalyticsLoadingState({ label = "Loading project analytics..." }
             <span className="sr-only" role="status" aria-live="polite">{label}</span>
         </AnalyticsShellCard>
     );
-}
-
-export function SeverityPill({ severity }: { severity: ProjectAnalyticsRiskSignal["severity"] }) {
-    const className = {
-        low: "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300",
-        medium: "bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-200",
-        high: "bg-rose-100 text-rose-800 dark:bg-rose-950/50 dark:text-rose-200",
-    }[severity];
-    return <span className={`rounded-full px-2.5 py-1 text-xs font-semibold capitalize ${className}`}>{severity}</span>;
 }
 
 import { CheckSquare, Timer, FileText, User, UserPlus, Activity, Settings, Info } from "lucide-react";
