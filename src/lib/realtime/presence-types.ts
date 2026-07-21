@@ -46,23 +46,9 @@ export type PresenceServerEvent =
     }
   | {
       type: "ack";
-      ackType: "auth" | "heartbeat" | "cursor" | "typing" | "delivered" | "read";
+      ackType: "auth" | "heartbeat" | "cursor" | "typing";
       roomType: PresenceRoomType;
       roomId: string;
-      serverTime: number;
-    }
-  | {
-      // Wave 2 Step 11: latency-optimized receipt broadcast.
-      // Emitted by the server when a conversation participant sends a
-      // `delivered` or `read` client event. Lets the sender's UI advance
-      // the delivery tick (~100 ms) before the postgres_changes INSERT
-      // from the receipt table propagates (~100–300 ms).
-      type: "receipt.broadcast";
-      receiptType: "delivered" | "read";
-      roomType: PresenceRoomType;
-      roomId: string;
-      userId: string;
-      messageIds: string[];
       serverTime: number;
     }
   | {
@@ -88,20 +74,8 @@ export type PresenceClientEvent =
     }
   | {
       type: "typing";
+      userId?: string;
       isTyping: boolean;
       profile?: PresenceMemberProfile | null;
       context?: PresenceTypingContext | null;
-    }
-  | {
-      // Wave 2 Step 11: sent by the recipient's client to the conversation
-      // presence room after writing delivery receipts to the DB. The server
-      // broadcasts a `receipt.broadcast` to all room members so the sender
-      // sees the tick advance within ~100 ms.
-      type: "delivered";
-      messageIds: string[];
-    }
-  | {
-      // Wave 2 Step 11: same as `delivered` but for read receipts.
-      type: "read";
-      messageIds: string[];
     };
