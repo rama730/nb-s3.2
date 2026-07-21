@@ -355,17 +355,6 @@ export function formatDraftWithCodeSnippet(content: string): string {
     return serializeSegmentsForDraft(segments);
 }
 
-export function getCodeSnippetPreview(content: string): { language: string | null; lineCount: number } | null {
-    const trimmed = normalizeSnippetContent(content);
-    const codeSegment = parseMessageSegments(trimmed).find((segment) => segment.type === 'code');
-    if (!codeSegment) return null;
-
-    return {
-        language: codeSegment.language,
-        lineCount: Math.max(1, codeSegment.content.split('\n').length),
-    };
-}
-
 export function analyzeDraftCodeSnippet(content: string): {
     formatted: string;
     length: number;
