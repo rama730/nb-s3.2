@@ -9,8 +9,8 @@ import {
     getConversationSummariesV2,
     getConversationSummaryV2,
     getConversationThreadPageV2,
-    getUnreadSummaryV2,
 } from '@/app/actions/messaging/v2';
+import { getUnreadCount } from '@/app/actions/messaging';
 import type { MessagesInboxPageV2 } from '@/app/actions/messaging/v2';
 import {
     getCachedInboxConversationIds,
@@ -33,7 +33,6 @@ import {
 import { isMessagingDenormalizedInboxRealtimeEnabled } from '@/lib/features/messages';
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
-import { subscribePresenceRoom } from '@/lib/realtime/presence-client';
 import { useMessagesV2OutboxStore } from '@/stores/messagesV2OutboxStore';
 import { queryKeys } from '@/lib/query-keys';
 import {
@@ -81,12 +80,20 @@ function removeOutboxItemIfPresent(clientMessageId: string | null | undefined) {
     }
 }
 
+function getPayloadField(
+    payload: { new?: Record<string, unknown>; old?: Record<string, unknown> },
+    scope: 'new' | 'old',
+    field: string,
+) {
+    return payload[scope]?.[field];
+}
+
 function getPayloadStringField(
     payload: { new?: Record<string, unknown>; old?: Record<string, unknown> },
     scope: 'new' | 'old',
     field: string,
 ) {
-    const value = payload[scope]?.[field];
+    const value = getPayloadField(payload, scope, field);
     return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
@@ -95,7 +102,7 @@ function getPayloadNumberField(
     scope: 'new' | 'old',
     field: string,
 ) {
-    const value = payload[scope]?.[field];
+    const value = getPayloadField(payload, scope, field);
     return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
@@ -104,7 +111,7 @@ function getPayloadDateField(
     scope: 'new' | 'old',
     field: string,
 ) {
-    const value = payload[scope]?.[field];
+    const value = getPayloadField(payload, scope, field);
     if (value instanceof Date) {
         return Number.isNaN(value.getTime()) ? null : value;
     }
@@ -119,7 +126,7 @@ function getPayloadMetadataField(
     payload: { new?: Record<string, unknown>; old?: Record<string, unknown> },
     scope: 'new' | 'old',
 ) {
-    const metadata = payload[scope]?.metadata;
+    const metadata = getPayloadField(payload, scope, 'metadata');
     return metadata && typeof metadata === 'object' && !Array.isArray(metadata)
         ? metadata as Record<string, unknown>
         : {};
@@ -340,16 +347,60 @@ function hasPendingReadCommit(queryClient: QueryClient) {
         .some(([, state]) => Boolean(state?.requestId));
 }
 
+type MessagesRealtimeOptions = boolean | {
+    inbox?: boolean;
+    activeThread?: boolean;
+};
+
+const ENABLE_MESSAGES_REALTIME_TRACE =
+    process.env.NODE_ENV !== 'production'
+    || process.env.NEXT_PUBLIC_MESSAGES_REALTIME_TRACE === '1';
+
+function normalizeMessagesRealtimeOptions(options: MessagesRealtimeOptions) {
+    if (typeof options === 'boolean') {
+        return { inbox: options, activeThread: options };
+    }
+    return {
+        inbox: options.inbox ?? false,
+        activeThread: options.activeThread ?? false,
+    };
+}
+
+function traceMessagesRealtimeChannel(
+    action: 'subscribe' | 'unsubscribe',
+    payload: {
+        scope: 'inbox' | 'active-thread';
+        conversationId?: string | null;
+        tables: ReadonlyArray<string>;
+    },
+) {
+    if (!ENABLE_MESSAGES_REALTIME_TRACE) return;
+    const detail = {
+        action,
+        route: typeof window === 'undefined' ? null : window.location.pathname,
+        scope: payload.scope,
+        conversationId: payload.conversationId ?? null,
+        tables: payload.tables,
+    };
+    console.debug('[messages-v2] realtime_channel', detail);
+    if (typeof performance !== 'undefined' && typeof performance.mark === 'function') {
+        performance.mark(`messages-v2:realtime:${payload.scope}:${action}`);
+    }
+}
+
 export function useMessagesV2Realtime(
     activeConversationId: string | null,
-    enabled: boolean,
+    options: MessagesRealtimeOptions,
 ) {
     const queryClient = useQueryClient();
     const { user, session, isLoading } = useAuth();
     const userId = user?.id ?? null;
     const realtimeToken = session?.access_token ?? null;
+    const requestedRealtime = normalizeMessagesRealtimeOptions(options);
     const denormalizedInboxRealtimeEnabled = isMessagingDenormalizedInboxRealtimeEnabled(userId);
-    const realtimeEnabled = enabled && Boolean(userId) && Boolean(realtimeToken) && !isLoading;
+    const realtimeAvailable = Boolean(userId) && Boolean(realtimeToken) && !isLoading;
+    const inboxRealtimeEnabled = requestedRealtime.inbox && realtimeAvailable;
+    const activeThreadRealtimeEnabled = requestedRealtime.activeThread && realtimeAvailable;
     const [inboxRealtimeConnected, setInboxRealtimeConnected] = useState(true);
     const [activeThreadConnected, setActiveThreadConnected] = useState(true);
     const inboxRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -360,8 +411,6 @@ export function useMessagesV2Realtime(
     const activeThreadConnectionTokenRef = useRef(0);
     const activeConversationIdRef = useRef(activeConversationId);
     const pendingConversationRefreshRef = useRef(new Map<string, boolean>());
-    const eventBufferRef = useRef<Array<() => void>>([]);
-    const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const pendingThreadMessageEventsRef = useRef(new Map<string, 'INSERT' | 'UPDATE' | 'DELETE' | 'REFRESH'>());
     const threadMessageSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -369,18 +418,8 @@ export function useMessagesV2Realtime(
         activeConversationIdRef.current = activeConversationId;
     }, [activeConversationId]);
 
-    const bufferEvent = useCallback((handler: () => void) => {
-        eventBufferRef.current.push(handler);
-        if (flushTimerRef.current) return;
-        flushTimerRef.current = setTimeout(() => {
-            const batch = eventBufferRef.current.splice(0);
-            flushTimerRef.current = null;
-            for (const fn of batch) fn();
-        }, 200);
-    }, []);
-
     const refreshUnreadSummary = useCallback(async () => {
-        const result = await getUnreadSummaryV2();
+        const result = await getUnreadCount();
         if (result.success && typeof result.count === 'number') {
             const cachedCount = queryClient.getQueryData<number | undefined>(queryKeys.messages.v2.unread()) ?? 0;
             if (result.count > cachedCount && hasPendingReadCommit(queryClient)) {
@@ -671,7 +710,7 @@ export function useMessagesV2Realtime(
     }, [flushPendingThreadMessageEvents]);
 
     useEffect(() => {
-        if (!realtimeEnabled || !userId || !realtimeToken) {
+        if (!inboxRealtimeEnabled || !userId || !realtimeToken) {
             inboxConnectionTokenRef.current += 1;
             setInboxRealtimeConnected(true);
             return;
@@ -750,6 +789,16 @@ export function useMessagesV2Realtime(
                     }
                 },
             });
+            traceMessagesRealtimeChannel('subscribe', {
+                scope: 'inbox',
+                tables: [
+                    'conversation_participants',
+                    'hidden_messages',
+                    'messages',
+                    'message_delivery_receipts',
+                    'message_read_receipts',
+                ],
+            });
         })().catch((error) => {
             console.error('[messages-v2] failed to initialize inbox realtime', error);
             if (inboxConnectionTokenRef.current === connectionToken) {
@@ -763,12 +812,21 @@ export function useMessagesV2Realtime(
             setInboxRealtimeConnected(true);
             if (channel) {
                 supabase.removeChannel(channel);
+                traceMessagesRealtimeChannel('unsubscribe', {
+                    scope: 'inbox',
+                    tables: [
+                        'conversation_participants',
+                        'hidden_messages',
+                        'messages',
+                        'message_delivery_receipts',
+                        'message_read_receipts',
+                    ],
+                });
             }
         };
     }, [
-        bufferEvent,
         denormalizedInboxRealtimeEnabled,
-        realtimeEnabled,
+        inboxRealtimeEnabled,
         queryClient,
         realtimeToken,
         refreshTrackedConversations,
@@ -779,7 +837,7 @@ export function useMessagesV2Realtime(
     ]);
 
     useEffect(() => {
-        if (!realtimeEnabled || !activeConversationId || !realtimeToken || activeConversationId.startsWith('draft:')) {
+        if (!activeThreadRealtimeEnabled || !activeConversationId || !realtimeToken || activeConversationId.startsWith('draft:')) {
             activeThreadConnectionTokenRef.current += 1;
             setActiveThreadConnected(true);
             return;
@@ -955,6 +1013,17 @@ export function useMessagesV2Realtime(
                     }
                 },
             });
+            traceMessagesRealtimeChannel('subscribe', {
+                scope: 'active-thread',
+                conversationId: activeConversationId,
+                tables: [
+                    'messages',
+                    'conversation_participants',
+                    'message_reactions',
+                    'message_delivery_receipts',
+                    'message_read_receipts',
+                ],
+            });
         })().catch((error) => {
             console.error('[messages-v2] failed to initialize active thread realtime', error);
             if (activeThreadConnectionTokenRef.current === connectionToken) {
@@ -968,15 +1037,26 @@ export function useMessagesV2Realtime(
             setActiveThreadConnected(true);
             if (channel) {
                 supabase.removeChannel(channel);
+                traceMessagesRealtimeChannel('unsubscribe', {
+                    scope: 'active-thread',
+                    conversationId: activeConversationId,
+                    tables: [
+                        'messages',
+                        'conversation_participants',
+                        'message_reactions',
+                        'message_delivery_receipts',
+                        'message_read_receipts',
+                    ],
+                });
             }
         };
     }, [
         activeConversationId,
+        activeThreadRealtimeEnabled,
         applyReceiptPatch,
         denormalizedInboxRealtimeEnabled,
         queueThreadMessageSync,
         queryClient,
-        realtimeEnabled,
         realtimeToken,
         refreshMessageReactionSummary,
         scheduleInboxRefresh,
@@ -991,36 +1071,6 @@ export function useMessagesV2Realtime(
             threadMessageSyncTimerRef.current = null;
         }
     }, [activeConversationId]);
-
-    // Wave 2 Step 11: subscribe to the active conversation's presence room
-    // and listen for `receipt.broadcast` events. When a peer's client signals
-    // delivered or read, immediately patch the thread cache so the sender's
-    // delivery tick advances within ~100 ms — before postgres_changes fires.
-    // This is purely additive; the postgres_changes subscriber in the effect
-    // above provides durability (idempotent re-application is safe since
-    // applyReceiptPatch never downgrades state).
-    useEffect(() => {
-        if (!realtimeEnabled || !activeConversationId || !userId || activeConversationId.startsWith('draft:')) return;
-
-        const subscription = subscribePresenceRoom({
-            roomType: 'conversation',
-            roomId: activeConversationId,
-            role: 'viewer',
-            onEvent: (event) => {
-                if (event.type !== 'receipt.broadcast') return;
-                if (event.roomId !== activeConversationId) return;
-
-                const kind = event.receiptType;
-                for (const messageId of event.messageIds) {
-                    applyReceiptPatch(activeConversationId, messageId, kind);
-                }
-            },
-        });
-
-        return () => {
-            subscription.unsubscribe();
-        };
-    }, [activeConversationId, applyReceiptPatch, realtimeEnabled, userId]);
 
     useEffect(() => {
         return () => {
@@ -1037,10 +1087,6 @@ export function useMessagesV2Realtime(
                 clearTimeout(summaryRefreshTimerRef.current);
                 summaryRefreshTimerRef.current = null;
             }
-            if (flushTimerRef.current) {
-                clearTimeout(flushTimerRef.current);
-                flushTimerRef.current = null;
-            }
             if (threadMessageSyncTimerRef.current) {
                 clearTimeout(threadMessageSyncTimerRef.current);
                 threadMessageSyncTimerRef.current = null;
@@ -1053,6 +1099,14 @@ export function useMessagesV2Realtime(
     return useMemo(() => ({
         inboxRealtimeConnected,
         activeThreadConnected,
-        isDegraded: enabled && (!inboxRealtimeConnected || (Boolean(activeConversationId) && !activeThreadConnected)),
-    }), [activeConversationId, activeThreadConnected, enabled, inboxRealtimeConnected]);
+        isDegraded:
+            (requestedRealtime.inbox && !inboxRealtimeConnected)
+            || (requestedRealtime.activeThread && Boolean(activeConversationId) && !activeThreadConnected),
+    }), [
+        activeConversationId,
+        activeThreadConnected,
+        inboxRealtimeConnected,
+        requestedRealtime.activeThread,
+        requestedRealtime.inbox,
+    ]);
 }
