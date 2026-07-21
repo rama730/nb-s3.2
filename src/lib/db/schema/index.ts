@@ -94,7 +94,6 @@ export const statusSprintEnum = pgEnum('status_sprint', ['planning', 'active', '
 export const statusTaskEnum = pgEnum('status_task', ['todo', 'in_progress', 'done', 'blocked'])
 export const statusNotificationEnum = pgEnum('status_notification', ['delivered', 'failed', 'dropped'])
 export const statusFileEnum = pgEnum('status_file', ['pending', 'finalized', 'expired', 'failed'])
-export const statusWorkflowEnum = pgEnum('status_workflow', ['queued', 'running', 'success', 'failed', 'canceled'])
 export const statusReportEnum = pgEnum('status_report', ['pending', 'reviewed', 'actioned', 'dismissed'])
 
 
@@ -117,7 +116,6 @@ export const profiles = pgTable('profiles', {
     experience: jsonb('experience').$type<ProfileExperienceEntry[]>().default([]),
     education: jsonb('education').$type<ProfileEducationEntry[]>().default([]),
     openTo: jsonb('open_to').$type<string[]>().default([]),
-    availabilityStatus: text('availability_status', { enum: ['available', 'busy', 'offline', 'focusing'] }).default('available'),
     socialLinks: jsonb('social_links').$type<Record<string, string>>().default({}),
     experienceLevel: text('experience_level', { enum: ['student', 'junior', 'mid', 'senior', 'lead', 'founder'] }),
     hoursPerWeek: text('hours_per_week', { enum: ['lt_5', 'h_5_10', 'h_10_20', 'h_20_40', 'h_40_plus'] }),
@@ -177,14 +175,15 @@ export const profiles = pgTable('profiles', {
     workspaceInProgressCount: integer('workspace_in_progress_count').default(0).notNull(),
     // Last activity timestamp (debounced, updated at most every 5 minutes via Redis guard)
     lastActiveAt: timestamp('last_active_at', { withTimezone: true }),
+    openToCustomRoles: text('open_to_custom_roles').array().notNull().default(sql`'{}'::text[]`),
+    preferredCategories: text('preferred_categories').array().notNull().default(sql`'{}'::text[]`),
 }, (t) => ({
     // Optimize lookups by email (auth)
-    emailIdx: index('profiles_email_idx').on(t.email),
     // Optimization: GIN Index for fast skill matching (1M Users Scalability)
     skillsIdx: index('profiles_skills_idx').using('gin', t.skills),
+    customRolesGinIdx: index('profiles_custom_roles_gin_idx').using('gin', t.openToCustomRoles),
     interestsIdx: index('profiles_interests_idx').using('gin', t.interests),
     // Optimization: Sort Index for ISR (Profile Page Optimization)
-    // Optimized for getPopularUsernames which sorts by createdAt DESC
     createdAtIdx: index('profiles_created_at_idx').on(t.createdAt),
     // Optimization: GIN Index for fast user search (Connections Optimization)
     usernameSearchIdx: index('profiles_username_search_idx').using('gin', sql`${t.username} gin_trgm_ops`),
@@ -451,6 +450,7 @@ export const projects = pgTable('projects', {
     currentTaskNumber: integer('current_task_number').default(0),
     currentSequenceNumber: bigint('current_sequence_number', { mode: 'number' }).default(0).notNull(),
 
+    openRolesCount: integer('open_roles_count').default(0).notNull(),
     lookingForCollaborators: boolean('looking_for_collaborators').default(false),
     memberUpdatesEnabled: boolean('member_updates_enabled').default(true).notNull(),
     maxCollaborators: text('max_collaborators'),
@@ -474,7 +474,7 @@ export const projects = pgTable('projects', {
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
 }, (t) => ({
-    ownerIdx: index('projects_owner_idx').on(t.ownerId),
+    ownerIdx: index('idx_projects_owner').on(t.ownerId),
     conversationIdx: index('projects_conversation_idx').on(t.conversationId),
     createdAtIdx: index('projects_created_at_idx').on(t.createdAt),
     // Multi-column indexes for filtering (critical for 1M users)
@@ -482,7 +482,6 @@ export const projects = pgTable('projects', {
     categoryStatusIdx: index('projects_category_status_idx').on(t.category, t.status),
     // Sort index for the main "Newest Projects" feed
     createdAtStatusIdx: index('projects_created_at_status_idx').on(t.createdAt, t.status),
-    keyIdx: index('projects_key_idx').on(t.key),
     // Optimization: GIN Index for fast project search (Hub Optimization)
     // Note: Requires pg_trgm extension. If fails, fallback to b-tree on title is suboptimal but works.
     titleSearchIdx: index('projects_title_search_idx').using('gin', sql`${t.title} gin_trgm_ops`),
@@ -532,8 +531,8 @@ export const projectMembers = pgTable('project_members', {
     joinedAt: timestamp('joined_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
     projectUserUnique: uniqueIndex('project_members_project_user_unique').on(t.projectId, t.userId),
-    projectIdx: index('project_members_project_idx').on(t.projectId),
-    userIdx: index('project_members_user_idx').on(t.userId),
+    projectIdx: index('idx_project_members_project').on(t.projectId),
+    userIdx: index('idx_project_members_user').on(t.userId),
     fileUploadIdx: index('project_members_file_upload_idx').on(t.projectId, t.fileUploadEnabled),
 }))
 
@@ -543,25 +542,32 @@ export const projectMembers = pgTable('project_members', {
 export const profileProjectContributions = pgTable('profile_project_contributions', {
     id: uuid('id').primaryKey().defaultRandom(),
     profileId: uuid('profile_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
-    projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+    projectId: uuid('project_id').references(() => projects.id, { onDelete: 'cascade' }),
+    externalKey: text('external_key'),
+    projectTitle: text('project_title'),
+    projectUrl: text('project_url'),
+    repositoryUrl: text('repository_url'),
     source: text('source', { enum: ['membership', 'application', 'owner', 'manual'] }).default('membership').notNull(),
     roleKind: text('role_kind', { enum: ['owner', 'admin', 'member', 'viewer', 'contributor'] }).default('contributor').notNull(),
     roleTitle: text('role_title'),
     summary: text('summary'),
-    highlights: jsonb('highlights').$type<string[]>().default([]).notNull(),
     skills: jsonb('skills').$type<string[]>().default([]).notNull(),
     startedAt: timestamp('started_at', { withTimezone: true }),
     endedAt: timestamp('ended_at', { withTimezone: true }),
     verifiedAt: timestamp('verified_at', { withTimezone: true }),
     verifiedBy: uuid('verified_by').references(() => profiles.id, { onDelete: 'set null' }),
     visibility: text('visibility', { enum: ['public', 'private'] }).default('public').notNull(),
+    version: integer('version').default(1).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
 }, (t) => ({
     profileProjectActiveUnique: uniqueIndex('profile_project_contributions_profile_project_active_unique')
         .on(t.profileId, t.projectId)
-        .where(sql`${t.deletedAt} IS NULL`),
+        .where(sql`${t.deletedAt} IS NULL AND ${t.projectId} IS NOT NULL`),
+    profileExternalActiveUnique: uniqueIndex('profile_project_contributions_profile_external_active_unique')
+        .on(t.profileId, t.externalKey)
+        .where(sql`${t.deletedAt} IS NULL AND ${t.projectId} IS NULL`),
     profileVisibleIdx: index('profile_project_contributions_profile_visible_idx')
         .on(t.profileId, t.visibility, t.updatedAt.desc())
         .where(sql`${t.deletedAt} IS NULL`),
@@ -572,13 +578,18 @@ export const profileProjectContributions = pgTable('profile_project_contribution
         .on(t.profileId, t.verifiedAt.desc())
         .where(sql`${t.deletedAt} IS NULL AND ${t.verifiedAt} IS NOT NULL`),
     verifiedByIdx: index('profile_project_contributions_verified_by_idx').on(t.verifiedBy),
+    authorityShapeCheck: check(
+        'profile_project_contributions_authority_shape_check',
+        sql`((${t.projectId} IS NOT NULL AND ${t.externalKey} IS NULL) OR (${t.projectId} IS NULL AND ${t.externalKey} IS NOT NULL AND NULLIF(BTRIM(${t.projectTitle}), '') IS NOT NULL))`,
+    ),
+    versionCheck: check('profile_project_contributions_version_check', sql`${t.version} > 0`),
 }))
 
 export const profileProjectContributionStages = pgTable('profile_project_contribution_stages', {
     id: uuid('id').primaryKey().defaultRandom(),
     contributionId: uuid('contribution_id').notNull().references(() => profileProjectContributions.id, { onDelete: 'cascade' }),
     profileId: uuid('profile_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
-    projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+    projectId: uuid('project_id').references(() => projects.id, { onDelete: 'cascade' }),
     source: text('source', { enum: ['membership', 'application', 'owner', 'manual', 'role_change', 'project_invite', 'ownership_transfer', 'removal', 'backfill'] }).default('membership').notNull(),
     roleKind: text('role_kind', { enum: ['owner', 'admin', 'member', 'viewer', 'contributor'] }).default('contributor').notNull(),
     roleTitle: text('role_title'),
@@ -622,7 +633,6 @@ export const profileCollaborationSummaries = pgTable('profile_collaboration_summ
         version: 1,
         generatedAt: '',
         projects: [],
-        featuredProjects: [],
         contributions: [],
         stats: {
             projectsCount: 0,
@@ -752,6 +762,9 @@ export const projectOpenRoles = pgTable('project_open_roles', {
     count: integer('count').default(1).notNull(),
     filled: integer('filled').default(0).notNull(),
     skills: jsonb('skills').$type<string[]>().default([]),
+    commitmentType: text('commitment_type'),
+    experienceRequired: text('experience_required'),
+    hoursPerWeek: text('hours_per_week'),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
@@ -776,6 +789,8 @@ export const roleApplications = pgTable('role_applications', {
     status: statusRoleAppEnum('status').default('pending').notNull(),
     proposedRoleId: uuid('proposed_role_id').references(() => projectOpenRoles.id, { onDelete: 'set null' }),
     acceptedRoleTitle: text('accepted_role_title'),
+    applyingProjectId: uuid('applying_project_id').references(() => projects.id, { onDelete: 'set null' }),
+    applyingProjectRole: text('applying_project_role'),
     decisionAt: timestamp('decision_at', { withTimezone: true }),
     decisionBy: uuid('decision_by').references(() => profiles.id, { onDelete: 'set null' }),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
@@ -783,6 +798,7 @@ export const roleApplications = pgTable('role_applications', {
 }, (t) => ({
     // O(1) lookups for user's applications
     applicantIdx: index('role_applications_applicant_idx').on(t.applicantId, t.status),
+    roleApplicantUniqIdx: uniqueIndex('role_applicant_uniq_idx').on(t.roleId, t.applicantId),
     // O(1) lookups for creator's pending applications
     creatorPendingIdx: index('role_applications_creator_pending_idx').on(t.creatorId, t.status),
     // O(1) cooldown check (project + applicant + updated_at)
@@ -791,9 +807,10 @@ export const roleApplications = pgTable('role_applications', {
     acceptedProjectMemberIdx: index('role_applications_accepted_member_idx').on(t.projectId, t.applicantId, t.status, t.updatedAt),
     projectUpdatedIdx: index('role_applications_project_updated_idx').on(t.projectId, t.updatedAt),
     uniqueAppIdx: uniqueIndex('role_applications_unique_idx').on(t.projectId, t.applicantId),
-    roleIdIdx: index('role_applications_role_id_idx').on(t.roleId),
-    decisionByIdx: index('role_applications_decision_by_idx').on(t.decisionBy),
+    roleIdIdx: index('idx_role_applications_role_id').on(t.roleId),
+    decisionByIdx: index('idx_role_applications_decision_by').on(t.decisionBy),
     proposedRoleIdx: index('role_applications_proposed_role_idx').on(t.proposedRoleId),
+    applyingProjectIdx: index('role_applications_applying_project_idx').on(t.applyingProjectId).where(sql`${t.applyingProjectId} IS NOT NULL`),
 }))
 
 // ============================================================================
@@ -805,8 +822,8 @@ export const projectFollows = pgTable('project_follows', {
     userId: uuid('user_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
-    projectIdx: index('project_follows_project_idx').on(t.projectId),
-    userIdx: index('project_follows_user_idx').on(t.userId),
+    projectIdx: index('idx_project_follows_project_id').on(t.projectId),
+    userIdx: index('idx_project_follows_user_id').on(t.userId),
     uniqueFollow: uniqueIndex('project_follows_unique_idx').on(t.projectId, t.userId),
 }))
 
@@ -821,7 +838,7 @@ export const savedProjects = pgTable('saved_projects', {
     projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
-    userIdx: index('saved_projects_user_idx').on(t.userId),
+    userIdx: index('idx_saved_projects_user_id').on(t.userId),
     projectIdx: index('idx_saved_projects_project_id').on(t.projectId),
     uniqueSave: uniqueIndex('saved_projects_unique_idx').on(t.userId, t.projectId),
 }))
@@ -970,7 +987,7 @@ export const tasks = pgTable('tasks', {
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
 }, (t) => ({
     projectIdx: index('tasks_project_idx').on(t.projectId),
-    sprintIdx: index('tasks_sprint_idx').on(t.sprintId),
+    sprintIdx: index('idx_tasks_sprint_id').on(t.sprintId),
     assigneeIdx: index('tasks_assignee_idx').on(t.assigneeId),
     statusIdx: index('tasks_status_idx').on(t.status),
     assigneeStatusDueIdx: index('tasks_assignee_status_due_idx').on(t.assigneeId, t.status, t.dueDate),
@@ -982,7 +999,7 @@ export const tasks = pgTable('tasks', {
     // Optimization: GIN Index for fast title search (Tasks Search Optimization)
     titleSearchIdx: index('tasks_title_search_idx').using('gin', sql`${t.title} gin_trgm_ops`),
     // Optimization: Creator Index for "My Tasks"
-    creatorIdx: index('tasks_creator_idx').on(t.creatorId),
+    creatorIdx: index('idx_tasks_creator_id').on(t.creatorId),
     projectNumberIdx: index('tasks_project_number_idx').on(t.projectId, t.taskNumber),
     deletedAtPartialIdx: index('tasks_deleted_at_partial_idx').on(t.deletedAt).where(sql`${t.deletedAt} IS NULL`),
 }))
@@ -999,7 +1016,7 @@ export const taskSubtasks = pgTable('task_subtasks', {
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
-    taskIdx: index('task_subtasks_task_idx').on(t.taskId),
+    taskIdx: index('idx_task_subtasks_task_id').on(t.taskId),
 }))
 
 // ============================================================================
@@ -1199,8 +1216,8 @@ export const projectNodes = pgTable('project_nodes', {
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
 }, (t) => ({
-    projectIdx: index('project_nodes_project_idx').on(t.projectId),
-    parentIdx: index('project_nodes_parent_idx').on(t.parentId),
+    projectIdx: index('idx_project_nodes_project_id').on(t.projectId),
+    parentIdx: index('idx_project_nodes_parent_id').on(t.parentId),
     pathIdx: index('project_nodes_path_idx').on(t.path),
     projectPathIdx: index('project_nodes_project_path_idx').on(t.projectId, t.path),
     // Optimization: Covered Index for listing (Listing Optimization)
@@ -1224,8 +1241,8 @@ export const projectNodes = pgTable('project_nodes', {
         foreignColumns: [t.id],
     }).onDelete('cascade'),
     noSelfParentCheck: check('project_nodes_no_self_parent_check', sql`${t.parentId} IS NULL OR ${t.parentId} <> ${t.id}`),
-    createdByIdx: index('project_nodes_created_by_idx').on(t.createdBy),
-    deletedByIdx: index('project_nodes_deleted_by_idx').on(t.deletedBy),
+    createdByIdx: index('idx_project_nodes_created_by').on(t.createdBy),
+    deletedByIdx: index('idx_project_nodes_deleted_by').on(t.deletedBy),
     deletedAtPartialIdx: index('project_nodes_deleted_at_partial_idx').on(t.deletedAt).where(sql`${t.deletedAt} IS NULL`),
 }))
 
@@ -1234,7 +1251,8 @@ export const projectNodes = pgTable('project_nodes', {
 // Version history sidecar for `projectNodes` rows where type='file'. Each row
 // captures the blob metadata for a specific version; the newest row for a
 // node has version = projectNodes.currentVersion. Inserts go through the
-// `replaceNodeWithNewVersion` server action; the table is append-only.
+// Canonical mutations go through `applyFileRevision`: new revisions append,
+// while an explicit active-revision save updates only the current row.
 // ============================================================================
 export const fileVersions = pgTable('file_versions', {
     id: uuid('id').primaryKey().defaultRandom(),
@@ -1307,11 +1325,11 @@ export const taskNodeLinks = pgTable('task_node_links', {
     linkedAt: timestamp('linked_at', { withTimezone: true }).defaultNow().notNull(),
     createdBy: uuid('created_by').references(() => profiles.id, { onDelete: 'set null' }),
 }, (t) => ({
-    taskIdx: index('task_node_links_task_idx').on(t.taskId),
+    taskIdx: index('idx_task_node_links_task_id').on(t.taskId),
     taskLinkedAtIdx: index('task_node_links_task_linked_at_idx').on(t.taskId, t.linkedAt.desc()),
-    nodeIdx: index('task_node_links_node_idx').on(t.nodeId),
+    nodeIdx: index('idx_task_node_links_node_id').on(t.nodeId),
     uniqueLink: uniqueIndex('task_node_links_unique_idx').on(t.taskId, t.nodeId),
-    createdByIdx: index('task_node_links_created_by_idx').on(t.createdBy),
+    createdByIdx: index('idx_task_node_links_created_by').on(t.createdBy),
 }))
 
 // ============================================================================
@@ -1323,7 +1341,7 @@ export const projectFileIndex = pgTable('project_file_index', {
     content: text('content').default('').notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
-    projectIdx: index('project_file_index_project_idx').on(t.projectId),
+    projectIdx: index('idx_project_file_index_project_id').on(t.projectId),
     // Optimization: GIN Index for fast trigram search (Search Optimization)
     // Needs `CREATE EXTENSION IF NOT EXISTS pg_trgm;` in migration
     contentSearchIdx: index('project_file_index_content_search_idx').using('gin', sql`${t.content} gin_trgm_ops`),
@@ -1336,12 +1354,20 @@ export const projectNodeLocks = pgTable('project_node_locks', {
     nodeId: uuid('node_id').primaryKey().notNull().references(() => projectNodes.id, { onDelete: 'cascade' }),
     projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
     lockedBy: uuid('locked_by').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
-    sessionId: uuid('session_id'),
+    sessionId: uuid('session_id').notNull(),
+    leaseId: uuid('lease_id').defaultRandom().notNull(),
+    clientKind: text('client_kind', { enum: ['web', 'vscode'] }).default('web').notNull(),
+    deviceSessionId: uuid('device_session_id'),
+    fencingToken: bigint('fencing_token', { mode: 'number' }).notNull(),
     acquiredAt: timestamp('acquired_at', { withTimezone: true }).defaultNow().notNull(),
+    renewedAt: timestamp('renewed_at', { withTimezone: true }).defaultNow().notNull(),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
 }, (t) => ({
-    projectIdx: index('project_node_locks_project_idx').on(t.projectId),
+    projectIdx: index('idx_project_node_locks_project_id').on(t.projectId),
     expiresIdx: index('project_node_locks_expires_idx').on(t.expiresAt),
+    projectExpiresIdx: index('project_node_locks_project_expires_idx').on(t.projectId, t.expiresAt),
+    ownerSessionIdx: index('project_node_locks_owner_session_idx').on(t.lockedBy, t.sessionId),
+    deviceSessionIdx: index('project_node_locks_device_session_idx').on(t.deviceSessionId),
 }))
 
 // ============================================================================
@@ -1363,79 +1389,6 @@ export const projectNodeEvents = pgTable('project_node_events', {
     seqIdx: uniqueIndex('project_node_events_seq_idx').on(t.projectId, t.sequenceNumber, t.createdAt),
 }))
 
-// ============================================================================
-// PROJECT RUNNER PROFILES + SESSIONS
-// ============================================================================
-export const projectRunProfiles = pgTable('project_run_profiles', {
-    id: uuid('id').primaryKey().defaultRandom(),
-    projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
-    name: text('name').notNull(),
-    command: text('command').notNull(),
-    isDefault: boolean('is_default').default(false).notNull(),
-    createdBy: uuid('created_by').references(() => profiles.id, { onDelete: 'set null' }),
-    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
-    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
-}, (t) => ({
-    projectIdx: index('project_run_profiles_project_idx').on(t.projectId),
-    uniqueNameIdx: uniqueIndex('project_run_profiles_project_name_uidx').on(t.projectId, t.name),
-}));
-
-export const projectRunSessions = pgTable('project_run_sessions', {
-    id: uuid('id').primaryKey().defaultRandom(),
-    projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
-    profileId: uuid('profile_id').references(() => projectRunProfiles.id, { onDelete: 'set null' }),
-    startedBy: uuid('started_by').references(() => profiles.id, { onDelete: 'set null' }),
-    command: text('command').notNull(),
-    status: statusWorkflowEnum('status').default('queued').notNull(),
-    exitCode: integer('exit_code'),
-    durationMs: integer('duration_ms'),
-    errorCount: integer('error_count').default(0).notNull(),
-    warningCount: integer('warning_count').default(0).notNull(),
-    startedAt: timestamp('started_at', { withTimezone: true }).defaultNow().notNull(),
-    finishedAt: timestamp('finished_at', { withTimezone: true }),
-    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
-}, (t) => ({
-    projectIdx: index('project_run_sessions_project_idx').on(t.projectId, t.startedAt),
-    profileIdx: index('project_run_sessions_profile_idx').on(t.profileId),
-    statusIdx: index('project_run_sessions_status_idx').on(t.status, t.startedAt),
-}));
-
-export const projectRunLogs = pgTable('project_run_logs', {
-    id: uuid('id').defaultRandom().notNull(),
-    sessionId: uuid('session_id').notNull().references(() => projectRunSessions.id, { onDelete: 'cascade' }),
-    projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
-    stream: text('stream', { enum: ['stdout', 'stderr', 'system'] }).default('stdout').notNull(),
-    lineNumber: integer('line_number').default(0).notNull(),
-    message: text('message').notNull(),
-    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
-}, (t) => ({
-    pk: primaryKey({ columns: [t.id, t.createdAt] }),
-    sessionIdx: index('project_run_logs_session_idx').on(t.sessionId, t.lineNumber),
-    projectIdx: index('project_run_logs_project_idx').on(t.projectId, t.createdAt),
-}));
-
-export const projectRunDiagnostics = pgTable('project_run_diagnostics', {
-    id: uuid('id').defaultRandom().notNull(),
-    sessionId: uuid('session_id').notNull().references(() => projectRunSessions.id, { onDelete: 'cascade' }),
-    projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
-    nodeId: uuid('node_id').references(() => projectNodes.id, { onDelete: 'set null' }),
-    filePath: text('file_path'),
-    line: integer('line'),
-    column: integer('column'),
-    severity: text('severity', { enum: ['error', 'warning', 'info'] }).default('error').notNull(),
-    source: text('source'),
-    code: text('code'),
-    message: text('message').notNull(),
-    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
-}, (t) => ({
-    pk: primaryKey({ columns: [t.id, t.createdAt] }),
-    sessionIdx: index('project_run_diagnostics_session_idx').on(t.sessionId, t.severity),
-    projectIdx: index('project_run_diagnostics_project_idx').on(t.projectId, t.createdAt),
-    nodeIdx: index('project_run_diagnostics_node_idx').on(t.nodeId),
-}));
-
-
-// ============================================================================
 // ============================================================================
 // RELATIONS
 // ============================================================================
@@ -1952,7 +1905,6 @@ export const conversationParticipants = pgTable('conversation_participants', {
     lastMessagePreview: text('last_message_preview'),
     lastMessageType: text('last_message_type'),
     lastMessageSenderId: uuid('last_message_sender_id'),
-    pinnedAt: timestamp('pinned_at', { withTimezone: true }),
 }, (t) => ({
     conversationUserUnique: uniqueIndex('conversation_participants_unique').on(t.conversationId, t.userId),
     userIdx: index('conversation_participants_user_idx').on(t.userId),
@@ -2430,14 +2382,6 @@ export type ProjectNode = typeof projectNodes.$inferSelect
 export type NewProjectNode = typeof projectNodes.$inferInsert
 export type TaskNodeLink = typeof taskNodeLinks.$inferSelect
 export type NewTaskNodeLink = typeof taskNodeLinks.$inferInsert
-export type ProjectRunProfile = typeof projectRunProfiles.$inferSelect
-export type NewProjectRunProfile = typeof projectRunProfiles.$inferInsert
-export type ProjectRunSession = typeof projectRunSessions.$inferSelect
-export type NewProjectRunSession = typeof projectRunSessions.$inferInsert
-export type ProjectRunLog = typeof projectRunLogs.$inferSelect
-export type NewProjectRunLog = typeof projectRunLogs.$inferInsert
-export type ProjectRunDiagnostic = typeof projectRunDiagnostics.$inferSelect
-export type NewProjectRunDiagnostic = typeof projectRunDiagnostics.$inferInsert
 export type TaskComment = typeof taskComments.$inferSelect
 export type NewTaskComment = typeof taskComments.$inferInsert
 export type TaskCommentLike = typeof taskCommentLikes.$inferSelect
@@ -2453,33 +2397,177 @@ export type NewFileVersion = typeof fileVersions.$inferInsert
 // NORMALIZATION: SKILLS, INTERESTS, TAGS
 // ============================================================================
 
+export const skillCategories = pgTable('skill_categories', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    key: text('key').notNull().unique(),
+    name: text('name').notNull(),
+    description: text('description'),
+    iconKey: text('icon_key').default('badge').notNull(),
+    displayOrder: integer('display_order').default(0).notNull(),
+    status: text('status', { enum: ['active', 'hidden'] }).default('active').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+    orderIdx: index('skill_categories_order_idx').on(t.status, t.displayOrder),
+}))
+
 export const skills = pgTable('skills', {
     id: uuid('id').primaryKey().defaultRandom(),
     name: text('name').notNull().unique(),
     slug: text('slug').notNull().unique(),
+    canonicalKey: text('canonical_key').notNull().unique(),
+    categoryId: uuid('category_id').references(() => skillCategories.id, { onDelete: 'set null' }),
+    kind: text('kind', { enum: ['language', 'framework', 'library', 'database', 'platform', 'tool', 'protocol', 'methodology', 'competency', 'domain'] }).default('competency').notNull(),
+    description: text('description'),
+    iconSource: text('icon_source', { enum: ['simple-icons', 'devicon', 'skill-icons', 'logos', 'developer-icons', 'lucide', 'custom', 'monogram'] }).default('monogram').notNull(),
+    iconKey: text('icon_key').default('badge').notNull(),
+    brandColor: text('brand_color'),
+    marketTier: text('market_tier', { enum: ['core', 'extended', 'reference'] }).default('extended').notNull(),
+    status: text('status', { enum: ['active', 'deprecated', 'merged', 'hidden', 'pending'] }).default('active').notNull(),
+    selectable: boolean('selectable').default(true).notNull(),
+    replacementSkillId: uuid('replacement_skill_id').references((): AnyPgColumn => skills.id, { onDelete: 'set null' }),
+    sourceMetadata: jsonb('source_metadata').$type<Record<string, unknown>>().default({}).notNull(),
+    catalogVersion: text('catalog_version').default('legacy').notNull(),
+    lastReviewedAt: timestamp('last_reviewed_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
     nameSearchIdx: index('skills_name_search_idx').using('gin', sql`${t.name} gin_trgm_ops`),
+    categoryKindStatusIdx: index('skills_category_kind_status_idx').on(t.categoryId, t.kind, t.status),
+    tierStatusNameIdx: index('skills_tier_status_name_idx').on(t.marketTier, t.status, t.name),
+    replacementSkillIdx: index('skills_replacement_skill_id_idx').on(t.replacementSkillId),
+}))
+
+export const skillAliases = pgTable('skill_aliases', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    skillId: uuid('skill_id').notNull().references(() => skills.id, { onDelete: 'cascade' }),
+    alias: text('alias').notNull(),
+    normalizedAlias: text('normalized_alias').notNull(),
+    locale: text('locale').default('en').notNull(),
+    source: text('source').default('catalog').notNull(),
+    isPreferred: boolean('is_preferred').default(false).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+    normalizedLocaleUnique: uniqueIndex('skill_aliases_normalized_locale_unique').on(t.normalizedAlias, t.locale),
+    skillIdx: index('skill_aliases_skill_idx').on(t.skillId),
+    searchIdx: index('skill_aliases_search_idx').using('gin', sql`${t.normalizedAlias} gin_trgm_ops`),
+}))
+
+export const skillIconAssets = pgTable('skill_icon_assets', {
+    iconKey: text('icon_key').primaryKey(),
+    source: text('source', { enum: ['simple-icons', 'devicon', 'skill-icons', 'logos', 'developer-icons', 'lucide', 'custom'] }).notNull(),
+    sourceSlug: text('source_slug'),
+    sourceVersion: text('source_version').notNull(),
+    assetPath: text('asset_path').notNull(),
+    checksum: text('checksum').notNull(),
+    brandColor: text('brand_color'),
+    licenseType: text('license_type'),
+    licenseUrl: text('license_url'),
+    sourceUrl: text('source_url'),
+    guidelinesUrl: text('guidelines_url'),
+    approvalStatus: text('approval_status', { enum: ['catalog_approved', 'blocked', 'needs_review'] }).default('catalog_approved').notNull(),
+    lastReviewedAt: timestamp('last_reviewed_at', { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+})
+
+export const skillPopularitySnapshots = pgTable('skill_popularity_snapshots', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    skillId: uuid('skill_id').notNull().references(() => skills.id, { onDelete: 'cascade' }),
+    source: text('source').notNull(),
+    score: integer('score').default(0).notNull(),
+    rank: integer('rank'),
+    sampleSize: integer('sample_size'),
+    capturedAt: timestamp('captured_at', { withTimezone: true }).notNull(),
+    metadata: jsonb('metadata').$type<Record<string, unknown>>().default({}).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+    snapshotUnique: uniqueIndex('skill_popularity_snapshot_unique').on(t.skillId, t.source, t.capturedAt),
+    sourceRankIdx: index('skill_popularity_source_rank_idx').on(t.source, t.capturedAt.desc(), t.rank),
+}))
+
+export const skillProposals = pgTable('skill_proposals', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    submittedBy: uuid('submitted_by').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
+    label: text('label').notNull(),
+    normalizedLabel: text('normalized_label').notNull(),
+    context: text('context'),
+    status: text('status', { enum: ['pending', 'accepted', 'merged', 'rejected'] }).default('pending').notNull(),
+    resolvedSkillId: uuid('resolved_skill_id').references(() => skills.id, { onDelete: 'set null' }),
+    reviewedBy: uuid('reviewed_by').references(() => profiles.id, { onDelete: 'set null' }),
+    reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+    userLabelUnique: uniqueIndex('skill_proposals_user_label_unique').on(t.submittedBy, t.normalizedLabel),
+    statusCreatedIdx: index('skill_proposals_status_created_idx').on(t.status, t.createdAt),
+    resolvedSkillIdx: index('skill_proposals_resolved_skill_id_idx').on(t.resolvedSkillId),
+    reviewedByIdx: index('skill_proposals_reviewed_by_idx').on(t.reviewedBy),
 }))
 
 export const profileSkills = pgTable('profile_skills', {
     id: uuid('id').primaryKey().defaultRandom(),
     profileId: uuid('profile_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
     skillId: uuid('skill_id').notNull().references(() => skills.id, { onDelete: 'cascade' }),
+    proficiency: text('proficiency', { enum: ['learning', 'beginner', 'intermediate', 'advanced', 'expert'] }),
+    yearsExperience: integer('years_experience'),
+    isPrimary: boolean('is_primary').default(false).notNull(),
+    displayOrder: integer('display_order').default(0).notNull(),
+    visibility: text('visibility', { enum: ['public', 'connections', 'private'] }).default('public').notNull(),
+    evidence: jsonb('evidence').$type<Record<string, unknown>>().default({}).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
     uniqueProfileSkill: uniqueIndex('profile_skills_unique_idx').on(t.profileId, t.skillId),
     skillIdx: index('profile_skills_skill_idx').on(t.skillId),
+    profileOrderIdx: index('profile_skills_profile_order_idx').on(t.profileId, t.displayOrder),
 }))
 
 export const projectSkills = pgTable('project_skills', {
     id: uuid('id').primaryKey().defaultRandom(),
     projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
     skillId: uuid('skill_id').notNull().references(() => skills.id, { onDelete: 'cascade' }),
+    usageKind: text('usage_kind', { enum: ['used', 'primary', 'planned'] }).default('used').notNull(),
+    displayOrder: integer('display_order').default(0).notNull(),
+    evidence: jsonb('evidence').$type<Record<string, unknown>>().default({}).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
     uniqueProjectSkill: uniqueIndex('project_skills_unique_idx').on(t.projectId, t.skillId),
     skillIdx: index('project_skills_skill_idx').on(t.skillId),
+    projectOrderIdx: index('project_skills_project_order_idx').on(t.projectId, t.displayOrder),
+}))
+
+export const roleSkills = pgTable('role_skills', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    roleId: uuid('role_id').notNull().references(() => projectOpenRoles.id, { onDelete: 'cascade' }),
+    skillId: uuid('skill_id').notNull().references(() => skills.id, { onDelete: 'cascade' }),
+    requirement: text('requirement', { enum: ['required', 'preferred'] }).default('required').notNull(),
+    minimumProficiency: text('minimum_proficiency', { enum: ['learning', 'beginner', 'intermediate', 'advanced', 'expert'] }),
+    displayOrder: integer('display_order').default(0).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+    uniqueRoleSkill: uniqueIndex('role_skills_unique').on(t.roleId, t.skillId),
+    roleOrderIdx: index('role_skills_role_order_idx').on(t.roleId, t.displayOrder),
+    skillIdx: index('role_skills_skill_idx').on(t.skillId),
+}))
+
+export const profileContributionSkills = pgTable('profile_contribution_skills', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    contributionId: uuid('contribution_id').notNull().references(() => profileProjectContributions.id, { onDelete: 'cascade' }),
+    skillId: uuid('skill_id').notNull().references(() => skills.id, { onDelete: 'cascade' }),
+    evidence: jsonb('evidence').$type<Record<string, unknown>>().default({}).notNull(),
+    verifiedAt: timestamp('verified_at', { withTimezone: true }),
+    verifiedBy: uuid('verified_by').references(() => profiles.id, { onDelete: 'set null' }),
+    displayOrder: integer('display_order').default(0).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+    uniqueContributionSkill: uniqueIndex('profile_contribution_skills_unique').on(t.contributionId, t.skillId),
+    contributionOrderIdx: index('profile_contribution_skills_contribution_order_idx').on(t.contributionId, t.displayOrder),
+    skillIdx: index('profile_contribution_skills_skill_idx').on(t.skillId),
+    verifiedByIdx: index('profile_contribution_skills_verified_by_idx').on(t.verifiedBy),
 }))
 
 export const interests = pgTable('interests', {
@@ -2717,6 +2805,7 @@ export const extensionDeviceSessions = pgTable('extension_device_sessions', {
     editorName: text('editor_name'),
     editorPlatform: text('editor_platform'),
     editorVersion: text('editor_version'),
+    callbackUri: text('callback_uri'),
     revocationReason: text('revocation_reason'),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
     revokedAt: timestamp('revoked_at', { withTimezone: true }),
@@ -2737,6 +2826,69 @@ export const extensionDeviceSessionEvents = pgTable('extension_device_session_ev
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
     sessionIdx: index('extension_device_session_events_session_idx').on(t.sessionId),
+}))
+
+// ============================================================================
+// EXTENSION RECOVERY SESSIONS
+// Separates silent background safety copies from user-visible crash incidents.
+// ============================================================================
+export const extensionRecoverySessions = pgTable('extension_recovery_sessions', {
+    sessionId: text('session_id').primaryKey(),
+    userId: uuid('user_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
+    deviceId: text('device_id').notNull(),
+    status: text('status', { enum: ['active', 'clean', 'interrupted', 'resolved'] }).default('active').notNull(),
+    extensionVersion: text('extension_version'),
+    startedAt: timestamp('started_at', { withTimezone: true }).notNull(),
+    lastHeartbeatAt: timestamp('last_heartbeat_at', { withTimezone: true }).notNull(),
+    endedAt: timestamp('ended_at', { withTimezone: true }),
+    incidentDetectedAt: timestamp('incident_detected_at', { withTimezone: true }),
+    resolvedAt: timestamp('resolved_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+    ownerStatusHeartbeatIdx: index('extension_recovery_sessions_owner_status_heartbeat_idx').on(t.userId, t.status, t.lastHeartbeatAt.desc()),
+    ownerDeviceIdx: index('extension_recovery_sessions_owner_device_idx').on(t.userId, t.deviceId, t.startedAt.desc()),
+    updatedIdx: index('extension_recovery_sessions_updated_idx').on(t.updatedAt),
+}))
+
+// ============================================================================
+// EXTENSION RECOVERY DRAFTS
+// Immutable cloud generations for crash recovery. These records are never
+// published as file versions automatically; publishing still goes through the
+// explicit extension file revision APIs with base-version/hash validation.
+// ============================================================================
+export const extensionRecoveryDrafts = pgTable('extension_recovery_drafts', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
+    projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+    nodeId: uuid('node_id').references(() => projectNodes.id, { onDelete: 'set null' }),
+    deviceId: text('device_id').notNull(),
+    sessionId: text('session_id').notNull(),
+    filePath: text('file_path').notNull(),
+    storageKey: text('storage_key').notNull().unique(),
+    size: bigint('size', { mode: 'number' }).notNull(),
+    mimeType: text('mime_type').default('text/plain').notNull(),
+    contentHash: text('content_hash').notNull(),
+    baseVersion: integer('base_version'),
+    baseHash: text('base_hash'),
+    taskContext: jsonb('task_context').$type<Array<{
+        id: string;
+        title?: string;
+        taskNumber?: number | null;
+    }>>().default([]).notNull(),
+    status: text('status', { enum: ['pending', 'finalized', 'failed', 'expired'] }).default('pending').notNull(),
+    failureReason: text('failure_reason'),
+    capturedAt: timestamp('captured_at', { withTimezone: true }).notNull(),
+    finalizedAt: timestamp('finalized_at', { withTimezone: true }),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+    ownerUpdatedIdx: index('extension_recovery_drafts_owner_updated_idx').on(t.userId, t.updatedAt.desc()),
+    projectPathIdx: index('extension_recovery_drafts_project_path_idx').on(t.projectId, t.filePath, t.updatedAt.desc()),
+    deviceFileIdx: index('extension_recovery_drafts_device_file_idx').on(t.userId, t.deviceId, t.projectId, t.filePath, t.capturedAt.desc()),
+    expiryIdx: index('extension_recovery_drafts_expiry_idx').on(t.status, t.expiresAt),
+    nodeIdx: index('extension_recovery_drafts_node_idx').on(t.nodeId),
 }))
 
 // ============================================================================
@@ -2832,6 +2984,10 @@ export type ExtensionDeviceSession = typeof extensionDeviceSessions.$inferSelect
 export type NewExtensionDeviceSession = typeof extensionDeviceSessions.$inferInsert
 export type ExtensionDeviceSessionEvent = typeof extensionDeviceSessionEvents.$inferSelect
 export type NewExtensionDeviceSessionEvent = typeof extensionDeviceSessionEvents.$inferInsert
+export type ExtensionRecoveryDraft = typeof extensionRecoveryDrafts.$inferSelect
+export type NewExtensionRecoveryDraft = typeof extensionRecoveryDrafts.$inferInsert
+export type ExtensionRecoverySession = typeof extensionRecoverySessions.$inferSelect
+export type NewExtensionRecoverySession = typeof extensionRecoverySessions.$inferInsert
 export type ProjectGitDelta = typeof projectGitDeltas.$inferSelect
 export type NewProjectGitDelta = typeof projectGitDeltas.$inferInsert
 export type ImportJob = typeof importJobs.$inferSelect
