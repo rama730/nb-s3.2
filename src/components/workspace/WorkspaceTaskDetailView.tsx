@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Activity, CheckCircle2, CheckSquare, MessageCircle, Paperclip, Loader2 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
@@ -38,6 +38,10 @@ export default function WorkspaceTaskDetailView({ task, onBack }: WorkspaceTaskD
         sprints: [],
         members: [],
     });
+    const completedSubtaskCount = useMemo(
+        () => resource.subtasks.filter((subtask) => subtask.completed).length,
+        [resource.subtasks],
+    );
 
     useEffect(() => {
         void resource.ensureTabLoaded(activeTab);
@@ -125,8 +129,8 @@ export default function WorkspaceTaskDetailView({ task, onBack }: WorkspaceTaskD
 
             {/* Scrollable Tab Panel Container */}
             <div className="flex-1 overflow-y-auto p-6 bg-zinc-50/20 dark:bg-zinc-950/20 relative">
-                {resource.loadedTabs.details && (
-                    <div className={activeTab === "details" ? "block" : "hidden"}>
+                {activeTab === "details" && resource.loadedTabs.details && (
+                    <div>
                         <DetailsTab
                             task={resource.task}
                             canEdit={true}
@@ -134,21 +138,21 @@ export default function WorkspaceTaskDetailView({ task, onBack }: WorkspaceTaskD
                             mutationError={resource.taskMutations.mutationError}
                             members={[]}
                             sprints={[]}
-                            subtasks={resource.subtasks}
-                            attachments={resource.attachments}
+                            subtaskCount={resource.subtasks.length}
+                            completedSubtaskCount={completedSubtaskCount}
+                            attachmentCount={resource.attachments.length}
                             fileWarnings={resource.fileWarnings}
                             fileWarningSummary={resource.fileWarningSummary}
                             onUpdateField={resource.taskMutations.updateField}
                             onUpdateStatus={resource.taskMutations.updateStatus}
                             onUpdateAssignee={resource.taskMutations.updateAssignee}
-                            onToggleSubtask={resource.toggleSubtask}
-                            onDownloadAttachment={resource.fileMutations.downloadAttachment}
+                            onOpenTab={setActiveTab}
                         />
                     </div>
                 )}
 
-                {resource.loadedTabs.subtasks && (
-                    <div className={activeTab === "subtasks" ? "block" : "hidden"}>
+                {activeTab === "subtasks" && resource.loadedTabs.subtasks && (
+                    <div>
                         <SubtasksTab
                             subtasks={resource.subtasks}
                             isLoading={resource.loading.subtasks}
@@ -161,8 +165,8 @@ export default function WorkspaceTaskDetailView({ task, onBack }: WorkspaceTaskD
                     </div>
                 )}
 
-                {resource.loadedTabs.comments && (
-                    <div className={activeTab === "comments" ? "block" : "hidden"}>
+                {activeTab === "comments" && resource.loadedTabs.comments && (
+                    <div>
                         <CommentsTab
                             projectId={projectId}
                             comments={resource.comments}
@@ -185,8 +189,8 @@ export default function WorkspaceTaskDetailView({ task, onBack }: WorkspaceTaskD
                     </div>
                 )}
 
-                {resource.loadedTabs.files && (
-                    <div className={activeTab === "files" ? "block" : "hidden"}>
+                {activeTab === "files" && resource.loadedTabs.files && (
+                    <div>
                         <FilesTab
                             projectId={projectId}
                             taskId={resource.task.id}
@@ -207,7 +211,6 @@ export default function WorkspaceTaskDetailView({ task, onBack }: WorkspaceTaskD
                                     ? { success: true }
                                     : { success: false, error: result.error };
                             }}
-                            onAttachExisting={resource.fileMutations.attachExisting}
                             onUnlink={resource.fileMutations.unlinkAttachment}
                             onOpenFile={resource.fileMutations.downloadAttachment}
                             onResolvePendingResolution={resource.fileMutations.resolvePendingResolution}
@@ -225,8 +228,8 @@ export default function WorkspaceTaskDetailView({ task, onBack }: WorkspaceTaskD
                     </div>
                 )}
 
-                {resource.loadedTabs.activity && (
-                    <div className={activeTab === "activity" ? "block" : "hidden"}>
+                {activeTab === "activity" && resource.loadedTabs.activity && (
+                    <div>
                         <ActivityTab
                             items={resource.activity}
                             isLoading={resource.loading.activity}
