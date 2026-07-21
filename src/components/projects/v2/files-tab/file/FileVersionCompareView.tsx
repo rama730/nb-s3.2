@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { X, ArrowRight, Loader2, Info } from "lucide-react";
+import { X, ArrowRight, Loader2 } from "lucide-react";
 import { diffLines } from "diff";
 import { cn } from "@/lib/utils";
 import { getFileVersionContentAction } from "@/app/actions/files/versions";
@@ -19,7 +19,6 @@ export interface FileVersionCompareViewProps {
   baseVersion: number;
   targetVersion: number;
   onClose: () => void;
-  canEdit: boolean;
 }
 
 export function FileVersionCompareView({
@@ -29,23 +28,11 @@ export function FileVersionCompareView({
   baseVersion,
   targetVersion,
   onClose,
-  canEdit,
 }: FileVersionCompareViewProps): React.JSX.Element {
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
   const [leftLines, setLeftLines] = React.useState<AlignedLine[]>([]);
   const [rightLines, setRightLines] = React.useState<AlignedLine[]>([]);
-
-  // Cleanup references on unmount to assist V8 garbage collection
-  const leftLinesRef = React.useRef<AlignedLine[] | null>(null);
-  const rightLinesRef = React.useRef<AlignedLine[] | null>(null);
-
-  React.useEffect(() => {
-    return () => {
-      leftLinesRef.current = null;
-      rightLinesRef.current = null;
-    };
-  }, []);
 
   React.useEffect(() => {
     let active = true;
@@ -158,8 +145,6 @@ export function FileVersionCompareView({
         }
 
         if (active) {
-          leftLinesRef.current = localLeft;
-          rightLinesRef.current = localRight;
           setLeftLines(localLeft);
           setRightLines(localRight);
           setLoading(false);
