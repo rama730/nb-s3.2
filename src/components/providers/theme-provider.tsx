@@ -21,27 +21,23 @@ import {
     readLocalAppearanceSnapshot,
     resolveThemeMode,
     writeAppearanceSnapshot,
+    isReducedMotionEnabled,
+    prefersReducedMotionFromSystem,
 } from '@/lib/theme/appearance'
 import {
     type AppearanceSyncState,
     readAppearanceSettings,
-    resetAppearanceSettings,
     writeAppearanceSettings,
 } from '@/lib/theme/appearance-client'
-import { resolveReducedMotionPreference } from '@/lib/theme/appearance-runtime'
-import { isReducedMotionEnabled, prefersReducedMotionFromSystem } from '@/lib/theme/reduced-motion'
 
 const REMOTE_SYNC_DEBOUNCE_MS = 900
-const REMOTE_SYNC_RETRY_DELAYS_MS = [1_500, 5_000, 15_000]
 
 let themeTransitionInFlight = false
 
 interface ThemeContextValue {
     theme: ThemeMode;
     resolvedTheme: ResolvedTheme;
-    setTheme: (theme: ThemeMode) => void;
     setThemeWithTransition: (theme: ThemeMode) => Promise<void>;
-    isThemeTransitioning: boolean;
 }
 
 interface AppearanceContextValue {
@@ -88,7 +84,6 @@ function ThemeRuntimeProvider({ children }: ThemeProviderProps) {
     const [accentColor, setAccentColorState] = useState<AccentColor>(DEFAULT_APPEARANCE_SNAPSHOT.accentColor)
     const [density, setDensityState] = useState<Density>(DEFAULT_APPEARANCE_SNAPSHOT.density)
     const [reduceMotion, setReduceMotionState] = useState<boolean>(DEFAULT_APPEARANCE_SNAPSHOT.reduceMotion)
-    const [isThemeTransitioning, setIsThemeTransitioning] = useState(false)
     const [viewerId, setViewerId] = useState<string | null>(null)
     const [shellHardeningEnabled, setShellHardeningEnabled] = useState(
         isHardeningDomainEnabled('shellV1', null),
@@ -104,9 +99,7 @@ function ThemeRuntimeProvider({ children }: ThemeProviderProps) {
     const pendingSyncRef = useRef<AppearanceSnapshot | null>(null)
     const lastSyncedSnapshotRef = useRef<AppearanceSnapshot | null>(null)
     const syncInFlightRef = useRef(false)
-    const syncRetryIndexRef = useRef(0)
     const syncTimerRef = useRef<number | null>(null)
-    const retryTimerRef = useRef<number | null>(null)
 
     const persistLocalSnapshot = useCallback((snapshot: AppearanceSnapshot, source: string) => {
         try {
@@ -153,13 +146,11 @@ function ThemeRuntimeProvider({ children }: ThemeProviderProps) {
         syncInFlightRef.current = true
         pendingSyncRef.current = null
         const startedAt = performance.now()
-        let retryScheduled = false
         setSyncState('saving')
 
         try {
             if (lastSyncedSnapshotRef.current && areAppearanceSnapshotsEquivalent(lastSyncedSnapshotRef.current, snapshot)) {
                 logger.metric('theme.sync.skip_stale', { reason, userId: viewerId })
-                syncRetryIndexRef.current = 0
                 setSyncState('saved')
                 setLastSyncedAt(lastSyncedSnapshotRef.current.updatedAt)
                 return
@@ -171,48 +162,22 @@ function ThemeRuntimeProvider({ children }: ThemeProviderProps) {
             setLastSyncedAt(savedSnapshot.updatedAt)
             setSyncState('saved')
 
-            syncRetryIndexRef.current = 0
             logger.metric('theme.sync.success', {
                 reason,
                 userId: viewerId,
                 durationMs: Math.round(performance.now() - startedAt),
             })
         } catch (error) {
-            const retryIndex = syncRetryIndexRef.current
-            const retryDelay = REMOTE_SYNC_RETRY_DELAYS_MS[retryIndex] ?? null
             logger.metric('theme.sync.failure', {
                 reason,
                 userId: viewerId,
-                retryIndex,
-                retryDelayMs: retryDelay ?? 0,
                 error: error instanceof Error ? error.message : 'unknown',
             })
-
-            if (retryDelay !== null) {
-                syncRetryIndexRef.current = retryIndex + 1
-                pendingSyncRef.current = snapshot
-                if (retryTimerRef.current !== null) {
-                    window.clearTimeout(retryTimerRef.current)
-                }
-                retryTimerRef.current = window.setTimeout(() => {
-                    retryTimerRef.current = null
-                    void flushRemoteSync('retry')
-                }, retryDelay)
-                retryScheduled = true
-            } else {
-                syncRetryIndexRef.current = 0
-                setSyncState('save_failed')
-            }
+            setSyncState('save_failed')
         } finally {
             syncInFlightRef.current = false
-            if (pendingSyncRef.current && !retryScheduled) {
-                if (retryTimerRef.current !== null) {
-                    window.clearTimeout(retryTimerRef.current)
-                }
-                retryTimerRef.current = window.setTimeout(() => {
-                    retryTimerRef.current = null
-                    void flushRemoteSync('queued')
-                }, 0)
+            if (pendingSyncRef.current) {
+                queueMicrotask(() => void flushRemoteSync('queued'))
             }
         }
     }, [profileHardeningEnabled, viewerId])
@@ -233,11 +198,6 @@ function ThemeRuntimeProvider({ children }: ThemeProviderProps) {
         if (syncTimerRef.current !== null) {
             window.clearTimeout(syncTimerRef.current)
         }
-        if (retryTimerRef.current !== null) {
-            window.clearTimeout(retryTimerRef.current)
-            retryTimerRef.current = null
-        }
-
         syncTimerRef.current = window.setTimeout(() => {
             void flushRemoteSync(reason)
         }, REMOTE_SYNC_DEBOUNCE_MS)
@@ -265,7 +225,6 @@ function ThemeRuntimeProvider({ children }: ThemeProviderProps) {
         }
 
         themeTransitionInFlight = true
-        setIsThemeTransitioning(true)
         root.classList.add('theme-transition')
 
         try {
@@ -297,19 +256,8 @@ function ThemeRuntimeProvider({ children }: ThemeProviderProps) {
         } finally {
             window.setTimeout(() => root.classList.remove('theme-transition'), 220)
             themeTransitionInFlight = false
-            setIsThemeTransitioning(false)
         }
     }, [setNextTheme, shellHardeningEnabled])
-
-    const setTheme = useCallback((nextThemeInput: ThemeMode) => {
-        const nextTheme = normalizeThemeMode(nextThemeInput, theme)
-        if (nextTheme === theme) return
-
-        const nextSnapshot = buildNextSnapshot({ theme: nextTheme })
-        persistLocalSnapshot(nextSnapshot, 'set-theme')
-        queueRemoteSync(nextSnapshot, 'set-theme')
-        void applyThemeMode(nextTheme, false)
-    }, [applyThemeMode, buildNextSnapshot, persistLocalSnapshot, queueRemoteSync, theme])
 
     const setThemeWithTransition = useCallback(async (nextThemeInput: ThemeMode) => {
         const nextTheme = normalizeThemeMode(nextThemeInput, theme)
@@ -361,11 +309,7 @@ function ThemeRuntimeProvider({ children }: ThemeProviderProps) {
     useEffect(() => {
         const media = window.matchMedia('(prefers-reduced-motion: reduce)')
         const update = () => {
-            setSystemReduceMotion(
-                resolveReducedMotionPreference({
-                    matchMedia: window.matchMedia?.bind(window),
-                }),
-            )
+            setSystemReduceMotion(prefersReducedMotionFromSystem(window.matchMedia?.bind(window)))
         }
         update()
         media.addEventListener('change', update)
@@ -484,10 +428,6 @@ function ThemeRuntimeProvider({ children }: ThemeProviderProps) {
                 window.clearTimeout(syncTimerRef.current)
                 syncTimerRef.current = null
             }
-            if (retryTimerRef.current !== null) {
-                window.clearTimeout(retryTimerRef.current)
-                retryTimerRef.current = null
-            }
         }
     }, [applySnapshotLocally, persistLocalSnapshot, setNextTheme])
 
@@ -500,59 +440,14 @@ function ThemeRuntimeProvider({ children }: ThemeProviderProps) {
     const resetAppearance = useCallback(async () => {
         const snapshot = createAppearanceSnapshot(DEFAULT_APPEARANCE_SNAPSHOT)
         applySnapshotLocally(snapshot, 'reset-local')
-        if (!profileHardeningEnabled || !viewerId || !bootstrappedRef.current) {
-            setSyncState('idle')
-            setLastSyncedAt(undefined)
-            return
-        }
-        pendingSyncRef.current = snapshot
-        setSyncState('saving')
-        if (syncTimerRef.current !== null) {
-            window.clearTimeout(syncTimerRef.current)
-            syncTimerRef.current = null
-        }
-        if (retryTimerRef.current !== null) {
-            window.clearTimeout(retryTimerRef.current)
-            retryTimerRef.current = null
-        }
-        try {
-            const result = await resetAppearanceSettings()
-            const savedSnapshot = result.snapshot ?? snapshot
-            lastSyncedSnapshotRef.current = savedSnapshot
-            pendingSyncRef.current = null
-            syncRetryIndexRef.current = 0
-            setLastSyncedAt(savedSnapshot.updatedAt)
-            setSyncState('saved')
-        } catch (error) {
-            const retryIndex = syncRetryIndexRef.current
-            const retryDelay = REMOTE_SYNC_RETRY_DELAYS_MS[retryIndex] ?? null
-            logger.metric('theme.reset.failure', {
-                userId: viewerId,
-                retryIndex,
-                retryDelayMs: retryDelay ?? 0,
-                error: error instanceof Error ? error.message : 'unknown',
-            })
-            pendingSyncRef.current = snapshot
-            if (retryDelay !== null) {
-                syncRetryIndexRef.current = retryIndex + 1
-                retryTimerRef.current = window.setTimeout(() => {
-                    retryTimerRef.current = null
-                    void flushRemoteSync('reset-retry')
-                }, retryDelay)
-                return
-            }
-            syncRetryIndexRef.current = 0
-            setSyncState('save_failed')
-        }
-    }, [applySnapshotLocally, flushRemoteSync, profileHardeningEnabled, viewerId])
+        queueRemoteSync(snapshot, 'reset')
+    }, [applySnapshotLocally, queueRemoteSync])
 
     const themeValue = useMemo<ThemeContextValue>(() => ({
         theme,
         resolvedTheme,
-        setTheme,
         setThemeWithTransition,
-        isThemeTransitioning,
-    }), [isThemeTransitioning, resolvedTheme, setTheme, setThemeWithTransition, theme])
+    }), [resolvedTheme, setThemeWithTransition, theme])
 
     const appearanceValue = useMemo<AppearanceContextValue>(() => ({
         accentColor,
