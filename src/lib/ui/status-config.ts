@@ -1,64 +1,35 @@
 /**
- * C4 + C5: Single source of truth for availability status and experience level configs.
+ * Single source of truth for durable profile and lifecycle status labels.
  */
-
-// ---------------------------------------------------------------------------
-// Availability Status
-// ---------------------------------------------------------------------------
-
-export const AVAILABILITY_CONFIG: Record<string, { color: string; label: string }> = {
-    available: { color: 'text-emerald-500', label: 'Available' },
-    busy: { color: 'text-amber-500', label: 'Busy' },
-    focusing: { color: 'text-blue-500', label: 'Focusing' },
-    offline: { color: 'text-zinc-400', label: 'Offline' },
-};
-
-export type AvailabilityPresentation = {
-    color: string;
-    label: string;
-};
-
-export function getAvailabilityPresentation(status: string | null | undefined): AvailabilityPresentation {
-    const config = AVAILABILITY_CONFIG[status || ''];
-    if (config) return config;
-    return { color: 'text-emerald-500', label: 'Available' };
-}
-
-export function getAvailabilityLabel(status: string | null | undefined): string {
-    return getAvailabilityPresentation(status).label;
-}
-
-export function getAvailabilityColor(status: string | null | undefined): string {
-    return getAvailabilityPresentation(status).color;
-}
 
 // ---------------------------------------------------------------------------
 // Experience Level
 // ---------------------------------------------------------------------------
 
-export const EXPERIENCE_LABELS: Record<string, string> = {
-    student: 'Student',
-    junior: 'Junior',
-    mid: 'Mid-level',
-    senior: 'Senior',
-    lead: 'Lead',
-    founder: 'Founder',
-};
-
 export function getExperienceLabel(level: string | null | undefined): string {
-    return EXPERIENCE_LABELS[level || ''] ?? '';
+    switch (level) {
+        case 'student':
+            return 'Student';
+        case 'junior':
+            return 'Junior';
+        case 'mid':
+            return 'Mid-level';
+        case 'senior':
+            return 'Senior';
+        case 'lead':
+            return 'Lead';
+        case 'founder':
+            return 'Founder';
+        default:
+            return '';
+    }
 }
 
 export function buildProfileStatusSummary(input: {
-    availabilityStatus?: string | null | undefined;
     experienceLevel?: string | null | undefined;
     activeLabel?: string | null | undefined;
 }) {
     const parts: string[] = [];
-
-    if (input.availabilityStatus) {
-        parts.push(getAvailabilityLabel(input.availabilityStatus));
-    }
 
     const experienceLabel = getExperienceLabel(input.experienceLevel);
     if (experienceLabel) {
@@ -69,10 +40,7 @@ export function buildProfileStatusSummary(input: {
         parts.push(input.activeLabel);
     }
 
-    return {
-        parts,
-        availabilityColor: input.availabilityStatus ? getAvailabilityColor(input.availabilityStatus) : null,
-    };
+    return { parts };
 }
 
 // ---------------------------------------------------------------------------
@@ -122,8 +90,6 @@ const LIFECYCLE_STATUS_STYLES: Record<string, LifecycleStatusStyle> = {
         textColor: "text-blue-600 dark:text-blue-400",
     },
 };
-
-const FALLBACK_LIFECYCLE_STATUS = LIFECYCLE_STATUS_STYLES.pending;
 
 export function getLifecycleStatusStyle(status: string): LifecycleStatusStyle {
     const style = LIFECYCLE_STATUS_STYLES[status];
