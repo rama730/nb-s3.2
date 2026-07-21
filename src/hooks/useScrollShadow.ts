@@ -13,17 +13,10 @@ export function useScrollShadow() {
 
     useEffect(() => {
         let cleanup: (() => void) | null = null;
-        let frameId: number | null = null;
-        let retryCount = 0;
 
         const attach = () => {
+            cleanup?.();
             const routeRoot = resolveRouteScrollRoot();
-            if (!routeRoot && retryCount < 20) {
-                retryCount += 1;
-                frameId = window.requestAnimationFrame(attach);
-                return;
-            }
-
             const target: HTMLElement | Window = routeRoot ?? window;
             const handler = () => {
                 const scrolled = routeRoot ? routeRoot.scrollTop > 0 : window.scrollY > 0;
@@ -39,11 +32,10 @@ export function useScrollShadow() {
         };
 
         attach();
+        window.addEventListener("route-scroll-root-ready", attach);
 
         return () => {
-            if (frameId !== null) {
-                window.cancelAnimationFrame(frameId);
-            }
+            window.removeEventListener("route-scroll-root-ready", attach);
             cleanup?.();
         };
     }, [pathname]);
