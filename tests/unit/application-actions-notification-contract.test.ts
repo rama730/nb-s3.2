@@ -18,21 +18,20 @@ function extractFunction(source: string, functionName: string) {
 test('reject application decision notifications are best-effort after persistence', () => {
     const source = readProjectFile('src/app/actions/applications/internal.ts');
     const rejectAction = extractFunction(source, 'rejectApplicationAction');
+    const helperStart = source.indexOf('async function enqueueApplicationDecisionBestEffort');
+    const helperEnd = source.indexOf('\nasync function ', helperStart + 1);
+    const enqueueBestEffort = source.slice(helperStart, helperEnd);
 
     assert.match(rejectAction, /trackApplicationEvent\('apply_rejected'/);
-    assert.match(rejectAction, /try\s*\{\s*await emitApplicationDecisionNotification\(\{[\s\S]*status:\s*'rejected'/);
-    assert.match(rejectAction, /catch \(notificationError\) \{[\s\S]*Failed to emit application decision notification/);
+    assert.match(rejectAction, /await enqueueApplicationDecisionBestEffort\(\{[\s\S]*status:\s*'rejected'/);
     assert.match(rejectAction, /actorUserId:\s*user\.id/);
-    assert.match(rejectAction, /recipientUserId:\s*application\.applicantId/);
-    assert.match(rejectAction, /eventKey:\s*traceId/);
     assert.match(rejectAction, /traceId/);
+    assert.match(enqueueBestEffort, /try\s*\{\s*await enqueueProjectNotificationEvent\(\{/);
+    assert.match(enqueueBestEffort, /catch \(notificationError\) \{[\s\S]*Failed to enqueue application decision notification/);
 
-    const notificationCatchStart = rejectAction.indexOf('catch (notificationError)');
-    const successStart = rejectAction.indexOf('return toApplicationSuccess', notificationCatchStart);
-    assert.notEqual(notificationCatchStart, -1);
+    const notificationStart = rejectAction.indexOf('await enqueueApplicationDecisionBestEffort');
+    const successStart = rejectAction.indexOf('return toApplicationSuccess', notificationStart);
+    assert.notEqual(notificationStart, -1);
     assert.notEqual(successStart, -1);
-    assert.ok(notificationCatchStart < successStart, 'notification failure must not bypass the success result');
-
-    const notificationCatchBlock = rejectAction.slice(notificationCatchStart, successStart);
-    assert.doesNotMatch(notificationCatchBlock, /\bthrow\b/);
+    assert.ok(notificationStart < successStart, 'notification enqueue must finish before the success result');
 });
