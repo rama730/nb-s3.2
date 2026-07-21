@@ -1,84 +1,42 @@
 "use client";
 
-import { memo, useEffect, useState } from "react";
-import { CheckCircle2, ShieldCheck } from "lucide-react";
+import dynamic from "next/dynamic";
 import { SettingsPageHeader } from "@/components/settings/ui/SettingsPageHeader";
 import { SettingsSectionCard } from "@/components/settings/ui/SettingsSectionCard";
 import SecurityOverviewSection from "@/components/settings/SecurityOverviewSection";
-import SecurityActivitySection from "@/components/settings/SecurityActivitySection";
-import PasswordManagementSection from "@/components/settings/PasswordManagementSection";
-import { MfaSetup } from "@/components/auth/MfaSetup";
-import { SessionsList } from "@/components/settings/SessionsList";
-import LoginHistory from "@/components/auth/LoginHistory";
 import { useSecurityData } from "@/hooks/useSettingsQueries";
 import { useAuth } from "@/hooks/useAuth";
-import { formatProviderLabel, hasPasswordCredential, resolvePrimaryProvider } from "@/lib/auth/account-identity";
-import { isEmailVerified } from "@/lib/auth/email-verification";
+import { hasPasswordCredential } from "@/lib/auth/account-identity";
 import { isSecurityHardeningEnabled } from "@/lib/features/security";
+import { buildSecurityStepUpMethods } from "@/lib/security/step-up-methods";
 
-const SECURITY_SECTION_KEYS = ["overview", "mfa", "password", "sessions", "login-history", "security-activity"] as const;
+const SecurityActivitySection = dynamic(() => import("@/components/settings/SecurityActivitySection"));
+const PasswordManagementSection = dynamic(() => import("@/components/settings/PasswordManagementSection"));
+const MfaSetup = dynamic(() => import("@/components/auth/MfaSetup").then((mod) => mod.MfaSetup));
+const SessionsList = dynamic(() => import("@/components/settings/SessionsList").then((mod) => mod.SessionsList));
+const LoginHistory = dynamic(() => import("@/components/auth/LoginHistory"));
 
-const SecuritySectionsSkeleton = memo(function SecuritySectionsSkeleton() {
-    return (
-        <div className="space-y-6 animate-pulse">
-            {SECURITY_SECTION_KEYS.map((key) => (
-                <div
-                    key={key}
-                    className="rounded-2xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-900"
-                >
-                    <div className="mb-4 h-5 w-40 rounded bg-zinc-200 dark:bg-zinc-800" />
-                    <div className="space-y-3">
-                        <div className="h-12 rounded bg-zinc-100 dark:bg-zinc-800" />
-                        <div className="h-12 rounded bg-zinc-100 dark:bg-zinc-800" />
-                    </div>
-                </div>
-            ))}
-        </div>
-    );
-});
+function SecuritySectionsSkeleton() {
+    return <div className="h-96 animate-pulse rounded-2xl border border-zinc-200 bg-zinc-100 dark:border-zinc-800 dark:bg-zinc-900" />;
+}
 
 export default function SecurityPage() {
     const { user } = useAuth();
     const securityHardeningEnabled = isSecurityHardeningEnabled(user?.id ?? null);
     const { data: securityData, isLoading, error } = useSecurityData({ hardeningEnabled: securityHardeningEnabled });
-    const [passwordConfiguredLocally, setPasswordConfiguredLocally] = useState(false);
-
-    useEffect(() => {
-        setPasswordConfiguredLocally(false);
-    }, [user?.id]);
-
-    const securityErrorMessage = (() => {
-        if (!error) return null;
-        if (error instanceof Error) return error.message;
-        if (typeof error === "object" && error !== null && "message" in error) {
-            const message = (error as { message?: unknown }).message;
-            if (typeof message === "string") return message;
-        }
-        if (typeof error === "string") return error;
-        try {
-            return JSON.stringify(error);
-        } catch {
-            return String(error);
-        }
-    })();
-
-    const providerLabel = formatProviderLabel(resolvePrimaryProvider(user));
-    const emailVerified = isEmailVerified(user as Record<string, unknown> | null);
-    const passwordAvailable = securityData?.password?.hasPassword || hasPasswordCredential(user) || passwordConfiguredLocally;
+    const securityErrorMessage = error ? (error instanceof Error ? error.message : String(error)) : null;
+    const passwordAvailable = Boolean(securityData?.password?.hasPassword || hasPasswordCredential(user));
     const verifiedTotpFactors = (securityData?.mfaFactors ?? []).filter(
         (factor) => factor.type === "totp" && factor.status === "verified"
     );
     const primaryVerifiedFactorId = verifiedTotpFactors[0]?.id;
-    const recoveryCodeMethods = (securityData?.recoveryCodes?.remainingCount ?? 0) > 0 ? ["recovery_code" as const] : [];
-    const passwordStepUpMethods = [
-        ...(primaryVerifiedFactorId ? (["totp" as const]) : []),
-        ...recoveryCodeMethods,
-    ];
-    const sessionStepUpMethods = [
-        ...(primaryVerifiedFactorId ? (["totp" as const]) : []),
-        ...recoveryCodeMethods,
-        ...(passwordAvailable ? (["password" as const]) : []),
-    ];
+    const stepUpState = {
+        hasTotp: Boolean(primaryVerifiedFactorId),
+        hasRecoveryCodes: (securityData?.recoveryCodes?.remainingCount ?? 0) > 0,
+    };
+    const passwordStepUpMethods = buildSecurityStepUpMethods({ ...stepUpState, hasPassword: false })
+        .filter((method): method is "totp" | "recovery_code" => method !== "password");
+    const sessionStepUpMethods = buildSecurityStepUpMethods({ ...stepUpState, hasPassword: passwordAvailable });
 
     if (isLoading) {
         return (
@@ -98,34 +56,6 @@ export default function SecurityPage() {
                 title="Security"
                 description="Protect your account with an authenticator app, manage your fallback password, and review recent activity."
             />
-
-            <div className="rounded-2xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    <div>
-                        <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-zinc-500 dark:text-zinc-400">
-                            Signed in as
-                        </div>
-                        <div className="mt-1 break-all text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-                            {user?.email || "Unavailable"}
-                        </div>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2 text-xs font-medium">
-                        <span className="inline-flex rounded-full bg-zinc-100 px-3 py-1 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
-                            Via {providerLabel}
-                        </span>
-                        <span
-                            className={
-                                emailVerified
-                                    ? "inline-flex items-center gap-1 rounded-full bg-emerald-100 px-3 py-1 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"
-                                    : "inline-flex items-center gap-1 rounded-full bg-amber-100 px-3 py-1 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300"
-                            }
-                        >
-                            {emailVerified ? <CheckCircle2 className="h-3.5 w-3.5" /> : <ShieldCheck className="h-3.5 w-3.5" />}
-                            {emailVerified ? "Email verified" : "Email not verified"}
-                        </span>
-                    </div>
-                </div>
-            </div>
 
             {securityErrorMessage ? (
                 <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:border-amber-900/40 dark:bg-amber-900/10 dark:text-amber-300">
@@ -161,7 +91,6 @@ export default function SecurityPage() {
                     lastChangedAt={securityData?.password?.lastChangedAt}
                     availableStepUpMethods={passwordStepUpMethods}
                     primaryTotpFactorId={primaryVerifiedFactorId}
-                    onPasswordConfigured={() => setPasswordConfiguredLocally(true)}
                 />
             </div>
 
