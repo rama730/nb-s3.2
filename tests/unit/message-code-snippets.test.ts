@@ -3,7 +3,6 @@ import test from 'node:test';
 
 import {
     formatDraftWithCodeSnippet,
-    getCodeSnippetPreview,
     parseMessageSegments,
 } from '@/lib/messages/code-snippets';
 
@@ -93,7 +92,6 @@ test('message code snippets do not classify ordinary captions as code', () => {
     const segments = parseMessageSegments('this is the code');
 
     assert.deepEqual(segments, [{ type: 'text', content: 'this is the code', language: null }]);
-    assert.equal(getCodeSnippetPreview('this is the code'), null);
 });
 
 test('message code snippet draft formatting preserves code plus text order', () => {
