@@ -1,4 +1,4 @@
-import { and, eq, isNull, lt, inArray, sql } from "drizzle-orm";
+import { and, eq, isNull, lt, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { uploadIntents, type UploadIntent } from "@/lib/db/schema";
 import { createAdminClient } from "@/lib/supabase/server";
@@ -272,101 +272,11 @@ export async function finalizeUploadIntents(paramsList: Array<{
   expectedScope?: UploadIntentScope;
   expectedKind?: UploadIntentKind;
 }>) {
-  const firstParam = paramsList[0];
-  if (!firstParam) return;
-
-  const keys = paramsList.map(p => p.storageKey);
-  const bucket = firstParam.bucket;
-
-  const intents = await db.query.uploadIntents.findMany({
-    where: and(
-      eq(uploadIntents.bucket, bucket),
-      inArray(uploadIntents.storageKey, keys),
-      eq(uploadIntents.userId, firstParam.userId)
-    )
-  });
-
-  const intentsByKey = new Map(intents.map(i => [i.storageKey, i]));
-  const results = [];
-  const admin = await createAdminClient();
-
-  // Process all files, downloading them concurrently
-  const validations = await Promise.all(paramsList.map(async (params) => {
-    const intent = intentsByKey.get(params.storageKey);
-    if (!intent) return { storageKey: params.storageKey, error: "Upload intent not found" };
-
-    if (params.expectedScope && intent.scope !== params.expectedScope) return { intent, error: "Upload intent scope mismatch" };
-    if (params.expectedKind && intent.kind !== params.expectedKind) return { intent, error: "Upload intent kind mismatch" };
-    if (params.projectId !== undefined && intent.projectId !== (params.projectId ?? null)) return { intent, error: "Upload intent project mismatch" };
-
-    if (intent.status === "finalized") return { intent, success: true };
-
-    try {
-      assertPendingIntent(intent);
-    } catch (error) {
-      return { intent, error: error instanceof Error ? error.message : "Invalid intent" };
-    }
-
-    const { data, error } = await admin.storage.from(intent.bucket).download(intent.storageKey);
-    if (error || !data) {
-      return { intent, error: error?.message || "Uploaded object is missing" };
-    }
-
-    try {
-      await validateUploadedBlobMagicBytes(data, intent.expectedMimeType);
-      const finalizedSize = normalizeAndValidateFileSize(data.size, Number.MAX_SAFE_INTEGER, "Upload");
-      if (finalizedSize !== intent.expectedSize) {
-        return { intent, error: "Uploaded object size does not match the declared size" };
-      }
-      return { intent, success: true, finalizedSize };
-    } catch (error) {
-      return { intent, error: error instanceof Error ? error.message : "Upload verification failed" };
-    }
-  }));
-
-  const toUpdate = [];
-  const toFail = [];
-
-  for (const v of validations) {
-    if (!v.intent) continue;
-    if (v.error) {
-      toFail.push({ id: v.intent.id, error: v.error });
-    } else if (v.success && v.intent.status !== "finalized") {
-      toUpdate.push({
-        id: v.intent.id,
-        finalizedMimeType: v.intent.expectedMimeType,
-        finalizedSize: v.finalizedSize,
-      });
-    }
-  }
-
-  // Bulk update failures
-  if (toFail.length > 0) {
-    await Promise.all(toFail.map(f => markIntentFailure(f.id, f.error)));
-  }
-
-  // Bulk update successes
-  if (toUpdate.length > 0) {
-    const ids = toUpdate.map(u => u.id);
-    const mimeCases = sql.join(
-      toUpdate.map(u => sql`WHEN ${uploadIntents.id} = ${u.id} THEN ${u.finalizedMimeType}`),
-      sql` `
+  const concurrency = 8;
+  for (let index = 0; index < paramsList.length; index += concurrency) {
+    await Promise.all(
+      paramsList.slice(index, index + concurrency).map((params) => finalizeUploadIntent(params)),
     );
-    const sizeCases = sql.join(
-      toUpdate.map(u => sql`WHEN ${uploadIntents.id} = ${u.id} THEN ${u.finalizedSize}`),
-      sql` `
-    );
-
-    await db.update(uploadIntents)
-      .set({
-        status: "finalized",
-        finalizedMimeType: sql`CASE ${mimeCases} ELSE ${uploadIntents.finalizedMimeType} END`,
-        finalizedSize: sql`CASE ${sizeCases} ELSE ${uploadIntents.finalizedSize} END`,
-        finalizedAt: new Date(),
-        failureReason: null,
-        updatedAt: new Date(),
-      })
-      .where(inArray(uploadIntents.id, ids));
   }
 }
 
