@@ -1,18 +1,16 @@
 import { exportAccountData } from '@/app/actions/account';
-import { getRequestId, jsonError, jsonSuccess, logApiRoute } from '@/app/api/v1/_shared';
+import { getRequestId, jsonError, logApiRoute, requireAuthenticatedUser } from '@/app/api/v1/_shared';
 import { logger } from '@/lib/logger';
 import { consumeRateLimit } from '@/lib/security/rate-limit';
-import { createClient } from '@/lib/supabase/server';
 
 export async function GET(request: Request) {
     const startedAt = Date.now();
     const requestId = getRequestId(request);
 
     try {
-        const supabase = await createClient();
-        const { data: { user } } = await supabase.auth.getUser();
+        const auth = await requireAuthenticatedUser();
 
-        if (!user) {
+        if (auth.response || !auth.user) {
             logApiRoute(request, {
                 requestId,
                 action: 'account.export',
@@ -21,8 +19,9 @@ export async function GET(request: Request) {
                 status: 401,
                 errorCode: 'UNAUTHORIZED',
             });
-            return jsonError('Not authenticated', 401, 'UNAUTHORIZED');
+            return auth.response ?? jsonError('Not authenticated', 401, 'UNAUTHORIZED');
         }
+        const user = auth.user;
 
         // Rate limit: 1 export per hour
         const rateLimitResult = await consumeRateLimit(
