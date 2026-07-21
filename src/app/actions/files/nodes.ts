@@ -6,7 +6,7 @@ import type { ProjectNode } from "@/lib/db/schema";
 import { eq, and, isNull, ilike, inArray, sql, type SQL } from "drizzle-orm";
 import { createClient } from "@/lib/supabase/server";
 import { logger } from "@/lib/logger";
-import { runInFlightDeduped } from "@/lib/async/inflight-dedupe";
+import { runInFlightDeduped } from "@/lib/utils/inflight-dedupe";
 import { canProjectMemberUploadFiles } from "@/lib/projects/settings-policies";
 import {
     assertProjectFileReadAccess,
@@ -64,7 +64,7 @@ async function enrichNodesWithLatestVersionAttribution(
     for (let i = 0; i < fileIds.length; i += VERSION_ATTRIBUTION_BATCH_SIZE) {
         const chunk = fileIds.slice(i, i + VERSION_ATTRIBUTION_BATCH_SIZE);
         const rows = await db.execute<LatestVersionAttributionRow>(sql`
-            SELECT DISTINCT ON (fv.node_id)
+            SELECT
                 fv.node_id,
                 fv.uploaded_by,
                 fv.uploaded_at,
@@ -72,9 +72,11 @@ async function enrichNodesWithLatestVersionAttribution(
                 p.username,
                 p.avatar_url
             FROM file_versions fv
+            INNER JOIN project_nodes pn
+                ON pn.id = fv.node_id
+               AND pn.current_version = fv.version
             LEFT JOIN profiles p ON p.id = fv.uploaded_by
             WHERE fv.node_id IN (${sql.join(chunk.map((id) => sql`${id}`), sql`, `)})
-            ORDER BY fv.node_id, fv.version DESC
         `);
 
         for (const row of Array.from(rows)) {
@@ -230,6 +232,17 @@ export async function getProjectTreeFlat(
 
         // Smart threshold: load everything as a flat tree only while the caller's
         // interaction budget allows it. Larger projects fall back to paginated loading.
+
+        // First do a fast count check to avoid fetching/serializing thousands of nodes if we exceed the cap
+        const [countResult] = await db
+            .select({ count: sql<number>`count(*)` })
+            .from(projectNodes)
+            .where(and(eq(projectNodes.projectId, projectId), isNull(projectNodes.deletedAt)));
+
+        const totalNodes = countResult?.count ?? 0;
+        if (totalNodes > maxFlatTreeNodes) {
+            return { nodes: [], isComplete: false };
+        }
 
         const nodes = await db.query.projectNodes.findMany({
             where: and(
