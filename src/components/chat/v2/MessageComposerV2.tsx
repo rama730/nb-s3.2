@@ -3,19 +3,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Code2, Loader2, Paperclip, SendHorizonal } from 'lucide-react';
 import { toast } from 'sonner';
-import { useAuth } from '@/hooks/useAuth';
 import { useMessagesV2UiStore } from '@/stores/messagesV2UiStore';
 import { type MessageWithSender } from '@/app/actions/messaging';
 import { type ConversationCapabilityV2 } from '@/app/actions/messaging/v2';
-import type { MessagingStructuredCatalogV2 } from '@/app/actions/messaging/collaboration';
-import { useMessagingStructuredCatalog } from '@/hooks/useMessagesV2';
 import {
     canSendFromCapability,
     getComposerWorkflowNotice,
 } from '@/lib/chat/composer-workflow';
-import {
-    isMessagingStructuredActionsEnabled,
-} from '@/lib/features/messages';
 import {
     analyzeDraftCodeSnippet,
     formatDraftWithCodeSnippet,
@@ -23,9 +17,7 @@ import {
 } from '@/lib/messages/code-snippets';
 import { cn } from '@/lib/utils';
 import { ComposerAttachmentsPanel } from './ComposerAttachmentsPanel';
-import { ComposerContextPanel } from './ComposerContextPanel';
 import { ComposerReplyBanner } from './ComposerReplyBanner';
-import { ComposerSlashMenu } from './ComposerSlashMenu';
 import { ComposerWorkflowNotice } from './ComposerWorkflowNotice';
 import { MentionDropdown } from './MentionDropdown';
 import {
@@ -69,16 +61,13 @@ export function MessageComposerV2({
     onAddFiles,
     participants,
 }: MessageComposerV2Props) {
-    const { user } = useAuth();
     const draft = useMessagesV2UiStore((state) => state.draftsByConversation[conversationId] || '');
     const setDraft = useMessagesV2UiStore((state) => state.setDraft);
     const clearDraft = useMessagesV2UiStore((state) => state.clearDraft);
     const [sendAnimating, setSendAnimating] = useState(false);
-    const [catalogData, setCatalogData] = useState<MessagingStructuredCatalogV2 | undefined>(undefined);
     const inputRef = useRef<HTMLTextAreaElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const composerRootRef = useRef<HTMLDivElement>(null);
-    const composerShellRef = useRef<HTMLDivElement>(null);
     const typingIdleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const typingActiveRef = useRef(false);
     const composerHeightRef = useRef(0);
@@ -126,61 +115,19 @@ export function MessageComposerV2({
         };
     }, [onComposerHeightChange]);
 
-    const structuredActionsEnabled = isMessagingStructuredActionsEnabled(user?.id ?? null);
-
     const commands = useMessageComposerCommands({
         conversationId,
         draft,
         setDraft,
         inputRef,
         participants,
-        structuredActionsEnabled,
-        structuredCatalogData: catalogData,
     });
     const {
         mentionQuery,
         setMentionQuery,
-        pendingContextChips,
-        setPendingContextChips,
-        slashMenuOpen,
-        slashSelectedIndex,
-        setSlashSelectedIndex,
-        structuredDraft,
-        setStructuredDraft,
-        slashItems,
-        openSlashMenu,
-        closeSlashMenu,
-        returnToSlashList,
-        clearStructuredDraft,
-        handleSlashItemSelect,
         handleMentionSelect,
-        handleRemoveContextChip,
-        buildStructuredDraftContextChips,
         syncCommandsFromInput,
-        activeStructuredOption,
-        structuredSubmitLabel,
-        hasStructuredDraft,
-        visibleContextChips,
     } = commands;
-
-    const structuredCatalog = useMessagingStructuredCatalog(
-        conversationId,
-        targetUserId ?? null,
-        structuredActionsEnabled
-            && (
-                slashMenuOpen
-                || pendingContextChips.length > 0
-                || Boolean(structuredDraft.kind)
-            ),
-    );
-
-    useEffect(() => {
-        setCatalogData(structuredCatalog.data);
-    }, [structuredCatalog.data]);
-
-    useEffect(() => {
-        setCatalogData(undefined);
-    }, [conversationId]);
 
     const attachments = useMessageComposerAttachments({
         conversationId,
@@ -236,17 +183,6 @@ export function MessageComposerV2({
         el.dataset.overflowing = el.scrollHeight > 160 ? 'true' : 'false';
     }, [draft]);
 
-    useEffect(() => {
-        if (!slashMenuOpen) return;
-        const handlePointerDown = (event: MouseEvent) => {
-            if (!composerShellRef.current?.contains(event.target as Node)) {
-                closeSlashMenu();
-            }
-        };
-        document.addEventListener('mousedown', handlePointerDown);
-        return () => document.removeEventListener('mousedown', handlePointerDown);
-    }, [closeSlashMenu, slashMenuOpen]);
-
     const actions = useMessageComposerActions({
         conversationId,
         targetUserId,
@@ -256,12 +192,6 @@ export function MessageComposerV2({
         clearDraft,
         attachments: attachments.attachments,
         clearAttachments: attachments.clearAttachments,
-        pendingContextChips,
-        setPendingContextChips,
-        structuredDraft,
-        closeSlashMenu,
-        clearStructuredDraft,
-        buildStructuredDraftContextChips,
         onClearReply,
         inputRef,
         clearTypingIdleTimer,
@@ -272,11 +202,8 @@ export function MessageComposerV2({
     const {
         isSending,
         requestLoading,
-        applicationActionLoading,
-        handleSendStructured,
         handleSend,
         handleConnectionAction,
-        handleApplicationAction,
     } = actions;
 
     const handleChange = useCallback((event: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -316,55 +243,11 @@ export function MessageComposerV2({
     ]);
 
     const handleComposerKeyDown = useCallback((event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-        if (slashMenuOpen && !structuredDraft.kind) {
-            if (event.key === 'ArrowDown') {
-                event.preventDefault();
-                setSlashSelectedIndex((current) =>
-                    slashItems.length === 0 ? 0 : (current + 1) % slashItems.length,
-                );
-                return;
-            }
-
-            if (event.key === 'ArrowUp') {
-                event.preventDefault();
-                setSlashSelectedIndex((current) =>
-                    slashItems.length === 0
-                        ? 0
-                        : (current - 1 + slashItems.length) % slashItems.length,
-                );
-                return;
-            }
-
-            if (event.key === 'Enter' && !event.shiftKey) {
-                const currentItem = slashItems[slashSelectedIndex];
-                if (currentItem) {
-                    event.preventDefault();
-                    handleSlashItemSelect(currentItem);
-                    return;
-                }
-            }
-        }
-
-        if (event.key === 'Escape' && slashMenuOpen) {
-            event.preventDefault();
-            closeSlashMenu();
-            return;
-        }
-
         if (event.key === 'Enter' && !event.shiftKey) {
             event.preventDefault();
             void handleSend();
         }
-    }, [
-        closeSlashMenu,
-        handleSend,
-        handleSlashItemSelect,
-        setSlashSelectedIndex,
-        slashItems,
-        slashMenuOpen,
-        slashSelectedIndex,
-        structuredDraft.kind,
-    ]);
+    }, [handleSend]);
 
     const draftCodeAnalysis = useMemo(() => analyzeDraftCodeSnippet(draft), [draft]);
     const preparedDraftLength = draftCodeAnalysis.length;
@@ -381,8 +264,6 @@ export function MessageComposerV2({
         && !hasUploadingAttachments
         && (hasSendableContent || Boolean(draft.trim()))
         && preparedDraftLength <= MAX_MESSAGE_LENGTH;
-    const canSendStructured = canSend && !isSending;
-
     const workflowNotice = useMemo(() => getComposerWorkflowNotice(capability), [capability]);
     const codeSnippetPreview = draftCodeAnalysis.preview;
 
@@ -407,9 +288,7 @@ export function MessageComposerV2({
                     workflowNotice={workflowNotice}
                     isPopup={isPopup}
                     requestLoading={requestLoading}
-                    applicationActionLoading={applicationActionLoading}
                     onConnectionAction={handleConnectionAction}
-                    onApplicationAction={(action) => void handleApplicationAction(action)}
                 />
             ) : null}
 
@@ -420,13 +299,6 @@ export function MessageComposerV2({
                     onClearReply={onClearReply}
                 />
             ) : null}
-
-            <ComposerContextPanel
-                chips={visibleContextChips}
-                hasStructuredDraft={hasStructuredDraft}
-                onClear={() => setPendingContextChips([])}
-                onRemove={handleRemoveContextChip}
-            />
 
             <ComposerAttachmentsPanel
                 attachments={attachments.attachments}
@@ -447,10 +319,7 @@ export function MessageComposerV2({
                 </div>
             ) : null}
 
-            <div
-                ref={composerShellRef}
-                className="relative flex-1"
-            >
+            <div className="relative flex-1">
 
                 {mentionQuery !== null && participants && participants.length > 0 ? (
                     <MentionDropdown
