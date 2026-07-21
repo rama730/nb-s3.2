@@ -19,11 +19,10 @@ import {
   signDocCollaborationToken,
 } from "@/lib/realtime/doc-collaboration-token";
 import { resolveProjectDocPermission } from "@/lib/projects/doc";
+import { isUuid } from "@/lib/validations/uuid";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export async function POST(
   request: NextRequest,
@@ -33,7 +32,7 @@ export async function POST(
   const requestId = getRequestId(request);
   const { id: projectId } = await context.params;
 
-  if (!UUID_RE.test(projectId)) {
+  if (!isUuid(projectId)) {
     return jsonError("Not found", 404, "NOT_FOUND");
   }
 
