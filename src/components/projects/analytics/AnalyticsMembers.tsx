@@ -1,5 +1,6 @@
 import type { ProjectAnalyticsContextFilters } from "@/lib/projects/analytics";
 import { useProjectAnalyticsMembers, useProjectMemberAnalytics } from "@/hooks/hub/useProjectAnalyticsData";
+import { useMemo } from "react";
 import { AnalyticsMemberDetail } from "./AnalyticsMemberDetail";
 import {
     AnalyticsContextNote,
@@ -25,7 +26,14 @@ export function AnalyticsMembers({
     onBack: () => void;
 }) {
     const membersQuery = useProjectAnalyticsMembers(projectId, context);
-    const detailQuery = useProjectMemberAnalytics(projectId, selectedMemberId, Boolean(selectedMemberId), context);
+    const resolvedMemberId = useMemo(() => {
+        if (!selectedMemberId) return null;
+        const found = membersQuery.data?.find(
+            (member) => member.person.username === selectedMemberId || member.person.id === selectedMemberId,
+        );
+        return found?.person.id ?? selectedMemberId;
+    }, [membersQuery.data, selectedMemberId]);
+    const detailQuery = useProjectMemberAnalytics(projectId, resolvedMemberId, Boolean(selectedMemberId) && !membersQuery.isLoading, context);
 
     if (selectedMemberId) {
         if (detailQuery.isLoading) return <AnalyticsLoadingState label="Loading member intelligence..." />;
