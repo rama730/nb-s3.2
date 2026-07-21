@@ -207,10 +207,6 @@ export function isMessageWorkflowItemStatus(value: unknown): value is MessageWor
     return typeof value === 'string' && MESSAGE_WORKFLOW_ITEM_STATUSES.includes(value as MessageWorkflowItemStatus);
 }
 
-export function isWorkflowResolutionAction(value: unknown): value is WorkflowResolutionAction {
-    return typeof value === 'string' && STRUCTURED_WORKFLOW_RESOLUTION_ACTIONS.includes(value as WorkflowResolutionAction);
-}
-
 export function normalizeMessageContextChips(value: unknown): MessageContextChip[] {
     if (!Array.isArray(value)) {
         return [];
