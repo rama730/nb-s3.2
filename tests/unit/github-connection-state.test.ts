@@ -37,6 +37,8 @@ describe("github connection state", () => {
     assert.deepEqual(buildGithubAccountConnectionState(user), {
       linked: true,
       username: "rama730",
+      avatarUrl: null,
+      fullName: null,
     });
   });
 
@@ -52,6 +54,8 @@ describe("github connection state", () => {
     assert.deepEqual(buildGithubAccountConnectionState(user), {
       linked: false,
       username: null,
+      avatarUrl: null,
+      fullName: null,
     });
   });
 });
