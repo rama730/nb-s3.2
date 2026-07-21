@@ -6,11 +6,11 @@ import { logger } from "@/lib/logger";
 import { isProjectTabVisibleToViewer } from "@/lib/projects/settings-policies";
 import { PROJECT_UPDATE_MEDIA_BUCKET } from "@/lib/projects/updates";
 import { createAdminClient, createClient } from "@/lib/supabase/server";
+import { isUuid } from "@/lib/validations/uuid";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SIGNED_URL_TTL_SECONDS = 15 * 60;
 const PRIVATE_REDIRECT_MAX_AGE_SECONDS = 120;
 const PUBLIC_REDIRECT_MAX_AGE_SECONDS = 5 * 60;
@@ -20,7 +20,7 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
     if (limitResponse) return limitResponse;
 
     const { id: projectId } = await context.params;
-    if (!UUID_RE.test(projectId)) return jsonError("Not found", 404, "NOT_FOUND");
+    if (!isUuid(projectId)) return jsonError("Not found", 404, "NOT_FOUND");
 
     const storageKey = request.nextUrl.searchParams.get("key")?.trim() ?? "";
     const expectedPrefix = `projects/${projectId}/update-media/`;
