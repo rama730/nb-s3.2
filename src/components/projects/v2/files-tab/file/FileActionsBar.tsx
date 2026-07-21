@@ -1,16 +1,7 @@
-// Task 6.3: Files tab file actions bar (Unified context-aware Actions dropdown).
-// Task 5.4: Added LinkedTasksPanel toggle button (Req 8.1, 8.6).
-// Task 5.5: Added "Attach to task…" action (Req 9.1–9.6, 24.1).
-// Task 7.3: Added "Replace…" button (Req 11.1–11.6, 5.2, 16.3, 24.1).
-//
-// Edit, "Attach to task…", and "Replace…" are hidden entirely when
-// role === "Role_Viewer" (Req 5.3-5.4, 9.2, 11.2, 19.3, 24.1).
-// The LinkedTasksPanel toggle is visible to ALL roles (Req 8.6).
-// Role is read from FilesTabRoleContext. When the context is absent, we
-// default to read-only (canEdit=false) so the mutation affordance stays
-// hidden — consistent with Req 19.3 ("must not be visible, focusable, or
-// activatable" for Role_Viewer). See design.md § FileActionsBar.
+// File actions: role-gated edit/replace/task/doc actions plus read-only panel toggles.
 "use client";
+
+import { toast } from "sonner";
 
 import * as React from "react";
 import {
@@ -34,15 +25,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
-import { useToast } from "@/components/ui-custom/Toast";
 import { logger } from "@/lib/logger";
 import { useQueryClient } from "@tanstack/react-query";
 import { normalizeProjectDocSlug } from "@/lib/projects/doc";
 import {
-  useProjectDocDraft,
   PROJECT_DOC_DRAFT_QUERY_KEY,
   PROJECT_DOC_QUERY_KEY,
-  useProjectMarkdowns,
   PROJECT_MARKDOWNS_LIST_QUERY_KEY,
 } from "@/hooks/hub/useProjectDocData";
 
@@ -60,7 +48,6 @@ export interface FileActionsBarProps {
   onView: () => void;
   onRaw: () => void;
   onEdit: () => void;
-  onDownload: () => void;
   /** Callback to toggle the LinkedTasksPanel open/closed (Req 8.1). */
   onToggleLinkedTasks?: () => void;
   /** Whether the LinkedTasksPanel is currently open (drives toggle visual state). */
@@ -77,8 +64,9 @@ export interface FileActionsBarProps {
   fileSize?: number | null;
   mimeType?: string | null;
   className?: string;
-  isLinkedDoc?: boolean;
+  linkedDoc?: { slug: string; linkedNodeId?: string | null } | null;
   onNavigateToDoc?: (slug: string) => void;
+  actionsTriggerRef?: React.Ref<HTMLButtonElement>;
 }
 
 export function FileActionsBar({
@@ -86,7 +74,6 @@ export function FileActionsBar({
   onView,
   onRaw,
   onEdit,
-  onDownload,
   onToggleLinkedTasks,
   isLinkedTasksPanelOpen = false,
   onToggleVersionHistory,
@@ -97,8 +84,9 @@ export function FileActionsBar({
   fileSize = 0,
   mimeType,
   className,
-  isLinkedDoc,
+  linkedDoc = null,
   onNavigateToDoc,
+  actionsTriggerRef,
 }: FileActionsBarProps): React.JSX.Element {
   const roleCtx = React.useContext(FilesTabRoleContext);
   // Default to read-only when no provider is mounted so the Edit control
@@ -107,13 +95,7 @@ export function FileActionsBar({
 
   const queryClient = useQueryClient();
 
-  const { data: markdowns = [] } = useProjectMarkdowns(projectId || "");
-  const linkedDoc = React.useMemo(() => {
-    return markdowns.find((doc: any) => doc.linkedNodeId === nodeId);
-  }, [markdowns, nodeId]);
   const isLinked = !!linkedDoc;
-
-  const { showToast } = useToast();
   const [isTaskPickerOpen, setIsTaskPickerOpen] = React.useState(false);
   const [isLinking, setIsLinking] = React.useState(false);
   const [isImportingReadme, setIsImportingReadme] = React.useState(false);
@@ -192,17 +174,17 @@ export function FileActionsBar({
         // On success: close picker (Req 9.4). TaskLinkChip updates via
         // realtime Project_Channel (Req 9.6).
         setIsTaskPickerOpen(false);
-        showToast("File attached to task", "success");
+        toast.success("File attached to task");
       } catch (err) {
         // On failure: show error toast, keep picker open for retry (Req 9.5).
         const message =
           err instanceof Error ? err.message : "Failed to attach file to task";
-        showToast(message, "error");
+        toast.error(message);
       } finally {
         setIsLinking(false);
       }
     },
-    [nodeId, isLinking, showToast],
+    [nodeId, isLinking],
   );
 
   const handleUseAsReadme = React.useCallback(async () => {
@@ -213,10 +195,10 @@ export function FileActionsBar({
         const { unlinkProjectDocAction } = await import("@/app/actions/project/doc");
         const result = await unlinkProjectDocAction(projectId, linkedDoc.slug);
         if (!result.success) {
-          showToast(result.error || "Failed to unlink file from Doc", "error");
+          toast.error(result.error || "Failed to unlink file from Doc");
           return;
         }
-        showToast("File unlinked from Doc successfully", "success");
+        toast.success("File unlinked from Doc successfully");
         await Promise.all([
           queryClient.invalidateQueries({ queryKey: PROJECT_MARKDOWNS_LIST_QUERY_KEY(projectId) }),
           queryClient.invalidateQueries({ queryKey: PROJECT_DOC_DRAFT_QUERY_KEY(projectId, linkedDoc.slug) }),
@@ -224,7 +206,7 @@ export function FileActionsBar({
         ]);
       } catch (err) {
         const message = err instanceof Error ? err.message : "Failed to unlink file";
-        showToast(message, "error");
+        toast.error(message);
       } finally {
         setIsImportingReadme(false);
       }
@@ -238,10 +220,10 @@ export function FileActionsBar({
       const { linkProjectDocAction } = await import("@/app/actions/project/doc");
       const result = await linkProjectDocAction(projectId, nodeId, docSlug);
       if (!result.success) {
-        showToast(result.error || "Failed to link file to Doc", "error");
+        toast.error(result.error || "Failed to link file to Doc");
         return;
       }
-      showToast("File linked to Doc successfully", "success");
+      toast.success("File linked to Doc successfully");
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: PROJECT_MARKDOWNS_LIST_QUERY_KEY(projectId) }),
         queryClient.invalidateQueries({ queryKey: PROJECT_DOC_DRAFT_QUERY_KEY(projectId, docSlug) }),
@@ -250,11 +232,11 @@ export function FileActionsBar({
       onNavigateToDoc?.(docSlug);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to link file";
-      showToast(message, "error");
+      toast.error(message);
     } finally {
       setIsImportingReadme(false);
     }
-  }, [isImportingReadme, isLinked, linkedDoc, nodeId, projectId, fileName, queryClient, onNavigateToDoc, showToast]);
+  }, [isImportingReadme, isLinked, linkedDoc, nodeId, projectId, fileName, queryClient, onNavigateToDoc]);
 
   // ── Replace… handlers (Req 11.3–11.6) ───────────────────────────────
 
@@ -275,14 +257,14 @@ export function FileActionsBar({
       const expectedExt = extOf(fileName || "");
       const uploadedExt = extOf(file.name);
       if (expectedExt !== uploadedExt) {
-        showToast(`Extension mismatch: Expected .${expectedExt} but received .${uploadedExt}`, "error");
+        toast.error(`Extension mismatch: Expected .${expectedExt} but received .${uploadedExt}`);
         return;
       }
 
       setPendingFile(file);
       setIsModalOpen(true);
     },
-    [projectId, nodeId, fileName, showToast]
+    [projectId, nodeId, fileName]
   );
 
   const handleRevisionOptionSelected = React.useCallback(
@@ -295,75 +277,49 @@ export function FileActionsBar({
       setLockConflict(null);
 
       try {
-        const [{ saveFileAsNewVersion }, { createClient }, { updateProjectFileStats }] = await Promise.all([
+        const [{ saveFileRevision }, { createClient }] = await Promise.all([
           import("@/hooks/useFileVersions"),
           import("@/lib/supabase/client"),
-          import("@/app/actions/files/content"),
         ]);
         const supabaseClient = createClient();
+        const node = useFilesWorkspaceStore.getState().byProjectId[projectId]?.nodesById?.[nodeId];
+        const result = await saveFileRevision({
+          projectId,
+          nodeId,
+          file,
+          mode: choice.option === "commit" ? "new_revision" : "active_revision",
+          comment: choice.comment || (choice.option === "commit" ? "Uploaded via Files Tab" : null),
+          baseVersion: node?.currentVersion,
+          supabase: supabaseClient,
+        });
 
-        if (choice.option === "commit") {
-          // Option B: Commit as New Revision
-          const result = await saveFileAsNewVersion({
+        if (result.success) {
+          toast.success(choice.option === "commit"
+              ? "New revision committed successfully"
+              : "Active revision updated successfully");
+          useFilesWorkspaceStore.getState().setNodes(projectId, [result.node]);
+
+          logger.metric("files_tab.version_replaced", {
+            module: "files-tab",
+            source: "files_tab",
             projectId,
             nodeId,
-            file,
-            comment: choice.comment || "Uploaded via Files Tab",
-            supabase: supabaseClient,
+            revisionMode: choice.option === "commit" ? "new_revision" : "active_revision",
+            newVersion: result.version.version,
           });
-
-          if (result.success) {
-            showToast("New revision committed successfully", "success");
-            // Set node in store
-            useFilesWorkspaceStore.getState().setNodes(projectId, [result.node]);
-
-            logger.metric("files_tab.version_replaced", {
-              module: "files-tab",
-              source: "files_tab",
-              projectId,
-              nodeId,
-              newVersion: result.version.version,
-            });
-          } else if (result.lockConflict) {
-            setLockConflict(result.lockConflict);
-          } else {
-            showToast(result.error || "Failed to commit revision", "error");
-          }
+        } else if (result.lockConflict) {
+          setLockConflict(result.lockConflict);
         } else {
-          // Option A: Apply to Active Revision
-          const node = useFilesWorkspaceStore.getState().byProjectId[projectId]?.nodesById?.[nodeId];
-          if (!node || !node.s3Key) {
-            showToast("Cannot overwrite: Active file has no storage key.", "error");
-            return;
-          }
-
-          const { error: uploadError } = await supabaseClient.storage
-            .from("project-files")
-            .update(node.s3Key, file, { upsert: true });
-
-          if (uploadError) throw uploadError;
-
-          const updatedNode = (await updateProjectFileStats(
-            projectId,
-            nodeId,
-            file.size
-          )) as any;
-
-          if (updatedNode) {
-            useFilesWorkspaceStore.getState().setNodes(projectId, [updatedNode]);
-            showToast("Active revision updated in-place", "success");
-          } else {
-            throw new Error("Failed to update database record stats.");
-          }
+          toast.error(result.error || "Failed to save revision");
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : "Failed to replace file";
-        showToast(message, "error");
+        toast.error(message);
       } finally {
         setIsReplacing(false);
       }
     },
-    [pendingFile, projectId, nodeId, showToast]
+    [pendingFile, projectId, nodeId]
   );
 
   return (
@@ -374,6 +330,7 @@ export function FileActionsBar({
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button
+            ref={actionsTriggerRef}
             type="button"
             variant="outline"
             size="sm"
@@ -447,6 +404,8 @@ export function FileActionsBar({
           {onToggleLinkedTasks && (
             <DropdownMenuItem
               onClick={onToggleLinkedTasks}
+              data-testid="linked-tasks-toggle"
+              aria-pressed={isLinkedTasksPanelOpen}
               className={cn("gap-2 cursor-pointer", isLinkedTasksPanelOpen && "bg-zinc-100 dark:bg-zinc-800 font-medium")}
             >
               <ListTodo className="h-4 w-4 opacity-70" />
@@ -457,6 +416,8 @@ export function FileActionsBar({
           {onToggleVersionHistory && (
             <DropdownMenuItem
               onClick={onToggleVersionHistory}
+              data-testid="version-history-toggle"
+              aria-pressed={isVersionHistoryPanelOpen}
               className={cn("gap-2 cursor-pointer", isVersionHistoryPanelOpen && "bg-zinc-100 dark:bg-zinc-800 font-medium")}
             >
               <History className="h-4 w-4 opacity-70" />
