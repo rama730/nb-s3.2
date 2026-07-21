@@ -14,16 +14,22 @@ export async function GET(
   const { slug } = await context.params;
   let title = trimCopy(slug.replace(/[-_]+/g, " "), "Project");
   let description = "Build with Edge.";
+  let isPublic = false;
 
   try {
     const result = await readProjectDetailMetadata({ slugOrId: slug, actorUserId: null });
     if (result.success) {
+      isPublic = true;
       title = trimCopy(result.data.title, "Project");
       description = trimCopy(result.data.shortDescription || result.data.description, "Build with Edge.");
     }
   } catch (error) {
     console.error("[project og route] failed to read project metadata", error);
   }
+
+  const cacheControlHeader = isPublic
+    ? "public, max-age=86400, stale-while-revalidate=3600"
+    : "private, no-store, no-cache, must-revalidate";
 
   return new ImageResponse(
     (
@@ -100,6 +106,9 @@ export async function GET(
     {
       width: 1200,
       height: 630,
+      headers: {
+        "Cache-Control": cacheControlHeader,
+      },
     },
   );
 }
