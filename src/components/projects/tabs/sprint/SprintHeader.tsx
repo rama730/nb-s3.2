@@ -6,7 +6,6 @@ import {
   CheckCircle2,
   MoreHorizontal,
   Pencil,
-  PlayCircle,
 } from "lucide-react";
 
 import {
@@ -34,7 +33,6 @@ interface SprintHeaderProps {
   visibleCounts: SprintVisibleCounts;
   onFilterChange: (filter: SprintTimelineFilter) => void;
   onEdit: () => void;
-  onStart: () => void;
   onComplete: () => void;
 }
 
@@ -66,9 +64,9 @@ function SprintActionButton({
       className={cn(
         "inline-flex h-10 items-center gap-2 rounded-lg border border-zinc-200 bg-white px-3.5 text-sm font-medium text-zinc-800 transition-colors",
         "hover:border-zinc-300 hover:bg-zinc-50 active:scale-[0.99]",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 focus-visible:ring-offset-2 focus-visible:ring-offset-white",
+        "focus-visible:outline-none    ",
         "disabled:pointer-events-none disabled:opacity-60",
-        "dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:border-zinc-700 dark:hover:bg-zinc-900 dark:focus-visible:ring-zinc-600 dark:focus-visible:ring-offset-zinc-950",
+        "dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:border-zinc-700 dark:hover:bg-zinc-900 dark: dark:",
       )}
     >
       {children}
@@ -83,7 +81,6 @@ function SprintMoreMenu({
   filter,
   visibleCounts,
   onFilterChange,
-  onStart,
   onComplete,
 }: Omit<SprintHeaderProps, "onEdit">) {
   const canRunLifecycle = permissions.canComplete && sprint.status === "active";
@@ -97,8 +94,8 @@ function SprintMoreMenu({
           className={cn(
             "inline-flex h-10 w-10 items-center justify-center rounded-lg border border-zinc-200 bg-white text-zinc-600 transition-colors",
             "hover:border-zinc-300 hover:bg-zinc-50 hover:text-zinc-900 active:scale-[0.99]",
-            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 focus-visible:ring-offset-2 focus-visible:ring-offset-white",
-            "dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-300 dark:hover:border-zinc-700 dark:hover:bg-zinc-900 dark:hover:text-zinc-100 dark:focus-visible:ring-zinc-600 dark:focus-visible:ring-offset-zinc-950",
+            "focus-visible:outline-none    ",
+            "dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-300 dark:hover:border-zinc-700 dark:hover:bg-zinc-900 dark:hover:text-zinc-100 dark: dark:",
           )}
         >
           <MoreHorizontal className="h-4 w-4" />
@@ -151,7 +148,6 @@ export function SprintHeader({
   visibleCounts,
   onFilterChange,
   onEdit,
-  onStart,
   onComplete,
 }: SprintHeaderProps) {
   const goal = sprint.goal?.trim();
@@ -186,7 +182,6 @@ export function SprintHeader({
             filter={filter}
             visibleCounts={visibleCounts}
             onFilterChange={onFilterChange}
-            onStart={onStart}
             onComplete={onComplete}
           />
         </div>
