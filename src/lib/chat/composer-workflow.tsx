@@ -1,12 +1,10 @@
 import type { ReactNode } from 'react';
 import {
     AlertTriangle,
-    Check,
     Clock,
     Loader2,
     UserCheck,
     UserPlus,
-    X,
 } from 'lucide-react';
 import type { ConversationCapabilityV2 } from '@/app/actions/messaging/v2';
 
@@ -19,14 +17,6 @@ export interface ComposerWorkflowNotice {
     title: string;
     description: string;
     actionLabel: string | null;
-    requestHref: string | null;
-    projectHref: string | null;
-    canAccept: boolean;
-    canReject: boolean;
-    canWithdraw: boolean;
-    canReopen: boolean;
-    canEditRequest: boolean;
-    lastStatusLabel: string | null;
 }
 
 export function canSendFromCapability(capability: ConversationCapabilityV2 | null) {
@@ -44,14 +34,6 @@ export function getComposerWorkflowNotice(
             title: 'Checking messaging permissions…',
             description: 'Loading the latest conversation workflow state.',
             actionLabel: null,
-            requestHref: null,
-            projectHref: null,
-            canAccept: false,
-            canReject: false,
-            canWithdraw: false,
-            canReopen: false,
-            canEditRequest: false,
-            lastStatusLabel: null,
         };
     }
 
@@ -67,14 +49,6 @@ export function getComposerWorkflowNotice(
             title: 'Messaging is blocked in this conversation.',
             description: 'You can still review the conversation history here.',
             actionLabel: null,
-            requestHref: null,
-            projectHref: null,
-            canAccept: false,
-            canReject: false,
-            canWithdraw: false,
-            canReopen: false,
-            canEditRequest: false,
-            lastStatusLabel: null,
         };
     }
 
@@ -86,14 +60,6 @@ export function getComposerWorkflowNotice(
             title: 'Accept this connection request to reply.',
             description: 'Once accepted, this thread becomes fully interactive.',
             actionLabel: 'Accept request',
-            requestHref: null,
-            projectHref: null,
-            canAccept: false,
-            canReject: false,
-            canWithdraw: false,
-            canReopen: false,
-            canEditRequest: false,
-            lastStatusLabel: null,
         };
     }
 
@@ -105,14 +71,6 @@ export function getComposerWorkflowNotice(
             title: 'Your connection request is pending.',
             description: 'You can cancel it or wait for them to accept before replying.',
             actionLabel: 'Cancel request',
-            requestHref: null,
-            projectHref: null,
-            canAccept: false,
-            canReject: false,
-            canWithdraw: false,
-            canReopen: false,
-            canEditRequest: false,
-            lastStatusLabel: null,
         };
     }
 
@@ -123,13 +81,5 @@ export function getComposerWorkflowNotice(
         title: 'Connect with this user to start messaging.',
         description: 'Send a connection request to unlock direct replies in this thread.',
         actionLabel: 'Send request',
-        requestHref: null,
-        projectHref: null,
-        canAccept: false,
-        canReject: false,
-        canWithdraw: false,
-        canReopen: false,
-        canEditRequest: false,
-        lastStatusLabel: null,
     };
 }
