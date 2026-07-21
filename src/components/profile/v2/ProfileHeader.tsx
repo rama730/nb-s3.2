@@ -1,14 +1,13 @@
 'use client'
 
 import React from 'react'
-import Link from 'next/link'
 import { cn } from '@/lib/utils'
 import { UserAvatar } from '@/components/ui/UserAvatar'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Ban, ChevronDown, Ellipsis, Lock, MapPin, Link2, Pencil, MessageSquare, UserPlus, UserCheck, UserMinus, Clock, Shield, Users } from 'lucide-react'
 import { buildPrivacyPresentation } from '@/lib/privacy/presentation'
 import type { ConnectionState, ProfilePrivacyRelationship } from './types'
-import { normalizeProfileVM } from './utils/normalizeProfileVM'
+import { normalizeProfile } from '@/lib/utils/normalize-profile'
 
 function Chip({ children, className }: { children: React.ReactNode; className?: string }) {
     return (
@@ -66,7 +65,7 @@ function IconButton({
     )
 }
 
-export const ProfileHeader = React.memo(function ProfileHeader({
+export function ProfileHeader({
     profile,
     viewerId,
     isOwner,
@@ -77,7 +76,6 @@ export const ProfileHeader = React.memo(function ProfileHeader({
     onConnectSecondary,
     onMessage,
     onToggleBlock,
-    isAdaptive = false,
     isLoadingConnection = false,
     isBlocking = false,
     mutualCount = 0,
@@ -94,20 +92,18 @@ export const ProfileHeader = React.memo(function ProfileHeader({
     onConnectSecondary?: () => void
     onMessage: () => void
     onToggleBlock?: () => void
-    isAdaptive?: boolean
     isLoadingConnection?: boolean
     isBlocking?: boolean
     mutualCount?: number
     privacyRelationship: ProfilePrivacyRelationship
     lockedShell?: boolean
 }) {
-    // CamelCase accessors
-    const vm = normalizeProfileVM(profile)
+    const vm = normalizeProfile(profile)
+    if (!vm) return null
     const name = vm.fullName || vm.username || 'User'
     const username = vm.username ? `@${vm.username}` : ''
     const headline = vm.headline || ''
     const location = vm.location || ''
-    const openTo = vm.openTo
 
     const connectLabel =
         connectionState === 'accepted'
@@ -193,7 +189,7 @@ export const ProfileHeader = React.memo(function ProfileHeader({
                             roundedClassName="rounded-2xl"
                             fallbackClassName="text-xl font-bold text-white"
                             sizes="(max-width: 640px) 80px, 96px"
-                            priority={!isAdaptive}
+                            priority
                         />
                         <div className="pb-1">
                             <div className="flex flex-wrap items-center gap-2">
@@ -348,13 +344,6 @@ export const ProfileHeader = React.memo(function ProfileHeader({
                     </div>
                 </div>
 
-                {!lockedShell && openTo.length ? (
-                    <div className="mt-4 flex flex-wrap gap-2">
-                        {openTo.slice(0, 8).map((item: string) => (
-                            <Chip key={item}>{item}</Chip>
-                        ))}
-                    </div>
-                ) : null}
                 {lockedShell ? (
                     <div className="mt-4 rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm text-zinc-600 dark:border-zinc-800 dark:bg-zinc-950/40 dark:text-zinc-300">
                         {privacyRelationship.blockedByViewer
@@ -369,4 +358,4 @@ export const ProfileHeader = React.memo(function ProfileHeader({
             </div>
         </div>
     )
-})
+}
