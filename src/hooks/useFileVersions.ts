@@ -4,10 +4,17 @@ import { useCallback, useMemo, useState } from "react";
 
 import { createClient } from "@/lib/supabase/client";
 import type { FileVersion, ProjectNode } from "@/lib/db/schema";
-import { listFileVersions, replaceNodeWithNewVersion, restoreFileVersion, deleteFileVersionAction } from "@/app/actions/files/versions";
+import { applyUploadedFileRevision, listFileVersions, restoreFileVersion, deleteFileVersionAction } from "@/app/actions/files/versions";
 import { getUploadPresignedUrl } from "@/app/actions/upload";
 import { buildProjectFileKey } from "@/lib/storage/project-file-key";
 import { computeContentHash } from "@/lib/files/content-hash";
+import type { FileRevisionMode } from "@/lib/files/revision-policy";
+import {
+  acquireBrowserFileLease,
+  releaseBrowserFileLease,
+  type BrowserFileLease,
+} from "@/lib/files/file-lease-client";
+import { newClientId } from "@/lib/utils/client-id";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -106,22 +113,29 @@ function parseLockConflictError(error: unknown): LockConflictInfo | undefined {
  * This is exported so that `useTaskFileMutations` can delegate its
  * `saveAsNewVersion` call here without duplicating the upload pipeline.
  */
-export async function saveFileAsNewVersion(params: {
+export async function saveFileRevision(params: {
   projectId: string;
   nodeId: string;
   file: File;
+  mode: FileRevisionMode;
   comment?: string | null;
+  baseVersion?: number | null;
+  baseHash?: string | null;
+  lease?: BrowserFileLease | null;
   supabase: ReturnType<typeof createClient>;
 }): Promise<
   | { success: true; node: ProjectNode; version: FileVersion }
   | { success: false; error: string; lockConflict?: LockConflictInfo }
 > {
-  const { projectId, nodeId, file, comment, supabase } = params;
+  const { projectId, nodeId, file, mode, comment, baseVersion, baseHash, supabase } = params;
   let storagePath: string | null = null;
+  let ownedLease = params.lease ?? null;
+  const transientLease = !ownedLease;
 
   try {
+    ownedLease = ownedLease ?? await acquireBrowserFileLease(projectId, nodeId);
     const fileExt = extOf(file.name);
-    const opaque = Math.random().toString(36).slice(2);
+    const opaque = newClientId();
     storagePath = buildProjectFileKey(
       projectId,
       `${opaque}${fileExt ? `.${fileExt}` : ""}`,
@@ -150,7 +164,7 @@ export async function saveFileAsNewVersion(params: {
     const contentHash =
       hashResult && hashResult.kind === "full" ? hashResult.hashHex : null;
 
-    const result = await replaceNodeWithNewVersion({
+    const result = await applyUploadedFileRevision({
       projectId,
       nodeId,
       s3Key: storagePath,
@@ -159,6 +173,14 @@ export async function saveFileAsNewVersion(params: {
       contentHash,
       uploadIntentId: uploadSession.uploadIntentId,
       comment: comment ?? null,
+      mode,
+      baseVersion,
+      baseHash,
+      lease: {
+        leaseId: ownedLease.leaseId,
+        sessionId: ownedLease.sessionId,
+        fencingToken: ownedLease.fencingToken,
+      },
     });
 
     // Handle structured lock conflict error returned from the server action
@@ -189,7 +211,17 @@ export async function saveFileAsNewVersion(params: {
     }
 
     return { success: false, error: message };
+  } finally {
+    if (transientLease && ownedLease) {
+      await releaseBrowserFileLease(ownedLease).catch(() => null);
+    }
   }
+}
+
+export async function saveFileAsNewVersion(
+  params: Omit<Parameters<typeof saveFileRevision>[0], "mode">,
+) {
+  return saveFileRevision({ ...params, mode: "new_revision" });
 }
 
 // ---------------------------------------------------------------------------
