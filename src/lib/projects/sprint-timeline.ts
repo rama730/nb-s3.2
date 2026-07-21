@@ -20,7 +20,7 @@ function getActivityTaskId(row: Extract<SprintTimelineRow, { kind: "task" | "fil
   return row.kind === "task" ? row.task.id : row.task.id;
 }
 
-function compareActivityRows(
+export function compareSprintTimelineActivityRows(
   left: Extract<SprintTimelineRow, { kind: "task" | "file" | "file_version" }>,
   right: Extract<SprintTimelineRow, { kind: "task" | "file" | "file_version" }>,
 ) {
@@ -128,7 +128,7 @@ export function buildSprintTimeline(input: {
     }
   }
 
-  activityRows.sort(compareActivityRows);
+  activityRows.sort(compareSprintTimelineActivityRows);
   rows.push(...activityRows);
 
   if (input.includeCloseout ?? true) {
