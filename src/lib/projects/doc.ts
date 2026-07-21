@@ -5,9 +5,21 @@ import { evaluateProjectDocQuality } from "@/lib/projects/doc-quality";
 import { parseProjectDocSmartBlocks, type ProjectDocSmartBlock } from "@/lib/projects/doc-blocks";
 import { buildProjectDocPlainText } from "@/lib/projects/doc-plain-text";
 import { extractProjectDocHeadings, type ProjectDocHeading } from "@/lib/projects/doc-headings";
+import {
+    isProjectDocSlugCanonical,
+    normalizeProjectDocSlug,
+    PROJECT_DOC_DEFAULT_SLUG,
+    PROJECT_DOC_SLUG_MAX_LENGTH,
+} from "@/lib/projects/doc-slug";
 
 export { buildProjectDocPlainText, decodeProjectDocHtmlEntities } from "@/lib/projects/doc-plain-text";
 export { extractProjectDocHeadings, slugifyReadmeHeading, type ProjectDocHeading } from "@/lib/projects/doc-headings";
+export {
+    isProjectDocSlugCanonical,
+    normalizeProjectDocSlug,
+    PROJECT_DOC_DEFAULT_SLUG,
+    PROJECT_DOC_SLUG_MAX_LENGTH,
+} from "@/lib/projects/doc-slug";
 
 export type ProjectDocEditPolicy = "leaders" | "members";
 export type ProjectDocPublicVisibility = "inherit_project";
@@ -124,8 +136,6 @@ export const PROJECT_DOC_MAX_CONTENT_BYTES = 500 * 1024;
 export const PROJECT_DOC_ASSET_MAX_BYTES = 5 * 1024 * 1024;
 export const PROJECT_DOC_ASSET_BUCKET = "project-files";
 export const PROJECT_DOC_ALLOWED_IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
-export const PROJECT_DOC_DEFAULT_SLUG = "readme";
-export const PROJECT_DOC_SLUG_MAX_LENGTH = 80;
 const GENERATED_COLLABORATION_FOOTER_RE = /(?:\n{1,3}|^)\s{0,3}#{0,6}\s*Collaborator\s+[^\n]{1,120}?\s+publish(?:ed|es)?\b[^\n]*(?:\n\s*)?$/i;
 
 export const DEFAULT_PROJECT_DOC_SETTINGS: ProjectDocSettings = {
@@ -138,27 +148,6 @@ export const DEFAULT_PROJECT_DOC_SETTINGS: ProjectDocSettings = {
     projectBlocks: true,
     notifyOnPublish: false,
 };
-
-export function normalizeProjectDocSlug(value: unknown, fallback = PROJECT_DOC_DEFAULT_SLUG) {
-    const fallbackSlug = typeof fallback === "string" && fallback.trim()
-        ? fallback.trim().toLowerCase()
-        : PROJECT_DOC_DEFAULT_SLUG;
-    const raw = typeof value === "string" ? value : "";
-    const normalized = raw
-        .trim()
-        .toLowerCase()
-        .replace(/\.(md|mdx|markdown)$/i, "")
-        .replace(/[^a-z0-9_-]+/g, "-")
-        .replace(/-+/g, "-")
-        .replace(/^[-_]+|[-_]+$/g, "")
-        .slice(0, PROJECT_DOC_SLUG_MAX_LENGTH)
-        .replace(/^[-_]+|[-_]+$/g, "");
-    return normalized || fallbackSlug;
-}
-
-export function isProjectDocSlugCanonical(value: unknown) {
-    return typeof value === "string" && value === normalizeProjectDocSlug(value);
-}
 
 export function normalizeProjectDocSettings(value: unknown): ProjectDocSettings {
     const source = value && typeof value === "object" ? value as Partial<ProjectDocSettings> : {};
