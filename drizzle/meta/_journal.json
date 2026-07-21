@@ -694,6 +694,202 @@
       "when": 1782691200000,
       "tag": "0099_schema_lineage_and_fk_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 99,
+      "version": "7",
+      "when": 1782950400000,
+      "tag": "0100_extension_recovery_drafts",
+      "breakpoints": true
+    },
+    {
+      "idx": 100,
+      "version": "7",
+      "when": 1782988200000,
+      "tag": "0101_project_file_leases",
+      "breakpoints": true
+    },
+    {
+      "idx": 101,
+      "version": "7",
+      "when": 1783000000000,
+      "tag": "0102_extension_recovery_sessions",
+      "breakpoints": true
+    },
+    {
+      "idx": 102,
+      "version": "7",
+      "when": 1783010000000,
+      "tag": "0103_market_skill_catalog",
+      "breakpoints": true
+    },
+    {
+      "idx": 103,
+      "version": "7",
+      "when": 1783011000000,
+      "tag": "0104_market_skill_seed",
+      "breakpoints": true
+    },
+    {
+      "idx": 104,
+      "version": "7",
+      "when": 1783012000000,
+      "tag": "0105_market_skill_catalog_1_0_1",
+      "breakpoints": true
+    },
+    {
+      "idx": 105,
+      "version": "7",
+      "when": 1783013000000,
+      "tag": "0106_role_skill_visibility_hardening",
+      "breakpoints": true
+    },
+    {
+      "idx": 106,
+      "version": "7",
+      "when": 1783014000000,
+      "tag": "0107_market_skill_catalog_1_1_0",
+      "breakpoints": true
+    },
+    {
+      "idx": 107,
+      "version": "7",
+      "when": 1783015000000,
+      "tag": "0108_market_skill_icons_1_2_0",
+      "breakpoints": true
+    },
+    {
+      "idx": 108,
+      "version": "7",
+      "when": 1783016000000,
+      "tag": "0109_skill_catalog_fk_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 109,
+      "version": "7",
+      "when": 1783017000000,
+      "tag": "0110_market_skill_icons_1_2_1",
+      "breakpoints": true
+    },
+    {
+      "idx": 110,
+      "version": "7",
+      "when": 1783018000000,
+      "tag": "0111_market_skill_catalog_1_3_0",
+      "breakpoints": true
+    },
+    {
+      "idx": 111,
+      "version": "7",
+      "when": 1783019000000,
+      "tag": "0112_market_skill_catalog_1_3_1",
+      "breakpoints": true
+    },
+    {
+      "idx": 112,
+      "version": "7",
+      "when": 1783020000000,
+      "tag": "0113_market_skill_catalog_1_3_2",
+      "breakpoints": true
+    },
+    {
+      "idx": 113,
+      "version": "7",
+      "when": 1783021000000,
+      "tag": "0114_market_skill_catalog_1_3_3",
+      "breakpoints": true
+    },
+    {
+      "idx": 114,
+      "version": "7",
+      "when": 1783022000000,
+      "tag": "0115_market_skill_catalog_1_3_4",
+      "breakpoints": true
+    },
+    {
+      "idx": 115,
+      "version": "7",
+      "when": 1783103400000,
+      "tag": "0116_market_skill_catalog_1_3_5",
+      "breakpoints": true
+    },
+    {
+      "idx": 116,
+      "version": "7",
+      "when": 1783157000000,
+      "tag": "0117_market_skill_catalog_1_3_6",
+      "breakpoints": true
+    },
+    {
+      "idx": 117,
+      "version": "7",
+      "when": 1783160000000,
+      "tag": "0118_remove_profile_availability_status",
+      "breakpoints": true
+    },
+    {
+      "idx": 118,
+      "version": "7",
+      "when": 1783161000000,
+      "tag": "0119_open_roles_ecosystem",
+      "breakpoints": true
+    },
+    {
+      "idx": 119,
+      "version": "7",
+      "when": 1783468800000,
+      "tag": "0120_ponytail_message_system_cleanup",
+      "breakpoints": true
+    },
+    {
+      "idx": 120,
+      "version": "7",
+      "when": 1783469700000,
+      "tag": "0121_ponytail_skill_catalog_table_cleanup",
+      "breakpoints": true
+    },
+    {
+      "idx": 121,
+      "version": "7",
+      "when": 1783470600000,
+      "tag": "0122_ponytail_database_hardening",
+      "breakpoints": true
+    },
+    {
+      "idx": 122,
+      "version": "7",
+      "when": 1783471500000,
+      "tag": "0123_ponytail_duplicate_index_completion",
+      "breakpoints": true
+    },
+    {
+      "idx": 123,
+      "version": "7",
+      "when": 1783557900000,
+      "tag": "0124_ponytail_storage_bucket_contracts",
+      "breakpoints": true
+    },
+    {
+      "idx": 124,
+      "version": "7",
+      "when": 1783558800000,
+      "tag": "0125_ponytail_realtime_publication_trim",
+      "breakpoints": true
+    },
+    {
+      "idx": 125,
+      "version": "7",
+      "when": 1783900800000,
+      "tag": "0126_extension_session_disconnect_callback",
+      "breakpoints": true
+    },
+    {
+      "idx": 126,
+      "version": "7",
+      "when": 1783987200000,
+      "tag": "0127_profile_contribution_authority",
+      "breakpoints": true
     }
   ]
 }
