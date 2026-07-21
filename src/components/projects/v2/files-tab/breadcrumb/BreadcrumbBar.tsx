@@ -407,7 +407,7 @@ function SegmentContent({
       type="button"
       data-breadcrumb-segment-id={dataId}
       onClick={() => onNavigate(isRoot ? null : segment.id)}
-      className="flex items-center gap-1 hover:bg-zinc-100 dark:hover:bg-zinc-800 px-1.5 py-0.5 rounded text-zinc-700 dark:text-zinc-200 transition-colors max-w-[180px] outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/40"
+      className="flex items-center gap-1 hover:bg-zinc-100 dark:hover:bg-zinc-800 px-1.5 py-0.5 rounded text-zinc-700 dark:text-zinc-200 transition-colors max-w-[180px] outline-none  "
       title={segment.name}
     >
       {isRoot ? (
@@ -437,7 +437,7 @@ function EllipsisButton({
           // but it navigates to the *hidden* segments via the dropdown, so
           // it carries the literal `__ellipsis__` id rather than a node id.
           data-breadcrumb-segment-id="__ellipsis__"
-          className="flex items-center px-1.5 py-0.5 rounded text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/40"
+          className="flex items-center px-1.5 py-0.5 rounded text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors outline-none  "
         >
           <MoreHorizontal className="w-4 h-4" aria-hidden="true" />
         </button>
