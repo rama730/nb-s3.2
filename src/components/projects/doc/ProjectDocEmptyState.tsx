@@ -3,22 +3,19 @@
 import { BookOpenText, Sparkles, X } from "lucide-react";
 import { useState, useEffect } from "react";
 
-import { ProjectDocImportPicker } from "@/components/projects/doc/ProjectDocImportPicker";
+import { ProjectDocLinkDialog } from "@/components/projects/doc/ProjectDocLinkDialog";
 
 export function ProjectDocEmptyState({
     canEdit,
     projectId,
-    importing,
     onCreate,
-    onImport,
 }: {
     canEdit: boolean;
     projectId: string;
-    importing?: boolean;
     onCreate: () => void;
-    onImport: (nodeId: string) => void;
 }) {
     const [isDismissed, setIsDismissed] = useState(true);
+    const [isLinkDialogOpen, setIsLinkDialogOpen] = useState(false);
 
     useEffect(() => {
         const dismissed = localStorage.getItem("docs_hub:dismissed_link_tip") === "true";
@@ -46,13 +43,22 @@ export function ProjectDocEmptyState({
                         </p>
                     </div>
                 </div>
-                <button
-                    type="button"
-                    onClick={onCreate}
-                    className="rounded-full bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-500"
-                >
-                    Create Document
-                </button>
+                <div className="flex items-center gap-3 shrink-0">
+                    <button
+                        type="button"
+                        onClick={onCreate}
+                        className="rounded-full bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-500 shadow-md active:scale-95"
+                    >
+                        Create Document
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => setIsLinkDialogOpen(true)}
+                        className="rounded-full border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 px-5 py-2.5 text-sm font-semibold text-zinc-700 dark:text-zinc-300 transition hover:bg-zinc-50 dark:hover:bg-zinc-900 shadow-sm active:scale-95"
+                    >
+                        Link Existing File
+                    </button>
+                </div>
             </div>
 
             {!isDismissed && (
@@ -75,9 +81,11 @@ export function ProjectDocEmptyState({
                 </div>
             )}
 
-            <div className="mt-6">
-                <ProjectDocImportPicker projectId={projectId} importing={importing} onImport={onImport} />
-            </div>
+            <ProjectDocLinkDialog
+                projectId={projectId}
+                isOpen={isLinkDialogOpen}
+                onClose={() => setIsLinkDialogOpen(false)}
+            />
         </div>
     );
 }
