@@ -10,6 +10,7 @@ import {
   type SprintTaskTimelineEntity,
 } from "@/lib/projects/sprint-detail";
 import { buildSprintDrawerPreviews } from "@/lib/projects/sprint-presentation";
+import { buildSprintTimeline, compareSprintTimelineActivityRows } from "@/lib/projects/sprint-timeline";
 import type { TaskSurfaceRecord } from "@/lib/projects/task-presentation";
 
 type SprintTaskMutationRecord = Pick<
@@ -135,89 +136,15 @@ function toTimelineTask(task: SprintTaskMutationRecord): SprintTaskTimelineEntit
   };
 }
 
-function toTimestamp(value: string | null | undefined) {
-  if (!value) return Number.POSITIVE_INFINITY;
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
-}
-
-function compareActivityRows(
-  left: Extract<SprintTimelineRow, { kind: "task" | "file" | "file_version" }>,
-  right: Extract<SprintTimelineRow, { kind: "task" | "file" | "file_version" }>,
-) {
-  const leftAt = toTimestamp(left.occurredAt);
-  const rightAt = toTimestamp(right.occurredAt);
-  if (leftAt !== rightAt) return leftAt - rightAt;
-
-  if (left.task.id === right.task.id && left.kind !== right.kind) {
-    const kindOrder = { task: 0, file: 1, file_version: 2 };
-    return kindOrder[left.kind] - kindOrder[right.kind];
-  }
-
-  if (left.kind !== right.kind) {
-    const kindOrder = { task: 0, file: 1, file_version: 2 };
-    return kindOrder[left.kind] - kindOrder[right.kind];
-  }
-
-  return left.id.localeCompare(right.id);
-}
-
-function buildFileRowsForTask(
-  task: SprintTaskMutationRecord,
-  timelineTask: SprintTaskTimelineEntity,
-): Extract<SprintTimelineRow, { kind: "file" | "file_version" }>[] {
-  const linkedFiles = [...(task.linkedFiles ?? [])].sort((left, right) => {
-    const byLinkedAt = toTimestamp(left.linkedAt ?? left.lastEventAt) - toTimestamp(right.linkedAt ?? right.lastEventAt);
-    if (byLinkedAt !== 0) return byLinkedAt;
-    return left.id.localeCompare(right.id);
-  });
-
-  const result: Extract<SprintTimelineRow, { kind: "file" | "file_version" }>[] = [];
-
-  for (const file of linkedFiles) {
-    result.push({
-      id: `${timelineTask.id}:${file.id}`,
-      kind: "file",
-      occurredAt: file.linkedAt ?? file.lastEventAt ?? timelineTask.activityAt ?? timelineTask.createdAt ?? null,
-      task: {
-        id: timelineTask.id,
-        title: timelineTask.title,
-        taskNumber: timelineTask.taskNumber,
-        status: timelineTask.status,
-        priority: timelineTask.priority,
-      },
-      file,
-    });
-
-    // Render version events as inline sub-rows beneath the linked file row
-    if (file.versionEvents && file.versionEvents.length > 0) {
-      for (const versionEvent of file.versionEvents) {
-        result.push({
-          id: `${timelineTask.id}:${file.id}:v${versionEvent.versionNumber}`,
-          kind: "file_version",
-          occurredAt: versionEvent.createdAt,
-          task: {
-            id: timelineTask.id,
-            title: timelineTask.title,
-            taskNumber: timelineTask.taskNumber,
-            status: timelineTask.status,
-            priority: timelineTask.priority,
-          },
-          file: {
-            id: file.id,
-            nodeId: file.nodeId,
-            nodeName: file.nodeName,
-            nodePath: file.nodePath,
-            nodeType: file.nodeType,
-          },
-          versionEvent,
-        });
-      }
-    }
-  }
-
-  return result;
-}
+const EMPTY_SPRINT_SUMMARY: SprintHealthSummary = {
+  totalTasks: 0,
+  completedTasks: 0,
+  blockedTasks: 0,
+  linkedFileCount: 0,
+  totalStoryPoints: 0,
+  completedStoryPoints: 0,
+  completionPercentage: 0,
+};
 
 function patchRows(
   rows: SprintDetailPayload["rows"],
@@ -252,16 +179,28 @@ function patchRows(
     });
 
     if (shouldMaterializeTask) {
-      activityRows.push({
-        id: timelineTask.id,
-        kind: "task",
-        occurredAt: timelineTask.activityAt ?? timelineTask.createdAt ?? null,
-        task: timelineTask,
-      });
+      activityRows.push(
+        ...buildSprintTimeline({
+          sprint: {
+            id: selectedSprintId ?? "",
+            projectId: timelineTask.projectId,
+            name: "",
+            goal: null,
+            description: null,
+            startDate: null,
+            endDate: null,
+            status: "planning",
+            createdAt: null,
+            updatedAt: null,
+          },
+          tasks: [{ ...timelineTask, files: afterTask.linkedFiles ?? [] }],
+          summary: EMPTY_SPRINT_SUMMARY,
+          includeKickoff: false,
+          includeCloseout: false,
+        }) as Extract<SprintTimelineRow, { kind: "task" | "file" | "file_version" }>[],
+      );
 
-      if (afterTask.linkedFiles) {
-        activityRows.push(...buildFileRowsForTask(afterTask, timelineTask));
-      } else {
+      if (!afterTask.linkedFiles) {
         activityRows = activityRows.map((row) => {
           if ((row.kind === "file" || row.kind === "file_version") && row.task.id === afterTask.id) {
             return {
@@ -282,7 +221,7 @@ function patchRows(
     }
   }
 
-  activityRows.sort(compareActivityRows);
+  activityRows.sort(compareSprintTimelineActivityRows);
   return [...kickoffRows, ...activityRows, ...closeoutRows];
 }
 
