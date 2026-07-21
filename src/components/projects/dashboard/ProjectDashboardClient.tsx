@@ -11,7 +11,7 @@ import ProjectLayout from '@/components/projects/dashboard/ProjectLayout';
 import InviteCollaboratorModal from '@/components/projects/dashboard/InviteCollaboratorModal';
 import { TabErrorBoundary } from '@/components/projects/TabErrorBoundary';
 import type { Project } from '@/types/hub';
-import { toggleProjectFollowAction, updateProjectStageAction, incrementProjectViewAction, getProjectLiveStatsAction, type ProjectUpdateMovementSummary, type ProjectUpdateView } from '@/app/actions/project';
+import { toggleProjectFollowAction, updateProjectStageAction, incrementProjectViewAction } from '@/app/actions/project';
 import { getApplicationStatusAction, acceptProposedRoleAction, declineProposedRoleAction, type ApplicationStatusResult } from '@/app/actions/applications';
 import { resolveMessageWorkflowActionV2 } from '@/app/actions/messaging';
 import { useProjectMembers } from '@/hooks/hub/useProjectMembers';
@@ -22,7 +22,7 @@ import { logger } from '@/lib/logger';
 import { subscribeProjectStage, subscribeProjectStats } from '@/lib/realtime/subscriptions';
 import type { SprintDetailPayload } from '@/lib/projects/sprint-detail';
 import type { TaskPanelTab } from '@/hooks/useTaskPanelResource';
-import { normalizeProjectDocSlug } from '@/lib/projects/doc';
+import { normalizeProjectDocSlug } from '@/lib/projects/doc-slug';
 import { isProjectTabVisibleToViewer, normalizeProjectMemberRole, normalizeProjectPublicTabVisibility, resolveAllowedProjectTab, type ProjectMemberRole } from '@/lib/projects/settings-policies';
 
 import { DashboardTab, DocTab, UpdatesTab, TasksTab, FilesTab, AnalyticsTab, SprintPlanning, ProjectSettingsTab } from '@/components/projects/dashboard/ProjectTabsRegistry';
@@ -43,41 +43,39 @@ function projectDetailTabQueryParam(tabId: string) {
     return tabId === 'readme' ? 'docs' : tabId;
 }
 
-const animatedProjects = new Set<string>();
-
 function deleteParam(params: URLSearchParams, key: string) {
     if (!params.has(key)) return false;
     params.delete(key);
     return true;
 }
 
-function clearProjectDetailScopedParams(params: URLSearchParams, activeTab: string) {
+function clearProjectDetailScopedParams(params: URLSearchParams, activeTab: string, resetActiveTab = false) {
     let changed = false;
 
-    if (activeTab !== 'tasks') {
+    if (resetActiveTab || activeTab !== 'tasks') {
         for (const key of ['drawerType', 'drawerId', 'panelTab']) {
             changed = deleteParam(params, key) || changed;
         }
     }
 
-    if (activeTab !== 'files') {
+    if (resetActiveTab || activeTab !== 'files') {
         for (const key of ['fileId', 'path', 'line', 'column']) {
             changed = deleteParam(params, key) || changed;
         }
     }
 
-    if (activeTab !== 'updates') {
+    if (resetActiveTab || activeTab !== 'updates') {
         for (const key of ['updateId', 'commentId']) {
             changed = deleteParam(params, key) || changed;
         }
     }
 
-    if (activeTab !== 'readme') {
+    if (resetActiveTab || activeTab !== 'readme') {
         changed = deleteParam(params, 'doc') || changed;
         changed = deleteParam(params, 'readmeMode') || changed;
     }
 
-    if (activeTab !== 'analytics') {
+    if (resetActiveTab || activeTab !== 'analytics') {
         for (const key of ['analyticsTab', 'memberId', 'analyticsMember', 'analyticsSource', 'analyticsWindow']) {
             changed = deleteParam(params, key) || changed;
         }
@@ -94,21 +92,9 @@ interface ProjectDashboardClientProps {
     isOwner: boolean;
     isMember: boolean;
     initialSprintData?: SprintDetailPayload | null;
-    initialUpdatesPage?: {
-        updates: ProjectUpdateView[];
-        nextCursor: string | null;
-        hasMore: boolean;
-        movementSummary?: ProjectUpdateMovementSummary | null;
-        capabilities?: {
-            canCreate: boolean;
-            canManage: boolean;
-            canInteract: boolean;
-        };
-    } | null;
-    forcedActiveTab?: string;
 }
 
-export default function ProjectDashboardClient({ project, currentUserId, viewerDisplayName = null, viewerAvatarUrl = null, isOwner, isMember, initialSprintData = null, initialUpdatesPage = null, forcedActiveTab }: ProjectDashboardClientProps) {
+export default function ProjectDashboardClient({ project, currentUserId, viewerDisplayName = null, viewerAvatarUrl = null, isOwner, isMember, initialSprintData = null }: ProjectDashboardClientProps) {
     const router = useRouter();
     const pathname = usePathname();
     const queryClient = useQueryClient();
@@ -182,12 +168,13 @@ export default function ProjectDashboardClient({ project, currentUserId, viewerD
     const canonicalProjectHref = useMemo(() => `/projects/${project.slug || project.id}`, [project.id, project.slug]);
     const publicTabVisibility = useMemo(() => normalizeProjectPublicTabVisibility((project as any).publicTabVisibility ?? (project as any).public_tab_visibility), [project]);
     const isOwnerOrMember = isOwner || isMember;
-    const isSprintRoute = pathname?.includes('/sprints/') ?? false;
     const resolvedActiveTab = resolveAllowedProjectTab({
         requestedTab: (() => {
             const searchTab = searchParams?.get('tab');
-            const requested = forcedActiveTab || (isSprintRoute ? 'sprints' : normalizeProjectDetailTabParam(searchTab));
-            if (requested === 'readme' && !isOwnerOrMember && !(project as any)?.hasPublishedReadme) return 'dashboard';
+            const requested = normalizeProjectDetailTabParam(searchTab);
+            if (requested === 'readme' && !isOwnerOrMember && !(project as any)?.hasPublishedReadme) {
+                // Ponytail: Allow docs tab to be visible natively.
+            }
             return requested;
         })(),
         isOwnerOrMember,
@@ -196,6 +183,7 @@ export default function ProjectDashboardClient({ project, currentUserId, viewerD
     });
 
     const [activeTab, setActiveTab] = useState(() => resolvedActiveTab);
+
     const [isDocEditing, setIsReadmeEditing] = useState(false);
 
     // State management
@@ -209,7 +197,7 @@ export default function ProjectDashboardClient({ project, currentUserId, viewerD
     const [preselectedRoleId, setPreselectedRoleId] = useState<string | undefined>(undefined);
     const [isOnboardingOpen, setIsOnboardingOpen] = useState(false);
     const [isStageUpdating, setIsStageUpdating] = useState(false);
-    const [stageVersion, setStageVersion] = useState<string | null>((project as any).updatedAt || null);
+    const [, setStageVersion] = useState<string | null>((project as any).updatedAt || null);
     const stageVersionRef = useRef<string | null>((project as any).updatedAt || null);
     const isStageUpdatingRef = useRef(false);
     const isMountedRef = useRef(true);
@@ -261,65 +249,35 @@ export default function ProjectDashboardClient({ project, currentUserId, viewerD
     const [applicationStatus, setApplicationStatus] = useState<ApplicationStatusResult>({ status: 'none' });
     const [invitationLoading, setInvitationLoading] = useState(false);
 
-    const handleAcceptInvitation = useCallback(async () => {
+    const handleInvitation = useCallback(async (action: 'accept' | 'decline') => {
         if (invitationLoading) return;
         setInvitationLoading(true);
         try {
             let res;
             if (applicationStatus.applicationId) {
-                res = await acceptProposedRoleAction(applicationStatus.applicationId);
+                res = action === 'accept'
+                    ? await acceptProposedRoleAction(applicationStatus.applicationId)
+                    : await declineProposedRoleAction(applicationStatus.applicationId);
             } else if (applicationStatus.workflowItemId) {
                 res = await resolveMessageWorkflowActionV2({
                     workflowItemId: applicationStatus.workflowItemId,
-                    action: 'accept',
+                    action,
                 });
             } else {
                 throw new Error('No active invitation ID found.');
             }
 
             if (res.success) {
-                toast.success('Invitation accepted successfully!');
+                toast.success(action === 'accept' ? 'Invitation accepted successfully!' : 'Invitation declined.');
                 refreshProjectData();
                 const nextStatus = await getApplicationStatusAction(project.id);
                 setApplicationStatus(nextStatus);
             } else {
-                toast.error(res.error || 'Failed to accept invitation');
+                toast.error(res.error || (action === 'accept' ? 'Failed to accept invitation' : 'Failed to decline invitation'));
             }
         } catch (error) {
-            console.error('Error accepting invitation:', error);
-            toast.error(error instanceof Error ? error.message : 'Failed to accept invitation');
-        } finally {
-            setInvitationLoading(false);
-        }
-    }, [applicationStatus, invitationLoading, project.id, refreshProjectData]);
-
-    const handleDeclineInvitation = useCallback(async () => {
-        if (invitationLoading) return;
-        setInvitationLoading(true);
-        try {
-            let res;
-            if (applicationStatus.applicationId) {
-                res = await declineProposedRoleAction(applicationStatus.applicationId);
-            } else if (applicationStatus.workflowItemId) {
-                res = await resolveMessageWorkflowActionV2({
-                    workflowItemId: applicationStatus.workflowItemId,
-                    action: 'decline',
-                });
-            } else {
-                throw new Error('No active invitation ID found.');
-            }
-
-            if (res.success) {
-                toast.success('Invitation declined.');
-                refreshProjectData();
-                const nextStatus = await getApplicationStatusAction(project.id);
-                setApplicationStatus(nextStatus);
-            } else {
-                toast.error(res.error || 'Failed to decline invitation');
-            }
-        } catch (error) {
-            console.error('Error declining invitation:', error);
-            toast.error(error instanceof Error ? error.message : 'Failed to decline invitation');
+            console.error(`Error ${action === 'accept' ? 'accepting' : 'declining'} invitation:`, error);
+            toast.error(error instanceof Error ? error.message : action === 'accept' ? 'Failed to accept invitation' : 'Failed to decline invitation');
         } finally {
             setInvitationLoading(false);
         }
@@ -328,17 +286,6 @@ export default function ProjectDashboardClient({ project, currentUserId, viewerD
     // Optimistic State for Project Journey
     const [optimisticStageIndex, setOptimisticStageIndex] = useState((project as any).currentStageIndex || 0);
     const [stageCompletionDates, setStageCompletionDates] = useState<Record<string, string>>(() => (project as any).stageCompletionDates || {});
-    // Track if the journey timeline has already animated during this page lifecycle
-    const [timelineHasAnimated, setTimelineHasAnimatedState] = useState(() =>
-        project?.id ? animatedProjects.has(project.id) : false
-    );
-
-    const setTimelineHasAnimated = useCallback((val: boolean) => {
-        setTimelineHasAnimatedState(val);
-        if (val && project?.id) {
-            animatedProjects.add(project.id);
-        }
-    }, [project?.id]);
 
     // Sync state with server updates (e.g. revalidation or external changes)
     // This ensures we don't get stuck in a detached state if the server updates
@@ -348,15 +295,6 @@ export default function ProjectDashboardClient({ project, currentUserId, viewerD
         setOptimisticStageIndex(serverStageIndex);
         setStageCompletionDates((project as any).stageCompletionDates || {});
     }, [serverStageIndex, (project as any).stageCompletionDates]);
-
-    // Reset timeline animation state when changing projects
-    useEffect(() => {
-        if (project?.id) {
-            setTimelineHasAnimatedState(animatedProjects.has(project.id));
-        } else {
-            setTimelineHasAnimatedState(false);
-        }
-    }, [project?.id]);
 
     // Realtime subscription for project stage changes
     useEffect(() => {
@@ -413,7 +351,6 @@ export default function ProjectDashboardClient({ project, currentUserId, viewerD
 
     // OPTIMIZATION: Default to empty arrays as these are now fetched client-side or lazy loaded
     const tasks = useMemo(() => extendedProject?.tasks || [], [extendedProject]);
-    const initialFileNodes = useMemo(() => extendedProject?.initialFileNodes || [], [extendedProject]);
     const sprints = useMemo(() => {
         if (initialSprintData?.sprints?.length) return initialSprintData.sprints;
         return extendedProject?.sprints || [];
@@ -457,8 +394,6 @@ export default function ProjectDashboardClient({ project, currentUserId, viewerD
     const {
         data: membersData,
         isLoading: loadingMembers,
-        fetchNextPage: fetchNextMembers,
-        hasNextPage: hasNextMembers,
     } = useProjectMembers(project.id, collaboratorUsers || [], {
         enabled: shouldLoadMembers,
         initialHasMore: (project as any)?.membersHasMore,
@@ -533,18 +468,7 @@ export default function ProjectDashboardClient({ project, currentUserId, viewerD
             if (tabId === activeTab) {
                 // If they click the current tab, clear any tab-specific parameters to reset tab view/drawer
                 const nextParams = new URLSearchParams(window.location.search);
-                let changed = false;
-                const keysToClear = [
-                    'fileId', 'path', 'line', 'column',
-                    'drawerType', 'drawerId', 'panelTab',
-                    'updateId', 'commentId'
-                ];
-                for (const key of keysToClear) {
-                    if (nextParams.has(key)) {
-                        nextParams.delete(key);
-                        changed = true;
-                    }
-                }
+                const changed = clearProjectDetailScopedParams(nextParams, tabId, true);
                 if (changed) {
                     const nextQuery = nextParams.toString();
                     const safePath = pathname ?? window.location.pathname;
@@ -554,23 +478,6 @@ export default function ProjectDashboardClient({ project, currentUserId, viewerD
                 return;
             }
             setActiveTab(tabId);
-            if (tabId === 'sprints') {
-                router.push(`${canonicalProjectHref}?tab=sprints`, { scroll: false });
-                return;
-            }
-            if (isSprintRoute || forcedActiveTab) {
-                if (tabId === 'dashboard') {
-                    router.push(canonicalProjectHref, { scroll: false });
-                    return;
-                }
-                const encodedTab = encodeURIComponent(projectDetailTabQueryParam(tabId));
-                let extraParams = '';
-                if (tabId === 'readme') {
-                    extraParams = '&doc=readme';
-                }
-                router.push(`${canonicalProjectHref}?tab=${encodedTab}${extraParams}`, { scroll: false });
-                return;
-            }
 
             const nextParams = new URLSearchParams(window.location.search);
             if (tabId === 'readme') {
@@ -590,18 +497,17 @@ export default function ProjectDashboardClient({ project, currentUserId, viewerD
             const nextUrl = nextQuery ? `${safePath}?${nextQuery}` : safePath;
             router.replace(nextUrl, { scroll: false });
         },
-        [activeTab, canManageProjectSettings, canonicalProjectHref, forcedActiveTab, isOwnerOrMember, isSprintRoute, pathname, publicTabVisibility, router],
+        [activeTab, canManageProjectSettings, isOwnerOrMember, pathname, publicTabVisibility, router],
     );
 
     // Keep the URL canonical from the URL state itself. This avoids the tab
     // rollback that happens when optimistic local tab state cleans a stale URL.
     useEffect(() => {
         if (typeof window === "undefined") return;
-        if (forcedActiveTab || isSprintRoute) return;
 
         const nextParams = new URLSearchParams(searchParams?.toString() ?? window.location.search);
         const requestedTab = normalizeProjectDetailTabParam(nextParams.get('tab'));
-        const normalizedRequestedTab = requestedTab === 'readme' && !isOwnerOrMember && !(project as any)?.hasPublishedReadme ? 'dashboard' : requestedTab;
+        const normalizedRequestedTab = requestedTab;
         const allowedTab = resolveAllowedProjectTab({
             requestedTab: normalizedRequestedTab,
             isOwnerOrMember,
@@ -636,12 +542,22 @@ export default function ProjectDashboardClient({ project, currentUserId, viewerD
         const safePath = pathname ?? window.location.pathname;
         const nextUrl = nextQuery ? `${safePath}?${nextQuery}` : safePath;
         router.replace(nextUrl, { scroll: false });
-    }, [canManageProjectSettings, forcedActiveTab, isOwnerOrMember, isSprintRoute, pathname, project, publicTabVisibility, router, searchParams]);
+    }, [
+        canManageProjectSettings,
+        isOwnerOrMember,
+        pathname,
+        project.id,
+        project.slug,
+
+        publicTabVisibility,
+        router,
+        searchParams
+    ]);
 
     useEffect(() => {
         const searchTab = searchParams?.get('tab');
-        const requestedTab = forcedActiveTab || (isSprintRoute ? 'sprints' : normalizeProjectDetailTabParam(searchTab));
-        const normalizedRequestedTab = requestedTab === 'readme' && !isOwnerOrMember && !(project as any)?.hasPublishedReadme ? 'dashboard' : requestedTab;
+        const requestedTab = normalizeProjectDetailTabParam(searchTab);
+        const normalizedRequestedTab = requestedTab;
         const nextTab = resolveAllowedProjectTab({
             requestedTab: normalizedRequestedTab,
             isOwnerOrMember,
@@ -649,7 +565,15 @@ export default function ProjectDashboardClient({ project, currentUserId, viewerD
             publicTabVisibility,
         });
         setActiveTab((prev) => (prev === nextTab ? prev : nextTab));
-    }, [canManageProjectSettings, forcedActiveTab, isOwnerOrMember, isSprintRoute, project, publicTabVisibility, searchParams]);
+    }, [
+        canManageProjectSettings,
+        isOwnerOrMember,
+        project.id,
+        project.slug,
+
+        publicTabVisibility,
+        searchParams
+    ]);
 
     useEffect(() => {
         if (activeTab !== 'readme') setIsReadmeEditing(false);
@@ -672,7 +596,7 @@ export default function ProjectDashboardClient({ project, currentUserId, viewerD
                 const queryState = queryClient.getQueryState(filesPrefetchQueryKey);
                 const isFresh = !!queryState?.dataUpdatedAt && Date.now() - queryState.dataUpdatedAt < 60_000;
                 if (isFresh) return;
-                void import('@/components/projects/v2/ProjectFilesWorkspace');
+                void import('@/components/projects/v2/files-tab/FilesTabRoot');
                 queryClient.prefetchQuery({
                     queryKey: filesPrefetchQueryKey,
                     queryFn: () => getProjectNodes(project.id, null),
@@ -705,9 +629,8 @@ export default function ProjectDashboardClient({ project, currentUserId, viewerD
     }, []);
 
     // Actions
-    const handleEdit = useCallback((section?: string) => {
+    const handleEdit = useCallback(() => {
         setIsEditModalOpen(true);
-        // Optional: Could pre-select tab based on section
     }, []);
 
     const handleShare = useCallback(async () => {
@@ -785,6 +708,9 @@ export default function ProjectDashboardClient({ project, currentUserId, viewerD
                 void queryClient.invalidateQueries({
                     queryKey: queryKeys.hub.projectsSimpleRoot(),
                 });
+                void queryClient.invalidateQueries({
+                    queryKey: queryKeys.globalSearch.hubRoot(),
+                });
 
                 // Broadcast updated stats to other connected clients
                 if (statsChannelRef.current) {
@@ -830,15 +756,8 @@ export default function ProjectDashboardClient({ project, currentUserId, viewerD
         let active = true;
         const supabase = createClient();
 
-        // 1. Fetch latest reconciled view count, followers, and follow status on mount
-        getProjectLiveStatsAction(project.id).then((result) => {
-            if (!active) return;
-            if (result.success) {
-                if (result.viewCount !== undefined) setViewCount(result.viewCount);
-                if (result.followersCount !== undefined) setFollowersCount(result.followersCount);
-                if (result.isFollowed !== undefined) setIsFollowing(result.isFollowed);
-            }
-        });
+        // 1. Rely on fresh server-side rendered stats from props on mount.
+        // Live updates are synced via the realtime broadcast channel below.
 
         // 2. Subscribe to live realtime broadcast updates
         const channel = subscribeProjectStats({
@@ -880,6 +799,9 @@ export default function ProjectDashboardClient({ project, currentUserId, viewerD
                     // Invalidate the Hub project feed query cache
                     void queryClient.invalidateQueries({
                         queryKey: queryKeys.hub.projectsSimpleRoot(),
+                    });
+                    void queryClient.invalidateQueries({
+                        queryKey: queryKeys.globalSearch.hubRoot(),
                     });
 
                     // Broadcast updated view count to peers
@@ -1030,190 +952,63 @@ export default function ProjectDashboardClient({ project, currentUserId, viewerD
         [lifecycleStageNames.length, project.id, setIsStageUpdatingSafe, setStageVersionSafe],
     );
 
-    const handleUndoStage = useCallback(
-        async (prevIndex: number, rollbackIndex: number, expectedUpdatedAt: string | null) => {
-            if (isStageUpdatingRef.current) return;
-            setOptimisticStageIndex(prevIndex);
-            const committed = await commitStageIndex(prevIndex, expectedUpdatedAt, true);
-            if (!committed) {
-                setOptimisticStageIndex(rollbackIndex);
-                return;
-            }
-            toast.success('Undid stage advancement');
-        },
-        [commitStageIndex],
-    );
-
-    const handleRegressStage = useCallback(async () => {
+    const moveStage = useCallback(async (delta: 1 | -1) => {
         if (isStageUpdating) {
             toast.info('Stage update is in progress');
             return;
         }
         if (!isOwner) {
-            toast.error('Only the project owner can revert the stage');
-            return;
-        }
-
-        if (optimisticStageIndex <= 0) {
-            toast.info('Project is already at the starting stage');
+            toast.error(delta > 0 ? 'Only the project owner can advance the stage' : 'Only the project owner can revert the stage');
             return;
         }
 
         const stages = lifecycleStageNames;
         const prevIndex = optimisticStageIndex;
-        const nextIndex = prevIndex - 1;
-        const prevStageName = stages[nextIndex];
-        const expectedUpdatedAt = stageVersionRef.current;
-
-        // 1. Optimistic Update
-        setOptimisticStageIndex(nextIndex);
-
-        // 2. Show Toast with Undo
-        toast.success(`Returned to ${prevStageName}`, {
-            action: {
-                label: 'Undo',
-                onClick: () => {
-                    void handleUndoStage(prevIndex, nextIndex, expectedUpdatedAt);
-                },
-            },
-            duration: 4000,
-        });
-
-        // 3. Server Action
-        const committed = await commitStageIndex(nextIndex, expectedUpdatedAt, true);
-        if (!committed) {
-            // Revert on failure
-            setOptimisticStageIndex(prevIndex);
-        }
-    }, [isOwner, isStageUpdating, lifecycleStageNames, optimisticStageIndex, commitStageIndex, handleUndoStage]);
-
-    const handleAdvanceStage = useCallback(async () => {
-        if (isStageUpdating) {
-            toast.info('Stage update is in progress');
+        const nextIndex = prevIndex + delta;
+        if (nextIndex < 0) {
+            toast.info('Project is already at the starting stage');
             return;
         }
-        if (!isOwner) {
-            toast.error('Only the project owner can advance the stage');
-            return;
-        }
-
-        const stages = lifecycleStageNames;
-        if (optimisticStageIndex >= stages.length - 1) {
+        if (nextIndex >= stages.length) {
             toast.info('Project is already at the final stage');
             return;
         }
 
-        const prevIndex = optimisticStageIndex;
-        const nextIndex = prevIndex + 1;
-        const nextStageName = stages[nextIndex];
         const expectedUpdatedAt = stageVersionRef.current;
-
-        // 1. Optimistic Update
         setOptimisticStageIndex(nextIndex);
 
-        // 2. Show Toast with Undo
-        toast.success(`Advanced to ${nextStageName}`, {
-            action: {
-                label: 'Undo',
-                onClick: () => {
-                    void handleUndoStage(prevIndex, nextIndex, expectedUpdatedAt);
-                },
-            },
-            duration: 4000,
-        });
-
-        // 3. Server Action
         const committed = await commitStageIndex(nextIndex, expectedUpdatedAt, true);
         if (!committed) {
-            // Revert on failure
             setOptimisticStageIndex(prevIndex);
+            return;
         }
-    }, [isOwner, isStageUpdating, lifecycleStageNames, optimisticStageIndex, commitStageIndex, handleUndoStage]);
+        toast.success(delta > 0 ? `Advanced to ${stages[nextIndex]}` : `Returned to ${stages[nextIndex]}`);
+    }, [commitStageIndex, isOwner, isStageUpdating, lifecycleStageNames, optimisticStageIndex]);
+
+    const handleRegressStage = useCallback(() => {
+        void moveStage(-1);
+    }, [moveStage]);
+
+    const handleAdvanceStage = useCallback(() => {
+        void moveStage(1);
+    }, [moveStage]);
 
     const filesSyncStatus = extendedProject?.syncStatus;
-    const filesImportSourceType = extendedProject?.importSource?.type || null;
     const initialTaskDrawerId = searchParams?.get('drawerType') === 'task' ? searchParams.get('drawerId') : null;
     const initialTaskPanelTabParam = searchParams?.get('panelTab');
     const initialTaskPanelTab = initialTaskPanelTabParam === 'details' || initialTaskPanelTabParam === 'subtasks' || initialTaskPanelTabParam === 'comments' || initialTaskPanelTabParam === 'files' || initialTaskPanelTabParam === 'activity' ? (initialTaskPanelTabParam as TaskPanelTab) : null;
     const initialOpenFileId = searchParams?.get('fileId') || null;
     const initialOpenPath = searchParams?.get('path') || null;
-    const initialOpenLineRaw = Number(searchParams?.get('line') || '');
-    const initialOpenColumnRaw = Number(searchParams?.get('column') || '');
-    const initialOpenLine = Number.isFinite(initialOpenLineRaw) ? initialOpenLineRaw : null;
-    const initialOpenColumn = Number.isFinite(initialOpenColumnRaw) ? initialOpenColumnRaw : null;
 
     // Memoize the Files tab while active so parent shell updates do not churn the workspace.
     const filesTabContent = useMemo(
         () => (
             <TabErrorBoundary tabName="Files" fillContainer>
-                <FilesTab projectId={project.id} projectName={project.title} currentUserId={currentUserId || undefined} isOwnerOrMember={isOwnerOrMember} isActive={activeTab === 'files'} initialFileNodes={initialFileNodes} syncStatus={filesSyncStatus} importSourceType={filesImportSourceType} initialOpenFileId={initialOpenFileId} initialOpenPath={initialOpenPath} initialOpenLine={initialOpenLine} initialOpenColumn={initialOpenColumn} />
+                <FilesTab projectId={project.id} projectName={project.title} currentUserId={currentUserId || undefined} isOwnerOrMember={isOwnerOrMember} isActive={activeTab === 'files'} syncStatus={filesSyncStatus} initialOpenFileId={initialOpenFileId} initialOpenPath={initialOpenPath} />
             </TabErrorBoundary>
         ),
-        [project.id, project.title, currentUserId, isOwnerOrMember, activeTab, initialFileNodes, filesSyncStatus, filesImportSourceType, initialOpenFileId, initialOpenPath, initialOpenLine, initialOpenColumn],
+        [project.id, project.title, currentUserId, isOwnerOrMember, activeTab, filesSyncStatus, initialOpenFileId, initialOpenPath],
     );
-
-    // Render active tab content
-    const renderTabContent = () => {
-        switch (activeTab) {
-            case 'dashboard':
-                return (
-                    <TabErrorBoundary tabName="Dashboard">
-                        <DashboardTab project={projectWithLiveStats} isCreator={isOwner} isCollaborator={isMember} members={members} hasNextMembers={hasNextMembers} fetchNextMembers={fetchNextMembers} loadingMembers={loadingMembers} rolesWithFilled={rolesWithFilled} onEdit={handleEdit} onShare={handleShare} onAdvanceStage={handleAdvanceStage} onRedoStage={handleRegressStage} onApplyToRole={handleApplyToRole} onManageTeam={() => setIsInviteModalOpen(true)} lifecycleStages={lifecycleStages} currentStageIndex={optimisticStageIndex} applicationStatus={applicationStatus} timelineHasAnimated={timelineHasAnimated} setTimelineHasAnimated={setTimelineHasAnimated} onAcceptInvitation={handleAcceptInvitation} onDeclineInvitation={handleDeclineInvitation} invitationLoading={invitationLoading} />
-                    </TabErrorBoundary>
-                );
-
-            case 'readme':
-                return (
-                    <TabErrorBoundary tabName="Docs" fillContainer>
-                        <DocTab projectId={project.id} project={projectWithLiveStats} currentUserId={currentUserId} currentUserName={currentUserName} canEditProject={canManageProjectSettings} onEditingChange={setIsReadmeEditing} />
-                    </TabErrorBoundary>
-                );
-
-            case 'updates':
-                return (
-                    <TabErrorBoundary tabName="Updates">
-                        <UpdatesTab projectId={project.id} projectSlug={project.slug || project.id} projectName={project.title} currentUserId={currentUserId} currentUserName={currentUserName} currentUserAvatarUrl={currentUserAvatarUrl} canCreateUpdates={canCreateUpdates} canManageUpdates={canManageUpdates} initialUpdateId={searchParams?.get('updateId') || null} initialCommentId={searchParams?.get('commentId') || null} initialUpdatesPage={initialUpdatesPage} />
-                    </TabErrorBoundary>
-                );
-
-            case 'sprints':
-                return (
-                    <TabErrorBoundary tabName="Sprints">
-                        <div className="space-y-6">
-                            <SprintPlanning projectId={project.id} projectSlug={project.slug || project.id} projectName={project.title} isOwner={isOwner} isOwnerOrMember={isOwnerOrMember} initialSprintData={initialSprintData} />
-                        </div>
-                    </TabErrorBoundary>
-                );
-
-            case 'tasks':
-                return (
-                    <TabErrorBoundary tabName="Tasks">
-                        <TasksTab projectId={project.id} projectName={project.title} currentUserId={currentUserId || undefined} isOwner={isOwner} isOwnerOrMember={isOwnerOrMember} projectCreatorId={(project as any).ownerId} initialTasks={tasks} totalCount={tasks.length} members={allMembers} sprints={sprints} initialOpenTaskId={initialTaskDrawerId} initialPanelTab={initialTaskPanelTab} />
-                    </TabErrorBoundary>
-                );
-
-            case 'analytics':
-                return (
-                    <TabErrorBoundary tabName="Analytics">
-                        <AnalyticsTab projectId={project.id} project={projectWithLiveStats} />
-                    </TabErrorBoundary>
-                );
-
-            case 'files':
-                return null;
-
-            case 'settings':
-                if (!canManageProjectSettings) return null;
-                return (
-                    <TabErrorBoundary tabName="Settings">
-                        <ProjectSettingsTab projectId={project.id} project={project} onProjectUpdated={handleProjectSettingsUpdated} isProjectOwner={isOwner} actorRole={currentProjectRole} members={allMembers} loadingMembers={loadingMembers} />
-                    </TabErrorBoundary>
-                );
-
-            default:
-                return null;
-        }
-    };
 
     if (!project) {
         return (
@@ -1224,8 +1019,70 @@ export default function ProjectDashboardClient({ project, currentUserId, viewerD
     }
 
     return (
-        <ProjectLayout project={projectWithLiveStats} isOwner={isOwner} canManageSettings={canManageProjectSettings} isOwnerOrMember={isOwnerOrMember} publicTabVisibility={publicTabVisibility} activeTab={activeTab} isDocEditing={isDocEditing} onTabChange={handleTabChange} followersCount={followersCount} viewCount={viewCount} onEdit={() => handleEdit()} isFollowing={isFollowing} onFollow={handleFollow} followLoading={followLoading} onShare={handleShare} onTabHover={handleTabHover} onTabLeave={handleTabLeave}>
-            {activeTab === 'files' ? filesTabContent : renderTabContent()}
+        <ProjectLayout project={projectWithLiveStats} isOwner={isOwner} canManageSettings={canManageProjectSettings} isOwnerOrMember={isOwnerOrMember} publicTabVisibility={publicTabVisibility} activeTab={activeTab} isDocEditing={isDocEditing} onTabChange={handleTabChange} followersCount={followersCount} viewCount={viewCount} isFollowing={isFollowing} onFollow={handleFollow} followLoading={followLoading} onShare={handleShare} onTabHover={handleTabHover} onTabLeave={handleTabLeave}>
+            {activeTab === 'dashboard' && (
+                <div className="w-full h-full min-h-0">
+                    <TabErrorBoundary tabName="Dashboard">
+                        <DashboardTab project={projectWithLiveStats} isCreator={isOwner} isCollaborator={isMember} members={members} loadingMembers={loadingMembers} rolesWithFilled={rolesWithFilled} onEdit={handleEdit} onAdvanceStage={handleAdvanceStage} onRedoStage={handleRegressStage} onApplyToRole={handleApplyToRole} onManageTeam={() => setIsInviteModalOpen(true)} lifecycleStages={lifecycleStages} currentStageIndex={optimisticStageIndex} applicationStatus={applicationStatus} onAcceptInvitation={() => void handleInvitation('accept')} onDeclineInvitation={() => void handleInvitation('decline')} invitationLoading={invitationLoading} />
+                    </TabErrorBoundary>
+                </div>
+            )}
+
+            {activeTab === 'readme' && (
+                <div className="w-full h-full min-h-0">
+                    <TabErrorBoundary tabName="Docs" fillContainer>
+                        <DocTab projectId={project.id} project={projectWithLiveStats} currentUserId={currentUserId} currentUserName={currentUserName} onEditingChange={setIsReadmeEditing} />
+                    </TabErrorBoundary>
+                </div>
+            )}
+
+            {activeTab === 'updates' && (
+                <div className="w-full h-full min-h-0">
+                    <TabErrorBoundary tabName="Updates">
+                        <UpdatesTab projectId={project.id} projectSlug={project.slug || project.id} projectName={project.title} currentUserId={currentUserId} currentUserName={currentUserName} currentUserAvatarUrl={currentUserAvatarUrl} canCreateUpdates={canCreateUpdates} canManageUpdates={canManageUpdates} initialUpdateId={searchParams?.get('updateId') || null} initialCommentId={searchParams?.get('commentId') || null} />
+                    </TabErrorBoundary>
+                </div>
+            )}
+
+            {activeTab === 'sprints' && (
+                <div className="w-full h-full min-h-0">
+                    <TabErrorBoundary tabName="Sprints">
+                        <div className="space-y-6">
+                            <SprintPlanning projectId={project.id} projectSlug={project.slug || project.id} projectName={project.title} isOwner={isOwner} isOwnerOrMember={isOwnerOrMember} initialSprintData={initialSprintData} />
+                        </div>
+                    </TabErrorBoundary>
+                </div>
+            )}
+
+            {activeTab === 'tasks' && (
+                <div className="w-full h-full min-h-0">
+                    <TabErrorBoundary tabName="Tasks">
+                        <TasksTab projectId={project.id} projectName={project.title} currentUserId={currentUserId || undefined} isOwner={isOwner} isOwnerOrMember={isOwnerOrMember} initialTasks={tasks} members={allMembers} sprints={sprints} initialOpenTaskId={initialTaskDrawerId} initialPanelTab={initialTaskPanelTab} />
+                    </TabErrorBoundary>
+                </div>
+            )}
+
+            {activeTab === 'analytics' && (
+                <div className="w-full h-full min-h-0">
+                    <TabErrorBoundary tabName="Analytics">
+                        <AnalyticsTab projectId={project.id} project={projectWithLiveStats} />
+                    </TabErrorBoundary>
+                </div>
+            )}
+
+            {activeTab === 'files' && (
+                <div className="w-full h-full min-h-0">
+                    {filesTabContent}
+                </div>
+            )}
+
+            {canManageProjectSettings && activeTab === 'settings' && (
+                <div className="w-full h-full min-h-0">
+                    <TabErrorBoundary tabName="Settings">
+                        <ProjectSettingsTab projectId={project.id} project={project} onProjectUpdated={handleProjectSettingsUpdated} isProjectOwner={isOwner} actorRole={currentProjectRole} members={allMembers} loadingMembers={loadingMembers} />
+                    </TabErrorBoundary>
+                </div>
+            )}
 
             {isOnboardingOpen ? (
                 <ProjectOnboardingModal
