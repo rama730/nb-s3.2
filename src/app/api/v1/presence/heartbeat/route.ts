@@ -4,7 +4,7 @@ import { enforceRouteLimit } from '@/app/api/v1/_shared';
 import { db } from '@/lib/db';
 import { isTransientDbError, readDbErrorCode, withDbRetry } from '@/lib/db/retry';
 import { profiles } from '@/lib/db/schema';
-import { eq } from 'drizzle-orm';
+import { and, eq, isNull, lt, or } from 'drizzle-orm';
 import { getRedisClient } from '@/lib/redis';
 import { validateCsrf } from '@/lib/security/csrf';
 import { getViewerAuthContext } from '@/lib/server/viewer-context';
@@ -17,8 +17,7 @@ const DEBOUNCE_SECONDS = 300; // 5 minutes
 const localHeartbeatDebounce = new Map<string, number>();
 
 function shouldUseRedisPresenceHeartbeat() {
-    const mode = (process.env.PRESENCE_STORE_MODE || process.env.PRESENCE_TRANSPORT || '').trim().toLowerCase();
-    return process.env.NODE_ENV === 'production' || mode === 'redis';
+    return process.env.NODE_ENV === 'production';
 }
 
 function isLocallyDebounced(key: string) {
@@ -53,16 +52,11 @@ export async function POST(request: NextRequest) {
         }
 
         // Debounce: only update DB if last update was more than 5 minutes ago
-        const liveSessionKey = `presence:live-session:${auth.userId}:${sessionId}`;
         const debounceKey = `presence:heartbeat:${auth.userId}:${sessionId}`;
 
         if (shouldUseRedisPresenceHeartbeat()) {
             const redis = getRedisClient();
             if (!redis) {
-                return jsonSuccess({ updated: false });
-            }
-            const liveSession = await redis.get(liveSessionKey);
-            if (!liveSession) {
                 return jsonSuccess({ updated: false });
             }
             const already = await redis.get(debounceKey);
@@ -77,10 +71,14 @@ export async function POST(request: NextRequest) {
 
         try {
             await withDbRetry("presence.heartbeat.last_active", async () => {
+                const staleBefore = new Date(Date.now() - DEBOUNCE_SECONDS * 1000);
                 await db
                     .update(profiles)
                     .set({ lastActiveAt: new Date() })
-                    .where(eq(profiles.id, userId));
+                    .where(and(
+                        eq(profiles.id, userId),
+                        or(isNull(profiles.lastActiveAt), lt(profiles.lastActiveAt, staleBefore)),
+                    ));
             }, { module: "presence" });
         } catch (error) {
             if (isTransientDbError(error)) {
