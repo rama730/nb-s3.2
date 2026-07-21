@@ -30,6 +30,7 @@ import {
   type TaskDiscussionThreadPage,
 } from "@/lib/projects/task-discussion";
 import { subscribeTaskResource } from "@/lib/realtime/task-resource";
+import { newClientId } from "@/lib/utils/client-id";
 import { createVisibilityAwareInterval } from "@/lib/utils/visibility";
 
 import { useTaskDiscussionTyping } from "./useTaskDiscussionTyping";
@@ -291,7 +292,7 @@ export function useTaskDiscussionResource(params: {
     }
 
     setError(null);
-    const optimisticId = `optimistic:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`;
+    const optimisticId = newClientId("optimistic:");
     const optimisticEntry = buildOptimisticTaskDiscussionEntry({
       id: optimisticId,
       taskId,
