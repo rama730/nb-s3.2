@@ -1,8 +1,8 @@
 "use server";
 
 import { db } from "@/lib/db";
-import { fileVersions, profiles, projectNodeLocks, projectNodes, type FileVersion } from "@/lib/db/schema";
-import { and, desc, eq, gt } from "drizzle-orm";
+import { fileVersions, profiles, projectNodes, type FileVersion } from "@/lib/db/schema";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { consumeRateLimit } from "@/lib/security/rate-limit";
@@ -24,20 +24,25 @@ import { enqueueProjectNotificationEvent } from "@/lib/notifications/project-eve
 import {
   assertProjectFileReadAccess,
   assertProjectUploadAccess,
-  assertProjectUploadAccessTx,
   assertProjectWriteAccess,
   assertProjectWriteAccessTx,
-  assertNodeNotLockedByAnotherUser,
   recordNodeEvent,
 } from "@/lib/files/internal-helpers";
+import { applyFileRevision } from "@/lib/files/apply-file-revision";
+import type { FileRevisionMode } from "@/lib/files/revision-policy";
+import {
+  assertOwnedFileLease,
+  type FileLeaseCredentials,
+  withTransientFileLease,
+} from "@/lib/files/file-lock-service";
 
 /**
  * Server actions for the task-file version history.
  *
  * The lifecycle mirrors `createFileNode` in `mutations.ts` but appends to the
- * existing node instead of creating a sibling. Each call bumps
- * `project_nodes.current_version` in the same transaction as the insert into
- * `file_versions`, so the two stay consistent.
+ * existing node instead of creating a sibling. New revisions bump
+ * `project_nodes.current_version`; active-revision saves preserve the version
+ * number. Both paths update the node and sidecar row in one transaction.
  *
  * Upload-like actions re-verify upload access inside the transaction
  * (`assertProjectUploadAccessTx`) so per-member file-intake toggles cannot be
@@ -174,7 +179,7 @@ export type ReplaceNodeResult =
  * security-sensitive (it's only used for dedup), and the server recomputes
  * if/when this file is picked up by the lazy backfill job.
  */
-export async function replaceNodeWithNewVersion(input: {
+export async function applyUploadedFileRevision(input: {
   projectId: string;
   nodeId: string;
   s3Key: string;
@@ -183,6 +188,10 @@ export async function replaceNodeWithNewVersion(input: {
   contentHash: string | null;
   uploadIntentId?: string;
   comment?: string | null;
+  mode: FileRevisionMode;
+  baseVersion?: number | null;
+  baseHash?: string | null;
+  lease: FileLeaseCredentials;
 }): Promise<ReplaceNodeResult> {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -220,130 +229,58 @@ export async function replaceNodeWithNewVersion(input: {
   );
 
   const normalizedHash = sanitizeHash(input.contentHash);
-  const normalizedComment = input.comment?.trim() ? input.comment.trim().slice(0, 500) : null;
-
-  const result = await db.transaction(async (tx) => {
-    await assertProjectUploadAccessTx(tx, input.projectId, user.id);
-
-    // Lock check: query project_node_locks joined with profiles to get displayName
-    const now = new Date();
-    const lockRows = await tx
-      .select({
-        lockedBy: projectNodeLocks.lockedBy,
-        acquiredAt: projectNodeLocks.acquiredAt,
-        displayName: profiles.fullName,
-      })
-      .from(projectNodeLocks)
-      .innerJoin(profiles, eq(profiles.id, projectNodeLocks.lockedBy))
-      .where(
-        and(
-          eq(projectNodeLocks.projectId, input.projectId),
-          eq(projectNodeLocks.nodeId, input.nodeId),
-          gt(projectNodeLocks.expiresAt, now),
-        )
-      )
-      .limit(1);
-
-    const activeLock = lockRows[0];
-    if (activeLock && activeLock.lockedBy !== user.id) {
-      return {
-        error: "lock_conflict" as const,
-        lockedBy: {
-          userId: activeLock.lockedBy,
-          displayName: activeLock.displayName ?? "Unknown User",
-          lockedAt: activeLock.acquiredAt.toISOString(),
-        },
-      };
-    }
-
-    const current = await tx.query.projectNodes.findFirst({
-      where: and(
-        eq(projectNodes.id, input.nodeId),
-        eq(projectNodes.projectId, input.projectId),
-      ),
-      columns: {
-        id: true,
-        type: true,
-        currentVersion: true,
-        deletedAt: true,
-      },
-    });
-    if (!current || current.deletedAt) throw new Error("File not found");
-    if (current.type !== "file") throw new Error("Only file nodes support versions");
-
-    const nextVersion = (current.currentVersion ?? 1) + 1;
-
-    const [versionRow] = await tx
-      .insert(fileVersions)
-      .values({
-        nodeId: input.nodeId,
-        version: nextVersion,
-        s3Key: canonicalS3Key,
-        size: normalizedSize,
-        mimeType: normalizedMimeType,
-        contentHash: normalizedHash,
-        uploadedBy: user.id,
-        comment: normalizedComment,
-      })
-      .returning();
-
-    const [updatedNode] = await tx
-      .update(projectNodes)
-      .set({
-        s3Key: canonicalS3Key,
-        size: normalizedSize,
-        mimeType: normalizedMimeType,
-        currentVersion: nextVersion,
-        updatedAt: new Date(),
-      })
-      .where(eq(projectNodes.id, input.nodeId))
-      .returning();
-
-    return { node: updatedNode!, version: versionRow! };
-  });
-
-  // If the transaction returned a lock conflict, return it immediately
-  // without recording events or sending notifications.
-  if ("error" in result) {
-    return result;
-  }
-
-  await recordNodeEvent(input.projectId, user.id, input.nodeId, "replace_file_version", {
-    version: result.version.version,
+  const result = await applyFileRevision({
+    projectId: input.projectId,
+    nodeId: input.nodeId,
+    actorUserId: user.id,
+    storageKey: canonicalS3Key,
     size: normalizedSize,
     mimeType: normalizedMimeType,
-    hash: normalizedHash,
+    contentHash: normalizedHash,
+    mode: input.mode,
+    comment: input.comment,
+    baseVersion: input.baseVersion,
+    baseHash: input.baseHash,
+    lease: input.lease,
+    eventType:
+      input.mode === "new_revision"
+        ? "replace_file_version"
+        : "update_active_file_revision",
+    eventMetadata: { source: "files_tab" },
   });
-  try {
-    await notifyForFileVersionCreated({
-      actorUserId: user.id,
+
+  if (input.mode === "new_revision") {
+    try {
+      await notifyForFileVersionCreated({
+        actorUserId: user.id,
+        projectId: input.projectId,
+        nodeId: input.nodeId,
+        version: result.version.version,
+      });
+    } catch (error) {
+      logger.warn("files.version.notification_failed", {
+        module: "files",
+        projectId: input.projectId,
+        nodeId: input.nodeId,
+        version: result.version.version,
+        actorUserId: user.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    await enqueueProjectFileVersionNotification({
       projectId: input.projectId,
-      nodeId: input.nodeId,
-      version: result.version.version,
-    });
-  } catch (error) {
-    logger.warn("files.version.notification_failed", {
-      module: "files",
-      projectId: input.projectId,
-      nodeId: input.nodeId,
-      version: result.version.version,
       actorUserId: user.id,
-      error: error instanceof Error ? error.message : String(error),
+      ...actorNotificationSnapshot(user),
+      eventKey: "files.version_added",
+      title: `New file version added`,
+      body: `Version ${result.version.version} was added to a project file.`,
+      sourceEventId: `${input.nodeId}:version:${result.version.version}`,
+      entityRefs: {
+        projectId: input.projectId,
+        fileId: input.nodeId,
+      },
     });
   }
-  await enqueueProjectFileVersionNotification({
-    projectId: input.projectId,
-    actorUserId: user.id,
-    ...actorNotificationSnapshot(user),
-    eventKey: "files.version_added",
-    title: `New file version added`,
-    body: `Version ${result.version.version} was added to a project file.`,
-    sourceEventId: `${input.nodeId}:version:${result.version.version}`,
-    entityRefs: {
-      projectId: input.projectId,
-      fileId: input.nodeId,
-    },
-  });
 
   if (result.node) {
     const profile = await db.query.profiles.findFirst({
@@ -360,7 +297,13 @@ export async function replaceNodeWithNewVersion(input: {
   }
 
   revalidatePath(`/projects/${input.projectId}`);
-  return result;
+  return { node: result.node, version: result.version };
+}
+
+export async function replaceNodeWithNewVersion(
+  input: Omit<Parameters<typeof applyUploadedFileRevision>[0], "mode">,
+): Promise<ReplaceNodeResult> {
+  return applyUploadedFileRevision({ ...input, mode: "new_revision" });
 }
 
 /**
@@ -381,36 +324,34 @@ export async function restoreFileVersion(
   if (!allowed) throw new Error("Rate limit exceeded");
   await assertProjectWriteAccess(projectId, user.id);
 
-  const result = await db.transaction(async (tx) => {
-    await assertProjectWriteAccessTx(tx, projectId, user.id);
-    await assertNodeNotLockedByAnotherUser(projectId, nodeId, user.id, tx);
+  const result = await withTransientFileLease(
+    { projectId, nodeId, userId: user.id },
+    async (lease) => {
+      const source = await db.query.fileVersions.findFirst({
+        where: and(
+          eq(fileVersions.nodeId, nodeId),
+          eq(fileVersions.version, targetVersion),
+        ),
+      });
+      if (!source) throw new Error("Version not found");
 
-    const current = await tx.query.projectNodes.findFirst({
-      where: and(eq(projectNodes.id, nodeId), eq(projectNodes.projectId, projectId)),
-      columns: { id: true, type: true, currentVersion: true, deletedAt: true },
-    });
-    if (!current || current.deletedAt) throw new Error("File not found");
-    if (current.type !== "file") throw new Error("Only file nodes support versions");
-
-    const source = await tx.query.fileVersions.findFirst({
-      where: and(eq(fileVersions.nodeId, nodeId), eq(fileVersions.version, targetVersion)),
-    });
-    if (!source) throw new Error("Version not found");
-
-    const [updatedNode] = await tx
-      .update(projectNodes)
-      .set({
-        s3Key: source.s3Key,
+      return applyFileRevision({
+        projectId,
+        nodeId,
+        actorUserId: user.id,
+        storageKey: source.s3Key,
         size: source.size,
         mimeType: source.mimeType,
-        currentVersion: targetVersion,
-        updatedAt: new Date(),
-      })
-      .where(eq(projectNodes.id, nodeId))
-      .returning();
-
-    return { node: updatedNode!, version: source };
-  });
+        contentHash: source.contentHash,
+        mode: "new_revision",
+        comment: `Restored from version ${targetVersion}`,
+        lease,
+        accessRequirement: "write",
+        eventType: "restore_file_version",
+        eventMetadata: { restoredFrom: targetVersion },
+      });
+    },
+  );
 
   if (result.node) {
     const profile = await db.query.profiles.findFirst({
@@ -426,10 +367,6 @@ export async function restoreFileVersion(
     });
   }
 
-  await recordNodeEvent(projectId, user.id, nodeId, "restore_file_version", {
-    restoredFrom: targetVersion,
-    newVersion: targetVersion,
-  });
   revalidatePath(`/projects/${projectId}`);
   return result;
 }
@@ -488,64 +425,61 @@ export async function deleteFileVersionAction(
 
   await assertProjectWriteAccess(projectId, user.id);
   
-  const target = await db.query.fileVersions.findFirst({
-    where: and(eq(fileVersions.nodeId, nodeId), eq(fileVersions.version, versionNumber)),
+  const mutation = await withTransientFileLease(
+    { projectId, nodeId, userId: user.id },
+    (lease) => db.transaction(async (tx) => {
+      await assertProjectWriteAccessTx(tx, projectId, user.id);
+      await tx.execute(sql`SELECT id FROM project_nodes WHERE id = ${nodeId} FOR UPDATE`);
+      await assertOwnedFileLease(tx, { projectId, nodeId, userId: user.id, credentials: lease });
+      const node = await tx.query.projectNodes.findFirst({
+        where: and(eq(projectNodes.id, nodeId), eq(projectNodes.projectId, projectId)),
+      });
+      if (!node || node.deletedAt) throw new Error("File not found");
+      const versions = await tx.query.fileVersions.findMany({
+        where: eq(fileVersions.nodeId, nodeId),
+        orderBy: desc(fileVersions.version),
+      });
+      if (versions.length <= 1) throw new Error("Cannot delete the only remaining version of this file.");
+      const target = versions.find((version) => version.version === versionNumber);
+      if (!target) throw new Error("Version not found");
+      await tx.delete(fileVersions).where(eq(fileVersions.id, target.id));
+
+      let nextActiveVersion: number | null = null;
+      let updatedNode: typeof projectNodes.$inferSelect | undefined;
+      if (node.currentVersion === versionNumber) {
+        const remaining = versions.filter((version) => version.id !== target.id)[0];
+        if (!remaining) throw new Error("No replacement version is available");
+        nextActiveVersion = remaining.version;
+        [updatedNode] = await tx
+          .update(projectNodes)
+          .set({
+            s3Key: remaining.s3Key,
+            size: remaining.size,
+            mimeType: remaining.mimeType,
+            currentVersion: remaining.version,
+            updatedAt: new Date(),
+          })
+          .where(eq(projectNodes.id, nodeId))
+          .returning();
+      }
+      return { target, nextActiveVersion, updatedNode };
+    }),
+  );
+
+  const stillReferenced = await db.query.fileVersions.findFirst({
+    where: eq(fileVersions.s3Key, mutation.target.s3Key),
+    columns: { id: true },
   });
-  if (!target) throw new Error("Version not found");
-
-  // Prevent deleting the last remaining version to keep file nodes safe
-  const allVersions = await db.query.fileVersions.findMany({
-    where: eq(fileVersions.nodeId, nodeId),
-    orderBy: desc(fileVersions.version),
-  });
-  if (allVersions.length <= 1) {
-    throw new Error("Cannot delete the only remaining version of this file.");
-  }
-
-  // Delete from S3
-  const adminClient = await createAdminClient();
-  await adminClient.storage.from("project-files").remove([target.s3Key]);
-
-  // Delete from db
-  await db.delete(fileVersions).where(eq(fileVersions.id, target.id));
-
-  // Check if we deleted the current active version
-  const node = await db.query.projectNodes.findFirst({
-    where: eq(projectNodes.id, nodeId),
-    columns: { currentVersion: true },
-  });
-
-  let nextActiveVersion: number | null = null;
-  let updatedNode: typeof projectNodes.$inferSelect | undefined = undefined;
-  if (node && node.currentVersion === versionNumber) {
-    // Find the next highest version available
-    const remaining = await db.query.fileVersions.findFirst({
-      where: eq(fileVersions.nodeId, nodeId),
-      orderBy: desc(fileVersions.version),
-    });
-    if (remaining) {
-      nextActiveVersion = remaining.version;
-      const [resNode] = await db
-        .update(projectNodes)
-        .set({
-          s3Key: remaining.s3Key,
-          size: remaining.size,
-          mimeType: remaining.mimeType,
-          currentVersion: remaining.version,
-          updatedAt: new Date(),
-        })
-        .where(eq(projectNodes.id, nodeId))
-        .returning();
-      updatedNode = resNode;
-    }
+  if (!stillReferenced) {
+    const adminClient = await createAdminClient();
+    await adminClient.storage.from("project-files").remove([mutation.target.s3Key]).catch(() => null);
   }
 
   await recordNodeEvent(projectId, user.id, nodeId, "delete_file_version", {
     deletedVersion: versionNumber,
-    newActiveVersion: nextActiveVersion,
+    newActiveVersion: mutation.nextActiveVersion,
   });
 
   revalidatePath(`/projects/${projectId}`);
-  return { success: true, nextActiveVersion, node: updatedNode };
+  return { success: true, nextActiveVersion: mutation.nextActiveVersion, node: mutation.updatedNode };
 }
-
