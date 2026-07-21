@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { Check, Loader2, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { sanitizeUsernameInput } from '@/lib/validations/username'
@@ -106,9 +105,9 @@ export default function UsernameInput({ value, onChange, fullName, disabled, onS
 
     return (
         <div className="space-y-2">
-            <Label htmlFor="username" className="text-sm font-medium">
+            <label htmlFor="username" className="text-sm font-medium">
                 Username <span className="text-destructive">*</span>
-            </Label>
+            </label>
 
             <div className="relative">
                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">
@@ -159,7 +158,7 @@ export default function UsernameInput({ value, onChange, fullName, disabled, onS
                                 key={suggestion}
                                 type="button"
                                 onClick={() => selectSuggestion(suggestion)}
-                                className="px-3 py-1.5 text-sm rounded-lg bg-muted text-foreground hover:bg-primary/10 hover:text-primary transition-colors min-h-[44px] sm:min-h-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                                className="px-3 py-1.5 text-sm rounded-lg bg-muted text-foreground hover:bg-primary/10 hover:text-primary transition-colors min-h-[44px] sm:min-h-0 focus-visible:outline-none   "
                             >
                                 @{suggestion}
                             </button>
