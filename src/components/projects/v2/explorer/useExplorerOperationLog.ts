@@ -1,12 +1,11 @@
 "use client";
 
+import { toast } from "sonner";
 import { useCallback, useRef, useState } from "react";
-import { useToast } from "@/components/ui-custom/Toast";
 import type { ExplorerOperation } from "./explorerTypes";
 import { getErrorMessage } from "./explorerTypes";
 
 export function useExplorerOperationLog() {
-  const { showToast } = useToast();
   const [operationsOpen, setOperationsOpen] = useState(false);
   const [operations, setOperations] = useState<ExplorerOperation[]>([]);
   const operationsRef = useRef<ExplorerOperation[]>([]);
@@ -54,10 +53,10 @@ export function useExplorerOperationLog() {
               : entry
           )
         );
-        showToast(`Undo failed: ${getErrorMessage(error, "Unknown error")}`, "error");
+        toast.error(`Undo failed: ${getErrorMessage(error, "Unknown error")}`);
       }
     },
-    [showToast, syncOperations]
+    [syncOperations]
   );
 
   const clearOperations = useCallback(() => {
