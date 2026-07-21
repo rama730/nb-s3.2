@@ -1,3 +1,5 @@
+import { isLooseUuid } from "@/lib/validations/uuid";
+
 // ============================================================================
 // Task Panel Overhaul - Wave 4: @mention token format
 //
@@ -26,8 +28,6 @@
 // This module is pure and isomorphic so it can be used from server actions,
 // React components, and Node tests with no browser dependencies.
 // ============================================================================
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // We pre-compile the matcher for the full token. The name is capped at 120
 // characters and may not contain the characters we use as delimiters or
@@ -74,7 +74,7 @@ export function sanitizeMentionDisplayName(raw: string): string {
  * unambiguous, so we fail loud rather than silently skip a mention.
  */
 export function buildMentionToken(params: { userId: string; displayName: string }): string {
-    if (!UUID_RE.test(params.userId)) {
+    if (!isLooseUuid(params.userId)) {
         throw new Error(`buildMentionToken: invalid userId "${params.userId}"`);
     }
     const safeName = sanitizeMentionDisplayName(params.displayName) || "user";
@@ -168,5 +168,5 @@ export function serializeSegments(segments: MentionSegment[]): string {
 }
 
 export function isValidUserId(value: string): boolean {
-    return UUID_RE.test(value);
+    return isLooseUuid(value);
 }
