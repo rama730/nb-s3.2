@@ -12,6 +12,8 @@ const SHARED_IMPORT_RE = /from\s+["'][^"']*\/api\/v1\/(_shared|_envelope)["']/;
 const DIRECT_NEXT_RESPONSE_RE = /NextResponse\.json\s*\(/;
 const HELPER_CALL_RE = /\b(jsonSuccess|jsonError)\s*\(/;
 const PUBLIC_500_ERROR_DETAIL_RE = /jsonError\s*\(\s*(?:error|err|e)(?:\?\.)?\.message\s*,\s*5\d{2}\b/;
+const DELEGATED_HELPER_IMPORT_RE =
+  /import\s*\{\s*([A-Za-z_$][\w$]*)\s*\}\s*from\s*["']@\/app\/api\/v1\/([^"']+)["']/g;
 
 // Routes that use third-party SDK response handlers (e.g. Inngest serve())
 const ENVELOPE_EXEMPT_ROUTES = new Set<string>([
@@ -33,6 +35,29 @@ function collectRouteFiles(dir: string, into: string[]) {
   }
 }
 
+function inspectDelegatedEnvelopeHelper(rootDir: string, routeSource: string) {
+  for (const match of routeSource.matchAll(DELEGATED_HELPER_IMPORT_RE)) {
+    const [, helperName, modulePath] = match;
+    if (!helperName || !modulePath) continue;
+    const helperCall = new RegExp(`\\b${helperName}\\s*\\(`);
+    if (!helperCall.test(routeSource)) continue;
+
+    const moduleBase = path.join(rootDir, API_V1_DIR, modulePath);
+    const candidates = [`${moduleBase}.ts`, path.join(moduleBase, "index.ts")];
+    const helperFile = candidates.find((candidate) => fs.existsSync(candidate));
+    if (!helperFile) continue;
+
+    const helperSource = fs.readFileSync(helperFile, "utf8");
+    if (!SHARED_IMPORT_RE.test(helperSource) || !HELPER_CALL_RE.test(helperSource)) continue;
+    return {
+      usesEnvelope: true,
+      exposesPublicErrorDetail: PUBLIC_500_ERROR_DETAIL_RE.test(helperSource),
+    };
+  }
+
+  return { usesEnvelope: false, exposesPublicErrorDetail: false };
+}
+
 export function validateApiEnvelopeContract(rootDir: string = process.cwd()): ValidationResult {
   const errors: string[] = [];
   const routeFiles: string[] = [];
@@ -51,18 +76,21 @@ export function validateApiEnvelopeContract(rootDir: string = process.cwd()): Va
     }
 
     const usesHelpers = HELPER_CALL_RE.test(source);
-    if (!usesHelpers) {
+    const delegated = usesHelpers
+      ? { usesEnvelope: false, exposesPublicErrorDetail: false }
+      : inspectDelegatedEnvelopeHelper(rootDir, source);
+    if (!usesHelpers && !delegated.usesEnvelope) {
       errors.push(`${rel}: route must use jsonSuccess/jsonError helpers.`);
       continue;
     }
 
-    if (!SHARED_IMPORT_RE.test(source)) {
+    if (usesHelpers && !SHARED_IMPORT_RE.test(source)) {
       errors.push(
         `${rel}: jsonSuccess/jsonError must be imported from /api/v1/_shared or /api/v1/_envelope.`,
       );
     }
 
-    if (PUBLIC_500_ERROR_DETAIL_RE.test(source)) {
+    if (PUBLIC_500_ERROR_DETAIL_RE.test(source) || delegated.exposesPublicErrorDetail) {
       errors.push(
         `${rel}: public 5xx responses must not expose caught error.message values; log details and return a stable generic message.`,
       );
