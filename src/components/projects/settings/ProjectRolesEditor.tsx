@@ -1,12 +1,10 @@
 "use client";
 
-import type { FieldErrors, UseFormRegister } from "react-hook-form";
+import { Controller, type Control, type FieldErrors, type UseFormRegister } from "react-hook-form";
 import { Plus, Trash2 } from "lucide-react";
 import type { ProjectRoleFormValue } from "@/lib/projects/project-roles-form";
 import type { ProjectSettingsMember } from "@/lib/projects/settings-policies";
-
-export { normalizeProjectRoleFormValues } from "@/lib/projects/project-roles-form";
-export type { ProjectRoleFormValue, ProjectRolesFormValues } from "@/lib/projects/project-roles-form";
+import { SkillPicker } from "@/components/skills/SkillPicker";
 
 type ProjectRoleField = ProjectRoleFormValue & {
     fieldKey?: string;
@@ -15,13 +13,10 @@ type ProjectRoleField = ProjectRoleFormValue & {
 type ProjectRolesEditorProps = {
     fields: ProjectRoleField[];
     register: UseFormRegister<any>;
+    control: Control<any>;
     errors?: FieldErrors<any>;
     disabled?: boolean;
     className?: string;
-    title?: string;
-    description?: string;
-    emptyText?: string;
-    addLabel?: string;
     onAddRole: () => void;
     onRemoveRole: (index: number, roleId?: string) => void;
     members?: ProjectSettingsMember[];
@@ -30,13 +25,10 @@ type ProjectRolesEditorProps = {
 export function ProjectRolesEditor({
     fields,
     register,
+    control,
     errors,
     disabled = false,
     className = "",
-    title = "Project Roles",
-    description = "Define open positions for collaborators",
-    emptyText = "No open roles listed. Add one to invite collaborators.",
-    addLabel = "Add Role",
     onAddRole,
     onRemoveRole,
     members,
@@ -53,8 +45,8 @@ export function ProjectRolesEditor({
         <div className={`space-y-6 ${className}`}>
             <div className="flex items-center justify-between gap-4">
                 <div>
-                    <h3 className="text-lg font-bold text-zinc-900 dark:text-zinc-100">{title}</h3>
-                    <p className="text-sm text-zinc-500">{description}</p>
+                    <h3 className="text-lg font-bold text-zinc-900 dark:text-zinc-100">Project Roles</h3>
+                    <p className="text-sm text-zinc-500">Define open positions for collaborators</p>
                 </div>
                 <button
                     type="button"
@@ -63,14 +55,14 @@ export function ProjectRolesEditor({
                     className="flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                     <Plus className="h-4 w-4" />
-                    {addLabel}
+                    Add Role
                 </button>
             </div>
 
             <div className="grid gap-4">
                 {fields.length === 0 ? (
                     <div className="rounded-xl border-2 border-dashed border-zinc-200 p-8 text-center text-sm text-zinc-400 dark:border-zinc-800">
-                        {emptyText}
+                        No open roles listed. Add one to invite collaborators.
                     </div>
                 ) : (
                     fields.map((field, index) => (
@@ -87,7 +79,7 @@ export function ProjectRolesEditor({
                                         {...register(`roles.${index}.role`)}
                                         disabled={disabled}
                                         placeholder="e.g. Frontend Developer"
-                                        className="w-full rounded-lg border border-zinc-200 bg-transparent px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500/20 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700"
+                                        className="w-full rounded-lg border border-zinc-200 bg-transparent px-3 py-2 text-sm outline-none   disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700"
                                     />
                                     {roleErrors?.[index]?.role?.message ? (
                                         <p className="text-xs text-red-500">{roleErrors[index]?.role?.message}</p>
@@ -102,7 +94,7 @@ export function ProjectRolesEditor({
                                         min={1}
                                         {...register(`roles.${index}.count`, { valueAsNumber: true })}
                                         disabled={disabled || field.id === 'lead-role'}
-                                        className="w-full rounded-lg border border-zinc-200 bg-transparent px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500/20 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700"
+                                        className="w-full rounded-lg border border-zinc-200 bg-transparent px-3 py-2 text-sm outline-none   disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700"
                                     />
                                     {roleErrors?.[index]?.count?.message ? (
                                         <p className="text-xs text-red-500">{roleErrors[index]?.count?.message}</p>
@@ -127,7 +119,24 @@ export function ProjectRolesEditor({
                                     {...register(`roles.${index}.description`)}
                                     disabled={disabled}
                                     placeholder="Describe the responsibilities and requirements..."
-                                    className="mt-1.5 min-h-[80px] w-full rounded-lg border border-zinc-200 bg-transparent px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500/20 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700"
+                                    className="mt-1.5 min-h-[80px] w-full rounded-lg border border-zinc-200 bg-transparent px-3 py-2 text-sm outline-none   disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700"
+                                />
+                            </div>
+
+                            <div className="mt-4">
+                                <Controller
+                                    control={control}
+                                    name={`roles.${index}.skills`}
+                                    render={({ field: skillsField }) => (
+                                        <SkillPicker
+                                            value={Array.isArray(skillsField.value) ? skillsField.value : []}
+                                            onChange={skillsField.onChange}
+                                            maxSkills={12}
+                                            label="Required and preferred skills"
+                                            description="These skills power role matching and application recommendations."
+                                            compact
+                                        />
+                                    )}
                                 />
                             </div>
 
