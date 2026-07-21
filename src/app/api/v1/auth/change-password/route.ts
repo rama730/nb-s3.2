@@ -16,6 +16,7 @@ import { verifyPasswordCredential } from "@/lib/security/password-auth";
 import { resolveSecurityStepUp } from "@/lib/security/step-up";
 import { checkIdempotencyKey, saveIdempotencyResult } from "@/lib/security/idempotency";
 import { getPasswordPolicyResult } from "@/lib/security/password-policy";
+import { isLeakedPassword } from "@/lib/security/leaked-password";
 import { logger } from "@/lib/logger";
 
 const changePasswordSchema = z.object({
@@ -39,7 +40,6 @@ export async function POST(request: Request) {
     return csrfError;
   }
 
-  // H9: Tightened from 30/min to 10/hour for security-critical password changes
   const limitResponse = await enforceRouteLimit(request, "api:v1:auth:change-password", 10, 3600);
   if (limitResponse) {
     logApiRoute(request, {
@@ -159,6 +159,31 @@ export async function POST(request: Request) {
     return jsonError("New password must be different from current password", 400, "BAD_REQUEST");
   }
 
+  try {
+    if (await isLeakedPassword(newPassword)) {
+      logApiRoute(request, {
+        requestId,
+        action: "auth.changePassword.post",
+        userId: auth.user.id,
+        startedAt,
+        success: false,
+        status: 400,
+        errorCode: "LEAKED_PASSWORD",
+      });
+      return jsonError(
+        "This password has appeared in a data breach. Choose a different password.",
+        400,
+        "LEAKED_PASSWORD",
+      );
+    }
+  } catch {
+    return jsonError(
+      "Password safety check is temporarily unavailable. Please try again.",
+      503,
+      "PASSWORD_SAFETY_UNAVAILABLE",
+    );
+  }
+
   if (!auth.user.email || !isEmailVerified(auth.user)) {
     logApiRoute(request, {
       requestId,
@@ -191,7 +216,7 @@ export async function POST(request: Request) {
     const mfaFactors = await listSecurityMfaFactors(auth.supabase);
     const hasVerifiedTotp = getVerifiedTotpFactors(mfaFactors).length > 0;
 
-    if (hasVerifiedTotp) {
+    if (hasVerifiedTotp || !accountHasPassword) {
       const stepUp = await resolveSecurityStepUp(auth.user.id, ["totp", "recovery_code"]);
       if (!stepUp.ok) {
         logApiRoute(request, {
@@ -204,27 +229,9 @@ export async function POST(request: Request) {
           errorCode: "STEP_UP_REQUIRED",
         });
         return jsonError(
-          "Verify this device with your authenticator app or a recovery code before changing your password",
-          403,
-          "STEP_UP_REQUIRED",
-        );
-      }
-    }
-
-    if (!accountHasPassword) {
-      const stepUp = await resolveSecurityStepUp(auth.user.id, ["totp", "recovery_code"]);
-      if (!stepUp.ok) {
-        logApiRoute(request, {
-          requestId,
-          action: "auth.changePassword.post",
-          userId: auth.user.id,
-          startedAt,
-          success: false,
-          status: 403,
-          errorCode: "STEP_UP_REQUIRED",
-        });
-        return jsonError(
-          "Set up MFA and verify this device before setting a password on this account",
+          accountHasPassword
+            ? "Verify this device with your authenticator app or a recovery code before changing your password"
+            : "Set up MFA and verify this device before setting a password on this account",
           403,
           "STEP_UP_REQUIRED",
         );
@@ -305,8 +312,7 @@ export async function POST(request: Request) {
       success: true,
       status: 200,
     });
-    const successBody = JSON.stringify({ ok: true, message: "Password updated successfully" });
-    await saveIdempotencyResult(request, 'auth.changePassword', successBody, idempotencyCheck.lockToken, auth.user.id);
+    await saveIdempotencyResult(request, 'auth.changePassword', JSON.stringify({ ok: true, message: "Password updated successfully" }), idempotencyCheck.lockToken, auth.user.id);
     return jsonSuccess(undefined, "Password updated successfully");
   } catch (error) {
     logger.error("[api/v1/auth/change-password] failed", { module: 'api', error: error instanceof Error ? error.message : String(error) });
