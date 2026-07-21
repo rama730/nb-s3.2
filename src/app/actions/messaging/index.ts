@@ -7,7 +7,6 @@
 export {
     // Conversations
     getConversations,
-    getConversationById,
     hydrateConversationLastMessageDeliveryMetadata,
     getOrCreateDMConversation,
     markConversationAsRead,
@@ -49,8 +48,6 @@ export {
     reportMessage,
     recordReadReceipts,
     recordDeliveryReceipts,
-    getMessageReadReceipts,
-    setConversationPinned,
 } from './features'
 
 export type { ReactionSummary } from './features'
