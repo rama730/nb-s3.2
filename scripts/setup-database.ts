@@ -40,17 +40,6 @@ const NON_TRANSACTIONAL_MIGRATIONS = new Set([
   "0092_project_updates_performance_indexes",
   "0099_schema_lineage_and_fk_indexes",
 ]);
-const REQUIRED_REALTIME_PUBLICATION_TABLES = [
-  "profiles",
-  "projects",
-  "tasks",
-  "task_comments",
-  "task_subtasks",
-  "task_comment_likes",
-  "task_node_links",
-  "project_updates",
-  "project_update_comments",
-] as const;
 
 if (!DATABASE_URL && !DRY_RUN) {
   console.error("❌ DATABASE_URL not found in .env.local");
@@ -62,28 +51,8 @@ const sql = postgres(DATABASE_URL || "postgres://dry-run.invalid/unused", {
   ssl: "require",
 });
 
-const DEFAULT_NOTIFICATION_PREFERENCES = JSON.stringify({
-  messages: true,
-  mentions: true,
-  workflows: true,
-  projects: true,
-  tasks: true,
-  applications: true,
-  connections: true,
-  pausedUntil: null,
-  mutedScopes: [],
-});
-
 function resolveWorkspacePath(...parts: string[]) {
   return path.join(process.cwd(), ...parts);
-}
-
-function sqlLiteral(value: string) {
-  return `'${value.replace(/'/g, "''")}'`;
-}
-
-function sqlTextArray(values: readonly string[]) {
-  return `ARRAY[${values.map(sqlLiteral).join(", ")}]`;
 }
 
 async function readJournal(): Promise<JournalFile> {
@@ -133,8 +102,12 @@ async function ensureJournalTable() {
 }
 
 async function ensureAuthUidHelper() {
+  const [hardeningRow] = await sql<{ hardened: boolean }[]>`
+    SELECT to_regprocedure('app_private.get_auth_uid()') IS NOT NULL AS hardened
+  `;
+  const schema = hardeningRow?.hardened ? "app_private" : "public";
   await sql.unsafe(`
-    CREATE OR REPLACE FUNCTION public.get_auth_uid()
+    CREATE OR REPLACE FUNCTION ${schema}.get_auth_uid()
     RETURNS uuid
     LANGUAGE sql STABLE
     SET search_path = ''
@@ -175,10 +148,6 @@ async function readMigration(tag: string) {
     checksum: createHash("sha256").update(source).digest("hex"),
     statements: splitMigrationStatements(source),
   };
-}
-
-async function readMigrationStatements(tag: string) {
-  return (await readMigration(tag)).statements;
 }
 
 async function validateMigrationSources(entries: JournalEntry[]) {
@@ -434,176 +403,6 @@ async function validateAndBackfillChecksums(
   }
 }
 
-const PROJECT_UPDATES_REPAIR_BEGIN = "-- project_updates_schema_repair_begin";
-const PROJECT_UPDATES_REPAIR_END = "-- project_updates_schema_repair_end";
-
-async function readProjectUpdatesRepairStatements() {
-  const filePath = resolveWorkspacePath("drizzle", "0063_database_setup_authority_backfill.sql");
-  const source = await readFile(filePath, "utf8");
-  const begin = source.indexOf(PROJECT_UPDATES_REPAIR_BEGIN);
-  const end = source.indexOf(PROJECT_UPDATES_REPAIR_END);
-  if (begin < 0 || end < 0 || end <= begin) {
-    throw new Error("Project updates repair block is missing from drizzle/0063_database_setup_authority_backfill.sql");
-  }
-  return splitMigrationStatements(source.slice(begin + PROJECT_UPDATES_REPAIR_BEGIN.length, end));
-}
-
-async function ensureProjectUpdatesSchema() {
-  const [dependencies] = await sql<{ ready: boolean }[]>`
-    SELECT
-      to_regclass('public.projects') IS NOT NULL
-      AND to_regclass('public.profiles') IS NOT NULL AS ready
-  `;
-
-  if (dependencies?.ready !== true) {
-    return;
-  }
-
-  const statements = await readProjectUpdatesRepairStatements();
-  for (const statement of statements) {
-    await sql.unsafe(statement);
-  }
-}
-
-async function ensureProjectUpdateDraftsRls() {
-  const [dependencies] = await sql<{ ready: boolean }[]>`
-    SELECT
-      to_regclass('public.project_update_drafts') IS NOT NULL
-      AND to_regclass('public.projects') IS NOT NULL
-      AND to_regclass('public.project_members') IS NOT NULL AS ready
-  `;
-
-  if (dependencies?.ready !== true) {
-    return;
-  }
-
-  const statements = await readMigrationStatements("0083_project_update_drafts_rls");
-  for (const statement of statements) {
-    await sql.unsafe(statement);
-  }
-}
-
-async function ensureRealtimePublicationCoverage() {
-  await sql.unsafe(`
-    DO $repair$
-    DECLARE
-      realtime_table text;
-    BEGIN
-      IF NOT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'supabase_realtime') THEN
-        RETURN;
-      END IF;
-
-      FOREACH realtime_table IN ARRAY ${sqlTextArray(REQUIRED_REALTIME_PUBLICATION_TABLES)} LOOP
-        IF to_regclass(format('public.%I', realtime_table)) IS NULL THEN
-          CONTINUE;
-        END IF;
-
-        IF NOT EXISTS (
-          SELECT 1
-          FROM pg_publication_tables
-          WHERE pubname = 'supabase_realtime'
-            AND schemaname = 'public'
-            AND tablename = realtime_table
-        ) THEN
-          EXECUTE format('ALTER PUBLICATION supabase_realtime ADD TABLE public.%I', realtime_table);
-        END IF;
-      END LOOP;
-    END
-    $repair$;
-  `);
-}
-
-async function ensureProjectUpdateMediaStorage() {
-  const [dependencies] = await sql<{ ready: boolean }[]>`
-    SELECT
-      to_regclass('storage.buckets') IS NOT NULL
-      AND to_regclass('public.projects') IS NOT NULL
-      AND to_regclass('public.project_members') IS NOT NULL AS ready
-  `;
-
-  if (dependencies?.ready !== true) {
-    return;
-  }
-
-  const statements = await readMigrationStatements("0085_project_update_media_storage");
-  for (const statement of statements) {
-    await sql.unsafe(statement);
-  }
-}
-
-async function cleanupOrphanTypingIndicatorFunctions() {
-  await sql.unsafe(`
-    DO $repair$
-    BEGIN
-      IF to_regclass('public.typing_indicators') IS NULL THEN
-        DROP FUNCTION IF EXISTS public.cleanup_old_typing_indicators();
-        DROP FUNCTION IF EXISTS public.update_typing_timestamp();
-      END IF;
-    END
-    $repair$;
-  `);
-}
-
-async function ensureLatestSchemaRepairs() {
-  const preferences = DEFAULT_NOTIFICATION_PREFERENCES.replace(/'/g, "''");
-
-  await sql.unsafe(`
-    DO $$
-    BEGIN
-      IF to_regclass('public.profiles') IS NOT NULL THEN
-        ALTER TABLE public."profiles"
-          ADD COLUMN IF NOT EXISTS "notification_preferences" jsonb DEFAULT '${preferences}'::jsonb;
-
-        UPDATE public."profiles"
-        SET "notification_preferences" = COALESCE("notification_preferences", '${preferences}'::jsonb);
-
-        UPDATE public."profiles"
-        SET "notification_preferences" =
-          jsonb_set(
-            jsonb_set(
-              "notification_preferences",
-              '{pausedUntil}',
-              COALESCE("notification_preferences"->'pausedUntil', 'null'::jsonb),
-              true
-            ),
-            '{mutedScopes}',
-            COALESCE("notification_preferences"->'mutedScopes', '[]'::jsonb),
-            true
-          )
-        WHERE "notification_preferences" IS NOT NULL;
-      END IF;
-
-      IF to_regclass('public.projects') IS NOT NULL THEN
-        ALTER TABLE public."projects"
-          ADD COLUMN IF NOT EXISTS "stage_completion_dates" jsonb DEFAULT '{}'::jsonb;
-      END IF;
-
-      IF to_regclass('public.user_notifications') IS NOT NULL THEN
-        ALTER TABLE public."user_notifications"
-          ADD COLUMN IF NOT EXISTS "dismissed_at" timestamp with time zone;
-
-        DROP POLICY IF EXISTS "user_notifications_update_own" ON public."user_notifications";
-      END IF;
-    END $$;
-  `);
-
-  await sql.unsafe(`
-    DO $$
-    BEGIN
-      IF to_regclass('public.user_notifications') IS NOT NULL THEN
-        CREATE INDEX IF NOT EXISTS "user_notifications_user_dismissed_idx"
-          ON public."user_notifications" USING btree ("user_id", "dismissed_at");
-      END IF;
-    END $$;
-  `);
-
-  await ensureProjectUpdatesSchema();
-  await ensureProjectUpdateDraftsRls();
-  await ensureRealtimePublicationCoverage();
-  await ensureProjectUpdateMediaStorage();
-  await cleanupOrphanTypingIndicatorFunctions();
-}
-
 async function setupDatabase() {
   console.log("🚀 Starting database setup via Drizzle migrations...\n");
   const journal = await readJournal();
@@ -668,10 +467,6 @@ async function setupDatabase() {
       console.log(`✅ Applied ${appliedCount} migration${appliedCount === 1 ? "" : "s"} from the journal.`);
     }
 
-    if (process.env.ALLOW_LEGACY_SCHEMA_REPAIRS === "1") {
-      await ensureLatestSchemaRepairs();
-      console.log("✅ Applied explicitly enabled legacy schema repairs.");
-    }
   } finally {
     await releaseMigrationLock().catch(() => undefined);
     await sql.end();
