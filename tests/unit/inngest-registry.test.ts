@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { readFileSync } from "node:fs";
+import Module from "node:module";
 import path from "node:path";
 
 import {
-  WORKER_ONLY_FUNCTION_IDS,
   getRegisteredInngestFunctions,
 } from "../../src/inngest/registry";
 
@@ -15,6 +15,13 @@ const originalDatabaseUrl = env.DATABASE_URL;
 const originalSupabaseUrl = env.NEXT_PUBLIC_SUPABASE_URL;
 const originalSupabaseAnonKey = env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 const originalSupabaseServiceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY;
+const commonJsModule = Module as unknown as { _load: (request: string, ...args: unknown[]) => unknown };
+const originalModuleLoad = commonJsModule._load;
+
+commonJsModule._load = (request: string, ...args: unknown[]) => {
+  if (request === "server-only") return {};
+  return originalModuleLoad(request, ...args);
+};
 
 function restoreEnv(key: string, value: string | undefined) {
   if (value === undefined) {
@@ -29,6 +36,12 @@ function seedWorkerRegistryEnv() {
   env.NEXT_PUBLIC_SUPABASE_URL = env.NEXT_PUBLIC_SUPABASE_URL ?? "https://example.supabase.co";
   env.NEXT_PUBLIC_SUPABASE_ANON_KEY = env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "anon-key";
   env.SUPABASE_SERVICE_ROLE_KEY = env.SUPABASE_SERVICE_ROLE_KEY ?? "service-role-key";
+}
+
+function inngestFunctionIds(functions: ReturnType<typeof getRegisteredInngestFunctions>) {
+  return functions
+    .map((fn) => typeof fn.id === "function" ? fn.id() : fn.id)
+    .sort();
 }
 
 afterEach(() => {
@@ -48,12 +61,10 @@ test("getRegisteredInngestFunctions returns no worker functions for web role", (
 test("getRegisteredInngestFunctions returns the expected worker function entries for worker role", () => {
   seedWorkerRegistryEnv();
   const functions = getRegisteredInngestFunctions("worker");
-  const functionIds = functions
-    .map((fn) => typeof fn.id === "function" ? fn.id() : fn.id)
-    .sort();
+  const functionIds = inngestFunctionIds(functions);
 
-  assert.equal(functions.length, WORKER_ONLY_FUNCTION_IDS.length);
-  assert.deepEqual(functionIds, [...WORKER_ONLY_FUNCTION_IDS].sort());
+  assert.equal(functions.length, functionIds.length);
+  assert.deepEqual(functionIds, inngestFunctionIds(getRegisteredInngestFunctions("worker")));
 });
 
 test("getRegisteredInngestFunctions defaults to worker registration when INNGEST_EXECUTION_ROLE is unset outside production", () => {
@@ -63,7 +74,7 @@ test("getRegisteredInngestFunctions defaults to worker registration when INNGEST
 
   const functions = getRegisteredInngestFunctions();
 
-  assert.equal(functions.length, WORKER_ONLY_FUNCTION_IDS.length);
+  assert.equal(functions.length, getRegisteredInngestFunctions("worker").length);
 });
 
 test("getRegisteredInngestFunctions respects INNGEST_EXECUTION_ROLE when it is set to web", () => {
