@@ -44,7 +44,7 @@ export function SectionNav({
             className={cn(
               "inline-flex items-center rounded-[var(--radius-lg)] px-3.5 py-2 text-sm transition-colors",
               "min-h-[44px] sm:min-h-0",
-              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+              "focus-visible:outline-none   ",
               isActive && "bg-primary/10 font-medium text-primary",
               isCompleted && "bg-transparent text-muted-foreground",
               !isActive && !isCompleted && "bg-transparent text-muted-foreground"
