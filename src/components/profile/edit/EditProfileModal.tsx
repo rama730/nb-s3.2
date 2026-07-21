@@ -1,30 +1,48 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { EditProfileTabs, type EditProfileSection } from "./EditProfileTabs";
-import Button from "@/components/ui-custom/Button";
-import { updateProfileAction } from "@/app/actions/profile";
-import { useToast } from "@/components/ui-custom/Toast";
-import { useAuth } from "@/lib/hooks/use-auth";
 import { useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
-import { calculateProfileCompletion } from "@/lib/validations/profile";
+import { toast } from "sonner";
+
+import { saveProfileContributionsAction } from "@/app/actions/profile-contributions";
+import { updateProfileAction } from "@/app/actions/profile";
+import { Button } from "@/components/ui/button";
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+} from "@/components/ui/dialog";
+import { useAuth } from "@/lib/hooks/use-auth";
+import {
+    buildContributionMutations,
+    contributionToEditorEntry,
+    type ContributionEditorEntry,
+} from "@/lib/profile/contribution-editor";
+import type { ProfileCollaborationContribution } from "@/lib/profile/collaboration";
+import {
+    loadProfileContributionsPage,
+    loadProfileContributionWindow,
+} from "@/lib/profile/browser-profile";
+import { applyPayloadToFormBase, toFormState, toServerPayload } from "@/lib/profile/normalization";
 import { queryKeys } from "@/lib/query-keys";
-import { loadProfileEditRefreshState } from "@/lib/profile/browser-profile";
+import { calculateProfileCompletion } from "@/lib/validations/profile";
+import { EditProfileTabs, type EditProfileSection } from "./EditProfileTabs";
 
 interface EditProfileModalProps {
     open: boolean;
     onOpenChange: (open: boolean) => void;
     profile: any;
+    contributions?: ProfileCollaborationContribution[];
     onOptimisticUpdate?: (updates: any) => void;
     initialSection?: EditProfileSection;
-    projects?: any[];
+    onSaved?: () => Promise<void> | void;
 }
 
 type SaveState = "idle" | "saving" | "success" | "error";
-
-import { toFormState, toServerPayload, applyPayloadToFormBase } from "@/lib/profile/normalization";
 
 function toIsoTimestamp(value: unknown): string {
     if (typeof value === "string" && value.trim()) return value;
@@ -32,40 +50,67 @@ function toIsoTimestamp(value: unknown): string {
     return new Date().toISOString();
 }
 
-export function EditProfileModal({ open, onOpenChange, profile, onOptimisticUpdate, initialSection = "general", projects = [] }: EditProfileModalProps) {
-    const { showToast } = useToast();
+function withContributionEntries(profile: any, contributions: readonly ProfileCollaborationContribution[]) {
+    const normalized = toFormState(profile) as any;
+    const entries = contributions.map(contributionToEditorEntry);
+    normalized.experience = entries;
+    normalized.contributionBase = entries;
+    return normalized;
+}
+
+function withoutLegacyContributionPayload(formState: any, expectedUpdatedAt: string) {
+    const { experience: _experience, ...payload } = toServerPayload(formState, expectedUpdatedAt) as any;
+    return payload as Record<string, unknown>;
+}
+
+function profilePayloadChanged(payload: Record<string, unknown>, base: Record<string, unknown>) {
+    return Object.entries(payload).some(([key, value]) => {
+        if (key === "expectedUpdatedAt") return false;
+        return JSON.stringify(value ?? null) !== JSON.stringify(base[key] ?? null);
+    });
+}
+
+export function EditProfileModal({
+    open,
+    onOpenChange,
+    profile,
+    contributions = [],
+    onOptimisticUpdate,
+    initialSection = "general",
+    onSaved,
+}: EditProfileModalProps) {
     const queryClient = useQueryClient();
     const { refreshProfile } = useAuth();
     const [formState, setFormState] = useState<any>(null);
     const [saveState, setSaveState] = useState<SaveState>("idle");
     const [saveErrorMessage, setSaveErrorMessage] = useState<string | null>(null);
+    const [contributionErrors, setContributionErrors] = useState<Record<string, string>>({});
+    const [contributionHasMore, setContributionHasMore] = useState(false);
+    const [contributionTotal, setContributionTotal] = useState(contributions.length);
+    const [contributionsLoadingMore, setContributionsLoadingMore] = useState(false);
     const [hasChanges, setHasChanges] = useState(false);
     const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
     const [activeSection, setActiveSection] = useState<EditProfileSection>(initialSection);
     const [pendingSection, setPendingSection] = useState<EditProfileSection | null>(null);
     const inFlightRef = useRef(false);
     const wasOpenRef = useRef(false);
-    const lastKnownUpdatedAtRef = useRef<string>(
-        toIsoTimestamp(profile?.updatedAt)
-    );
-    const baseProfileRef = useRef<any>(toFormState(profile));
+    const draftTouchedRef = useRef(false);
+    const openGenerationRef = useRef(0);
+    const lastKnownUpdatedAtRef = useRef(toIsoTimestamp(profile?.updatedAt));
+    const baseProfileRef = useRef<any>(withContributionEntries(profile, contributions));
     const originalUsernameRef = useRef<string>(toFormState(profile).username || "");
 
-    const completion = useMemo(
-        () =>
-            calculateProfileCompletion({
-                avatarUrl: formState?.avatarUrl || "",
-                fullName: formState?.fullName || "",
-                username: formState?.username || "",
-                headline: formState?.headline || "",
-                bio: formState?.bio || "",
-                location: formState?.location || "",
-                website: formState?.website || "",
-                skills: formState?.skills || [],
-                socialLinks: formState?.socialLinks || {},
-            }),
-        [formState]
-    );
+    const completion = useMemo(() => calculateProfileCompletion({
+        avatarUrl: formState?.avatarUrl || "",
+        fullName: formState?.fullName || "",
+        username: formState?.username || "",
+        headline: formState?.headline || "",
+        bio: formState?.bio || "",
+        location: formState?.location || "",
+        website: formState?.website || "",
+        skills: formState?.skills || [],
+        socialLinks: formState?.socialLinks || {},
+    }), [formState]);
 
     useEffect(() => {
         if (!profile?.id) {
@@ -77,19 +122,49 @@ export function EditProfileModal({ open, onOpenChange, profile, onOptimisticUpda
         }
         const isOpening = open && !wasOpenRef.current;
         wasOpenRef.current = open;
-        if (isOpening) {
-            const normalized = toFormState(profile);
-            baseProfileRef.current = normalized;
-            originalUsernameRef.current = normalized.username || "";
-            setFormState(normalized);
-            lastKnownUpdatedAtRef.current = toIsoTimestamp(profile?.updatedAt);
-            setHasChanges(false);
-            setSaveState("idle");
-            setSaveErrorMessage(null);
-            setShowDiscardConfirm(false);
-            setActiveSection(initialSection);
-        }
-    }, [initialSection, open, profile?.id, profile?.updatedAt]);
+        if (!isOpening) return;
+
+        openGenerationRef.current += 1;
+        const generation = openGenerationRef.current;
+        draftTouchedRef.current = false;
+        const initial = withContributionEntries(profile, contributions);
+        baseProfileRef.current = initial;
+        originalUsernameRef.current = initial.username || "";
+        lastKnownUpdatedAtRef.current = toIsoTimestamp(profile.updatedAt);
+        setFormState(initial);
+        setHasChanges(false);
+        setSaveState("idle");
+        setSaveErrorMessage(null);
+        setContributionErrors({});
+        setContributionHasMore(false);
+        setContributionTotal(contributions.length);
+        setContributionsLoadingMore(true);
+        setShowDiscardConfirm(false);
+        setActiveSection(initialSection);
+
+        void loadProfileContributionsPage(profile.id, { limit: 50, offset: 0, stageLimit: 8 })
+            .then((page) => {
+                if (openGenerationRef.current !== generation) return;
+                setContributionTotal(page.total);
+                if (draftTouchedRef.current) {
+                    setContributionHasMore((baseProfileRef.current.contributionBase?.length ?? 0) < Math.min(page.total, 500));
+                    return;
+                }
+                const complete = withContributionEntries(profile, page.contributions);
+                baseProfileRef.current = complete;
+                setFormState(complete);
+                setContributionHasMore(page.hasMore && page.contributions.length < 500);
+            })
+            .catch((error) => {
+                if (openGenerationRef.current !== generation) return;
+                const message = error instanceof Error ? error.message : "Could not load all project contributions";
+                setSaveErrorMessage(message);
+                toast.error(message);
+            })
+            .finally(() => {
+                if (openGenerationRef.current === generation) setContributionsLoadingMore(false);
+            });
+    }, [contributions, initialSection, open, profile]);
 
     const applyOptimisticPatch = (payload: Record<string, unknown>) => {
         if (!onOptimisticUpdate) return;
@@ -104,141 +179,164 @@ export function EditProfileModal({ open, onOpenChange, profile, onOptimisticUpda
             bannerUrl: payload.bannerUrl,
             skills: payload.skills,
             socialLinks: payload.socialLinks,
-            availabilityStatus: payload.availabilityStatus,
             openTo: payload.openTo,
-            experience: payload.experience,
+            experienceLevel: payload.experienceLevel,
+            hoursPerWeek: payload.hoursPerWeek,
             education: payload.education,
         });
     };
 
-    const loadLatestServerProfileState = async () => {
-        if (!profile?.id) return null;
-        return loadProfileEditRefreshState(profile.id);
+    const invalidateProfileReads = (payload: Record<string, unknown>) => {
+        const targets = new Set<string>([
+            profile?.id || "",
+            profile?.username || "",
+            (payload.username as string | undefined) || "",
+        ]);
+        targets.forEach((target) => {
+            if (target) void queryClient.invalidateQueries({ queryKey: queryKeys.profile.byTarget(target) });
+        });
+        if (profile?.id) {
+            void queryClient.invalidateQueries({ queryKey: queryKeys.profile.collaborationSummary(profile.id) });
+            void queryClient.invalidateQueries({ queryKey: queryKeys.profile.projects(profile.id) });
+        }
+        void queryClient.invalidateQueries({ queryKey: queryKeys.globalSearch.peopleRoot(), refetchType: "active" });
     };
 
-    const persistChanges = async (payload: Record<string, unknown>, closeOnSuccess: boolean) => {
+    const persistChanges = async (closeOnSuccess: boolean) => {
         if (!formState || inFlightRef.current) return;
         inFlightRef.current = true;
         setSaveState("saving");
         setSaveErrorMessage(null);
-        const rollbackPatch: Record<string, unknown> = {}
+        setContributionErrors({});
+
+        const profilePayload = withoutLegacyContributionPayload(formState, lastKnownUpdatedAtRef.current);
+        const base = baseProfileRef.current as any;
+        const mutations = buildContributionMutations(
+            (base.contributionBase ?? []) as ContributionEditorEntry[],
+            (formState.experience ?? []) as ContributionEditorEntry[],
+        );
+        const shouldSaveProfile = profilePayloadChanged(profilePayload, base);
+        const rollbackPatch: Record<string, unknown> = {};
+
         try {
-            for (const [key, value] of Object.entries(payload)) {
-                if (key === "expectedUpdatedAt") continue;
-                if (key === "fullName") rollbackPatch.fullName = baseProfileRef.current.fullName
-                if (key === "username") rollbackPatch.username = baseProfileRef.current.username
-                if (key === "headline") rollbackPatch.headline = baseProfileRef.current.headline
-                if (key === "bio") rollbackPatch.bio = baseProfileRef.current.bio
-                if (key === "location") rollbackPatch.location = baseProfileRef.current.location
-                if (key === "website") rollbackPatch.website = baseProfileRef.current.website
-                if (key === "avatarUrl") rollbackPatch.avatarUrl = baseProfileRef.current.avatarUrl
-                if (key === "bannerUrl") rollbackPatch.bannerUrl = baseProfileRef.current.bannerUrl
-                if (key === "skills") rollbackPatch.skills = baseProfileRef.current.skills
-                if (key === "socialLinks") rollbackPatch.socialLinks = baseProfileRef.current.socialLinks
-                if (key === "availabilityStatus") rollbackPatch.availabilityStatus = baseProfileRef.current.availabilityStatus
-                if (key === "openTo") rollbackPatch.openTo = baseProfileRef.current.openTo
-                if (key === "experience") rollbackPatch.experience = baseProfileRef.current.experience
-                if (key === "education") rollbackPatch.education = baseProfileRef.current.education
-                void value;
+            if (shouldSaveProfile) {
+                for (const key of Object.keys(profilePayload)) {
+                    if (key !== "expectedUpdatedAt" && key in base) rollbackPatch[key] = base[key];
+                }
+                applyOptimisticPatch(profilePayload);
+                const response = await updateProfileAction(profilePayload as any);
+                if (!response.success) {
+                    applyOptimisticPatch(rollbackPatch);
+                    const code = (response as any).errorCode || (response as any).code;
+                    const message = code === "PROFILE_CONFLICT"
+                        ? "Your profile changed in another session. Keep this editor open, refresh the profile, and review before saving again."
+                        : ((response as any).error || "Could not update profile");
+                    throw new Error(message);
+                }
+                lastKnownUpdatedAtRef.current = typeof (response as any).updatedAt === "string"
+                    ? (response as any).updatedAt
+                    : lastKnownUpdatedAtRef.current;
+                baseProfileRef.current = applyPayloadToFormBase(baseProfileRef.current, profilePayload);
             }
 
-            applyOptimisticPatch(payload);
-            const applyUpdate = async (nextPayload: Record<string, unknown>) => {
-                const response = await updateProfileAction(nextPayload as any);
-                if (response.success && typeof (response as any).updatedAt === "string") {
-                    return { ok: true as const, response, payload: nextPayload };
-                }
-                return { ok: false as const, response };
-            };
-
-            let updateResult = await applyUpdate(payload);
-            let retryBaseState: ReturnType<typeof toFormState> | null = null;
-            const errorCode =
-                !updateResult.ok
-                    ? ((updateResult.response as any)?.errorCode || (updateResult.response as any)?.code)
-                    : null;
-
-            if (!updateResult.ok && errorCode === "PROFILE_CONFLICT") {
-                const latest = await loadLatestServerProfileState();
-                if (latest) {
-                    const retryPayload = { ...payload, expectedUpdatedAt: latest.updatedAt };
-                    updateResult = await applyUpdate(retryPayload);
-                    if (updateResult.ok) {
-                        retryBaseState = latest.formState;
+            if (mutations.length > 0) {
+                const result = await saveProfileContributionsAction({
+                    idempotencyKey: crypto.randomUUID(),
+                    mutations,
+                });
+                if (!result.success) {
+                    const failedMutation = result.mutationIndex === undefined
+                        ? undefined
+                        : mutations[result.mutationIndex];
+                    const failedEntry = ((formState.experience ?? []) as ContributionEditorEntry[]).find((entry) =>
+                        (result.contributionId && entry.contributionId === result.contributionId)
+                        || (failedMutation?.kind === "external" && entry.externalKey === failedMutation.externalKey),
+                    );
+                    if (failedEntry) {
+                        setContributionErrors({ [failedEntry.draftId]: result.error });
                     }
+                    throw new Error(result.error);
                 }
             }
 
-            if (updateResult.ok) {
-                const targetKeys = new Set<string>([
-                    profile?.id || "",
-                    profile?.username || "",
-                    (payload.username as string | undefined) || "",
-                ]);
-                targetKeys.forEach((target) => {
-                    if (!target) return;
-                    queryClient.invalidateQueries({ queryKey: queryKeys.profile.byTarget(target) });
-                });
-                void refreshProfile().catch((refreshError) => {
-                    console.warn("Profile refresh after save failed", {
-                        profileId: profile?.id,
-                        error:
-                            refreshError instanceof Error
-                                ? refreshError.message
-                                : String(refreshError),
-                    });
-                });
-                if (retryBaseState) {
-                    baseProfileRef.current = retryBaseState;
-                }
-                lastKnownUpdatedAtRef.current = (updateResult.response as any).updatedAt || lastKnownUpdatedAtRef.current;
-                baseProfileRef.current = applyPayloadToFormBase(baseProfileRef.current, updateResult.payload);
-                setHasChanges(false);
-                setSaveState("success");
-                showToast("Profile updated successfully", "success");
-                if (closeOnSuccess) {
-                    onOpenChange(false);
-                }
-            } else {
-                applyOptimisticPatch(rollbackPatch);
-                const message =
-                    (updateResult.response as any)?.error ||
-                    "Failed to update profile. Please review your changes and retry.";
-                console.error("Profile save failed", {
-                    profileId: profile?.id,
-                    errorCode: (updateResult.response as any)?.errorCode || (updateResult.response as any)?.code || null,
-                    message,
-                });
-                setSaveState("error");
-                setSaveErrorMessage(message);
-                showToast(message, "error");
-            }
+            const loadedCount = Math.max(
+                ((formState.experience ?? []) as ContributionEditorEntry[]).length,
+                1,
+            );
+            const freshWindow = profile?.id
+                ? await loadProfileContributionWindow(profile.id, loadedCount)
+                : { contributions, total: contributions.length, hasMore: false };
+            const freshEntries = freshWindow.contributions.map(contributionToEditorEntry);
+            const nextBase = {
+                ...baseProfileRef.current,
+                experience: freshEntries,
+                contributionBase: freshEntries,
+            };
+            baseProfileRef.current = nextBase;
+            setFormState(nextBase);
+            setHasChanges(false);
+            setContributionErrors({});
+            setContributionTotal(freshWindow.total);
+            setContributionHasMore(freshWindow.hasMore && freshEntries.length < 500);
+            draftTouchedRef.current = false;
+            setSaveState("success");
+            invalidateProfileReads(profilePayload);
+            void refreshProfile().catch(() => undefined);
+            await onSaved?.();
+            toast.success("Profile updated successfully");
+            if (closeOnSuccess) onOpenChange(false);
         } catch (error) {
-            applyOptimisticPatch(rollbackPatch);
-            console.error(error);
-            const message = "An unexpected error occurred while saving your profile.";
+            const message = error instanceof Error ? error.message : "An unexpected error occurred while saving your profile.";
             setSaveState("error");
             setSaveErrorMessage(message);
-            showToast(message, "error");
+            toast.error(message);
         } finally {
             inFlightRef.current = false;
         }
     };
 
-    const handleSave = async () => {
-        if (!formState) return;
-        const payload = toServerPayload(formState, lastKnownUpdatedAtRef.current);
-        await persistChanges(payload, true);
+    const handleLoadMoreContributions = async () => {
+        if (!profile?.id || contributionsLoadingMore || !contributionHasMore) return;
+        const generation = openGenerationRef.current;
+        const base = baseProfileRef.current as any;
+        const baseEntries = (base.contributionBase ?? []) as ContributionEditorEntry[];
+        setContributionsLoadingMore(true);
+        try {
+            const page = await loadProfileContributionsPage(profile.id, {
+                limit: 50,
+                offset: baseEntries.length,
+                stageLimit: 8,
+            });
+            if (openGenerationRef.current !== generation) return;
+            const incoming = page.contributions.map(contributionToEditorEntry);
+            const known = new Set(baseEntries.map((entry) => entry.draftId));
+            const additions = incoming.filter((entry) => !known.has(entry.draftId));
+            if (additions.length > 0) {
+                baseProfileRef.current = {
+                    ...base,
+                    experience: [...baseEntries, ...additions],
+                    contributionBase: [...baseEntries, ...additions],
+                };
+                setFormState((current: any) => ({
+                    ...current,
+                    experience: [...(current?.experience ?? []), ...additions.filter((entry) =>
+                        !(current?.experience ?? []).some((existing: ContributionEditorEntry) => existing.draftId === entry.draftId),
+                    )],
+                    contributionBase: [...baseEntries, ...additions],
+                }));
+            }
+            setContributionTotal(page.total);
+            setContributionHasMore(
+                baseEntries.length + additions.length < Math.min(page.total, 500) && page.hasMore,
+            );
+        } catch (error) {
+            const message = error instanceof Error ? error.message : "Could not load more project contributions";
+            setSaveErrorMessage(message);
+            toast.error(message);
+        } finally {
+            if (openGenerationRef.current === generation) setContributionsLoadingMore(false);
+        }
     };
-
-    const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
-        event.preventDefault();
-        await handleSave();
-    };
-
-    // Section saves removed in favor of global save
-
-    // Section resets removed
 
     const handleOpenChange = (openValue: boolean) => {
         if (!openValue && hasChanges && !showDiscardConfirm) {
@@ -246,9 +344,7 @@ export function EditProfileModal({ open, onOpenChange, profile, onOptimisticUpda
             setShowDiscardConfirm(true);
             return;
         }
-        if (!openValue) {
-            setShowDiscardConfirm(false);
-        }
+        if (!openValue) setShowDiscardConfirm(false);
         onOpenChange(openValue);
     };
 
@@ -264,6 +360,8 @@ export function EditProfileModal({ open, onOpenChange, profile, onOptimisticUpda
     const handleDiscard = () => {
         setFormState(baseProfileRef.current);
         setHasChanges(false);
+        setContributionErrors({});
+        draftTouchedRef.current = false;
         setShowDiscardConfirm(false);
         if (pendingSection) {
             setActiveSection(pendingSection);
@@ -273,78 +371,61 @@ export function EditProfileModal({ open, onOpenChange, profile, onOptimisticUpda
         }
     };
 
-    const handleKeepEditing = () => {
-        setShowDiscardConfirm(false);
-        setPendingSection(null);
-    };
-
-    const usernameChanged = Boolean(
-        formState?.username &&
-            baseProfileRef.current?.username &&
-            formState.username !== baseProfileRef.current.username
-    );
-
     return (
         <Dialog open={open} onOpenChange={handleOpenChange}>
-            <DialogContent className="sm:max-w-4xl h-[700px] max-h-[90vh] flex flex-col p-0 gap-0 overflow-hidden bg-zinc-50 dark:bg-zinc-950 border-zinc-200 dark:border-zinc-800 rounded-2xl">
-                <DialogHeader className="px-6 py-4 bg-white dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800 z-10">
+            <DialogContent className="flex h-[700px] max-h-[90vh] flex-col gap-0 overflow-hidden rounded-2xl border-zinc-200 bg-zinc-50 p-0 sm:max-w-4xl dark:border-zinc-800 dark:bg-zinc-950">
+                <DialogHeader className="z-10 border-b border-zinc-200 bg-white px-6 py-4 dark:border-zinc-800 dark:bg-zinc-900">
                     <DialogTitle className="flex items-center justify-between">
                         <span>Edit Profile</span>
                         <span className="text-xs font-normal text-zinc-500">{completion.score}% complete</span>
                     </DialogTitle>
-                    <DialogDescription className="sr-only">
-                        Edit your profile information, work experience, education, skills, and social presence.
-                    </DialogDescription>
-                    <div className="h-1.5 rounded-full bg-zinc-100 dark:bg-zinc-800 overflow-hidden mt-3">
-                        <div
-                            className="h-full bg-indigo-600 transition-all"
-                            style={{ width: `${completion.score}%` }}
-                        />
+                    <DialogDescription className="sr-only">Edit your profile and project contribution visibility.</DialogDescription>
+                    <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
+                        <div className="h-full bg-indigo-600 transition-all" style={{ width: `${completion.score}%` }} />
                     </div>
                 </DialogHeader>
 
-                <form className="flex-1 min-h-0 flex flex-col" onSubmit={handleSubmit} aria-label="Edit profile form">
-                    <div className="flex-1 min-h-0 flex flex-col md:flex-row w-full overflow-hidden">
+                <form className="flex min-h-0 flex-1 flex-col" onSubmit={(event) => { event.preventDefault(); void persistChanges(true); }} aria-label="Edit profile form">
+                    <div className="flex min-h-0 w-full flex-1 flex-col overflow-hidden md:flex-row">
                         <EditProfileTabs
                             profile={formState || profile}
                             originalUsername={originalUsernameRef.current}
                             section={activeSection}
                             onSectionChange={handleSectionChange}
+                            contributionErrors={contributionErrors}
+                            contributionsSaving={saveState === "saving"}
+                            contributionsLoadingMore={contributionsLoadingMore}
+                            contributionHasMore={contributionHasMore}
+                            contributionTotal={contributionTotal}
+                            onLoadMoreContributions={() => { void handleLoadMoreContributions(); }}
                             onChange={(updates) => {
+                                draftTouchedRef.current = true;
                                 setFormState(updates);
                                 setHasChanges(true);
+                                setContributionErrors({});
                                 if (saveState !== "saving") {
                                     setSaveState("idle");
                                     setSaveErrorMessage(null);
                                 }
                             }}
-                            projects={projects}
                         />
                     </div>
 
-                    <DialogFooter className="px-6 py-4 border-t border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 z-10">
+                    <DialogFooter className="z-10 border-t border-zinc-200 bg-white px-6 py-4 dark:border-zinc-800 dark:bg-zinc-900">
                         {showDiscardConfirm ? (
                             <>
-                                <p className="mr-auto text-sm font-medium text-zinc-900 dark:text-zinc-100 flex items-center">
-                                    Discard unsaved changes?
-                                </p>
-                                <Button type="button" variant="ghost" onClick={handleKeepEditing}>
-                                    Keep Editing
-                                </Button>
-                                <Button type="button" variant="danger" onClick={handleDiscard}>
-                                    Discard
-                                </Button>
+                                <p className="mr-auto flex items-center text-sm font-medium text-zinc-900 dark:text-zinc-100">Discard unsaved changes?</p>
+                                <Button type="button" variant="ghost" onClick={() => { setShowDiscardConfirm(false); setPendingSection(null); }}>Keep Editing</Button>
+                                <Button type="button" variant="destructive" onClick={handleDiscard}>Discard</Button>
                             </>
                         ) : (
                             <>
-                                {saveErrorMessage ? (
-                                    <p className="mr-auto text-xs text-red-500">{saveErrorMessage}</p>
-                                ) : null}
-                                <Button type="button" variant="outline" onClick={() => handleOpenChange(false)} disabled={saveState === "saving"}>
-                                    Cancel
-                                </Button>
+                                <p aria-live="polite" className={`mr-auto text-xs ${saveErrorMessage ? "text-red-500" : "text-zinc-500"}`}>
+                                    {saveErrorMessage || (saveState === "saving" ? "Saving profile and contribution changes…" : "")}
+                                </p>
+                                <Button type="button" variant="outline" onClick={() => handleOpenChange(false)} disabled={saveState === "saving"}>Cancel</Button>
                                 <Button type="submit" disabled={saveState === "saving" || !hasChanges}>
-                                    {saveState === "saving" && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                                    {saveState === "saving" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                                     Save Changes
                                 </Button>
                             </>
