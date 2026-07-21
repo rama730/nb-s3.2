@@ -43,7 +43,7 @@ function toFieldErrors(error: z.ZodError<TaskEditorDraft>) {
 
 function inputClassName(hasError: boolean) {
     return cn(
-        "w-full rounded-xl border bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none transition focus:ring-2 focus:ring-blue-500/20 dark:bg-zinc-900 dark:text-zinc-100",
+        "w-full rounded-xl border bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none transition   dark:bg-zinc-900 dark:text-zinc-100",
         hasError
             ? "border-rose-300 focus:border-rose-400 dark:border-rose-800 dark:focus:border-rose-700"
             : "border-zinc-200 focus:border-blue-500 dark:border-zinc-700 dark:focus:border-blue-500",
@@ -270,7 +270,7 @@ export default function CreateTaskModal({
                                 <select
                                     value={draft.status}
                                     onChange={(event) => handleFieldChange("status", event.target.value)}
-                                    className="appearance-none rounded-full border border-zinc-200 bg-zinc-100 py-1.5 pl-3 pr-8 text-xs font-medium text-zinc-700 outline-none transition hover:bg-zinc-200 focus:ring-2 focus:ring-blue-500/20 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+                                    className="appearance-none rounded-full border border-zinc-200 bg-zinc-100 py-1.5 pl-3 pr-8 text-xs font-medium text-zinc-700 outline-none transition hover:bg-zinc-200   dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
                                 >
                                     {TASK_WORKFLOW_STATUSES.map((status) => (
                                         <option key={status} value={status}>
@@ -285,7 +285,7 @@ export default function CreateTaskModal({
                                 <select
                                     value={draft.priority}
                                     onChange={(event) => handleFieldChange("priority", event.target.value)}
-                                    className="appearance-none rounded-full border border-zinc-200 bg-zinc-100 py-1.5 pl-3 pr-8 text-xs font-medium text-zinc-700 outline-none transition hover:bg-zinc-200 focus:ring-2 focus:ring-blue-500/20 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+                                    className="appearance-none rounded-full border border-zinc-200 bg-zinc-100 py-1.5 pl-3 pr-8 text-xs font-medium text-zinc-700 outline-none transition hover:bg-zinc-200   dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
                                 >
                                     {TASK_PRIORITY_VALUES.map((priority) => (
                                         <option key={priority} value={priority}>
@@ -415,7 +415,7 @@ export default function CreateTaskModal({
                             type="checkbox"
                             checked={createAnother}
                             onChange={(event) => setCreateAnother(event.target.checked)}
-                            className="rounded border-zinc-300 text-blue-600 focus:ring-blue-500"
+                            className="rounded border-zinc-300 text-blue-600 "
                         />
                         Create another
                     </label>
