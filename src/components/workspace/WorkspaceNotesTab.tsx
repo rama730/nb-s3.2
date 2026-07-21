@@ -267,7 +267,7 @@ export default function WorkspaceNotesTab() {
                                 value={note}
                                 onChange={handleChange}
                                 placeholder="Write down personal notes, scratch ideas, or draft todo tasks using Markdown..."
-                                className="w-full h-full resize-none bg-transparent outline-none border-none text-zinc-800 dark:text-zinc-200 text-xs leading-relaxed placeholder-zinc-400 focus:ring-0 focus:outline-none"
+                                className="w-full h-full resize-none bg-transparent outline-none border-none text-zinc-800 dark:text-zinc-200 text-xs leading-relaxed placeholder-zinc-400  focus:outline-none"
                             />
                         ) : note.trim() === "" ? (
                             <div className="flex flex-col items-center justify-center py-12 text-center text-zinc-400">
