@@ -1,22 +1,28 @@
 import crypto from "crypto";
-import { and, eq, gt, isNull } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 
 import { enforceRouteLimit, jsonError, jsonSuccess, requireAuthenticatedUser } from "@/app/api/v1/_shared";
+import {
+  assertNoExtensionWriteConflict,
+  buildExtensionRevisionStorageKey,
+  checksumSchema,
+  extensionRevisionConflictResponse,
+  extensionRevisionData,
+  parseExtensionLeaseMetadata,
+  resolveWritableExtensionFile,
+} from "@/app/api/v1/extension/_file-revision";
 import { db } from "@/lib/db";
-import { fileVersions, profiles, projectNodeLocks, projectNodes, uploadIntents } from "@/lib/db/schema";
-import { getProjectAccessById } from "@/lib/data/project-access";
+import { fileVersions, projectNodes, uploadIntents } from "@/lib/db/schema";
 import { recordExtensionMetric } from "@/lib/extension/observability";
-import { recordNodeEvent } from "@/lib/files/internal-helpers";
+import { applyFileRevision } from "@/lib/files/apply-file-revision";
+import { FILE_REVISION_MODES, normalizeRevisionComment, parseFileRevisionMode } from "@/lib/files/revision-policy";
 import { logger } from "@/lib/logger";
-import { buildProjectFileKey } from "@/lib/storage/project-file-key";
 import { createAdminClient } from "@/lib/supabase/server";
 import { createUploadIntent } from "@/lib/upload/upload-intents";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-const checksumSchema = z.string().regex(/^[a-f0-9]{64}$/i);
 
 const intentSchema = z.object({
   action: z.literal("intent"),
@@ -27,6 +33,12 @@ const intentSchema = z.object({
   contentHash: checksumSchema,
   baseVersion: z.number().int().positive().optional().nullable(),
   baseHash: checksumSchema.optional().nullable(),
+  revisionMode: z.enum(FILE_REVISION_MODES).optional().default("new_revision"),
+  comment: z.string().max(500).optional().nullable(),
+  operationId: z.string().min(8).max(200).optional().nullable(),
+  leaseId: z.string().uuid(),
+  clientSessionId: z.string().uuid(),
+  fencingToken: z.number().int().positive(),
 });
 
 const finalizeSchema = z.object({
@@ -35,89 +47,42 @@ const finalizeSchema = z.object({
   checksum: checksumSchema,
 });
 
-function inferExtensionSuffix(path: string) {
-  const extension = path.split(".").pop()?.toLowerCase();
-  return extension && /^[a-z0-9]{1,16}$/.test(extension) ? `.${extension}` : "";
-}
-
 function readIntentMetadata(intent: typeof uploadIntents.$inferSelect) {
   return intent.metadata && typeof intent.metadata === "object"
     ? intent.metadata as Record<string, unknown>
     : {};
 }
 
-async function resolveWritableNode(projectId: string, path: string, userId: string) {
-  const access = await getProjectAccessById(projectId, userId);
-  if (!access.project) return { error: jsonError("Project not found", 404, "NOT_FOUND") };
-  if (!access.canWrite) return { error: jsonError("Forbidden", 403, "FORBIDDEN") };
+async function recoverFinalizedIntent(intent: typeof uploadIntents.$inferSelect) {
+  const metadata = readIntentMetadata(intent);
+  const nodeId = typeof metadata.nodeId === "string" ? metadata.nodeId : "";
+  const revisionMode = parseFileRevisionMode(metadata.revisionMode);
+  if (!nodeId) return null;
 
+  const version = await db.query.fileVersions.findFirst({
+    where: and(
+      eq(fileVersions.nodeId, nodeId),
+      eq(fileVersions.s3Key, intent.storageKey),
+    ),
+    orderBy: [desc(fileVersions.version)],
+  });
   const node = await db.query.projectNodes.findFirst({
-    where: and(
-      eq(projectNodes.projectId, projectId),
-      eq(projectNodes.path, path),
-      eq(projectNodes.type, "file"),
-      isNull(projectNodes.deletedAt),
-    ),
+    where: eq(projectNodes.id, nodeId),
   });
+  if (!version || !node) return null;
 
-  if (!node) return { error: jsonError("File node not found", 404, "NOT_FOUND") };
-  return { node };
-}
-
-async function assertNoWriteConflict(params: {
-  projectId: string;
-  nodeId: string;
-  userId: string;
-  baseVersion?: number | null;
-  baseHash?: string | null;
-}) {
-  const node = await db.query.projectNodes.findFirst({
-    where: and(
-      eq(projectNodes.id, params.nodeId),
-      eq(projectNodes.projectId, params.projectId),
-      eq(projectNodes.type, "file"),
-      isNull(projectNodes.deletedAt),
-    ),
-  });
-  if (!node) {
-    return jsonError("File node not found", 404, "NOT_FOUND");
-  }
-
-  if (params.baseVersion && params.baseVersion !== node.currentVersion) {
-    return jsonError("File changed on the server. Refresh before saving again.", 409, "CONFLICT");
-  }
-
-  if (params.baseHash) {
-    const currentVersion = await db.query.fileVersions.findFirst({
-      where: and(eq(fileVersions.nodeId, node.id), eq(fileVersions.version, node.currentVersion)),
-      columns: { contentHash: true },
-    });
-    if (currentVersion?.contentHash && currentVersion.contentHash !== params.baseHash) {
-      return jsonError("File content changed on the server. Refresh before saving again.", 409, "CONFLICT");
-    }
-  }
-
-  const activeLock = await db.query.projectNodeLocks.findFirst({
-    where: and(
-      eq(projectNodeLocks.projectId, params.projectId),
-      eq(projectNodeLocks.nodeId, params.nodeId),
-      gt(projectNodeLocks.expiresAt, new Date()),
-    ),
-  });
-
-  if (activeLock && activeLock.lockedBy !== params.userId) {
-    const lockHolder = await db.query.profiles.findFirst({
-      where: eq(profiles.id, activeLock.lockedBy),
-      columns: { fullName: true, username: true },
-    });
-    return jsonError(
-      `File is locked by ${lockHolder?.fullName || lockHolder?.username || "another collaborator"}.`,
-      423,
-      "CONFLICT",
-    );
-  }
-
-  return null;
+  return {
+    nodeId,
+    version: version.version,
+    size: version.size,
+    mimeType: version.mimeType,
+    contentHash: version.contentHash,
+    syncStatus: node.syncStatus,
+    sequenceNumber: null,
+    revisionMode,
+    versionIncremented: revisionMode === "new_revision",
+    updatedAt: node.updatedAt?.toISOString?.() ?? node.updatedAt,
+  };
 }
 
 async function markIntentFailed(uploadIntentId: string, failureReason: string) {
@@ -133,24 +98,71 @@ async function markIntentFailed(uploadIntentId: string, failureReason: string) {
 
 async function handleIntent(userId: string, body: z.infer<typeof intentSchema>) {
   const startedAt = Date.now();
-  const resolved = await resolveWritableNode(body.projectId, body.path, userId);
-  if (resolved.error) return resolved.error;
+  const resolved = await resolveWritableExtensionFile(body.projectId, body.path, userId);
+  if (resolved.response) return resolved.response;
   const node = resolved.node!;
 
-  const conflict = await assertNoWriteConflict({
-    projectId: body.projectId,
-    nodeId: node.id,
-    userId,
+  if (body.operationId) {
+    const previousIntent = await db.query.uploadIntents.findFirst({
+      where: and(
+        eq(uploadIntents.userId, userId),
+        eq(uploadIntents.projectId, body.projectId),
+        sql`${uploadIntents.metadata} ->> 'operationId' = ${body.operationId}`,
+      ),
+      orderBy: [desc(uploadIntents.createdAt)],
+    });
+    if (previousIntent) {
+      const previousMetadata = readIntentMetadata(previousIntent);
+      if (
+        previousMetadata.path !== body.path ||
+        previousMetadata.contentHash !== body.contentHash.toLowerCase() ||
+        parseFileRevisionMode(previousMetadata.revisionMode) !== body.revisionMode
+      ) {
+        return jsonError(
+          "Operation id was already used for different file content",
+          409,
+          "CONFLICT",
+        );
+      }
+    }
+    if (previousIntent?.status === "finalized") {
+      const finalizedResult = await recoverFinalizedIntent(previousIntent);
+      if (finalizedResult) {
+        return jsonSuccess({
+          alreadyFinalized: true,
+          finalizedResult,
+          uploadIntentId: previousIntent.id,
+        });
+      }
+    }
+    if (previousIntent?.status === "pending" && previousIntent.expiresAt.getTime() > Date.now()) {
+      const adminClient = await createAdminClient();
+      const { data: uploadSession, error } = await adminClient.storage
+        .from(previousIntent.bucket)
+        .createSignedUploadUrl(previousIntent.storageKey);
+      if (!error && uploadSession) {
+        return jsonSuccess({
+          uploadIntentId: previousIntent.id,
+          signedUrl: uploadSession.signedUrl,
+          uploadToken: uploadSession.token,
+          storagePath: previousIntent.storageKey,
+          bucket: previousIntent.bucket,
+          contentType: previousIntent.expectedMimeType,
+          expiresAt: previousIntent.expiresAt.toISOString(),
+        });
+      }
+    }
+  }
+
+  const conflict = await assertNoExtensionWriteConflict({
+    node,
     baseVersion: body.baseVersion,
     baseHash: body.baseHash,
   });
   if (conflict) return conflict;
 
   const contentHash = body.contentHash.toLowerCase();
-  const storageKey = buildProjectFileKey(
-    body.projectId,
-    `nodes/${node.id}/versions/${contentHash}-${crypto.randomUUID()}${inferExtensionSuffix(body.path)}`,
-  );
+  const storageKey = buildExtensionRevisionStorageKey(body.projectId, node.id, body.path, contentHash);
   const bucket = "project-files";
   const adminClient = await createAdminClient();
   const { data: uploadSession, error: storageError } = await adminClient.storage
@@ -183,6 +195,12 @@ async function handleIntent(userId: string, body: z.infer<typeof intentSchema>) 
       baseVersion: body.baseVersion ?? node.currentVersion,
       baseHash: body.baseHash ?? null,
       contentHash,
+      revisionMode: body.revisionMode,
+      comment: normalizeRevisionComment(body.comment),
+      operationId: body.operationId ?? null,
+      leaseId: body.leaseId,
+      clientSessionId: body.clientSessionId,
+      fencingToken: body.fencingToken,
     },
   });
 
@@ -195,6 +213,7 @@ async function handleIntent(userId: string, body: z.infer<typeof intentSchema>) 
     uploadIntentId: intent.id,
     path: body.path,
     sizeBytes: body.size,
+    revisionMode: body.revisionMode,
     durationMs: Date.now() - startedAt,
   });
 
@@ -218,8 +237,26 @@ async function handleFinalize(userId: string, body: z.infer<typeof finalizeSchem
     ),
   });
 
-  if (!intent || intent.status !== "pending") {
+  if (!intent) {
     return jsonError("Upload intent not found or already finalized", 404, "NOT_FOUND");
+  }
+  const metadata = readIntentMetadata(intent);
+  const nodeId = typeof metadata.nodeId === "string" ? metadata.nodeId : "";
+  const path = typeof metadata.path === "string" ? metadata.path : "";
+  const contentHash = typeof metadata.contentHash === "string" ? metadata.contentHash.toLowerCase() : "";
+  if (!nodeId || !path || !contentHash || contentHash !== body.checksum.toLowerCase()) {
+    if (intent.status === "pending") {
+      await markIntentFailed(intent.id, "Upload intent metadata mismatch");
+    }
+    return jsonError("Upload intent metadata mismatch", 400, "BAD_REQUEST");
+  }
+  if (intent.status === "finalized") {
+    const recovered = await recoverFinalizedIntent(intent);
+    if (recovered) return jsonSuccess(recovered);
+    return jsonError("Finalized upload result is unavailable", 409, "CONFLICT");
+  }
+  if (intent.status !== "pending") {
+    return jsonError("Upload intent is not pending", 409, "CONFLICT");
   }
   if (intent.expiresAt.getTime() <= Date.now()) {
     await markIntentFailed(intent.id, "Upload intent expired");
@@ -230,25 +267,25 @@ async function handleFinalize(userId: string, body: z.infer<typeof finalizeSchem
     return jsonError("Invalid upload intent", 400, "BAD_REQUEST");
   }
 
-  const metadata = readIntentMetadata(intent);
-  const nodeId = typeof metadata.nodeId === "string" ? metadata.nodeId : "";
-  const path = typeof metadata.path === "string" ? metadata.path : "";
-  const contentHash = typeof metadata.contentHash === "string" ? metadata.contentHash.toLowerCase() : "";
   const baseVersion = typeof metadata.baseVersion === "number" ? metadata.baseVersion : null;
   const baseHash = typeof metadata.baseHash === "string" ? metadata.baseHash : null;
-  if (!nodeId || !path || !contentHash || contentHash !== body.checksum.toLowerCase()) {
+  const revisionMode = parseFileRevisionMode(metadata.revisionMode);
+  const comment = normalizeRevisionComment(metadata.comment);
+  const operationId = typeof metadata.operationId === "string" ? metadata.operationId : null;
+  const lease = parseExtensionLeaseMetadata(metadata);
+  if (!lease) {
+    await markIntentFailed(intent.id, "Upload intent is missing editing lease metadata");
+    return jsonError("A valid editing lease is required", 409, "CONFLICT");
+  }
+  const resolved = await resolveWritableExtensionFile(intent.projectId, path, userId);
+  if (resolved.response) return resolved.response;
+  if (resolved.node!.id !== nodeId) {
     await markIntentFailed(intent.id, "Upload intent metadata mismatch");
     return jsonError("Upload intent metadata mismatch", 400, "BAD_REQUEST");
   }
 
-  const access = await getProjectAccessById(intent.projectId, userId);
-  if (!access.project) return jsonError("Project not found", 404, "NOT_FOUND");
-  if (!access.canWrite) return jsonError("Forbidden", 403, "FORBIDDEN");
-
-  const conflict = await assertNoWriteConflict({
-    projectId: intent.projectId,
-    nodeId,
-    userId,
+  const conflict = await assertNoExtensionWriteConflict({
+    node: resolved.node!,
     baseVersion,
     baseHash,
   });
@@ -258,84 +295,62 @@ async function handleFinalize(userId: string, body: z.infer<typeof finalizeSchem
   }
 
   const adminClient = await createAdminClient();
-  const { data, error } = await adminClient.storage.from(intent.bucket).download(intent.storageKey);
-  if (error || !data) {
-    await markIntentFailed(intent.id, error?.message || "Uploaded object missing");
+  const { data: info, error: infoError } = await adminClient.storage.from(intent.bucket).info(intent.storageKey);
+  if (infoError || !info) {
+    await markIntentFailed(intent.id, infoError?.message || "Uploaded object missing");
     return jsonError("Uploaded object not found in storage", 404, "NOT_FOUND");
   }
 
-  const buffer = Buffer.from(await data.arrayBuffer());
-  if (buffer.byteLength !== intent.expectedSize) {
+  if (info.size !== intent.expectedSize) {
     await markIntentFailed(intent.id, "Uploaded object size mismatch");
     return jsonError("File size mismatch", 400, "BAD_REQUEST");
   }
-  const actualHash = crypto.createHash("sha256").update(buffer).digest("hex");
-  if (actualHash !== contentHash) {
-    await markIntentFailed(intent.id, "Uploaded object checksum mismatch");
-    return jsonError("Checksum mismatch", 400, "BAD_REQUEST");
-  }
 
-  const result = await db.transaction(async (tx) => {
-    const current = await tx.query.projectNodes.findFirst({
-      where: and(eq(projectNodes.id, nodeId), eq(projectNodes.projectId, intent.projectId!)),
-      columns: { currentVersion: true },
-    });
-    const nextVersion = (current?.currentVersion ?? 1) + 1;
-
-    const [versionRow] = await tx
-      .insert(fileVersions)
-      .values({
-        nodeId,
-        version: nextVersion,
-        s3Key: intent.storageKey,
-        size: intent.expectedSize,
-        mimeType: intent.expectedMimeType,
-        contentHash,
-        uploadedBy: userId,
-      })
-      .returning();
-
-    const [updatedNode] = await tx
-      .update(projectNodes)
-      .set({
-        s3Key: intent.storageKey,
-        size: intent.expectedSize,
-        mimeType: intent.expectedMimeType,
-        currentVersion: nextVersion,
-        gitHash: contentHash,
-        syncStatus: "merged",
-        updatedAt: new Date(),
-      })
-      .where(eq(projectNodes.id, nodeId))
-      .returning();
-
-    await tx
-      .update(uploadIntents)
-      .set({
-        status: "finalized",
-        finalizedMimeType: intent.expectedMimeType,
-        finalizedSize: intent.expectedSize,
-        finalizedAt: new Date(),
-        failureReason: null,
-        updatedAt: new Date(),
-      })
-      .where(eq(uploadIntents.id, intent.id));
-
-    const eventResult = await recordNodeEvent(intent.projectId!, userId, nodeId, "extension_file_saved", {
-      version: nextVersion,
+  let result;
+  try {
+    result = await applyFileRevision({
+      projectId: intent.projectId,
+      nodeId,
+      actorUserId: userId,
+      storageKey: intent.storageKey,
       size: intent.expectedSize,
       mimeType: intent.expectedMimeType,
-      hash: contentHash,
-      uploadIntentId: intent.id,
-      transfer: "signed_upload",
-    }, tx);
-
-    return {
-      node: updatedNode!,
-      version: versionRow!,
-      sequenceNumber: eventResult.sequenceNumber,
-    };
-  });
+      contentHash,
+      mode: revisionMode,
+      comment,
+      baseVersion,
+      baseHash,
+      lease,
+      eventType: "extension_file_saved",
+      eventMetadata: {
+        uploadIntentId: intent.id,
+        transfer: "signed_upload",
+        operationId,
+      },
+      syncStatus: "merged",
+      afterMutationTx: async (tx) => {
+        await tx
+          .update(uploadIntents)
+          .set({
+            status: "finalized",
+            finalizedMimeType: intent.expectedMimeType,
+            finalizedSize: intent.expectedSize,
+            finalizedAt: new Date(),
+            failureReason: null,
+            updatedAt: new Date(),
+          })
+          .where(eq(uploadIntents.id, intent.id));
+      },
+    });
+  } catch (error) {
+    await markIntentFailed(
+      intent.id,
+      error instanceof Error ? error.message : "Failed to apply revision",
+    );
+    const conflictResponse = extensionRevisionConflictResponse(error);
+    if (conflictResponse) return conflictResponse;
+    throw error;
+  }
 
   recordExtensionMetric("extension.file_upload.finalize", {
     action: "finalize",
@@ -346,19 +361,12 @@ async function handleFinalize(userId: string, body: z.infer<typeof finalizeSchem
     uploadIntentId: intent.id,
     path,
     sizeBytes: intent.expectedSize,
+    revisionMode: result.mode,
+    versionIncremented: result.versionIncremented,
     durationMs: Date.now() - startedAt,
   });
 
-  return jsonSuccess({
-    nodeId: result.node.id,
-    version: result.version.version,
-    size: result.node.size,
-    mimeType: result.node.mimeType,
-    contentHash,
-    syncStatus: result.node.syncStatus,
-    sequenceNumber: result.sequenceNumber,
-    updatedAt: result.node.updatedAt?.toISOString?.() ?? result.node.updatedAt,
-  });
+  return jsonSuccess(extensionRevisionData(result, contentHash));
 }
 
 export async function POST(request: Request) {
@@ -370,6 +378,9 @@ export async function POST(request: Request) {
     if (authResult.response) return authResult.response;
     const user = authResult.user;
     if (!user) return jsonError("Not authenticated", 401, "UNAUTHORIZED");
+    if (!authResult.extensionSessionId) {
+      return jsonError("An active extension device session is required", 401, "UNAUTHORIZED");
+    }
 
     const body = await request.json().catch(() => null);
     const intent = intentSchema.safeParse(body);
@@ -386,7 +397,7 @@ export async function POST(request: Request) {
       error: error instanceof Error ? error.message : String(error),
     });
     return jsonError(
-      error instanceof Error ? error.message : "Extension upload failed",
+      "Failed to save file revision. Refresh the file and try again.",
       500,
       "INTERNAL_ERROR",
     );
