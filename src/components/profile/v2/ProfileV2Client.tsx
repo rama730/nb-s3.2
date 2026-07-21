@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
-import dynamic from 'next/dynamic'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { ProfilePageData, ProfilePrivacyRelationship, ProfileTabKey } from './types'
 import type { ProfileCollaborationSummary, ProfileInviteProjectOption } from '@/lib/profile/collaboration'
@@ -10,9 +9,6 @@ import { ProfileShell } from './ProfileShell'
 import { ProfileHeader } from './ProfileHeader'
 import { ProfileRightRail } from './ProfileRightRail'
 import { ProfileTabs } from './ProfileTabs'
-import { useConnectionMutations } from '@/hooks/useConnections';
-import { checkConnectionStatus } from '@/app/actions/connections';
-import { getProfileViewerOverlayAction } from '@/app/actions/profile';
 import { toast } from 'sonner';
 import { useAuth } from '@/lib/hooks/use-auth';
 import { invalidatePrivacyDependents } from '@/lib/privacy/client-invalidation';
@@ -25,21 +21,20 @@ import { queryKeys } from '@/lib/query-keys';
 import { AboutCard } from './sections/AboutCard'
 import { ProjectContributionsCard } from './sections/ProjectContributionsCard'
 import { SkillsCard } from './sections/SkillsCard'
+import { OpenToRolesCard } from './sections/OpenToRolesCard'
 import { ComponentErrorBoundary } from '@/components/ui/ComponentErrorBoundary'
+import { ProjectsGridCard } from './sections/ProjectsGridCard'
 
-// Pure Optimization: Dynamic imports for Modals (Reduces initial bundle size by ~20%)
-const EditProfileModal = dynamic(() => import('@/components/profile/edit/EditProfileModal').then(m => m.EditProfileModal), { ssr: false });
-const UserConnectionsModal = dynamic(() => import('@/components/profile/v2/UserConnectionsModal').then(m => m.UserConnectionsModal), { ssr: false });
-const ProjectsGridCard = dynamic(() => import('./sections/ProjectsGridCard').then(m => m.ProjectsGridCard), {
-    loading: () => null,
-    ssr: false,
-});
+type EditProfileModalComponent = typeof import('@/components/profile/edit/EditProfileModal')['EditProfileModal'];
+type UserConnectionsModalComponent = typeof import('@/components/profile/v2/UserConnectionsModal')['UserConnectionsModal'];
+type ProfileInviteModalComponent = typeof import('./ProfileInviteModal')['default'];
+type ApplyRoleModalComponent = typeof import('@/components/projects/ApplyRoleModal')['default'];
 
-interface ProfileClientProps extends Omit<ProfilePageData, 'projects' | 'stats'> {
-    projects?: any[];
+interface ProfileClientProps extends Omit<ProfilePageData, 'stats'> {
     stats?: any;
     collaborationSummary?: ProfileCollaborationSummary;
-    viewerPreviewMode?: boolean;
+    initialOpenRolesProjects?: any[];
+    viewerHasOpenRoles?: boolean;
 }
 
 type EditSection = "general" | "experience" | "skills" | "social";
@@ -56,6 +51,12 @@ function connectionStateFromRelationship(relationship: ProfilePrivacyRelationshi
     return 'none';
 }
 
+function connectionRequestKey() {
+    return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? `profile:${crypto.randomUUID()}`
+        : `profile:${Date.now()}`;
+}
+
 type ApiEnvelope<T> = {
     success?: boolean
     data?: T
@@ -67,7 +68,6 @@ const EMPTY_COLLABORATION_SUMMARY: ProfileCollaborationSummary = {
     version: 1,
     generatedAt: '',
     projects: [],
-    featuredProjects: [],
     contributions: [],
     stats: {
         projectsCount: 0,
@@ -116,12 +116,12 @@ export function ProfileV2Client({
     connectionStatus,
     privacyRelationship: initialPrivacyRelationship,
     lockedShell: initialLockedShell = false,
-    projects: initialProjects = [],
     collaborationSummary: initialCollaborationSummary = EMPTY_COLLABORATION_SUMMARY,
-    viewerPreviewMode = false,
+    initialOpenRolesProjects = [],
+    viewerHasOpenRoles = false,
 }: ProfileClientProps) {
     const { user: authUser } = useAuth()
-    const viewerUser = viewerPreviewMode ? null : (authUser ?? currentUser)
+    const viewerUser = authUser ?? currentUser
     const router = useRouter()
     const pathname = usePathname()
     const searchParams = useSearchParams()
@@ -132,12 +132,15 @@ export function ProfileV2Client({
     const [activeTab, setActiveTab] = useState<ProfileTabKey>(urlTab)
     const [liveProfile, setLiveProfile] = useState(profile)
     const [isEditModalOpen, setIsEditModalOpen] = useState(false)
+    const [EditProfileModal, setEditProfileModal] = useState<EditProfileModalComponent | null>(null)
+    const [UserConnectionsModal, setUserConnectionsModal] = useState<UserConnectionsModalComponent | null>(null)
+    const [ProfileInviteModal, setProfileInviteModal] = useState<ProfileInviteModalComponent | null>(null)
+    const [ApplyRoleModal, setApplyRoleModal] = useState<ApplyRoleModalComponent | null>(null)
     const [editSection, setEditSection] = useState<EditSection>('general')
     const [showConnectionsModal, setShowConnectionsModal] = useState(false)
     const [inviteOpen, setInviteOpen] = useState(false)
-    const [selectedInviteProjectId, setSelectedInviteProjectId] = useState('')
-    const [inviteNote, setInviteNote] = useState('')
-    const [isSendingInvite, setIsSendingInvite] = useState(false)
+    const [isApplyModalOpen, setIsApplyModalOpen] = useState(false)
+    const openRolesProjects = initialOpenRolesProjects
     const [status, setStatus] = useState<ConnectionState>(connectionStatus)
     const [privacyRelationship, setPrivacyRelationship] = useState(initialPrivacyRelationship)
     const [lockedShell, setLockedShell] = useState(initialLockedShell)
@@ -149,51 +152,21 @@ export function ProfileV2Client({
 
     useEffect(() => {
         setStatus(connectionStatus)
-    }, [connectionStatus])
-
-    useEffect(() => {
         setLiveProfile(profile)
-    }, [profile])
+        setPrivacyRelationship(initialPrivacyRelationship)
+        setLockedShell(initialLockedShell)
+        setViewerMutualCount((initialStats as any)?.mutualCount ?? 0)
+        setCollaborationSummary(initialCollaborationSummary || EMPTY_COLLABORATION_SUMMARY)
+    }, [connectionStatus, initialCollaborationSummary, initialLockedShell, initialPrivacyRelationship, initialStats, profile])
 
     useEffect(() => {
         setActiveTab(urlTab)
     }, [urlTab])
 
-    useEffect(() => {
-        setPrivacyRelationship(initialPrivacyRelationship)
-        setLockedShell(initialLockedShell)
-    }, [initialLockedShell, initialPrivacyRelationship])
-
-    useEffect(() => {
-        setViewerMutualCount((initialStats as any)?.mutualCount ?? 0)
-    }, [initialStats])
-
-    useEffect(() => {
-        setCollaborationSummary(initialCollaborationSummary || EMPTY_COLLABORATION_SUMMARY)
-    }, [initialCollaborationSummary])
-
-    const { sendRequest, acceptRequest, rejectRequest, cancelRequest, disconnect } = useConnectionMutations();
-
     const [isLoading, setIsLoading] = useState(false);
-
-    useEffect(() => {
-        if (!viewerUser || isOwner) return;
-        setStatus(connectionStatus);
-        setPrivacyRelationship(initialPrivacyRelationship);
-        setLockedShell(initialLockedShell);
-            setViewerMutualCount((initialStats as any)?.mutualCount ?? 0);
-    }, [
-        viewerUser,
-        isOwner,
-        connectionStatus,
-        initialPrivacyRelationship,
-        initialLockedShell,
-        initialStats,
-    ]);
 
     const safeProfile = liveProfile as any
     const initialSummary = collaborationSummary || EMPTY_COLLABORATION_SUMMARY
-    const safeProjects = initialProjects || [];
     const portfolioQuery = useQuery({
         queryKey: profile?.id ? queryKeys.profile.projects(profile.id) : queryKeys.profile.projects('unknown'),
         queryFn: () => fetchProfileProjects(profile.id),
@@ -206,11 +179,9 @@ export function ProfileV2Client({
         enabled: Boolean(profile?.id && inviteOpen && viewerUser && !isOwner),
         staleTime: 30_000,
     })
-    const portfolioProjects = portfolioQuery.data?.projects ?? safeProjects
-    const overviewProjects = initialSummary.projects?.length ? initialSummary.projects : safeProjects.slice(0, 4)
-    const collaborationContributions = initialSummary.contributions?.length
-        ? initialSummary.contributions
-        : (safeProfile?.experience || [])
+    const portfolioProjects = portfolioQuery.data?.projects ?? []
+    const overviewProjects = initialSummary.projects ?? []
+    const collaborationContributions = initialSummary.contributions ?? []
     const projectOptionsForEditing = portfolioProjects.length ? portfolioProjects : overviewProjects
     const safeStats = useMemo(
         () => ({
@@ -255,10 +226,31 @@ export function ProfileV2Client({
         await queryClient.invalidateQueries({ queryKey: queryKeys.profile.byTarget(profile.username || profile.id) })
     }, [profile?.id, profile?.username, queryClient])
 
-    useEffect(() => {
-        if (!inviteOpen || selectedInviteProjectId || !inviteOptionsQuery.data?.projects?.length) return
-        setSelectedInviteProjectId(inviteOptionsQuery.data.projects[0]!.id)
-    }, [inviteOpen, inviteOptionsQuery.data?.projects, selectedInviteProjectId])
+
+
+    const loadEditProfileModal = useCallback(async () => {
+        if (EditProfileModal) return
+        const mod = await import('@/components/profile/edit/EditProfileModal')
+        setEditProfileModal(() => mod.EditProfileModal)
+    }, [EditProfileModal])
+
+    const loadUserConnectionsModal = useCallback(async () => {
+        if (UserConnectionsModal) return
+        const mod = await import('@/components/profile/v2/UserConnectionsModal')
+        setUserConnectionsModal(() => mod.UserConnectionsModal)
+    }, [UserConnectionsModal])
+
+    const loadProfileInviteModal = useCallback(async () => {
+        if (ProfileInviteModal) return
+        const mod = await import('./ProfileInviteModal')
+        setProfileInviteModal(() => mod.default)
+    }, [ProfileInviteModal])
+
+    const loadApplyRoleModal = useCallback(async () => {
+        if (ApplyRoleModal) return
+        const mod = await import('@/components/projects/ApplyRoleModal')
+        setApplyRoleModal(() => mod.default)
+    }, [ApplyRoleModal])
 
     const openEditModal = useCallback((section: EditSection = 'general') => {
         setEditSection(section)
@@ -266,7 +258,8 @@ export function ProfileV2Client({
             prefetchPortfolioProjects()
         }
         setIsEditModalOpen(true)
-    }, [prefetchPortfolioProjects])
+        void loadEditProfileModal()
+    }, [loadEditProfileModal, prefetchPortfolioProjects])
 
     const handleTabChange = useCallback(
         (next: ProfileTabKey) => {
@@ -291,6 +284,7 @@ export function ProfileV2Client({
     }, [])
 
     const resolveConnectionId = async () => {
+        const { checkConnectionStatus } = await import('@/app/actions/connections');
         const result = await checkConnectionStatus(profile.id);
         if (!result.success || !result.connectionId) {
             throw new Error(result.error || "Connection record not found");
@@ -300,6 +294,7 @@ export function ProfileV2Client({
 
     const refreshViewerOverlay = useCallback(async () => {
         if (!viewerUser || isOwner || !profile?.id) return;
+        const { getProfileViewerOverlayAction } = await import('@/app/actions/profile');
         const result = await getProfileViewerOverlayAction(profile.id);
         if (!result.success) return;
         setPrivacyRelationship(result.privacyRelationship);
@@ -315,7 +310,8 @@ export function ProfileV2Client({
         try {
             if (status === 'none' || status === 'rejected') {
                 setStatus('pending_outgoing');
-                await toast.promise(sendRequest.mutateAsync({ userId: profile.id }), {
+                const { sendConnectionRequest } = await import('@/app/actions/connections');
+                await toast.promise(sendConnectionRequest(profile.id, connectionRequestKey()), {
                     loading: 'Sending request...',
                     success: 'Connection request sent',
                     error: (err) => err instanceof Error ? err.message : 'Failed to send request'
@@ -324,7 +320,8 @@ export function ProfileV2Client({
             } else if (status === 'pending_incoming') {
                 setStatus('accepted');
                 const connectionId = await resolveConnectionId();
-                await toast.promise(acceptRequest.mutateAsync(connectionId), {
+                const { acceptConnectionRequest } = await import('@/app/actions/connections');
+                await toast.promise(acceptConnectionRequest(connectionId, { idempotencyKey: connectionId }), {
                     loading: 'Accepting request...',
                     success: 'Connection accepted',
                     error: (err) => err instanceof Error ? err.message : 'Failed to accept request'
@@ -353,7 +350,8 @@ export function ProfileV2Client({
             if (status === 'pending_outgoing') {
                 setStatus('none');
                 const connectionId = await resolveConnectionId();
-                await toast.promise(cancelRequest.mutateAsync(connectionId), {
+                const { cancelConnectionRequest } = await import('@/app/actions/connections');
+                await toast.promise(cancelConnectionRequest(connectionId), {
                     loading: 'Cancelling request...',
                     success: 'Request cancelled',
                     error: (err) => err instanceof Error ? err.message : 'Failed to cancel request'
@@ -362,7 +360,8 @@ export function ProfileV2Client({
             } else if (status === 'pending_incoming') {
                 setStatus('none');
                 const connectionId = await resolveConnectionId();
-                await toast.promise(rejectRequest.mutateAsync({ id: connectionId }), {
+                const { rejectConnectionRequest } = await import('@/app/actions/connections');
+                await toast.promise(rejectConnectionRequest(connectionId), {
                     loading: 'Declining request...',
                     success: 'Request declined',
                     error: (err) => err instanceof Error ? err.message : 'Failed to decline request'
@@ -371,7 +370,8 @@ export function ProfileV2Client({
             } else if (status === 'accepted') {
                 setStatus('none');
                 const connectionId = await resolveConnectionId();
-                await toast.promise(disconnect.mutateAsync(connectionId), {
+                const { removeConnection } = await import('@/app/actions/connections');
+                await toast.promise(removeConnection(connectionId), {
                     loading: 'Disconnecting...',
                     success: 'Disconnected',
                     error: (err) => err instanceof Error ? err.message : 'Failed to disconnect'
@@ -399,36 +399,12 @@ export function ProfileV2Client({
         switch (activeTab) {
             case 'overview':
                 return (
-                    <div
-                        id="profile-panel-overview"
-                        role="tabpanel"
-                        aria-labelledby="profile-tab-overview"
-                        className="space-y-6"
-                    >
+                    <div id="profile-panel-overview" role="tabpanel" aria-labelledby="profile-tab-overview">
                         <ComponentErrorBoundary fallbackMessage="Failed to load about section.">
                             <AboutCard
                                 profile={safeProfile}
                                 isOwner={isOwner}
                                 onEdit={isOwner ? () => openEditModal('general') : undefined}
-                            />
-                        </ComponentErrorBoundary>
-                        
-                        <ComponentErrorBoundary fallbackMessage="Failed to load project contributions.">
-                            <ProjectContributionsCard
-                                contributions={collaborationContributions}
-                                isOwner={isOwner}
-                                onAdd={isOwner ? () => openEditModal('experience') : undefined}
-                                projects={projectOptionsForEditing}
-                                profileId={profile?.id}
-                                onProjectIntent={prefetchProjectHref}
-                                onStageUpdated={refreshCollaborationSummary}
-                            />
-                        </ComponentErrorBoundary>
-                        <ComponentErrorBoundary fallbackMessage="Failed to load skills.">
-                            <SkillsCard
-                                skills={safeProfile.skills || []}
-                                isOwner={isOwner}
-                                onAdd={isOwner ? () => openEditModal('skills') : undefined}
                             />
                         </ComponentErrorBoundary>
                     </div>
@@ -456,6 +432,21 @@ export function ProfileV2Client({
             default:
                 return null
         }
+    }
+
+    const renderMainBottom = () => {
+        if (lockedShell || activeTab !== 'overview') return null
+        return (
+            <ComponentErrorBoundary fallbackMessage="Failed to load project contributions.">
+                <ProjectContributionsCard
+                    contributions={collaborationContributions}
+                    isOwner={isOwner}
+                    onAdd={isOwner ? () => openEditModal('experience') : undefined}
+                    projects={projectOptionsForEditing}
+                    onProjectIntent={prefetchProjectHref}
+                />
+            </ComponentErrorBoundary>
+        )
     }
 
     const handleToggleBlock = async () => {
@@ -510,10 +501,7 @@ export function ProfileV2Client({
                 setStatus('blocked')
                 toast.success('Account blocked')
             }
-            await invalidatePrivacyDependents(queryClient, {
-                profileTargetKey: profile?.username || profile?.id || null,
-                includeProjects: true,
-            })
+            await invalidatePrivacyDependents(queryClient, profile?.username || profile?.id || null)
             await refreshViewerOverlay()
             router.refresh()
         } catch (error) {
@@ -535,35 +523,20 @@ export function ProfileV2Client({
         if (!viewerUser || isOwner) return
         prefetchInviteOptions()
         setInviteOpen(true)
-    }, [isOwner, prefetchInviteOptions, viewerUser])
+        void loadProfileInviteModal()
+    }, [isOwner, loadProfileInviteModal, prefetchInviteOptions, viewerUser])
 
-    const handleSendInvite = useCallback(async () => {
-        if (!profile?.id || !selectedInviteProjectId || isSendingInvite) return
-        setIsSendingInvite(true)
-        try {
-            const response = await fetch(`/api/v1/profiles/${encodeURIComponent(profile.id)}/project-invites`, {
-                method: 'POST',
-                headers: {
-                    accept: 'application/json',
-                    'Content-Type': 'application/json',
-                },
-                credentials: 'include',
-                body: JSON.stringify({
-                    projectId: selectedInviteProjectId,
-                    note: inviteNote,
-                }),
-            })
-            await readApiData(response)
-            toast.success('Project invite sent')
-            setInviteOpen(false)
-            setSelectedInviteProjectId('')
-            setInviteNote('')
-        } catch (error) {
-            toast.error(error instanceof Error ? error.message : 'Failed to send invite')
-        } finally {
-            setIsSendingInvite(false)
-        }
-    }, [inviteNote, isSendingInvite, profile?.id, selectedInviteProjectId])
+    const handleOpenConnections = useCallback(() => {
+        setShowConnectionsModal(true)
+        void loadUserConnectionsModal()
+    }, [loadUserConnectionsModal])
+
+    const handleOpenApplyModal = useCallback(() => {
+        setIsApplyModalOpen(true)
+        void loadApplyRoleModal()
+    }, [loadApplyRoleModal])
+
+
 
     return (
         <>
@@ -597,115 +570,75 @@ export function ProfileV2Client({
                     />
                 )}
                 main={renderMainContent()}
+                mainBottom={renderMainBottom()}
+                highlights={lockedShell ? null : (
+                    <>
+                        <ComponentErrorBoundary fallbackMessage="Failed to load skills.">
+                            <SkillsCard
+                                skills={safeProfile.skills || []}
+                                isOwner={isOwner}
+                                onAdd={isOwner ? () => openEditModal('skills') : undefined}
+                                variant="rail"
+                            />
+                        </ComponentErrorBoundary>
+                        <ComponentErrorBoundary fallbackMessage="Failed to load role preferences.">
+                            <OpenToRolesCard
+                                openTo={safeProfile.openTo}
+                                experienceLevel={safeProfile.experienceLevel}
+                                hoursPerWeek={safeProfile.hoursPerWeek}
+                                isOwner={isOwner}
+                                onEdit={isOwner ? () => openEditModal('skills') : undefined}
+                                onInvite={viewerUser && !isOwner && viewerHasOpenRoles ? handleOpenInvite : undefined}
+                                onInviteIntent={prefetchInviteOptions}
+                                onApply={viewerUser && !isOwner ? handleOpenApplyModal : undefined}
+                                hasOpenRoles={openRolesProjects.length > 0}
+                            />
+                        </ComponentErrorBoundary>
+                    </>
+                )}
                 rail={lockedShell ? null : (
                     <ProfileRightRail
                         profile={safeProfile}
                         stats={safeStats}
                         isOwner={isOwner}
                         socialLinks={safeProfile.socialLinks || []}
-                        onInvite={!viewerPreviewMode && viewerUser && !isOwner ? handleOpenInvite : undefined}
-                        onInviteIntent={prefetchInviteOptions}
-                        onConnectionsClick={() => setShowConnectionsModal(true)}
+                        onConnectionsClick={handleOpenConnections}
                         onEditSection={openEditModal}
                     />
                 )}
             />
 
-            {isOwner && isEditModalOpen && (
+            {isOwner && isEditModalOpen && EditProfileModal && (
                 <EditProfileModal
                     open={isEditModalOpen}
                     onOpenChange={setIsEditModalOpen}
                     profile={safeProfile}
+                    contributions={collaborationContributions}
                     onOptimisticUpdate={applyOptimisticProfileUpdate}
                     initialSection={editSection}
-                    projects={projectOptionsForEditing}
+                    onSaved={refreshCollaborationSummary}
                 />
             )}
 
-            {inviteOpen ? (
-                <div
-                    role="dialog"
-                    aria-modal="true"
-                    aria-labelledby="profile-project-invite-title"
-                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
-                >
-                    <div className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-5 shadow-xl dark:border-zinc-800 dark:bg-zinc-950">
-                        <div className="flex items-start justify-between gap-4">
-                            <div>
-                                <h2 id="profile-project-invite-title" className="text-base font-semibold text-zinc-900 dark:text-zinc-100">
-                                    Invite to project
-                                </h2>
-                                <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-                                    {safeProfile.fullName || safeProfile.username || 'This collaborator'}
-                                </p>
-                            </div>
-                            <button
-                                type="button"
-                                onClick={() => setInviteOpen(false)}
-                                className="rounded-lg px-2 py-1 text-sm text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-900"
-                            >
-                                Close
-                            </button>
-                        </div>
+            {inviteOpen && ProfileInviteModal && (
+                <ProfileInviteModal
+                    isOpen={inviteOpen}
+                    onClose={() => setInviteOpen(false)}
+                    profileId={profile.id}
+                    profileName={safeProfile.fullName || safeProfile.username || 'User'}
+                    projects={inviteOptions}
+                />
+            )}
 
-                        <div className="mt-5 space-y-4">
-                            <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300" htmlFor="profile-project-invite-project">
-                                Project
-                            </label>
-                            <select
-                                id="profile-project-invite-project"
-                                value={selectedInviteProjectId}
-                                onChange={(event) => setSelectedInviteProjectId(event.target.value)}
-                                className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-indigo-500 dark:border-zinc-800 dark:bg-zinc-950"
-                                disabled={inviteOptionsQuery.isLoading || inviteOptions.length === 0}
-                            >
-                                {inviteOptionsQuery.isLoading ? (
-                                    <option value="">Loading projects...</option>
-                                ) : inviteOptions.length === 0 ? (
-                                    <option value="">No managed projects available</option>
-                                ) : (
-                                    inviteOptions.map((project) => (
-                                        <option key={project.id} value={project.id}>
-                                            {project.title}
-                                        </option>
-                                    ))
-                                )}
-                            </select>
+            {isApplyModalOpen && openRolesProjects.length > 0 && ApplyRoleModal && (
+                <ApplyRoleModal
+                    isOpen={isApplyModalOpen}
+                    onClose={() => setIsApplyModalOpen(false)}
+                    candidateProjects={openRolesProjects}
+                />
+            )}
 
-                            <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300" htmlFor="profile-project-invite-note">
-                                Note
-                            </label>
-                            <textarea
-                                id="profile-project-invite-note"
-                                value={inviteNote}
-                                onChange={(event) => setInviteNote(event.target.value.slice(0, 500))}
-                                className="min-h-24 w-full resize-none rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500 dark:border-zinc-800 dark:bg-zinc-950"
-                                placeholder="Add a short invite note"
-                            />
-
-                            <div className="flex justify-end gap-2 pt-2">
-                                <button
-                                    type="button"
-                                    onClick={() => setInviteOpen(false)}
-                                    className="rounded-xl border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-900"
-                                >
-                                    Cancel
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={handleSendInvite}
-                                    disabled={!selectedInviteProjectId || isSendingInvite || inviteOptions.length === 0}
-                                    className="rounded-xl bg-zinc-900 px-4 py-2 text-sm font-semibold text-white hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-200"
-                                >
-                                    {isSendingInvite ? 'Sending...' : 'Send invite'}
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            ) : null}
-
-            {showConnectionsModal ? (
+            {showConnectionsModal && UserConnectionsModal ? (
                 <UserConnectionsModal
                     isOpen={showConnectionsModal}
                     onClose={() => setShowConnectionsModal(false)}
