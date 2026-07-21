@@ -1,15 +1,10 @@
 "use server";
 
-import type { DiscoverConnectionItem } from "@/hooks/useConnections";
-
 import { db } from '@/lib/db';
 import { z } from 'zod';
-import { isMissingRelationError } from '@/lib/db/errors';
-import { connectionSuggestionDismissals, connectionSuggestions, connections, profiles, projects, roleApplications } from '@/lib/db/schema';
-import { createClient } from '@/lib/supabase/server';
-import { eq, and, or, desc, asc, sql, inArray } from 'drizzle-orm';
-import { subDays, isToday, isYesterday } from "date-fns";
-import { randomUUID } from 'crypto';
+import { connectionSuggestionDismissals, connectionSuggestions, connections, messageWorkflowItems, profiles, projects, roleApplications } from '@/lib/db/schema';
+import { getAuthUser } from '@/lib/supabase/auth-user';
+import { eq, and, or, desc, asc, sql, inArray, isNull } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { consumeRateLimit } from '@/lib/security/rate-limit';
 import { IdempotencyConflictError, runIdempotent } from '@/lib/security/idempotency';
@@ -18,15 +13,23 @@ import {
     isConnectionHistoryStatus,
     type ConnectionRequestHistoryStatus,
 } from '@/lib/applications/status';
-import { runInFlightDeduped } from '@/lib/async/inflight-dedupe';
+import { runInFlightDeduped } from '@/lib/utils/inflight-dedupe';
 import { APPLICATION_BANNER_HIDE_AFTER_MS } from '@/lib/chat/banner-lifecycle';
-import { cacheData, getCachedData, redis } from '@/lib/redis';
+import { redis, getCachedData, cacheData } from '@/lib/redis';
+import {
+    invalidateDiscoverCacheForUsers,
+    revalidateConnectionsPaths,
+    syncConnectionsToRedis,
+} from '@/lib/connections/internal-helpers';
 import { queueCounterRefreshBestEffort } from '@/lib/workspace/counter-buffer';
 import { recordPrivacyReadEvents } from '@/lib/privacy/audit';
 import { buildViewerScopedProfileView } from '@/lib/privacy/profile-views';
 import { resolvePrivacyRelationship, resolvePrivacyRelationships } from '@/lib/privacy/resolver';
 import type { PrivacyRelationshipState } from '@/lib/privacy/relationship-state';
 import { emitConnectionAcceptedNotification, emitConnectionRequestReceivedNotification } from '@/lib/notifications/emitters';
+import { logger } from '@/lib/logger';
+import { containsLikePattern, normalizeSearchQuery, tokenizeSearchQuery } from '@/lib/search/query';
+import { recordGlobalSearchMetric } from '@/lib/search/observability';
 import { inngest } from '../../inngest/client';
 
 // ============================================================================
@@ -37,8 +40,40 @@ export interface ConnectionStats {
     totalConnections: number;
     pendingIncoming: number;
     pendingSent: number;
-    connectionsThisMonth: number;
-    connectionsGained: number;
+}
+
+export async function readPeoplePendingCountsAction() {
+    try {
+        const user = await getAuthUser();
+        if (!user) return { success: false as const, error: 'Not authenticated', pendingConnections: 0, pendingInvites: 0 };
+
+        const [connectionCount, inviteCount] = await Promise.all([
+            db
+                .select({ count: sql<number>`COUNT(*)::int` })
+                .from(connections)
+                .where(and(eq(connections.addresseeId, user.id), eq(connections.status, 'pending'))),
+            db
+                .select({ count: sql<number>`COUNT(*)::int` })
+                .from(messageWorkflowItems)
+                .where(and(
+                    eq(messageWorkflowItems.assigneeUserId, user.id),
+                    eq(messageWorkflowItems.kind, 'project_invite'),
+                    eq(messageWorkflowItems.status, 'pending'),
+                )),
+        ]);
+
+        return {
+            success: true as const,
+            pendingConnections: Number(connectionCount[0]?.count ?? 0),
+            pendingInvites: Number(inviteCount[0]?.count ?? 0),
+        };
+    } catch (error) {
+        logger.error('connections.pending_counts_failed', {
+            module: 'connections',
+            error: error instanceof Error ? error.message : String(error),
+        });
+        return { success: false as const, error: 'Failed to load pending requests', pendingConnections: 0, pendingInvites: 0 };
+    }
 }
 
 export interface SuggestedProfile {
@@ -56,11 +91,9 @@ export interface SuggestedProfile {
     mutualConnections?: number;
     recommendationReason?: string;
     projects?: Array<{ id: string; title: string; status: string | null }>;
-    availabilityStatus?: 'available' | 'busy' | 'offline' | 'focusing' | null;
     experienceLevel?: 'student' | 'junior' | 'mid' | 'senior' | 'lead' | 'founder' | null;
     skills?: string[];
     interests?: string[];
-    tags?: string[];
     openTo?: string[];
     messagePrivacy?: 'everyone' | 'connections' | null;
     canSendMessage?: boolean;
@@ -71,7 +104,6 @@ export interface SuggestedProfile {
 export type ConnectionsFeedTab = 'network' | 'requests_incoming' | 'requests_sent' | 'discover';
 
 export interface DiscoverFilters {
-    available?: boolean;
     seniorPlus?: boolean;
     hasMutuals?: boolean;
     hasSharedProjects?: boolean;
@@ -89,11 +121,11 @@ export interface ConnectionsFeedInput {
     limit?: number;
     cursor?: string;
     search?: string;
+    includeMeta?: boolean;
     sortBy?: 'recent' | 'name' | 'oldest';
     filters?: DiscoverFilters;
     historyFilters?: HistoryFilters;
     requestSortBy?: 'recent' | 'mutual' | 'oldest';
-    tagFilter?: string;
 }
 
 const CONNECTION_REJECTION_REASONS = ['not_interested', 'dont_know', 'spam', 'other'] as const;
@@ -104,19 +136,6 @@ interface ConnectionsFeedStats {
     totalConnections: number;
     pendingIncoming: number;
     pendingSent: number;
-}
-
-function isPresent<T>(value: T | null | undefined): value is T {
-    return value !== null && value !== undefined;
-}
-
-async function countPendingIncomingRequests(userId: string): Promise<number> {
-    const [row] = await db
-        .select({ count: sql<number>`count(*)` })
-        .from(connections)
-        .where(and(eq(connections.addresseeId, userId), eq(connections.status, 'pending')));
-
-    return Number(row?.count ?? 0);
 }
 
 async function applySuggestedProfilePrivacy(
@@ -213,72 +232,6 @@ function getUsableRelationshipConnectionId(connectionId: string | null | undefin
     return connectionId;
 }
 
-type PendingRequestsResult = {
-    incoming: Array<{
-        id: string;
-        requesterId: string;
-        addresseeId: string;
-        status: string;
-        createdAt: Date;
-        requesterUsername?: string | null;
-        requesterFullName?: string | null;
-        requesterAvatarUrl?: string | null;
-        requesterHeadline?: string | null;
-    }>;
-    sent: Array<{
-        id: string;
-        requesterId: string;
-        addresseeId: string;
-        status: string;
-        createdAt: Date;
-        addresseeUsername?: string | null;
-        addresseeFullName?: string | null;
-        addresseeAvatarUrl?: string | null;
-        addresseeHeadline?: string | null;
-    }>;
-    hasMoreIncoming: boolean;
-    hasMoreSent: boolean;
-};
-
-type ConnectionStatsQueryRow = {
-    pendingIncoming: number;
-    pendingSent: number;
-    connectionsThisMonth?: number;
-    connectionsGained?: number;
-};
-
-type DiscoverFeedItem = {
-    id: string;
-    username: string | null;
-    fullName: string | null;
-    avatarUrl: string | null;
-    headline: string | null;
-    location: string | null;
-    connectionStatus: SuggestedProfile['connectionStatus'];
-    connectionId?: string;
-    canConnect: boolean;
-    mutualConnections?: number;
-    recommendationReason?: string;
-    projects?: SuggestedProfile['projects'];
-    openTo?: SuggestedProfile['openTo'];
-    messagePrivacy?: SuggestedProfile['messagePrivacy'];
-    canSendMessage?: boolean;
-};
-
-type RequestFeedItem = {
-    id: string;
-    requesterId: string;
-    addresseeId: string;
-    status: string;
-    createdAt: Date;
-    user?: {
-        username?: string | null;
-        fullName?: string | null;
-        avatarUrl?: string | null;
-        headline?: string | null;
-    } | null;
-};
-
 export interface ConnectionRequestHistoryItem {
     id: string;
     kind: 'connection';
@@ -320,67 +273,7 @@ function isConnectionRequestHistoryStatus(status: unknown): status is Connection
 type DbTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 // ============================================================================
-// HELPER: Get authenticated user
 // ============================================================================
-
-async function getAuthUser() {
-    const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    return user;
-}
-
-
-
-// ============================================================================
-// 2A: lastActiveAt debounce mechanism
-// ============================================================================
-
-async function touchLastActive(userId: string) {
-    try {
-        if (!redis) return;
-        const key = `last_active:${userId}`;
-        const alreadySet = await redis.get(key);
-        if (alreadySet) return;
-        await redis.set(key, '1', { ex: 300 });
-        await db
-            .update(profiles)
-            .set({ lastActiveAt: new Date() })
-            .where(eq(profiles.id, userId));
-    } catch (e) {
-        console.error('[touchLastActive] Error:', e);
-    }
-}
-
-// ============================================================================
-// 2D: Cache viewerProjectIds per-session
-// ============================================================================
-
-async function getCachedViewerProjectIds(userId: string, forceQuery: boolean = false): Promise<string[]> {
-    if (redis) {
-        try {
-            const cached = await redis.get(`viewer:projects:${userId}`);
-            if (cached) {
-                try {
-                    return JSON.parse(cached as string);
-                } catch (error) {
-                    console.warn('[getCachedViewerProjectIds] Invalid cache payload', {
-                        userId,
-                        error: error instanceof Error ? error.message : String(error),
-                    });
-                }
-            }
-        } catch { /* ignore */ }
-    }
-    if (!forceQuery) return [];
-    const rows = await db.select({ id: projects.id }).from(projects).where(eq(projects.ownerId, userId)).limit(50);
-    const ids = rows.map(r => r.id);
-    if (redis) {
-        try {
-            await redis.set(`viewer:projects:${userId}`, JSON.stringify(ids), { ex: 300 });
-        } catch { /* ignore */ }
-    }
-    return ids;
-}
 
 // PURE OPTIMIZATION: lockConnectionPair fully replaced by native UNIQUE index constraint
 
@@ -393,26 +286,6 @@ async function applyConnectionsCountDelta(tx: DbTransaction, userIds: string[], 
             updatedAt: new Date(),
         })
         .where(inArray(profiles.id, userIds));
-}
-
-export async function applyConnectionsCountIncrements(tx: DbTransaction, increments: Map<string, number>) {
-    if (increments.size === 0) return;
-    const entries = [...increments.entries()].filter(([, value]) => value !== 0);
-    if (entries.length === 0) return;
-
-    const ids = entries.map(([id]) => id);
-    const cases = sql.join(
-        entries.map(([id, value]) => sql`WHEN ${profiles.id} = ${id} THEN ${value}`),
-        sql` `,
-    );
-
-    await tx
-        .update(profiles)
-        .set({
-            connectionsCount: sql`GREATEST(0, ${profiles.connectionsCount} + CASE ${cases} ELSE 0 END)`,
-            updatedAt: new Date(),
-        })
-        .where(inArray(profiles.id, ids));
 }
 
 const CONNECTIONS_CURSOR_DELIMITER = '|';
@@ -585,11 +458,71 @@ function buildNameSortedConnectionsCursorCondition(cursor: NameConnectionsCursor
     )`;
 }
 
-export async function revalidateConnectionsPaths() {
-    revalidatePath('/people');
-    revalidatePath('/connections');
-    revalidatePath('/profile');
-    revalidatePath('/messages');
+function buildProfileNameIlikeSearchCondition(searchTokens: string[]) {
+    return and(...searchTokens.map((token) => {
+        const pattern = containsLikePattern(token);
+        return sql`(${profiles.fullName} ILIKE ${pattern} OR ${profiles.username} ILIKE ${pattern})`;
+    }))!;
+}
+
+function buildProfileNameFuzzySearchCondition(searchPattern: string, safeSearch: string) {
+    return sql`(
+        similarity(${profiles.fullName}, ${safeSearch}) > 0.3
+        OR similarity(${profiles.username}, ${safeSearch}) > 0.3
+        OR ${profiles.fullName} ILIKE ${searchPattern}
+        OR ${profiles.username} ILIKE ${searchPattern}
+    )`;
+}
+
+function buildDiscoverProfileSearchCondition(searchTokens: string[]) {
+    return and(...searchTokens.map((token) => {
+        const pattern = containsLikePattern(token);
+        return sql`(
+            ${profiles.fullName} ILIKE ${pattern}
+            OR ${profiles.username} ILIKE ${pattern}
+            OR ${profiles.headline} ILIKE ${pattern}
+            OR ${profiles.location} ILIKE ${pattern}
+            OR EXISTS (
+                SELECT 1
+                FROM jsonb_array_elements_text(
+                    CASE WHEN jsonb_typeof(${profiles.skills}) = 'array' THEN ${profiles.skills} ELSE '[]'::jsonb END
+                ) AS skill(value)
+                WHERE skill.value ILIKE ${pattern}
+            )
+            OR EXISTS (
+                SELECT 1
+                FROM jsonb_array_elements_text(
+                    CASE WHEN jsonb_typeof(${profiles.interests}) = 'array' THEN ${profiles.interests} ELSE '[]'::jsonb END
+                ) AS interest(value)
+                WHERE interest.value ILIKE ${pattern}
+            )
+        )`;
+    }))!;
+}
+
+function buildConnectionDateCursorCondition(params: {
+    column: typeof connections.updatedAt | typeof connections.createdAt | typeof profiles.updatedAt;
+    idColumn?: typeof connections.id | typeof profiles.id;
+    isoValue: string;
+    id?: string | null;
+    direction: 'before' | 'after';
+}) {
+    const operator = params.direction === 'after' ? sql`>` : sql`<`;
+    if (!params.id) {
+        return sql`${params.column} ${operator} ${params.isoValue}`;
+    }
+    const idColumn = params.idColumn ?? connections.id;
+    return sql`(
+        ${params.column} ${operator} ${params.isoValue}
+        OR (${params.column} = ${params.isoValue} AND ${idColumn} ${operator} ${params.id})
+    )`;
+}
+
+function buildSuggestionScoreCursorCondition(cursor: { score: number; id: string }) {
+    return sql`(
+        ${connectionSuggestions.score} < ${cursor.score}
+        OR (${connectionSuggestions.score} = ${cursor.score} AND ${connectionSuggestions.suggestedUserId} < ${cursor.id})
+    )`;
 }
 
 async function getConnectionStatsForUser(targetId: string): Promise<ConnectionsFeedStats> {
@@ -618,8 +551,7 @@ async function getConnectionStatsForUser(targetId: string): Promise<ConnectionsF
 }
 
 function getSafeSearch(search?: string) {
-    // H5: Clamp search length to prevent expensive DB queries
-    const normalized = (search || '').trim().slice(0, 200);
+    const normalized = normalizeSearchQuery(search || '');
     return normalized.length > 0 ? normalized : undefined;
 }
 
@@ -631,167 +563,48 @@ function getErrorCode(error: unknown) {
     return typeof code === "string" ? code : null;
 }
 
-const DISCOVER_CACHE_KEY_PREFIX = 'connections:feed:discover:v2';
-let hasConnectionSuggestionsTable: boolean | null = null;
-
-function buildDiscoverCacheKey(params: {
-    userId: string;
-    limit: number;
-    offset: number;
-    cursor?: string;
-    search?: string;
-}) {
-    const cursorPart = params.cursor ? encodeURIComponent(params.cursor) : '';
-    const searchPart = params.search ? encodeURIComponent(params.search.toLowerCase()) : '';
-    return `${DISCOVER_CACHE_KEY_PREFIX}:${params.userId}:l:${params.limit}:o:${params.offset}:c:${cursorPart}:q:${searchPart}`;
-}
-
-async function invalidateDiscoverCacheForUser(userId: string) {
-    const redisClient = redis;
-    if (!redisClient) return;
-    try {
-        const discoverPattern = `discover:profile:${userId}:*`;
-        const inboxPattern = `connections:inbox_cache:${userId}:*`;
-        const patterns = [discoverPattern, inboxPattern];
-
-        for (const pattern of patterns) {
-            let cursor = "0";
-            do {
-                const [nextCursor, keys] = await redisClient.scan(cursor, {
-                    match: pattern,
-                    count: 100,
-                });
-                cursor = nextCursor;
-
-                if (keys.length > 0) {
-                    const deleteBatchSize = 100;
-                    for (let i = 0; i < keys.length; i += deleteBatchSize) {
-                        const batch = keys.slice(i, i + deleteBatchSize);
-                        if (batch.length === 0) continue;
-                        await Promise.all(batch.map((key) => redisClient.unlink(key)));
-                    }
-                }
-            } while (cursor !== '0');
-        }
-    } catch (error) {
-        console.error('Failed to invalidate discover and inbox cache:', error);
-    }
-}
-
-export async function invalidateDiscoverCacheForUsers(userIds: Iterable<string | null | undefined>) {
-    const uniqueUserIds = Array.from(
-        new Set(
-            Array.from(userIds).filter((userId): userId is string => typeof userId === 'string' && userId.length > 0),
-        ),
-    );
-    if (uniqueUserIds.length === 0) return;
-    // PURE OPTIMIZATION: Execute cache invalidation non-blocking to prevent request hangs
-    await Promise.allSettled(uniqueUserIds.map((userId) => invalidateDiscoverCacheForUser(userId))).catch(console.error);
-}
-
-// ============================================================================
-// REDIS CONNECTION EDGE CACHING (O(1) Authorization Checks)
-// ============================================================================
-
-export async function syncConnectionsToRedis(userId: string) {
-    const redisClient = redis;
-    if (!redisClient) return;
-    try {
-        const key = `user:${userId}:connections`;
-        const accepted = await db
-            .select({
-                otherId: sql<string>`CASE
-                    WHEN ${connections.requesterId} = ${userId} THEN ${connections.addresseeId}
-                    ELSE ${connections.requesterId}
-                END`
-            })
-            .from(connections)
-            .where(and(
-                eq(connections.status, 'accepted'),
-                or(eq(connections.requesterId, userId), eq(connections.addresseeId, userId))
-            ));
-
-        const otherIds = accepted.map(row => row.otherId);
-
-        const pipeline = redisClient.pipeline();
-        pipeline.del(key);
-        if (otherIds.length > 0) {
-            for (const otherId of otherIds) {
-                pipeline.sadd(key, otherId);
-            }
-            pipeline.expire(key, 86400); // 24h cache duration
-        }
-        await pipeline.exec();
-    } catch (error) {
-        console.error('Failed to sync connections to Redis:', error);
-    }
-}
-
-export async function isConnected(userId1: string, userId2: string): Promise<boolean> {
-    if (!redis) {
-        const [conn] = await db
-            .select({ id: connections.id })
-            .from(connections)
-            .where(and(
-                eq(connections.status, 'accepted'),
-                or(
-                    and(eq(connections.requesterId, userId1), eq(connections.addresseeId, userId2)),
-                    and(eq(connections.requesterId, userId2), eq(connections.addresseeId, userId1))
-                )
-            ))
-            .limit(1);
-        return !!conn;
-    }
-
-    try {
-        const key = `user:${userId1}:connections`;
-        const exists = await redis.exists(key);
-
-        if (exists) {
-            const isMember = await redis.sismember(key, userId2);
-            return !!isMember;
-        }
-    } catch (error) {
-        console.error('Redis isConnected check failed:', error);
-    }
-
-    const [conn] = await db
-        .select({ id: connections.id })
-        .from(connections)
-        .where(and(
-            eq(connections.status, 'accepted'),
-            or(
-                and(eq(connections.requesterId, userId1), eq(connections.addresseeId, userId2)),
-                and(eq(connections.requesterId, userId2), eq(connections.addresseeId, userId1))
-            )
-        ))
-        .limit(1);
-
-    syncConnectionsToRedis(userId1).catch(console.error);
-
-    return !!conn;
-}
-
 const connectionsFeedInputSchema = z.object({
     tab: z.enum(['network', 'discover', 'requests_incoming', 'requests_sent']),
     limit: z.number().max(100).optional(),
     cursor: z.string().optional(),
     search: z.string().max(100).optional(),
     sortBy: z.enum(['recent', 'name', 'oldest']).optional(),
-    filters: z.any().optional(),
-    historyFilters: z.any().optional(),
+    filters: z.object({
+        seniorPlus: z.boolean().optional(),
+        hasMutuals: z.boolean().optional(),
+        hasSharedProjects: z.boolean().optional(),
+    }).strict().optional(),
+    historyFilters: z.object({
+        status: z.enum(CONNECTION_REQUEST_HISTORY_STATUSES).optional(),
+        direction: z.enum(['sent', 'received']).optional(),
+        dateFrom: z.string().trim().max(40).optional(),
+        dateTo: z.string().trim().max(40).optional(),
+    }).strict().optional(),
     requestSortBy: z.enum(['recent', 'mutual', 'oldest']).optional(),
-    targetUserId: z.string().optional()
+    includeMeta: z.boolean().optional(),
 });
 
-export async function getConnectionsFeed(input: ConnectionsFeedInput) {
-    // Validate input boundaries
-    connectionsFeedInputSchema.parse(input);
+async function getConnectionsFeedImpl(input: ConnectionsFeedInput) {
+    const startedAt = performance.now();
+    const validation = connectionsFeedInputSchema.safeParse(input);
+    if (!validation.success) {
+        return {
+            success: false as const,
+            code: 'VALIDATION' as const,
+            error: 'Invalid connection search request',
+            items: [],
+            nextCursor: null,
+            hasMore: false,
+            stats: { totalConnections: 0, pendingIncoming: 0, pendingSent: 0 },
+        };
+    }
+    input = validation.data;
 
     const user = await getAuthUser();
     if (!user) {
         return {
             success: false as const,
+            code: 'UNAUTHENTICATED' as const,
             error: 'Not authenticated',
             items: [],
             nextCursor: null,
@@ -800,29 +613,47 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
         };
     }
 
-    // 2A: Fire-and-forget lastActiveAt debounce
-    touchLastActive(user.id).catch(() => {});
-
     const limit = Math.max(1, Math.min(input.limit ?? 20, 60));
     const tab = input.tab;
     const safeSearch = getSafeSearch(input.search);
+    const includeMeta = input.includeMeta !== false;
+    const recordPreview = (outcome: 'success' | 'empty' | 'rate-limited' | 'error', resultCount: number) => {
+        if (includeMeta || !safeSearch) return;
+        recordGlobalSearchMetric({
+            domain: 'people',
+            scope: tab,
+            outcome,
+            durationMs: performance.now() - startedAt,
+            resultCount,
+            queryLength: safeSearch.length,
+            tokenCount: tokenizeSearchQuery(safeSearch).length,
+        });
+    };
 
     if (safeSearch) {
         const searchRate = await consumeRateLimit(`connections-search:${user.id}`, 100, 60);
         if (!searchRate.allowed) {
+            recordPreview('rate-limited', 0);
             return {
                 success: false as const,
+                code: 'RATE_LIMITED' as const,
+                retryAfterMs: 1_000,
                 error: 'Too many searches. Please wait and try again.',
                 items: [],
                 nextCursor: null,
                 hasMore: false,
-                stats: await getConnectionStatsForUser(user.id),
+                stats: includeMeta
+                    ? await getConnectionStatsForUser(user.id)
+                    : { totalConnections: 0, pendingIncoming: 0, pendingSent: 0 },
             };
         }
     }
 
-    const stats = await getConnectionStatsForUser(user.id);
-    const searchPattern = safeSearch ? `%${safeSearch.toLowerCase()}%` : undefined;
+    const stats = includeMeta
+        ? await getConnectionStatsForUser(user.id)
+        : { totalConnections: 0, pendingIncoming: 0, pendingSent: 0 };
+    const searchPattern = safeSearch ? containsLikePattern(safeSearch.toLowerCase()) : undefined;
+    const searchTokens = safeSearch ? tokenizeSearchQuery(safeSearch.toLowerCase()) : [];
     const rawParsedCursor = parseConnectionsCursor(input.cursor);
 
     if (tab === 'network') {
@@ -834,35 +665,30 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
             eq(profiles.onboardingStatus, 'completed'),
         ];
 
-        // 2J: Trigram search with ILIKE fallback
-        if (searchPattern && safeSearch) {
-            conditions.push(
-                sql`(
-                    similarity(${profiles.fullName}, ${safeSearch}) > 0.3
-                    OR similarity(${profiles.username}, ${safeSearch}) > 0.3
-                    OR ${profiles.fullName} ILIKE ${searchPattern}
-                    OR ${profiles.username} ILIKE ${searchPattern}
-                )`,
-            );
-        }
+        if (searchPattern && safeSearch) conditions.push(searchTokens.length === 1
+            ? buildProfileNameFuzzySearchCondition(searchPattern, safeSearch)
+            : buildProfileNameIlikeSearchCondition(searchTokens));
 
         if (parsedCursor) {
             if (sortBy === 'name' && parsedCursor.kind === 'name') {
                 conditions.push(buildNameSortedConnectionsCursorCondition(parsedCursor));
             } else if (sortBy === 'oldest' && parsedCursor.kind === 'date') {
-                conditions.push(sql`(
-                    ${connections.updatedAt} > ${parsedCursor.updatedAt}
-                    OR (${connections.updatedAt} = ${parsedCursor.updatedAt} AND ${connections.id} > ${parsedCursor.id})
-                )`);
+                conditions.push(buildConnectionDateCursorCondition({
+                    column: connections.updatedAt,
+                    isoValue: parsedCursor.updatedAt,
+                    id: parsedCursor.id,
+                    direction: 'after',
+                }));
             } else if (sortBy !== 'name' && parsedCursor.kind === 'date') {
-                conditions.push(sql`(
-                    ${connections.updatedAt} < ${parsedCursor.updatedAt}
-                    OR (${connections.updatedAt} = ${parsedCursor.updatedAt} AND ${connections.id} < ${parsedCursor.id})
-                )`);
+                conditions.push(buildConnectionDateCursorCondition({
+                    column: connections.updatedAt,
+                    isoValue: parsedCursor.updatedAt,
+                    id: parsedCursor.id,
+                    direction: 'before',
+                }));
             }
         }
 
-        // 2I: Server-side sorting
         const orderClauses = sortBy === 'name'
             ? [
                 sql`${profiles.fullName} ASC NULLS LAST`,
@@ -873,7 +699,6 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
                 ? [asc(connections.updatedAt), asc(connections.id)]
                 : [desc(connections.updatedAt), desc(connections.id)];
 
-        // 2K: Use SQL DISTINCT ON to remove duplicates at query level
         const rows = await db
             .select({
                 id: connections.id,
@@ -894,7 +719,6 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
                 messagePrivacy: profiles.messagePrivacy,
                 openTo: profiles.openTo,
                 lastActiveAt: profiles.lastActiveAt,
-                tags: connections.tags,
             })
             .from(connections)
             .innerJoin(
@@ -910,18 +734,6 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
 
         const hasMore = rows.length > limit;
 
-        // 2S: Connection active status — read from Redis Set
-        let activeUserIds: Set<string> | null = null;
-        if (redis) {
-            try {
-                const activeMembers = await redis.smembers(`active_connections:${user.id}`);
-                if (activeMembers && activeMembers.length > 0) {
-                    activeUserIds = new Set(activeMembers);
-                }
-            } catch { /* ignore */ }
-        }
-
-        // 2K: Removed client-side seenNetworkUserIds dedup — uniqueness ensured by query join
         const items = rows.slice(0, limit).map((row) => ({
             id: row.id,
             type: 'network' as const,
@@ -930,8 +742,6 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
             status: row.status,
             createdAt: row.createdAt,
             updatedAt: row.updatedAt,
-            tags: (row.tags as string[] | null) ?? [],
-            isActive: activeUserIds?.has(row.profileId) ?? false,
             otherUser: {
                 id: row.profileId,
                 username: row.username,
@@ -1004,26 +814,6 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
             metadata: { count: visibleItems.length },
         });
 
-        // 1F: Merge monthly stats into network feed response
-        const now = new Date();
-        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-        const prevMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-        let connectionsThisMonth = 0;
-        let connectionsGained = 0;
-        try {
-            const [monthlyStats] = await db
-                .select({
-                    thisMonth: sql<number>`COUNT(*) FILTER (WHERE ${connections.status} = 'accepted' AND ${connections.updatedAt} >= ${monthStart})`,
-                    lastMonth: sql<number>`COUNT(*) FILTER (WHERE ${connections.status} = 'accepted' AND ${connections.updatedAt} >= ${prevMonthStart} AND ${connections.updatedAt} < ${monthStart})`,
-                })
-                .from(connections)
-                .where(or(eq(connections.requesterId, user.id), eq(connections.addresseeId, user.id)));
-            connectionsThisMonth = Number(monthlyStats?.thisMonth ?? 0);
-            connectionsGained = Math.max(0, connectionsThisMonth - Number(monthlyStats?.lastMonth ?? 0));
-        } catch { /* non-critical */ }
-
-        const enrichedStats = { ...stats, connectionsThisMonth, connectionsGained };
-
         const nextCursor = hasMore && visibleItems.length > 0
             ? sortBy === 'name'
                 ? encodeConnectionsNameCursor(
@@ -1034,7 +824,8 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
                 : encodeConnectionsCursor(visibleItems[visibleItems.length - 1]!.updatedAt, visibleItems[visibleItems.length - 1]!.id, sortBy)
             : null;
 
-        return { success: true as const, items: visibleItems, hasMore, nextCursor, stats: enrichedStats };
+        recordPreview(visibleItems.length > 0 ? 'success' : 'empty', visibleItems.length);
+        return { success: true as const, items: visibleItems, hasMore, nextCursor, stats };
     }
 
     if (tab === 'requests_incoming' || tab === 'requests_sent') {
@@ -1053,19 +844,16 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
             userCondition,
             eq(profiles.onboardingStatus, 'completed'),
         ];
-        if (searchPattern) {
-            conditions.push(
-                sql`(${profiles.fullName} ILIKE ${searchPattern} OR ${profiles.username} ILIKE ${searchPattern})`,
-            );
-        }
+        if (searchPattern) conditions.push(buildProfileNameIlikeSearchCondition(searchTokens));
         if (!isMutualRequestsSort && rawParsedCursor?.kind === 'date') {
-            conditions.push(sql`(
-                ${connections.createdAt} < ${rawParsedCursor.updatedAt}
-                OR (${connections.createdAt} = ${rawParsedCursor.updatedAt} AND ${connections.id} < ${rawParsedCursor.id})
-            )`);
+            conditions.push(buildConnectionDateCursorCondition({
+                column: connections.createdAt,
+                isoValue: rawParsedCursor.updatedAt,
+                id: rawParsedCursor.id,
+                direction: 'before',
+            }));
         }
 
-        // 2B: Add message column to request SELECT
         const requestsQuery = db
             .select({
                 id: connections.id,
@@ -1090,7 +878,6 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
             .innerJoin(profiles, profileJoinCondition)
             .where(and(...conditions))
             .orderBy(
-                // 1K: Configurable request sorting
                 input.requestSortBy === 'oldest' ? asc(connections.createdAt) : desc(connections.createdAt),
                 input.requestSortBy === 'oldest' ? asc(connections.id) : desc(connections.id),
             );
@@ -1100,7 +887,6 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
 
         const rawHasMore = rows.length > limit;
 
-        // 2L: Smart ordering for incoming requests — read mutual counts from Redis
         let mutualCountsMap: Record<string, string> | null = null;
         if (isIncoming && redis) {
             try {
@@ -1202,763 +988,270 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
         return { success: true as const, items, hasMore: rawHasMore, nextCursor, stats };
     }
 
-    // discover
-    // 2F: Keyset cursor for discover — offset cursors use `o:`, pre-computed score cursors use `s:`,
-    // and lightweight real-time connection-count cursors use `c:`.
-    let safeOffset = 0;
-    let discoverSuggestionKeyset: { score: number; id: string } | null = null;
-    let discoverConnectionsKeyset: { connectionsCount: number; id: string } | null = null;
-    if (input.cursor?.startsWith('o:')) {
-        const discoverOffset = Number(input.cursor.slice(2));
-        safeOffset = Number.isFinite(discoverOffset) && discoverOffset > 0 ? Math.min(discoverOffset, 1000) : 0;
-    } else if (input.cursor?.startsWith('s:')) {
-        const rest = input.cursor.slice(2);
-        const sepIdx = rest.indexOf('|');
-        if (sepIdx > 0) {
-            const scoreRaw = Number(rest.slice(0, sepIdx));
-            const id = rest.slice(sepIdx + 1);
-            if (Number.isFinite(scoreRaw) && id) {
-                discoverSuggestionKeyset = { score: scoreRaw, id };
-            }
-        }
-    } else if (input.cursor?.startsWith('c:')) {
-        const rest = input.cursor.slice(2);
-        const sepIdx = rest.indexOf('|');
-        if (sepIdx > 0) {
-            const connectionsCount = Number(rest.slice(0, sepIdx));
-            const id = rest.slice(sepIdx + 1);
-            if (Number.isFinite(connectionsCount) && id) {
-                discoverConnectionsKeyset = { connectionsCount, id };
-            }
-        }
+    let suggestionCursor: { score: number; id: string } | null = null;
+    if (input.cursor?.startsWith('s:')) {
+        const [scoreValue, id] = input.cursor.slice(2).split('|');
+        const score = Number(scoreValue);
+        if (Number.isFinite(score) && id) suggestionCursor = { score, id };
     }
 
-    // PURE OPTIMIZATION: Split heavy vs light queries based on offset
-    const isHeavyLoad = safeOffset === 0 && !discoverSuggestionKeyset && !discoverConnectionsKeyset && !searchPattern;
-    const cacheKey = buildDiscoverCacheKey({
-        userId: user.id,
-        limit,
-        offset: safeOffset,
-        cursor: input.cursor,
-        search: safeSearch,
-    });
-
-    // Redis Buffer Cache for Light Explore Load
-    if (!isHeavyLoad && !searchPattern) {
-        try {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const cachedResult = await getCachedData<any>(cacheKey);
-            if (cachedResult) return cachedResult;
-        } catch (e) {
-            console.error("Redis Cache error:", e);
-        }
+    const discoverConditions = [
+        eq(connectionSuggestions.userId, user.id),
+        eq(profiles.onboardingStatus, 'completed'),
+        isNull(profiles.deletedAt),
+        sql`NOT EXISTS (
+            SELECT 1 FROM ${connectionSuggestionDismissals}
+            WHERE ${connectionSuggestionDismissals.userId} = ${user.id}
+              AND ${connectionSuggestionDismissals.dismissedProfileId} = ${profiles.id}
+        )`,
+        sql`NOT EXISTS (
+            SELECT 1 FROM ${connections} existing
+            WHERE (existing.requester_id = ${user.id} AND existing.addressee_id = ${profiles.id})
+               OR (existing.requester_id = ${profiles.id} AND existing.addressee_id = ${user.id})
+        )`,
+    ];
+    if (suggestionCursor) discoverConditions.push(buildSuggestionScoreCursorCondition(suggestionCursor));
+    if (searchPattern) {
+        discoverConditions.push(eq(profiles.visibility, 'public'));
+        discoverConditions.push(buildDiscoverProfileSearchCondition(searchTokens));
+    }
+    if (input.filters?.seniorPlus) discoverConditions.push(sql`${profiles.experienceLevel} IN ('senior', 'lead', 'founder')`);
+    if (input.filters?.hasMutuals) discoverConditions.push(sql`${connectionSuggestions.mutualConnectionsCount} > 0`);
+    if (input.filters?.hasSharedProjects) {
+        discoverConditions.push(sql`EXISTS (SELECT 1 FROM ${projects} WHERE ${projects.ownerId} = ${profiles.id})`);
     }
 
-    // =========================================================================
-    // PHASE 6B: Pre-computed Suggestions Fast Path
-    // Try reading from the `connection_suggestions` table first (O(1) read).
-    // This data is pre-computed by the social-graph-suggestions Inngest worker.
-    // =========================================================================
-    if (!searchPattern && hasConnectionSuggestionsTable !== false) {
-        try {
-            // 2F: Keyset cursor for pre-computed path
-            const preComputedConditions = [eq(connectionSuggestions.userId, user.id)];
-            if (discoverSuggestionKeyset) {
-                preComputedConditions.push(sql`(
-                    ${connectionSuggestions.score} < ${discoverSuggestionKeyset.score}
-                    OR (${connectionSuggestions.score} = ${discoverSuggestionKeyset.score} AND ${connectionSuggestions.suggestedUserId} < ${discoverSuggestionKeyset.id})
-                )`);
-            }
-
-            const preComputed = await db
-                .select({
-                    suggestedUserId: connectionSuggestions.suggestedUserId,
-                    mutualConnectionsCount: connectionSuggestions.mutualConnectionsCount,
-                    score: connectionSuggestions.score,
-                    reason: connectionSuggestions.reason,
-                })
-                .from(connectionSuggestions)
-                .where(and(...preComputedConditions))
-                .orderBy(desc(connectionSuggestions.score))
-                .limit(limit + 1)
-                .offset(discoverSuggestionKeyset ? 0 : safeOffset);
-            hasConnectionSuggestionsTable = true;
-
-            if (preComputed.length > 0) {
-                const suggestedIds = preComputed.slice(0, limit).map(s => s.suggestedUserId);
-                // 2A, 2H: Add lastActiveAt, skills, interests to SELECT
-                const suggestedProfiles = await db
-                    .select({
-                        id: profiles.id,
-                        username: profiles.username,
-                        fullName: profiles.fullName,
-                        avatarUrl: profiles.avatarUrl,
-                        headline: profiles.headline,
-                        location: profiles.location,
-                        visibility: profiles.visibility,
-                        messagePrivacy: profiles.messagePrivacy,
-                        connectionsCount: profiles.connectionsCount,
-                        availabilityStatus: profiles.availabilityStatus,
-                        experienceLevel: profiles.experienceLevel,
-                        lastActiveAt: profiles.lastActiveAt,
-                        skills: profiles.skills,
-                        interests: profiles.interests,
-                        openTo: profiles.openTo,
-                    })
-                    .from(profiles)
-                    .where(
-                        and(
-                            inArray(profiles.id, suggestedIds),
-                            eq(profiles.onboardingStatus, 'completed')
-                        )
-                    );
-
-                const profileMap = new Map(suggestedProfiles.map(p => [p.id, p]));
-                const preComputedItems = preComputed.slice(0, limit).map(s => {
-                    const p = profileMap.get(s.suggestedUserId);
-                    if (!p) return null;
-                    const profileVisibility = (p.visibility || 'public') as SuggestedProfile['profileVisibility'];
-                    return {
-                        id: p.id,
-                        type: 'discover' as const,
-                        username: p.username,
-                        fullName: p.fullName,
-                        avatarUrl: p.avatarUrl,
-                        headline: p.headline,
-                        location: p.location,
-                        connectionStatus: 'none' as SuggestedProfile['connectionStatus'],
-                        connectionId: undefined,
-                        canConnect: true,
-                        profileVisibility,
-                        isLockedProfile: profileVisibility !== 'public',
-                        mutualConnections: s.mutualConnectionsCount,
-                        recommendationReason: s.reason || `${s.mutualConnectionsCount} mutual connections`,
-                        projects: [] as Array<{ id: string; title: string; status: string | null }>,
-                        availabilityStatus: p.availabilityStatus as SuggestedProfile['availabilityStatus'],
-                        experienceLevel: p.experienceLevel as SuggestedProfile['experienceLevel'],
-                        openTo: (p.openTo as string[]) ?? [],
-                        messagePrivacy: (p.messagePrivacy || 'connections') as SuggestedProfile['messagePrivacy'],
-                        canSendMessage: p.messagePrivacy === 'everyone',
-                        lastActiveAt: p.lastActiveAt?.toISOString() ?? null,
-                        skills: (p.skills as string[]) ?? [],
-                        interests: (p.interests as string[]) ?? [],
-                    };
-                }).filter(isPresent);
-
-                if (preComputedItems.length > 0) {
-                    const visiblePreComputedItems = await applySuggestedProfilePrivacy(user.id, preComputedItems);
-                    await recordPrivacyReadEvents({
-                        subjectUserIds: visiblePreComputedItems.map((item) => item.id),
-                        viewerUserId: user.id,
-                        eventType: 'discover_profile_served',
-                        route: 'connections.discover.precomputed',
-                        metadata: { count: visiblePreComputedItems.length },
-                    });
-                    const hasMore = preComputed.length > limit;
-                    // 2F: Return keyset cursor using score
-                    const lastItem = preComputed[Math.min(limit - 1, preComputed.length - 1)];
-                    const nextCursor = hasMore ? `s:${lastItem!.score}|${lastItem!.suggestedUserId}` : null;
-                    // 2D: Use cached viewer project IDs
-                    const [viewerProjectIds, viewerProfileRows] = await Promise.all([
-                        getCachedViewerProjectIds(user.id, isHeavyLoad),
-                        db
-                            .select({ skills: profiles.skills, location: profiles.location })
-                            .from(profiles)
-                            .where(eq(profiles.id, user.id))
-                            .limit(1),
-                    ]);
-                    const viewerSkills = (viewerProfileRows[0]?.skills as string[]) ?? [];
-                    const viewerLocation = viewerProfileRows[0]?.location ?? null;
-                    return { success: true as const, items: visiblePreComputedItems, hasMore, nextCursor, stats, viewerProjectIds, viewerSkills, viewerLocation };
-                }
-            }
-        } catch (e) {
-            if (isMissingRelationError(e, 'connection_suggestions')) {
-                hasConnectionSuggestionsTable = false;
-                console.warn('[discover] connection_suggestions table is unavailable; falling back to real-time suggestions.');
-            } else {
-                console.warn('[discover] Pre-computed suggestions read failed, falling back to real-time:', e);
-            }
-        }
-    }
-
-    // =========================================================================
-    // PHASE 6B: Graceful Degradation — Timeout-guarded real-time discovery
-    // If the heavy query takes >3s, fall back to a cached "Global Trending" feed
-    // =========================================================================
-    const DISCOVER_TIMEOUT_MS = 3000;
-
-    const realTimeDiscoverResult = await Promise.race([
-        (async () => {
-            // 2D: Use cached viewer project IDs
-            const [meProfile, viewerProjectIds] = await Promise.all([
-                db
-                    .select({
-                        skills: profiles.skills,
-                        interests: profiles.interests,
-                        openTo: profiles.openTo,
-                        location: profiles.location,
-                    })
-                    .from(profiles)
-                    .where(eq(profiles.id, user.id))
-                    .limit(1),
-                getCachedViewerProjectIds(user.id, isHeavyLoad),
-            ]);
-
-            const mySignals = new Set<string>([
-                ...((meProfile[0]?.skills || []).map((v) => v.toLowerCase())),
-                ...((meProfile[0]?.interests || []).map((v) => v.toLowerCase())),
-                ...((meProfile[0]?.openTo || []).map((v) => v.toLowerCase())),
-            ]);
-
-            const candidateBaseConditions = [
-                eq(profiles.onboardingStatus, 'completed'),
-                sql`${profiles.id} <> ${user.id}`
-            ];
-            candidateBaseConditions.push(sql`NOT EXISTS (
-                SELECT 1
-                FROM ${connectionSuggestionDismissals}
-                WHERE ${connectionSuggestionDismissals.userId} = ${user.id}
-                AND ${connectionSuggestionDismissals.dismissedProfileId} = ${profiles.id}
-            )`);
-            candidateBaseConditions.push(sql`NOT EXISTS (
-                SELECT 1
-                FROM ${connections} privacy_block
-                WHERE privacy_block.status = 'blocked'
-                AND (
-                    (privacy_block.requester_id = ${user.id} AND privacy_block.addressee_id = ${profiles.id} AND privacy_block.blocked_by = ${user.id})
-                    OR
-                    (privacy_block.requester_id = ${profiles.id} AND privacy_block.addressee_id = ${user.id} AND privacy_block.blocked_by = ${profiles.id})
-                )
-            )`);
-            if (searchPattern) {
-                candidateBaseConditions.push(
-                    sql`(
-                        ${profiles.fullName} ILIKE ${searchPattern}
-                        OR ${profiles.username} ILIKE ${searchPattern}
-                        OR ${profiles.headline} ILIKE ${searchPattern}
-                        OR ${profiles.location} ILIKE ${searchPattern}
-                        OR EXISTS (SELECT 1 FROM unnest(${profiles.skills}::text[]) s WHERE s ILIKE ${searchPattern})
-                        OR EXISTS (SELECT 1 FROM unnest(${profiles.interests}::text[]) i WHERE i ILIKE ${searchPattern})
-                    )`,
-                );
-            }
-
-            // 1I: Server-side filters for discover
-            const discoverFilters = input.filters;
-            if (discoverFilters?.available) {
-                candidateBaseConditions.push(sql`${profiles.availabilityStatus} = 'available'`);
-            }
-            if (discoverFilters?.seniorPlus) {
-                candidateBaseConditions.push(sql`${profiles.experienceLevel} IN ('senior', 'lead', 'founder')`);
-            }
-
-            // 2F: Keyset cursor for real-time path
-            if (discoverConnectionsKeyset) {
-                candidateBaseConditions.push(sql`(
-                    ${profiles.connectionsCount} < ${discoverConnectionsKeyset.connectionsCount}
-                    OR (${profiles.connectionsCount} = ${discoverConnectionsKeyset.connectionsCount} AND ${profiles.id} < ${discoverConnectionsKeyset.id})
-                )`);
-            }
-
-            // 2A: Add lastActiveAt to SELECT
-            const candidates = await db
-                .select({
-                    id: profiles.id,
-                    username: profiles.username,
-                    fullName: profiles.fullName,
-                    avatarUrl: profiles.avatarUrl,
-                    headline: profiles.headline,
-                    location: profiles.location,
-                    visibility: profiles.visibility,
-                    messagePrivacy: profiles.messagePrivacy,
-                    skills: profiles.skills,
-                    interests: profiles.interests,
-                    openTo: profiles.openTo,
-                    createdAt: profiles.createdAt,
-                    connectionsCount: profiles.connectionsCount,
-                    availabilityStatus: profiles.availabilityStatus,
-                    experienceLevel: profiles.experienceLevel,
-                    lastActiveAt: profiles.lastActiveAt,
-                })
-                .from(profiles)
-                .where(and(...candidateBaseConditions))
-                .orderBy(desc(profiles.connectionsCount), desc(profiles.createdAt), desc(profiles.id))
-                .limit(limit + 1)
-                .offset(discoverConnectionsKeyset ? 0 : safeOffset);
-
-            const candidateIds = candidates.map((candidate) => candidate.id);
-            if (candidateIds.length === 0) {
-                return {
-                    success: true as const,
-                    items: [],
-                    hasMore: false,
-                    nextCursor: null,
-                    stats,
-                };
-            }
-
-            const existingConnections = await db
-                .select({
-                    id: connections.id,
-                    requesterId: connections.requesterId,
-                    addresseeId: connections.addresseeId,
-                    status: connections.status,
-                    createdAt: connections.createdAt,
-                    updatedAt: connections.updatedAt,
-                })
-                .from(connections)
-                .where(
-                    or(
-                        and(eq(connections.requesterId, user.id), inArray(connections.addresseeId, candidateIds)),
-                        and(eq(connections.addresseeId, user.id), inArray(connections.requesterId, candidateIds)),
-                    ),
-                );
-
-            const connectionByCandidate = new Map<string, { status: typeof connections.$inferSelect.status; requesterId: string; id: string; updatedAt: Date }>();
-            for (const conn of existingConnections) {
-                const candidateId = conn.requesterId === user.id ? conn.addresseeId : conn.requesterId;
-                const existing = connectionByCandidate.get(candidateId);
-                if (!existing) {
-                    connectionByCandidate.set(candidateId, { status: conn.status, requesterId: conn.requesterId, id: conn.id, updatedAt: conn.updatedAt });
-                    continue;
-                }
-                const getPriority = (s: string) => {
-                    if (s === 'accepted') return 1;
-                    if (s === 'blocked') return 2;
-                    if (s === 'pending') return 3;
-                    return 4;
-                };
-                if (getPriority(conn.status) < getPriority(existing.status) || (getPriority(conn.status) === getPriority(existing.status) && conn.updatedAt > existing.updatedAt)) {
-                    connectionByCandidate.set(candidateId, { status: conn.status, requesterId: conn.requesterId, id: conn.id, updatedAt: conn.updatedAt });
-                }
-            }
-
-            let candidateProjects: Array<{ ownerId: string; id: string; title: string; status: string | null }> = [];
-            const mutualCounts = new Map<string, number>();
-
-            if (isHeavyLoad) {
-                const fetchedProjects = await db
-                    .select({
-                        ownerId: projects.ownerId,
-                        id: projects.id,
-                        title: projects.title,
-                        status: projects.status,
-                    })
-                    .from(projects)
-                    .where(inArray(projects.ownerId, candidateIds))
-                    .orderBy(desc(projects.createdAt));
-                candidateProjects = fetchedProjects;
-
-                const myPeerRows = await db
-                    .select({
-                        peerId: sql<string>`CASE
-                            WHEN ${connections.requesterId} = ${user.id} THEN ${connections.addresseeId}
-                            ELSE ${connections.requesterId}
-                        END`,
-                    })
-                    .from(connections)
-                    .where(
-                        and(
-                            eq(connections.status, 'accepted'),
-                            or(eq(connections.requesterId, user.id), eq(connections.addresseeId, user.id)),
-                        ),
-                    )
-                    .limit(1000);
-                const myPeerIds = myPeerRows.map((row) => row.peerId);
-
-                if (myPeerIds.length > 0) {
-                    const candidateIdSet = new Set(candidateIds);
-                    const mutualRows = await db
-                        .select({
-                            requesterId: connections.requesterId,
-                            addresseeId: connections.addresseeId,
-                        })
-                        .from(connections)
-                        .where(
-                            and(
-                                eq(connections.status, 'accepted'),
-                                or(
-                                    and(inArray(connections.requesterId, candidateIds), inArray(connections.addresseeId, myPeerIds)),
-                                    and(inArray(connections.addresseeId, candidateIds), inArray(connections.requesterId, myPeerIds)),
-                                ),
-                            ),
-                        );
-
-                    for (const row of mutualRows) {
-                        const candidateId = candidateIdSet.has(row.requesterId) ? row.requesterId : row.addresseeId;
-                        mutualCounts.set(candidateId, (mutualCounts.get(candidateId) || 0) + 1);
-                    }
-                }
-
-                // 2E: Cache mutual counts to Redis hash for light load
-                if (redis && mutualCounts.size > 0) {
-                    try {
-                        const hashKey = `discover:mutuals:${user.id}`;
-                        const hashEntries: Record<string, string> = {};
-                        for (const [cid, count] of mutualCounts) {
-                            hashEntries[cid] = String(count);
-                        }
-                        await redis.hset(hashKey, hashEntries);
-                        await redis.expire(hashKey, 300);
-                    } catch { /* ignore */ }
-                }
-            } else {
-                // 2E: Light load — read mutual counts from Redis
-                if (redis) {
-                    try {
-                        const hash = await redis.hgetall(`discover:mutuals:${user.id}`);
-                        if (hash) {
-                            for (const [cid, count] of Object.entries(hash)) {
-                                mutualCounts.set(cid, Number(count));
-                            }
-                        }
-                    } catch { /* ignore */ }
-                }
-            }
-
-            const projectsByOwner = new Map<string, Array<{ id: string; title: string; status: string | null }>>();
-            if (isHeavyLoad) {
-                for (const project of candidateProjects) {
-                    if (!projectsByOwner.has(project.ownerId)) {
-                        projectsByOwner.set(project.ownerId, []);
-                    }
-                    const ownerProjects = projectsByOwner.get(project.ownerId) ?? [];
-                    if (ownerProjects.length < 3) {
-                        ownerProjects.push({ id: project.id, title: project.title, status: project.status });
-                    }
-                }
-            }
-
-            // 1E: Configurable scoring weights from Redis
-            let wOverlap = 5, wMutual = 3, wRecency = 0.03;
-            if (redis) {
-                try {
-                    const weights = await redis.hgetall('discover:scoring_weights');
-                    if (weights) {
-                        if (weights.overlap != null) {
-                            const overlapWeight = Number(weights.overlap);
-                            if (Number.isFinite(overlapWeight)) wOverlap = overlapWeight;
-                        }
-                        if (weights.mutual != null) {
-                            const mutualWeight = Number(weights.mutual);
-                            if (Number.isFinite(mutualWeight)) wMutual = mutualWeight;
-                        }
-                        if (weights.recency != null) {
-                            const recencyWeight = Number(weights.recency);
-                            if (Number.isFinite(recencyWeight)) wRecency = recencyWeight;
-                        }
-                    }
-                } catch { /* fallback to defaults */ }
-            }
-
-            const scored = candidates.map((candidate) => {
-                const conn = connectionByCandidate.get(candidate.id);
-                const status = conn?.status === 'accepted'
-                    ? 'connected'
-                    : conn?.status === 'blocked'
-                        ? 'blocked'
-                    : conn?.status === 'pending'
-                        ? (conn.requesterId === user.id ? 'pending_sent' : 'pending_received')
-                        : 'none';
-                const canConnect = status === 'none';
-
-                if (!isHeavyLoad) {
-                    // 2E: Use cached mutual counts on light load
-                    const cachedMutual = mutualCounts.get(candidate.id) || 0;
-                    return {
-                        ...candidate,
-                        score: candidate.connectionsCount || 0,
-                        status,
-                        canConnect,
-                        mutual: cachedMutual,
-                        recommendationReason: cachedMutual > 0 ? `${cachedMutual} mutual connections` : undefined,
-                        scoringBreakdown: undefined as SuggestedProfile['scoringBreakdown'],
-                    };
-                }
-
-                const candidateSignals = new Set<string>([
-                    ...(((candidate.skills as string[]) || []).map((v) => v.toLowerCase())),
-                    ...(((candidate.interests as string[]) || []).map((v) => v.toLowerCase())),
-                ]);
-                let overlap = 0;
-                for (const signal of candidateSignals) {
-                    if (mySignals.has(signal)) overlap += 1;
-                }
-                const mutual = mutualCounts.get(candidate.id) || 0;
-                const recency = Math.max(0, 365 - (Date.now() - new Date(candidate.createdAt).getTime()) / (1000 * 60 * 60 * 24));
-                const rawScore = overlap * wOverlap + mutual * wMutual + recency * wRecency;
-
-                // 2G: Profile completeness multiplier
-                const hasHeadline = !!candidate.headline;
-                const hasSkills = ((candidate.skills as string[]) || []).length > 0;
-                const hasInterests = ((candidate.interests as string[]) || []).length > 0;
-                const hasLocation = !!candidate.location;
-                let completeness = 1.0;
-                if (!hasHeadline && !hasSkills && !hasInterests && !hasLocation) {
-                    completeness = 0.5;
-                } else if (hasHeadline && (hasSkills || hasInterests) && hasLocation) {
-                    completeness = 1.5;
-                }
-                const score = rawScore * completeness;
-
-                const recommendationReason = overlap > 0
-                    ? 'Skills match'
-                    : mutual > 0
-                        ? `${mutual} mutual connections`
-                        : 'Suggested for your network';
-
-                return {
-                    ...candidate,
-                    score,
-                    status,
-                    canConnect,
-                    mutual,
-                    recommendationReason,
-                    scoringBreakdown: { overlap, mutual, recency, completeness },
-                };
-            });
-
-            // 1I: Post-query filters (require computed data)
-            if (discoverFilters?.hasMutuals) {
-                for (let i = scored.length - 1; i >= 0; i--) {
-                    if ((scored[i]!.mutual ?? 0) === 0) scored.splice(i, 1);
-                }
-            }
-            if (discoverFilters?.hasSharedProjects && isHeavyLoad) {
-                for (let i = scored.length - 1; i >= 0; i--) {
-                    if (!projectsByOwner.has(scored[i]!.id) || projectsByOwner.get(scored[i]!.id)!.length === 0) {
-                        scored.splice(i, 1);
-                    }
-                }
-            }
-
-            if (isHeavyLoad) {
-                scored.sort((a, b) => b.score - a.score || +new Date(b.createdAt) - +new Date(a.createdAt));
-
-                // 2R: Diversity enforcement — prevent any single reason from dominating >50%
-                if (scored.length > 4) {
-                    const reasonCounts = new Map<string, number>();
-                    for (const s of scored) {
-                        if (s.recommendationReason) {
-                            reasonCounts.set(s.recommendationReason, (reasonCounts.get(s.recommendationReason) || 0) + 1);
-                        }
-                    }
-                    const threshold = Math.ceil(scored.length * 0.5);
-                    let dominantReason: string | null = null;
-                    for (const [reason, count] of reasonCounts) {
-                        if (count > threshold) { dominantReason = reason; break; }
-                    }
-                    if (dominantReason) {
-                        const dominant: typeof scored = [];
-                        const others: typeof scored = [];
-                        for (const s of scored) {
-                            if (s.recommendationReason === dominantReason) dominant.push(s);
-                            else others.push(s);
-                        }
-                        // Interleave: take from dominant and others alternately
-                        const interleaved: typeof scored = [];
-                        let di = 0, oi = 0;
-                        while (di < dominant.length || oi < others.length) {
-                            if (di < dominant.length) interleaved.push(dominant[di++]!);
-                            if (oi < others.length) interleaved.push(others[oi++]!);
-                        }
-                        scored.length = 0;
-                        scored.push(...interleaved);
-                    }
-                }
-            }
-
-            // 2P: Read lane preferences (heavy load only)
-            let lanePreferences: Record<string, number> | undefined;
-            if (isHeavyLoad && redis) {
-                try {
-                    const prefs = await redis.hgetall(`discover:preference:${user.id}`);
-                    if (prefs && Object.keys(prefs).length > 0) {
-                        lanePreferences = {};
-                        for (const [k, v] of Object.entries(prefs)) {
-                            lanePreferences[k] = Number(v);
-                        }
-                    }
-                } catch { /* ignore */ }
-            }
-
-            const hasMore = scored.length > limit;
-            const items = scored.slice(0, limit).map((candidate) => {
-                const profileVisibility = (candidate.visibility || 'public') as SuggestedProfile['profileVisibility'];
-                return {
-                    id: candidate.id,
-                    type: 'discover' as const,
-                    username: candidate.username,
-                    fullName: candidate.fullName,
-                    avatarUrl: candidate.avatarUrl,
-                    headline: candidate.headline,
-                    location: candidate.location,
-                    connectionStatus: candidate.status as SuggestedProfile['connectionStatus'],
-                    connectionId: connectionByCandidate.get(candidate.id)?.id,
-                    canConnect: candidate.canConnect,
-                    profileVisibility,
-                    isLockedProfile: candidate.status !== 'connected' && profileVisibility !== 'public',
-                    mutualConnections: isHeavyLoad ? candidate.mutual : (mutualCounts.get(candidate.id) || undefined),
-                    recommendationReason: isHeavyLoad ? candidate.recommendationReason : (candidate.recommendationReason || undefined),
-                    projects: isHeavyLoad ? projectsByOwner.get(candidate.id) || [] : undefined,
-                    availabilityStatus: candidate.availabilityStatus as SuggestedProfile['availabilityStatus'],
-                    experienceLevel: candidate.experienceLevel as SuggestedProfile['experienceLevel'],
-                    openTo: (candidate.openTo as string[]) ?? [],
-                    messagePrivacy: (candidate.messagePrivacy || 'connections') as SuggestedProfile['messagePrivacy'],
-                    canSendMessage:
-                        candidate.status === 'connected'
-                        || (candidate.messagePrivacy || 'connections') === 'everyone',
-                    // 2H: skills, interests, lastActiveAt
-                    skills: (candidate.skills as string[]) ?? [],
-                    interests: (candidate.interests as string[]) ?? [],
-                    lastActiveAt: candidate.lastActiveAt?.toISOString() ?? null,
-                    scoringBreakdown: candidate.scoringBreakdown,
-                };
-            });
-            const visibleItems = await applySuggestedProfilePrivacy(user.id, items);
-            await recordPrivacyReadEvents({
-                subjectUserIds: visibleItems.map((item) => item.id),
-                viewerUserId: user.id,
-                eventType: 'discover_profile_served',
-                route: 'connections.discover.scored',
-                metadata: { count: visibleItems.length },
-            });
-
-            // 2F: Use offset pagination when custom scoring is applied; otherwise keep the lightweight keyset.
-            let nextCursor: string | null = null;
-            if (hasMore && items.length > 0) {
-                if (isHeavyLoad) {
-                    nextCursor = `o:${safeOffset + limit}`;
-                } else {
-                    const lastScored = scored[Math.min(limit - 1, scored.length - 1)];
-                    nextCursor = `c:${lastScored!.connectionsCount}|${lastScored!.id}`;
-                }
-            }
-            return {
-                success: true as const,
-                items: visibleItems,
-                hasMore,
-                nextCursor,
-                stats,
-                viewerProjectIds,
-                lanePreferences,
-                viewerSkills: (meProfile[0]?.skills as string[]) ?? [],
-                viewerLocation: meProfile[0]?.location ?? null,
-            };
-        })(),
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), DISCOVER_TIMEOUT_MS)),
-    ]);
-
-    // If the real-time query completed, use it
-    if (realTimeDiscoverResult) {
-        const finalResult = realTimeDiscoverResult;
-        if (!isHeavyLoad && !searchPattern) {
-            try {
-                await cacheData(cacheKey, finalResult, 15 * 60);
-            } catch (e) {
-                console.error("Redis Cache Write error:", e);
-            }
-        }
-        return finalResult;
-    }
-
-    // GRACEFUL DEGRADATION: Timed out — serve "Global Trending" fallback
-    console.warn('[discover] Real-time query timed out, serving Global Trending fallback');
-    // 2A, 2H: Add lastActiveAt, skills, interests to fallback SELECT
-    const trendingProfiles = await db
+    const rows = searchPattern ? [] : await db
         .select({
-            id: profiles.id,
+            suggestedUserId: connectionSuggestions.suggestedUserId,
+            mutualConnectionsCount: connectionSuggestions.mutualConnectionsCount,
+            score: connectionSuggestions.score,
+            reason: connectionSuggestions.reason,
             username: profiles.username,
             fullName: profiles.fullName,
             avatarUrl: profiles.avatarUrl,
             headline: profiles.headline,
             location: profiles.location,
             visibility: profiles.visibility,
-            connectionsCount: profiles.connectionsCount,
-            availabilityStatus: profiles.availabilityStatus,
+            messagePrivacy: profiles.messagePrivacy,
             experienceLevel: profiles.experienceLevel,
             lastActiveAt: profiles.lastActiveAt,
             skills: profiles.skills,
             interests: profiles.interests,
+            openTo: profiles.openTo,
         })
-        .from(profiles)
-        .where(sql`${profiles.id} <> ${user.id}`)
-        .orderBy(desc(profiles.connectionsCount))
+        .from(connectionSuggestions)
+        .innerJoin(profiles, eq(profiles.id, connectionSuggestions.suggestedUserId))
+        .where(and(...discoverConditions))
+        .orderBy(desc(connectionSuggestions.score), desc(connectionSuggestions.suggestedUserId))
         .limit(limit + 1);
 
-    const trendingHasMore = trendingProfiles.length > limit;
-    const trendingItems = trendingProfiles.slice(0, limit).map(p => {
-        const profileVisibility = (p.visibility || 'public') as SuggestedProfile['profileVisibility'];
+    let items = rows.slice(0, limit).map((row) => {
+        const profileVisibility = (row.visibility || 'public') as SuggestedProfile['profileVisibility'];
         return {
-            id: p.id,
+            id: row.suggestedUserId,
             type: 'discover' as const,
-            username: p.username,
-            fullName: p.fullName,
-            avatarUrl: p.avatarUrl,
-            headline: p.headline,
-            location: p.location,
-            connectionStatus: 'none' as SuggestedProfile['connectionStatus'],
-            connectionId: undefined,
+            username: row.username,
+            fullName: row.fullName,
+            avatarUrl: row.avatarUrl,
+            headline: row.headline,
+            location: row.location,
+            connectionStatus: 'none' as const,
             canConnect: true,
             profileVisibility,
             isLockedProfile: profileVisibility !== 'public',
-            mutualConnections: undefined,
-            recommendationReason: 'Trending in your network',
-            projects: undefined,
-            availabilityStatus: p.availabilityStatus as SuggestedProfile['availabilityStatus'],
-            experienceLevel: p.experienceLevel as SuggestedProfile['experienceLevel'],
-            lastActiveAt: p.lastActiveAt?.toISOString() ?? null,
-            skills: (p.skills as string[]) ?? [],
-            interests: (p.interests as string[]) ?? [],
+            mutualConnections: row.mutualConnectionsCount,
+            recommendationReason: row.reason || `${row.mutualConnectionsCount} mutual connections`,
+            experienceLevel: row.experienceLevel as SuggestedProfile['experienceLevel'],
+            openTo: (row.openTo as string[]) ?? [],
+            messagePrivacy: (row.messagePrivacy || 'connections') as SuggestedProfile['messagePrivacy'],
+            canSendMessage: row.messagePrivacy === 'everyone',
+            lastActiveAt: row.lastActiveAt?.toISOString() ?? null,
+            skills: (row.skills as string[]) ?? [],
+            interests: (row.interests as string[]) ?? [],
         };
     });
-    const visibleTrendingItems = await applySuggestedProfilePrivacy(user.id, trendingItems);
-    await recordPrivacyReadEvents({
-        subjectUserIds: visibleTrendingItems.map((item) => item.id),
-        viewerUserId: user.id,
-        eventType: 'discover_profile_served',
-        route: 'connections.discover.trending',
-        metadata: { count: visibleTrendingItems.length },
-    });
 
-    // 2D: Use cached viewer project IDs
-    const [fallbackViewerProjectIds, fallbackViewerSkillsRow] = await Promise.all([
-        getCachedViewerProjectIds(user.id, isHeavyLoad),
-        db.select({ skills: profiles.skills }).from(profiles).where(eq(profiles.id, user.id)).limit(1),
+    let searchFallbackHasMore = false;
+    let searchFallbackNextCursor: string | null = null;
+
+    // Search must cover every eligible profile, not only the viewer's precomputed
+    // suggestion rows. The same query is also the cold-start fallback.
+    if (!suggestionCursor && !input.filters?.hasMutuals && (Boolean(searchPattern) || items.length === 0)) {
+        const fallbackConditions = [
+            sql`${profiles.id} != ${user.id}`,
+            eq(profiles.onboardingStatus, 'completed'),
+            isNull(profiles.deletedAt),
+        ];
+        if (searchPattern) {
+            fallbackConditions.push(sql`NOT EXISTS (
+                SELECT 1 FROM ${connections} blocked_connection
+                WHERE blocked_connection.status = 'blocked'
+                  AND (
+                    (blocked_connection.requester_id = ${user.id} AND blocked_connection.addressee_id = ${profiles.id})
+                    OR (blocked_connection.requester_id = ${profiles.id} AND blocked_connection.addressee_id = ${user.id})
+                  )
+            )`);
+            fallbackConditions.push(sql`(
+                ${profiles.visibility} = 'public'
+                OR EXISTS (
+                    SELECT 1 FROM ${connections} accepted_connection
+                    WHERE accepted_connection.status = 'accepted'
+                      AND (
+                        (accepted_connection.requester_id = ${user.id} AND accepted_connection.addressee_id = ${profiles.id})
+                        OR (accepted_connection.requester_id = ${profiles.id} AND accepted_connection.addressee_id = ${user.id})
+                      )
+                )
+            )`);
+            fallbackConditions.push(buildDiscoverProfileSearchCondition(searchTokens));
+        } else {
+            fallbackConditions.push(sql`NOT EXISTS (
+                SELECT 1 FROM ${connectionSuggestionDismissals}
+                WHERE ${connectionSuggestionDismissals.userId} = ${user.id}
+                  AND ${connectionSuggestionDismissals.dismissedProfileId} = ${profiles.id}
+            )`);
+            fallbackConditions.push(sql`NOT EXISTS (
+                SELECT 1 FROM ${connections} existing
+                WHERE (existing.requester_id = ${user.id} AND existing.addressee_id = ${profiles.id})
+                   OR (existing.requester_id = ${profiles.id} AND existing.addressee_id = ${user.id})
+            )`);
+        }
+        if (input.filters?.seniorPlus) fallbackConditions.push(sql`${profiles.experienceLevel} IN ('senior', 'lead', 'founder')`);
+        if (input.filters?.hasSharedProjects) {
+            fallbackConditions.push(sql`EXISTS (SELECT 1 FROM ${projects} WHERE ${projects.ownerId} = ${profiles.id})`);
+        }
+        if (searchPattern && rawParsedCursor?.kind === 'date' && rawParsedCursor.sortMode === 'recent') {
+            fallbackConditions.push(buildConnectionDateCursorCondition({
+                column: profiles.updatedAt,
+                idColumn: profiles.id,
+                isoValue: rawParsedCursor.updatedAt,
+                id: rawParsedCursor.id,
+                direction: 'before',
+            }));
+        }
+
+        const fallbackRows = await db
+            .select({
+                id: profiles.id,
+                username: profiles.username,
+                fullName: profiles.fullName,
+                avatarUrl: profiles.avatarUrl,
+                headline: profiles.headline,
+                location: profiles.location,
+                visibility: profiles.visibility,
+                messagePrivacy: profiles.messagePrivacy,
+                experienceLevel: profiles.experienceLevel,
+                lastActiveAt: profiles.lastActiveAt,
+                skills: profiles.skills,
+                interests: profiles.interests,
+                openTo: profiles.openTo,
+                updatedAt: profiles.updatedAt,
+            })
+            .from(profiles)
+            .where(and(...fallbackConditions))
+            .orderBy(
+                searchPattern ? sql`CASE
+                    WHEN lower(coalesce(${profiles.username}, '')) = ${safeSearch?.toLowerCase() ?? ''} THEN 100
+                    WHEN lower(coalesce(${profiles.fullName}, '')) = ${safeSearch?.toLowerCase() ?? ''} THEN 95
+                    WHEN lower(coalesce(${profiles.username}, '')) LIKE ${(safeSearch?.toLowerCase() ?? '') + '%'} THEN 80
+                    WHEN lower(coalesce(${profiles.fullName}, '')) LIKE ${(safeSearch?.toLowerCase() ?? '') + '%'} THEN 75
+                    ELSE 10
+                END DESC` : desc(profiles.lastActiveAt),
+                searchPattern ? desc(profiles.updatedAt) : desc(profiles.id),
+                desc(profiles.id),
+            )
+            .limit(limit + 1);
+
+        const fallbackPageRows = fallbackRows.slice(0, limit);
+        if (searchPattern) {
+            searchFallbackHasMore = fallbackRows.length > limit;
+            const lastFallbackRow = fallbackPageRows[fallbackPageRows.length - 1];
+            searchFallbackNextCursor = searchFallbackHasMore && lastFallbackRow
+                ? encodeConnectionsCursor(lastFallbackRow.updatedAt, lastFallbackRow.id, 'recent')
+                : null;
+        }
+
+        items = fallbackPageRows.map((row) => {
+            const profileVisibility = (row.visibility || 'public') as SuggestedProfile['profileVisibility'];
+            return {
+                id: row.id,
+                type: 'discover' as const,
+                username: row.username,
+                fullName: row.fullName,
+                avatarUrl: row.avatarUrl,
+                headline: row.headline,
+                location: row.location,
+                connectionStatus: 'none' as const,
+                canConnect: true,
+                profileVisibility,
+                isLockedProfile: profileVisibility !== 'public',
+                mutualConnections: 0,
+                recommendationReason: "Suggested for your network",
+                experienceLevel: row.experienceLevel as SuggestedProfile['experienceLevel'],
+                openTo: (row.openTo as string[]) ?? [],
+                messagePrivacy: (row.messagePrivacy || 'connections') as SuggestedProfile['messagePrivacy'],
+                canSendMessage: row.messagePrivacy === 'everyone',
+                lastActiveAt: row.lastActiveAt?.toISOString() ?? null,
+                skills: (row.skills as string[]) ?? [],
+                interests: (row.interests as string[]) ?? [],
+            };
+        });
+    }
+    const visibleItems = await applySuggestedProfilePrivacy(user.id, items);
+    const [viewerProjects, viewerProfiles] = await Promise.all([
+        includeMeta ? db.select({ id: projects.id }).from(projects).where(eq(projects.ownerId, user.id)).limit(50) : Promise.resolve([]),
+        includeMeta ? db.select({ skills: profiles.skills }).from(profiles).where(eq(profiles.id, user.id)).limit(1) : Promise.resolve([]),
+        recordPrivacyReadEvents({
+            subjectUserIds: visibleItems.map((item) => item.id),
+            viewerUserId: user.id,
+            eventType: 'discover_profile_served',
+            route: 'connections.discover.precomputed',
+            metadata: { count: visibleItems.length },
+        }),
     ]);
-    const fallbackViewerSkills = (fallbackViewerSkillsRow[0]?.skills as string[]) ?? [];
-    const fallbackResult = { success: true as const, items: visibleTrendingItems, hasMore: trendingHasMore, nextCursor: trendingHasMore ? `o:${safeOffset + limit}` : null, stats, viewerProjectIds: fallbackViewerProjectIds, viewerSkills: fallbackViewerSkills };
-    try {
-        await cacheData(cacheKey, fallbackResult, 5 * 60); // Cache fallback for 5 mins
-    } catch { /* ignore */ }
-    return fallbackResult;
+    const hasMore = searchPattern ? searchFallbackHasMore : rows.length > limit;
+    const last = rows[Math.min(limit - 1, rows.length - 1)];
+    recordPreview(visibleItems.length > 0 ? 'success' : 'empty', visibleItems.length);
+    return {
+        success: true as const,
+        items: visibleItems,
+        hasMore,
+        nextCursor: searchPattern
+            ? searchFallbackNextCursor
+            : hasMore && last ? `s:${last.score}|${last.suggestedUserId}` : null,
+        stats,
+        viewerProjectIds: viewerProjects.map((project) => project.id),
+        viewerSkills: (viewerProfiles[0]?.skills as string[]) ?? [],
+    };
 }
 
+export async function getConnectionsFeed(input: ConnectionsFeedInput) {
+    const user = await getAuthUser();
+    if (!user) {
+        return getConnectionsFeedImpl(input);
+    }
+    const safeSearch = input.search ? input.search.trim().replace(/\s+/g, ' ').slice(0, 100) : '';
+    const includeMeta = input.includeMeta !== false;
+    const cacheKey = !includeMeta && safeSearch
+        ? `search:preview:people:${user.id}:${input.tab}:${safeSearch.toLowerCase()}`
+        : null;
 
-function groupHistoryByTimeOnServer(items: ConnectionRequestHistoryItem[]): { label: string; items: ConnectionRequestHistoryItem[] }[] {
-    const today: ConnectionRequestHistoryItem[] = [];
-    const yesterday: ConnectionRequestHistoryItem[] = [];
-    const lastWeek: ConnectionRequestHistoryItem[] = [];
-    const older: ConnectionRequestHistoryItem[] = [];
-
-    const weekAgo = subDays(new Date(), 7);
-
-    for (const item of items) {
-        const date = new Date(item.eventAt);
-        if (isToday(date)) today.push(item);
-        else if (isYesterday(date)) yesterday.push(item);
-        else if (date >= weekAgo) lastWeek.push(item);
-        else older.push(item);
+    if (cacheKey) {
+        const cached = await getCachedData<any>(cacheKey);
+        if (cached) {
+            return cached as Awaited<ReturnType<typeof getConnectionsFeedImpl>>;
+        }
     }
 
-    const groups: { label: string; items: ConnectionRequestHistoryItem[] }[] = [];
-    if (today.length > 0) groups.push({ label: "Today", items: today });
-    if (yesterday.length > 0) groups.push({ label: "Yesterday", items: yesterday });
-    if (lastWeek.length > 0) groups.push({ label: "Last 7 days", items: lastWeek });
-    if (older.length > 0) groups.push({ label: "Older", items: older });
-    return groups;
+    const result = await getConnectionsFeedImpl(input);
+
+    if (cacheKey && result && result.success && result.items.length > 0) {
+        await cacheData(cacheKey, result, 180);
+    }
+
+    return result;
 }
+
 
 export async function getConnectionRequestHistory(
     limit: number = 80,
@@ -1967,18 +1260,16 @@ export async function getConnectionRequestHistory(
 ): Promise<{
     success: boolean;
     items: ConnectionRequestHistoryItem[];
-    groupedItems: { label: string; items: ConnectionRequestHistoryItem[] }[];
     nextCursor?: string | null;
     hasMore?: boolean;
     error?: string;
 }> {
     try {
         const user = await getAuthUser();
-        if (!user) return { success: false, items: [], groupedItems: [], error: 'Not authenticated' };
+        if (!user) return { success: false, items: [], error: 'Not authenticated' };
 
         const effectiveLimit = Math.max(1, Math.min(limit, 200));
 
-        // 2M: Parse keyset cursor (eventAt|id)
         let historyCursor: { eventAt: string; id: string } | null = null;
         if (cursor) {
             const sepIdx = cursor.indexOf('|');
@@ -2003,7 +1294,6 @@ export async function getConnectionRequestHistory(
                 inArray(connections.status, CONNECTION_HISTORY_STATUSES),
             ];
 
-            // 1J: History filters
             if (filters?.status && isConnectionHistoryStatus(filters.status)) {
                 conditions.push(eq(connections.status, filters.status));
             }
@@ -2025,7 +1315,6 @@ export async function getConnectionRequestHistory(
                 }
             }
 
-            // 2M: Keyset pagination
             if (historyCursor) {
                 conditions.push(sql`(
                     ${historyEventAtExpr} < ${historyCursor.eventAt}
@@ -2089,18 +1378,17 @@ export async function getConnectionRequestHistory(
                 }];
             });
 
-            // 2M: Build next cursor
             let nextCursor: string | null = null;
             if (hasMore && items.length > 0) {
                 const last = items[items.length - 1];
                 nextCursor = `${last!.eventAt}|${last!.id}`;
             }
 
-            return { success: true, items, groupedItems: groupHistoryByTimeOnServer(items), nextCursor, hasMore };
+            return { success: true, items, nextCursor, hasMore };
         });
     } catch (error) {
         console.error('Error fetching connection request history:', error);
-        return { success: false, items: [], groupedItems: [], error: 'Failed to load history' };
+        return { success: false, items: [], error: 'Failed to load history' };
     }
 }
 
@@ -2110,7 +1398,7 @@ export async function getConnectionRequestHistory(
 
 const CONNECTION_REQUEST_IDEMPOTENCY_TTL_SECONDS = 60;
 
-// SEC-H7: Two anti-spam layers independent of the short-window per-user and
+// Two anti-spam layers independent of the short-window per-user and
 // per-target token buckets above. The daily cap stops "phishing-style" fan-out
 // where one compromised account DMs hundreds of strangers per day; the
 // per-(sender, target) 24h hold prevents oscillating the same request until a
@@ -2135,7 +1423,6 @@ export async function sendConnectionRequest(
     addresseeId: string,
     idempotencyKey?: string,
     _message?: string,
-    lane?: string,
 ): Promise<{
     success: boolean;
     error?: string;
@@ -2161,7 +1448,7 @@ export async function sendConnectionRequest(
     };
 
     try {
-        // H6: Clamp message length to prevent oversized payloads
+        // Clamp message length to prevent oversized payloads.
         const requestMessage = _message?.trim().slice(0, 500) || null;
         const user = await getAuthUser();
         if (!user) return { success: false, error: 'Not authenticated' };
@@ -2327,7 +1614,6 @@ export async function sendConnectionRequest(
                         }
                     }
 
-                    // 2B: Store message on UPDATE
                     await tx
                         .update(connections)
                         .set({
@@ -2344,7 +1630,6 @@ export async function sendConnectionRequest(
             }
 
             try {
-                // 2B: Store message on INSERT
                 const inserted = await tx
                     .insert(connections)
                     .values({
@@ -2380,14 +1665,6 @@ export async function sendConnectionRequest(
         await queueCounterRefreshBestEffort([addresseeId]);
         await invalidateDiscoverCacheForUsers([user.id, addresseeId]);
 
-        // 2P: Lane preference tracking
-        if (lane && redis) {
-            try {
-                const prefKey = `discover:preference:${user.id}`;
-                await redis.hincrby(prefKey, lane, 1);
-                await redis.expire(prefKey, 7 * 24 * 60 * 60); // 7 days TTL
-            } catch { /* ignore */ }
-        }
 
         if (!txResult.skippedWrite) {
             try {
@@ -2432,7 +1709,7 @@ export async function dismissConnectionSuggestion(
             return { success: false, error: 'Too many actions. Please wait and try again.' };
         }
 
-        // M14: Validate and clamp dismiss feedback reason
+        // Validate and clamp dismiss feedback reason.
         const safeFeedbackReason = feedbackReason?.trim().slice(0, 120) || undefined;
 
         await db
@@ -2446,7 +1723,7 @@ export async function dismissConnectionSuggestion(
                 target: [connectionSuggestionDismissals.userId, connectionSuggestionDismissals.dismissedProfileId],
             });
 
-        await invalidateDiscoverCacheForUser(user.id);
+        await invalidateDiscoverCacheForUsers([user.id]);
         revalidatePath('/people');
         return { success: true };
     } catch (error) {
@@ -2455,113 +1732,9 @@ export async function dismissConnectionSuggestion(
     }
 }
 
-// 2N: Undo dismiss connection suggestion
-export async function undoDismissConnectionSuggestion(
-    profileId: string
-): Promise<{ success: boolean; error?: string }> {
-    try {
-        const user = await getAuthUser();
-        if (!user) return { success: false, error: 'Not authenticated' };
-
-        const undoRate = await consumeRateLimit(`connections-undo-dismiss:${user.id}`, 60, 60);
-        if (!undoRate.allowed) {
-            return { success: false, error: 'Too many actions. Please wait and try again.' };
-        }
-
-        await db
-            .delete(connectionSuggestionDismissals)
-            .where(
-                and(
-                    eq(connectionSuggestionDismissals.userId, user.id),
-                    eq(connectionSuggestionDismissals.dismissedProfileId, profileId),
-                )
-            );
-
-        await invalidateDiscoverCacheForUser(user.id);
-        revalidatePath('/people');
-        return { success: true };
-    } catch (error) {
-        console.error('Error undoing dismiss:', error);
-        return { success: false, error: 'Failed to undo dismiss' };
-    }
-}
-
-// 2O: Update connection tags
-export async function updateConnectionTags(
-    connectionId: string,
-    tags: string[]
-): Promise<{ success: boolean; error?: string }> {
-    try {
-        const user = await getAuthUser();
-        if (!user) return { success: false, error: 'Not authenticated' };
-
-        const tagRate = await consumeRateLimit(`connections-tags:${user.id}`, 60, 60);
-        if (!tagRate.allowed) {
-            return { success: false, error: 'Too many actions. Please wait and try again.' };
-        }
-
-        // Validate tags: max 10, each max 30 chars
-        const safeTags = tags.slice(0, 10).map(t => t.trim().slice(0, 30)).filter(Boolean);
-
-        const result = await db
-            .update(connections)
-            .set({ tags: safeTags })
-            .where(
-                and(
-                    eq(connections.id, connectionId),
-                    eq(connections.status, 'accepted'),
-                    or(
-                        eq(connections.requesterId, user.id),
-                        eq(connections.addresseeId, user.id),
-                    ),
-                )
-            )
-            .returning({ id: connections.id });
-
-        if (result.length === 0) {
-            return { success: false, error: 'Connection not found or not accepted' };
-        }
-
-        return { success: true };
-    } catch (error) {
-        console.error('Error updating tags:', error);
-        return { success: false, error: 'Failed to update tags' };
-    }
-}
-
-// 2Q: Track discover impressions (fire-and-forget)
-export async function trackDiscoverImpressions(
-    profileIds: string[]
-): Promise<{ success: boolean }> {
-    try {
-        const user = await getAuthUser();
-        if (!user) return { success: false };
-        if (!profileIds.length) return { success: true };
-
-        const impressionRate = await consumeRateLimit(`discover-impressions:${user.id}`, 30, 60);
-        if (!impressionRate.allowed) return { success: false };
-
-        if (!redis) return { success: true };
-
-        const dateKey = new Date().toISOString().slice(0, 10);
-        const key = `discover:imp:${user.id}:${dateKey}`;
-
-        // HyperLogLog for unique impression tracking
-        await redis.pfadd(key, ...profileIds.slice(0, 50));
-        // TTL 7 days
-        await redis.expire(key, 7 * 24 * 3600);
-
-        return { success: true };
-    } catch {
-        // Fire-and-forget — swallow errors
-        return { success: false };
-    }
-}
-
-// 2V: Batch action progress with jobId
 export async function acceptAllIncomingConnectionRequests(
     limit: number = 100
-): Promise<{ success: boolean; queued?: true; jobId?: string; error?: string }> {
+): Promise<{ success: boolean; count?: number; error?: string }> {
     try {
         const user = await getAuthUser();
         if (!user) return { success: false, error: 'Not authenticated' };
@@ -2572,55 +1745,83 @@ export async function acceptAllIncomingConnectionRequests(
             return { success: false, error: 'Too many bulk actions. Please wait and try again.' };
         }
 
-        const jobId = randomUUID();
-        let redisJobCreated = false;
+        const accepted = await db.transaction(async (tx) => {
+            const pendingRows = await tx
+                .select({ id: connections.id })
+                .from(connections)
+                .where(
+                    and(
+                        eq(connections.addresseeId, user.id),
+                        eq(connections.status, 'pending')
+                    )
+                )
+                .orderBy(desc(connections.createdAt), desc(connections.id))
+                .limit(effectiveLimit);
+            const pendingIds = pendingRows.map((row) => row.id);
+            if (pendingIds.length === 0) return [];
 
-        // 2V: Store job progress in Redis
-        if (redis) {
-            try {
-                const pendingCount = await countPendingIncomingRequests(user.id);
-                const total = Math.min(effectiveLimit, pendingCount);
-                await redis.hset(`bulk_job:${jobId}`, {
-                    total: String(total),
-                    completed: '0',
-                    failed: '0',
-                    status: 'pending',
-                    action: 'accept',
-                    userId: user.id,
+            const rows = await tx
+                .update(connections)
+                .set({
+                    status: 'accepted',
+                    updatedAt: new Date(),
+                })
+                .where(inArray(connections.id, pendingIds))
+                .returning({
+                    id: connections.id,
+                    requesterId: connections.requesterId,
+                    addresseeId: connections.addresseeId,
                 });
-                await redis.expire(`bulk_job:${jobId}`, 3600);
-                redisJobCreated = true;
-            } catch { /* ignore */ }
-        }
 
-        try {
-            await inngest.send({
-                name: 'workspace/connections.bulk',
-                data: {
-                    userId: user.id,
-                    action: 'accept',
-                    limit: effectiveLimit,
-                    jobId,
-                }
-            });
-        } catch (enqueueError) {
-            if (redisJobCreated && redis) {
-                void redis.del(`bulk_job:${jobId}`).catch(() => undefined);
+            for (const row of rows) {
+                await applyConnectionsCountDelta(tx, [row.requesterId, row.addresseeId], 1);
             }
-            throw enqueueError;
+            return rows;
+        });
+
+        if (accepted.length > 0) {
+            const affectedUserIds = new Set<string>([user.id]);
+            for (const row of accepted) {
+                affectedUserIds.add(row.requesterId);
+                affectedUserIds.add(row.addresseeId);
+            }
+
+            await Promise.allSettled(
+                accepted.map((row) => clearConnectionRequestHold(row.requesterId, row.addresseeId)),
+            );
+            await queueCounterRefreshBestEffort([...affectedUserIds]);
+            await invalidateDiscoverCacheForUsers(affectedUserIds);
+            await Promise.allSettled([
+                ...[...affectedUserIds].map((userId) => syncConnectionsToRedis(userId)),
+                ...[...affectedUserIds].map((userId) =>
+                    inngest.send({ name: 'workspace/connections.sync_suggestions', data: { userId } }),
+                ),
+                ...accepted.map((row) =>
+                    emitConnectionAcceptedNotification({
+                        recipientUserId: row.requesterId,
+                        actorUserId: row.addresseeId,
+                        actorName: (user.user_metadata?.full_name as string | undefined)
+                            ?? (user.user_metadata?.username as string | undefined)
+                            ?? null,
+                        actorAvatarUrl: (user.user_metadata?.avatar_url as string | undefined) ?? null,
+                        connectionId: row.id,
+                        eventKey: `${row.id}:${new Date().toISOString()}`,
+                    }),
+                ),
+            ]);
+            await revalidateConnectionsPaths();
         }
 
-        return { success: true, queued: true, jobId };
+        return { success: true, count: accepted.length };
     } catch (error) {
-        console.error('Error initiating bulk accept queue:', error);
+        console.error('Error accepting all requests:', error);
         return { success: false, error: 'Failed to accept all requests' };
     }
 }
 
-// 2V: Batch action progress with jobId
 export async function rejectAllIncomingConnectionRequests(
     limit: number = 100
-): Promise<{ success: boolean; queued?: true; jobId?: string; error?: string }> {
+): Promise<{ success: boolean; count?: number; error?: string }> {
     try {
         const user = await getAuthUser();
         if (!user) return { success: false, error: 'Not authenticated' };
@@ -2631,47 +1832,49 @@ export async function rejectAllIncomingConnectionRequests(
             return { success: false, error: 'Too many bulk actions. Please wait and try again.' };
         }
 
-        const jobId = randomUUID();
-        let redisJobCreated = false;
+        const rejected = await db.transaction(async (tx) => {
+            const pendingRows = await tx
+                .select({ id: connections.id })
+                .from(connections)
+                .where(
+                    and(
+                        eq(connections.addresseeId, user.id),
+                        eq(connections.status, 'pending')
+                    )
+                )
+                .orderBy(desc(connections.createdAt), desc(connections.id))
+                .limit(effectiveLimit);
+            const pendingIds = pendingRows.map((row) => row.id);
+            if (pendingIds.length === 0) return [];
 
-        // 2V: Store job progress in Redis
-        if (redis) {
-            try {
-                const pendingCount = await countPendingIncomingRequests(user.id);
-                const total = Math.min(effectiveLimit, pendingCount);
-                await redis.hset(`bulk_job:${jobId}`, {
-                    total: String(total),
-                    completed: '0',
-                    failed: '0',
-                    status: 'pending',
-                    action: 'reject',
-                    userId: user.id,
+            return tx
+                .update(connections)
+                .set({
+                    status: 'rejected',
+                    rejectionReason: null,
+                    updatedAt: new Date(),
+                })
+                .where(inArray(connections.id, pendingIds))
+                .returning({
+                    requesterId: connections.requesterId,
+                    addresseeId: connections.addresseeId,
                 });
-                await redis.expire(`bulk_job:${jobId}`, 3600);
-                redisJobCreated = true;
-            } catch { /* ignore */ }
-        }
+        });
 
-        try {
-            await inngest.send({
-                name: 'workspace/connections.bulk',
-                data: {
-                    userId: user.id,
-                    action: 'reject',
-                    limit: effectiveLimit,
-                    jobId,
-                }
-            });
-        } catch (enqueueError) {
-            if (redisJobCreated && redis) {
-                void redis.del(`bulk_job:${jobId}`).catch(() => undefined);
+        if (rejected.length > 0) {
+            const affectedUserIds = new Set<string>([user.id]);
+            for (const row of rejected) {
+                affectedUserIds.add(row.requesterId);
+                affectedUserIds.add(row.addresseeId);
             }
-            throw enqueueError;
+            await queueCounterRefreshBestEffort([...affectedUserIds]);
+            await invalidateDiscoverCacheForUsers(affectedUserIds);
+            await revalidateConnectionsPaths();
         }
 
-        return { success: true, queued: true, jobId };
+        return { success: true, count: rejected.length };
     } catch (error) {
-        console.error('Error initiating bulk reject queue:', error);
+        console.error('Error rejecting all requests:', error);
         return { success: false, error: 'Failed to reject all requests' };
     }
 }
@@ -2780,7 +1983,7 @@ export async function cancelConnectionRequest(
 // ACCEPT CONNECTION REQUEST (Addressee only)
 // ============================================================================
 
-// SEC-H14: accept a caller-supplied `idempotencyKey` so a double-clicked
+// Accept a caller-supplied `idempotencyKey` so a double-clicked
 // "Accept" button, a flaky network retry, or an offline queue flush never
 // produces two acceptance events for the same pending request. The key is
 // scoped to (user, connectionId) so a key cannot replay across different
@@ -2869,15 +2072,11 @@ export async function acceptConnectionRequest(
                 await invalidateDiscoverCacheForUsers([acceptedRequesterId, acceptedAddresseeId]);
 
                 if (accepted.changed) {
-                    const { incrementConnectionStat } = await import('@/lib/connections/connection-stats-counters');
                     await Promise.allSettled([
                         syncConnectionsToRedis(acceptedRequesterId),
                         syncConnectionsToRedis(acceptedAddresseeId),
                         inngest.send({ name: 'workspace/connections.sync_suggestions', data: { userId: acceptedRequesterId } }),
                         inngest.send({ name: 'workspace/connections.sync_suggestions', data: { userId: acceptedAddresseeId } }),
-                        incrementConnectionStat(acceptedRequesterId, 'this_month'),
-                        incrementConnectionStat(acceptedAddresseeId, 'this_month'),
-                        incrementConnectionStat(acceptedAddresseeId, 'gained'),
                     ]).catch(console.error);
 
                     try {
@@ -2918,8 +2117,7 @@ export async function acceptConnectionRequest(
 // REJECT CONNECTION REQUEST (Addressee only)
 // ============================================================================
 
-// 2C: Add optional reason parameter; 2T: Add serverNow for clock drift fix
-// SEC-H14: accept an optional idempotencyKey so rapid double-submits don't
+// Accept an optional idempotencyKey so rapid double-submits don't
 // produce duplicate rejection rows. The scope includes the connectionId so
 // two different connections can't share a replay window.
 export async function rejectConnectionRequest(
@@ -3091,14 +2289,10 @@ export async function removeConnection(
         await clearConnectionRequestHold(removed.requesterId, removed.addresseeId);
         await invalidateDiscoverCacheForUsers([removed.requesterId, removed.addresseeId]);
 
-        // PURE OPTIMIZATION: Non-blocking sync to Redis Edge Cache (removes from set) + Rolling Stats
-        const { decrementConnectionStat } = await import('@/lib/connections/connection-stats-counters');
+        // Non-blocking sync to Redis Edge Cache (removes from set).
         await Promise.allSettled([
             syncConnectionsToRedis(removed.requesterId),
             syncConnectionsToRedis(removed.addresseeId),
-            // Phase 6C: Decrement rolling window stat counters
-            decrementConnectionStat(removed.requesterId, 'this_month'),
-            decrementConnectionStat(removed.addresseeId, 'this_month'),
         ]).catch(console.error);
 
         await revalidateConnectionsPaths();
@@ -3107,290 +2301,6 @@ export async function removeConnection(
         console.error('Error removing connection:', error);
         return { success: false, error: 'Failed to remove connection' };
     }
-}
-
-// ============================================================================
-// GET CONNECTION STATS
-// ============================================================================
-
-export async function getConnectionStats(
-    userId?: string
-): Promise<ConnectionStats> {
-    const user = await getAuthUser();
-    const targetId = userId || user?.id;
-    const canViewPrivateStats = !!user?.id && user.id === targetId;
-
-    if (!targetId) {
-        return {
-            totalConnections: 0,
-            pendingIncoming: 0,
-            pendingSent: 0,
-            connectionsThisMonth: 0,
-            connectionsGained: 0,
-        };
-    }
-
-    try {
-        const dedupeKey = `connections:stats:${user?.id ?? 'anon'}:${targetId}:${canViewPrivateStats ? 'self' : 'public'}`;
-        return await runInFlightDeduped(dedupeKey, async () => {
-            // Phase 6C: Try Redis counters first for monthly/gained stats
-            let redisStats: { connectionsThisMonth: number; connectionsGained: number } | null = null;
-            if (canViewPrivateStats) {
-                try {
-                    const { getConnectionStatsFromRedis } = await import('@/lib/connections/connection-stats-counters');
-                    redisStats = await getConnectionStatsFromRedis(targetId);
-                } catch { /* Redis failure — fall through to DB */ }
-            }
-
-            const now = new Date();
-            const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-            const startOfMonthIso = startOfMonth.toISOString();
-
-            // If we got Redis stats, we can skip the expensive count(*) FILTER for monthly data
-            const [profileCounter, stats] = await Promise.all([
-                db
-                    .select({ connectionsCount: profiles.connectionsCount })
-                    .from(profiles)
-                    .where(eq(profiles.id, targetId))
-                    .limit(1),
-                // Only query pending counts (cheap) — skip monthly aggregations if Redis has them
-                redisStats
-                    ? db.select({
-                        pendingIncoming: sql<number>`count(*) FILTER (
-                            WHERE ${connections.addresseeId} = ${targetId}
-                            AND ${connections.status} = 'pending'
-                        )`,
-                        pendingSent: sql<number>`count(*) FILTER (
-                            WHERE ${connections.requesterId} = ${targetId}
-                            AND ${connections.status} = 'pending'
-                        )`,
-                    })
-                        .from(connections)
-                        .where(
-                            or(
-                                eq(connections.requesterId, targetId),
-                                eq(connections.addresseeId, targetId)
-                            )
-                        )
-                    : db.select({
-                        pendingIncoming: sql<number>`count(*) FILTER (
-                            WHERE ${connections.addresseeId} = ${targetId}
-                            AND ${connections.status} = 'pending'
-                        )`,
-                        pendingSent: sql<number>`count(*) FILTER (
-                            WHERE ${connections.requesterId} = ${targetId}
-                            AND ${connections.status} = 'pending'
-                        )`,
-                        connectionsThisMonth: sql<number>`count(*) FILTER (
-                            WHERE ${connections.status} = 'accepted'
-                            AND (${connections.requesterId} = ${targetId} OR ${connections.addresseeId} = ${targetId})
-                            AND ${connections.updatedAt} >= ${startOfMonthIso}
-                        )`,
-                        connectionsGained: sql<number>`count(*) FILTER (
-                            WHERE ${connections.addresseeId} = ${targetId}
-                            AND ${connections.status} = 'accepted'
-                            AND ${connections.updatedAt} >= ${startOfMonthIso}
-                        )`
-                    })
-                        .from(connections)
-                        .where(
-                            or(
-                                eq(connections.requesterId, targetId),
-                                eq(connections.addresseeId, targetId)
-                            )
-                        ),
-            ]);
-
-            const statsRow = stats[0] as ConnectionStatsQueryRow | undefined;
-
-            return {
-                totalConnections: Number(profileCounter[0]?.connectionsCount || 0),
-                pendingIncoming: canViewPrivateStats ? Number(statsRow?.pendingIncoming || 0) : 0,
-                pendingSent: canViewPrivateStats ? Number(statsRow?.pendingSent || 0) : 0,
-                connectionsThisMonth: canViewPrivateStats
-                    ? (redisStats?.connectionsThisMonth ?? Number(statsRow?.connectionsThisMonth || 0))
-                    : 0,
-                connectionsGained: canViewPrivateStats
-                    ? (redisStats?.connectionsGained ?? Number(statsRow?.connectionsGained || 0))
-                    : 0,
-            };
-        });
-    } catch (error) {
-        console.error('Error fetching connection stats:', error);
-        // Return zeros if table doesn't exist or query fails
-        return {
-            totalConnections: 0,
-            pendingIncoming: 0,
-            pendingSent: 0,
-            connectionsThisMonth: 0,
-            connectionsGained: 0,
-        };
-    }
-}
-
-// ============================================================================
-// GET SUGGESTED PEOPLE (Discovery)
-// ============================================================================
-
-export async function getSuggestedPeople(
-    limit: number = 20,
-    offset: number = 0
-): Promise<{ profiles: SuggestedProfile[]; hasMore: boolean }> {
-    const feed = await getConnectionsFeed({
-        tab: 'discover',
-        limit,
-        cursor: `o:${Math.max(offset, 0)}`,
-    });
-
-    if (!feed.success) {
-        return { profiles: [], hasMore: false };
-    }
-
-    const result: SuggestedProfile[] = (feed.items as DiscoverFeedItem[]).map((item) => ({
-        id: item.id,
-        username: item.username,
-        fullName: item.fullName,
-        avatarUrl: item.avatarUrl,
-        headline: item.headline,
-        location: item.location,
-        connectionStatus: item.connectionStatus || 'none',
-        connectionId: item.connectionId,
-        canConnect: item.canConnect,
-        mutualConnections: item.mutualConnections || 0,
-        recommendationReason: item.recommendationReason,
-        projects: item.projects || [],
-        openTo: item.openTo || [],
-        messagePrivacy: item.messagePrivacy || 'connections',
-        canSendMessage: item.canSendMessage,
-    }));
-
-    return { profiles: result, hasMore: feed.hasMore };
-}
-
-// ============================================================================
-// GET PENDING REQUESTS (Incoming + Sent)
-// ============================================================================
-
-export async function getPendingRequests(
-    limit: number = 20,
-    offset: number = 0
-) {
-    const safeLimit = Math.max(1, Math.min(limit, 60));
-    const safeOffset = Math.max(0, offset);
-    const user = await getAuthUser();
-    const dedupeKey = `connections:pending:${user?.id ?? 'anon'}:${safeLimit}:${safeOffset}`;
-
-    return runInFlightDeduped(dedupeKey, async () => {
-        if (!user) return { incoming: [], sent: [], hasMoreIncoming: false, hasMoreSent: false };
-
-        if (safeOffset > 0) {
-            const [incoming, sent] = await Promise.all([
-                db
-                    .select({
-                        id: connections.id,
-                        requesterId: connections.requesterId,
-                        addresseeId: connections.addresseeId,
-                        status: connections.status,
-                        createdAt: connections.createdAt,
-                        requesterUsername: profiles.username,
-                        requesterFullName: profiles.fullName,
-                        requesterAvatarUrl: profiles.avatarUrl,
-                        requesterHeadline: profiles.headline,
-                    })
-                    .from(connections)
-                    .innerJoin(profiles, eq(profiles.id, connections.requesterId))
-                    .where(and(eq(connections.addresseeId, user.id), eq(connections.status, 'pending')))
-                    .orderBy(desc(connections.createdAt))
-                    .limit(safeLimit + 1)
-                    .offset(safeOffset),
-                db
-                    .select({
-                        id: connections.id,
-                        requesterId: connections.requesterId,
-                        addresseeId: connections.addresseeId,
-                        status: connections.status,
-                        createdAt: connections.createdAt,
-                        addresseeUsername: profiles.username,
-                        addresseeFullName: profiles.fullName,
-                        addresseeAvatarUrl: profiles.avatarUrl,
-                        addresseeHeadline: profiles.headline,
-                    })
-                    .from(connections)
-                    .innerJoin(profiles, eq(profiles.id, connections.addresseeId))
-                    .where(and(eq(connections.requesterId, user.id), eq(connections.status, 'pending')))
-                    .orderBy(desc(connections.createdAt))
-                    .limit(safeLimit + 1)
-                    .offset(safeOffset),
-            ]);
-
-            return {
-                incoming: incoming.slice(0, safeLimit),
-                sent: sent.slice(0, safeLimit),
-                hasMoreIncoming: incoming.length > safeLimit,
-                hasMoreSent: sent.length > safeLimit,
-            };
-        }
-
-        const cacheKey = `connections:inbox_cache:${user.id}:${safeLimit}`;
-        if (safeOffset === 0 && redis) {
-            try {
-                const cached = await getCachedData<PendingRequestsResult>(cacheKey);
-                if (cached) return cached;
-            } catch (error) {
-                console.error('Redis cache read error for inbox:', error);
-            }
-        }
-
-        const [incomingFeed, sentFeed] = await Promise.all([
-            getConnectionsFeed({ tab: 'requests_incoming', limit: safeLimit }),
-            getConnectionsFeed({ tab: 'requests_sent', limit: safeLimit }),
-        ]);
-
-        if (!incomingFeed.success && !sentFeed.success) {
-            return { incoming: [], sent: [], hasMoreIncoming: false, hasMoreSent: false };
-        }
-
-        const result = {
-            incoming: incomingFeed.success
-                ? (incomingFeed.items as RequestFeedItem[]).map((item) => ({
-                    id: item.id,
-                    requesterId: item.requesterId,
-                    addresseeId: item.addresseeId,
-                    status: item.status,
-                    createdAt: item.createdAt,
-                    requesterUsername: item.user?.username,
-                    requesterFullName: item.user?.fullName,
-                    requesterAvatarUrl: item.user?.avatarUrl,
-                    requesterHeadline: item.user?.headline,
-                }))
-                : [],
-            sent: sentFeed.success
-                ? (sentFeed.items as RequestFeedItem[]).map((item) => ({
-                    id: item.id,
-                    requesterId: item.requesterId,
-                    addresseeId: item.addresseeId,
-                    status: item.status,
-                    createdAt: item.createdAt,
-                    addresseeUsername: item.user?.username,
-                    addresseeFullName: item.user?.fullName,
-                    addresseeAvatarUrl: item.user?.avatarUrl,
-                    addresseeHeadline: item.user?.headline,
-                }))
-                : [],
-            hasMoreIncoming: incomingFeed.success ? incomingFeed.hasMore : false,
-            hasMoreSent: sentFeed.success ? sentFeed.hasMore : false,
-        };
-
-        if (safeOffset === 0 && redis) {
-            try {
-                await cacheData(cacheKey, result, 300);
-            } catch (error) {
-                console.error('Redis cache write error for inbox:', error);
-            }
-        }
-
-        return result;
-    });
 }
 
 // ============================================================================
@@ -3496,7 +2406,9 @@ export async function getAcceptedConnections(
         }
     }
 
-    const searchPattern = search ? `%${search.trim().toLowerCase()}%` : undefined;
+    const normalizedSearch = normalizeSearchQuery(search || '').toLowerCase();
+    const searchPattern = normalizedSearch ? containsLikePattern(normalizedSearch) : undefined;
+    const searchTokens = normalizedSearch ? tokenizeSearchQuery(normalizedSearch) : [];
     const [cursorDateRaw, cursorIdRaw] = cursor ? cursor.split('|') : [];
     const cursorDate = cursorDateRaw ? new Date(cursorDateRaw) : undefined;
     const cursorConnectionId = cursorIdRaw || undefined;
@@ -3509,19 +2421,21 @@ export async function getAcceptedConnections(
         ),
     ];
 
-    if (searchPattern) {
-        conditions.push(
-            sql`(${profiles.fullName} ILIKE ${searchPattern} OR ${profiles.username} ILIKE ${searchPattern})`
-        );
-    }
+    if (searchPattern) conditions.push(buildProfileNameIlikeSearchCondition(searchTokens));
 
     if (cursorDate && cursorConnectionId) {
-        conditions.push(sql`(
-            ${connections.updatedAt} < ${cursorDate.toISOString()}
-            OR (${connections.updatedAt} = ${cursorDate.toISOString()} AND ${connections.id} < ${cursorConnectionId})
-        )`);
+        conditions.push(buildConnectionDateCursorCondition({
+            column: connections.updatedAt,
+            isoValue: cursorDate.toISOString(),
+            id: cursorConnectionId,
+            direction: 'before',
+        }));
     } else if (cursorDate) {
-        conditions.push(sql`${connections.updatedAt} < ${cursorDate.toISOString()}`);
+        conditions.push(buildConnectionDateCursorCondition({
+            column: connections.updatedAt,
+            isoValue: cursorDate.toISOString(),
+            direction: 'before',
+        }));
     }
 
     // Join only the opposite party profile to avoid self-rows and simplify filtering.
@@ -3584,43 +2498,6 @@ export async function getAcceptedConnections(
     }));
 
     return { connections: enrichedConnections, hasMore, nextCursor };
-}
-
-// ============================================================================
-// SEARCH ACCEPTED CONNECTIONS
-// ============================================================================
-
-export async function searchConnections(query: string, limit: number = 20) {
-    const user = await getAuthUser();
-    if (!user) return { success: false, error: 'Not authenticated' };
-
-    if (!query.trim()) return { success: true, connections: [] };
-
-    try {
-        const feed = await getConnectionsFeed({
-            tab: 'network',
-            limit,
-            search: query,
-        });
-
-        if (!feed.success) {
-            return { success: false, error: feed.error || 'Failed to search connections' };
-        }
-
-        const foundConnections = (feed.items as NetworkFeedItem[]).map((item) => ({
-            connectionId: item.id,
-            userId: item.otherUser?.id,
-            username: item.otherUser?.username,
-            fullName: item.otherUser?.fullName,
-            avatarUrl: item.otherUser?.avatarUrl,
-            headline: item.otherUser?.headline,
-        }));
-
-        return { success: true, connections: foundConnections };
-    } catch (error) {
-        console.error('Error searching connections:', error);
-        return { success: false, error: 'Failed to search connections' };
-    }
 }
 // ============================================================================
 // CHECK CONNECTION STATUS
@@ -3749,103 +2626,6 @@ export async function checkConnectionStatus(
     } catch (error) {
         console.error('Error checking connection status:', error);
         return { success: false, error: 'Failed to check connection status' };
-    }
-}
-
-export async function getConnectionTags(): Promise<{ success: boolean; tags: string[]; error?: string }> {
-    try {
-        const user = await getAuthUser();
-        if (!user) return { success: false, tags: [], error: 'Not authenticated' };
-
-        const rows = await db.execute(sql`
-            SELECT DISTINCT unnest(tags) as tag
-            FROM connections
-            WHERE (requester_id = ${user.id} OR addressee_id = ${user.id})
-              AND status = 'accepted'
-              AND tags IS NOT NULL
-        `);
-        return { success: true, tags: rows.map(r => r.tag as string) };
-    } catch (error) {
-        console.error('connections.get_tags_failed', { error });
-        return { success: false, tags: [], error: 'Failed to fetch tags' };
-    }
-}
-
-export async function bulkDisconnectConnections(connectionIds: string[]): Promise<{ success: boolean; error?: string }> {
-    try {
-        const user = await getAuthUser();
-        if (!user) return { success: false, error: 'Not authenticated' };
-
-        // Zod validation for bulk action
-        z.array(z.string()).max(100).parse(connectionIds);
-
-        if (!connectionIds.length) return { success: true };
-
-        await db.delete(connections)
-            .where(
-                and(
-                    inArray(connections.id, connectionIds),
-                    or(eq(connections.requesterId, user.id), eq(connections.addresseeId, user.id))
-                )
-            );
-        return { success: true };
-    } catch (error) {
-        console.error('connections.bulk_disconnect_failed', { error });
-        return { success: false, error: 'Failed to disconnect' };
-    }
-}
-
-export async function bulkUpdateConnectionTags(connectionIds: string[], tags: string[]): Promise<{ success: boolean; error?: string }> {
-    try {
-        const user = await getAuthUser();
-        if (!user) return { success: false, error: 'Not authenticated' };
-
-        // Zod validation for bulk tags
-        z.array(z.string()).max(100).parse(connectionIds);
-        z.array(z.string()).max(100).parse(tags);
-
-        if (!connectionIds.length) return { success: true };
-
-        await db.update(connections)
-            .set({ tags, updatedAt: new Date() })
-            .where(
-                and(
-                    inArray(connections.id, connectionIds),
-                    or(eq(connections.requesterId, user.id), eq(connections.addresseeId, user.id))
-                )
-            );
-        return { success: true };
-    } catch (error) {
-        console.error('connections.bulk_update_tags_failed', { error });
-        return { success: false, error: 'Failed to update tags' };
-    }
-}
-
-export async function getMutualSuggestions(limit: number = 6, search?: string): Promise<{ success: boolean; items: DiscoverConnectionItem[]; error?: string }> {
-    try {
-        const user = await getAuthUser();
-        if (!user) return { success: false, items: [], error: 'Not authenticated' };
-
-        // For simplicity, we can fetch from getConnectionsFeed with hasMutuals filter
-        const result = await getConnectionsFeed({ tab: 'discover', limit, search, filters: { hasMutuals: true, available: true } });
-        if (!result.success) throw new Error(result.error);
-        return { success: true, items: (result.items || []) as DiscoverConnectionItem[] };
-    } catch {
-        return { success: false, items: [], error: 'Failed to fetch mutuals' };
-    }
-}
-
-export async function getRoleSuggestions(limit: number = 6, search?: string): Promise<{ success: boolean; items: DiscoverConnectionItem[]; error?: string }> {
-    try {
-        const user = await getAuthUser();
-        if (!user) return { success: false, items: [], error: 'Not authenticated' };
-
-        // For simplicity, we can fetch from getConnectionsFeed with hasSharedProjects or seniorPlus filter
-        const result = await getConnectionsFeed({ tab: 'discover', limit, search, filters: { hasSharedProjects: true, available: true } });
-        if (!result.success) throw new Error(result.error);
-        return { success: true, items: (result.items || []) as DiscoverConnectionItem[] };
-    } catch {
-        return { success: false, items: [], error: 'Failed to fetch roles' };
     }
 }
 
