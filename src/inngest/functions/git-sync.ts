@@ -22,6 +22,7 @@ import { promisify } from "node:util";
 import { runWithConcurrency } from "@/lib/utils/concurrency";
 import { logger } from "@/lib/logger";
 import { verifySignedJobRequestToken } from "@/lib/security/job-request";
+import { deleteExpiredFileLeases } from "@/lib/files/file-lock-service";
 
 const execFileAsync = promisify(execFile);
 const GIT_COMMAND_TIMEOUT_MS = (() => {
@@ -246,7 +247,6 @@ export const gitPush = inngest.createFunction(
                 preferredInstallationId,
                 sealedImportToken: sourceMetadata.importAuth,
             });
-
             // Claim pending deltas transactionally
             const claimedDeltas = await db.transaction(async (tx) => {
                 await tx.execute(sql`SELECT 1 FROM projects WHERE id = ${projectId} FOR UPDATE`);
@@ -651,6 +651,18 @@ export const gitPull = inngest.createFunction(
         });
 
         await step.run("pull-from-github", async () => {
+            const activeLease = await db.query.projectNodeLocks.findFirst({
+                where: and(
+                    eq(projectNodeLocks.projectId, projectId),
+                    sql`${projectNodeLocks.expiresAt} > now()`,
+                ),
+                columns: { nodeId: true, expiresAt: true },
+            });
+            if (activeLease) {
+                throw new Error(
+                    `Git pull deferred because a collaborator is editing a file until ${activeLease.expiresAt.toISOString()}`,
+                );
+            }
             const [project] = await db
                 .select({
                     githubRepoUrl: projects.githubRepoUrl,
@@ -677,12 +689,18 @@ export const gitPull = inngest.createFunction(
                 preferredInstallationId,
                 sealedImportToken: sourceMetadata.importAuth,
             });
+            const useAnonymousAccess = (event.data as Record<string, unknown>).anonymous === true;
 
             const tenantLockedRun = await withTenantSyncLock(userId, async () => withProjectSyncLock(projectId, async () => {
                 const tempDir = await mkdtemp(join(tmpdir(), "nb-git-pull-"));
 
                 try {
-                    await cloneRepository(project.githubRepoUrl!, tempDir, branch, access.token);
+                    await cloneRepository(
+                        project.githubRepoUrl!,
+                        tempDir,
+                        branch,
+                        useAnonymousAccess ? null : access.token,
+                    );
                     assertRepositoryWithinBudgets(tempDir, { job: "git pull", projectId });
 
                     const repoFiles: string[] = [];
@@ -1040,10 +1058,16 @@ export const lockCleanup = inngest.createFunction(
     { id: "lock-cleanup" },
     { cron: "*/5 * * * *" },
     async () => {
-        await db
-            .delete(projectNodeLocks)
-            .where(lt(projectNodeLocks.expiresAt, new Date()));
-
-        return { cleaned: true };
+        let deleted = 0;
+        for (let batch = 0; batch < 10; batch += 1) {
+            const count = await deleteExpiredFileLeases(1_000);
+            deleted += count;
+            if (count < 1_000) break;
+        }
+        logger.info("files.lock.cleanup.completed", {
+            module: "files",
+            deleted,
+        });
+        return { cleaned: true, deleted };
     },
 );
