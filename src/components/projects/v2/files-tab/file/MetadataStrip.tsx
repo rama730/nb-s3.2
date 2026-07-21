@@ -14,12 +14,7 @@
 //   2. Every field is derived from the `node` prop on every render — no
 //      parent refs, no memoized caches, no shared module-level state.
 //      (Req 17.3.)
-//   3. The media-inspection side effects (`useImageDimensions`,
-//      `useMediaDuration`) live INSIDE this component so their cleanup is
-//      tied to this component's lifecycle. They were previously owned by
-//      `AssetMetadataPanel` and outlived file switches — that panel is NOT
-//      used here.
-//   4. The root element carries `data-testid="files-tab-metadata-strip"`
+//   3. The root element carries `data-testid="files-tab-metadata-strip"`
 //      and `data-node-id={node.id}` so Property 2 (`metadata_matches_selection`)
 //      can verify the DOM without reaching into React internals.
 //
@@ -32,8 +27,6 @@ import * as React from "react";
 
 import type { ProjectNode } from "@/lib/db/schema";
 import { cn } from "@/lib/utils";
-import { Button } from "@/components/ui/button";
-import { History } from "lucide-react";
 
 import { formatBytes, formatRelativeTime } from "../folder/format";
 import { TaskLinkPopover } from "../TaskLinkPopover";
@@ -59,107 +52,6 @@ export type MetadataStripNode = ProjectNode & {
   updatedByAvatarUrl?: string | null;
   versionUpdatedAt?: Date | string | null;
 };
-
-// ---------------------------------------------------------------------------
-// Side-effect hooks (owned here so cleanup runs on unmount)
-// ---------------------------------------------------------------------------
-
-type MediaKind = "image" | "video" | "audio" | "other";
-
-function mediaKindOf(mime: string | null | undefined): MediaKind {
-  const m = (mime ?? "").toLowerCase();
-  if (m.startsWith("image/")) return "image";
-  if (m.startsWith("video/")) return "video";
-  if (m.startsWith("audio/")) return "audio";
-  return "other";
-}
-
-/**
- * Load intrinsic pixel dimensions of an image by URL. Null until loaded,
- * null when `url`/`kind` aren't an image, null on error. Effect cleanup
- * detaches the image handlers so a late `onload` on an unmounted component
- * cannot call `setDims`.
- */
-function useImageDimensions(
-  url: string | null | undefined,
-  kind: MediaKind,
-): { width: number; height: number } | null {
-  const [dims, setDims] = React.useState<{ width: number; height: number } | null>(null);
-
-  React.useEffect(() => {
-    setDims(null);
-    if (kind !== "image" || !url) return;
-    // Guard against SSR / non-DOM environments.
-    if (typeof window === "undefined" || typeof Image === "undefined") return;
-
-    let cancelled = false;
-    const img = new Image();
-    img.onload = () => {
-      if (cancelled) return;
-      setDims({ width: img.naturalWidth, height: img.naturalHeight });
-    };
-    img.onerror = () => {
-      if (cancelled) return;
-      setDims(null);
-    };
-    img.src = url;
-
-    return () => {
-      cancelled = true;
-      img.onload = null;
-      img.onerror = null;
-      // Drop the src so the browser can cancel the in-flight request.
-      img.src = "";
-    };
-  }, [url, kind]);
-
-  return dims;
-}
-
-/**
- * Load media duration (seconds) by URL for `<video>` / `<audio>` sources.
- * Returns null until metadata is ready, null when kind doesn't apply.
- * The inspector element is detached on cleanup.
- */
-function useMediaDuration(
-  url: string | null | undefined,
-  kind: MediaKind,
-): number | null {
-  const [duration, setDuration] = React.useState<number | null>(null);
-
-  React.useEffect(() => {
-    setDuration(null);
-    if ((kind !== "video" && kind !== "audio") || !url) return;
-    if (typeof document === "undefined") return;
-
-    let cancelled = false;
-    const el = document.createElement(kind === "video" ? "video" : "audio") as
-      | HTMLVideoElement
-      | HTMLAudioElement;
-    el.preload = "metadata";
-
-    const handleLoaded = () => {
-      if (cancelled) return;
-      if (Number.isFinite(el.duration)) setDuration(el.duration);
-    };
-    el.addEventListener("loadedmetadata", handleLoaded);
-    el.src = url;
-
-    return () => {
-      cancelled = true;
-      el.removeEventListener("loadedmetadata", handleLoaded);
-      el.src = "";
-      // Force the element to release its network handle.
-      try {
-        el.load();
-      } catch {
-        // Ignore: load() may throw in jsdom / exotic DOMs.
-      }
-    };
-  }, [url, kind]);
-
-  return duration;
-}
 
 // ---------------------------------------------------------------------------
 // Field derivation
@@ -203,10 +95,6 @@ function nameLabel(node: MetadataStripNode): string {
 export interface MetadataStripProps {
   /** Invariant: `node.id === currentLocation.id` (see design § Metadata Bug Fix). */
   node: MetadataStripNode;
-  /** Controls whether `FileActionsBar` shows the Edit button (Req 5.3-5.4). */
-  canEdit: boolean;
-  /** Optional signed URL for the file blob — used by the media side effects. */
-  signedUrl?: string | null;
   /** Project ID — passed to FileActionsBar for "Attach to task…" (Req 9.1). */
   projectId?: string;
   /** Number of tasks linked to this node (from store taskLinkCounts). Req 7.1. */
@@ -219,8 +107,6 @@ export interface MetadataStripProps {
   onRaw: () => void;
   /** Edit mode handler (Req 5.8). */
   onEdit: () => void;
-  /** Download handler. */
-  onDownload: () => void;
   /** Callback to toggle the LinkedTasksPanel open/closed (Req 8.1). */
   onToggleLinkedTasks?: () => void;
   /** Whether the LinkedTasksPanel is currently open (Req 8.1). */
@@ -232,8 +118,9 @@ export interface MetadataStripProps {
   /** Optional uploader display name cache map. */
   uploaderNames?: Record<string, string>;
   className?: string;
-  isLinkedDoc?: boolean;
+  linkedDoc?: { slug: string; linkedNodeId?: string | null } | null;
   onNavigateToDoc?: (slug: string) => void;
+  actionsTriggerRef?: React.Ref<HTMLButtonElement>;
 }
 
 /**
@@ -243,23 +130,21 @@ export interface MetadataStripProps {
  */
 export function MetadataStrip({
   node,
-  canEdit,
-  signedUrl,
   projectId,
   taskLinkCount,
   mode,
   onView,
   onRaw,
   onEdit,
-  onDownload,
   onToggleLinkedTasks,
   isLinkedTasksPanelOpen,
   onToggleVersionHistory,
   isVersionHistoryPanelOpen,
   uploaderNames,
   className,
-  isLinkedDoc,
+  linkedDoc = null,
   onNavigateToDoc,
+  actionsTriggerRef,
 }: MetadataStripProps): React.JSX.Element {
   // Dev-only invariant assertion. When this fires, the parent forgot to
   // gate the render on `currentLocation.type === "file"` or lost the
@@ -267,13 +152,6 @@ export function MetadataStrip({
   if (process.env.NODE_ENV !== "production") {
     console.assert(Boolean(node?.id), "MetadataStrip requires node.id");
   }
-
-  const mediaKind = mediaKindOf(node.mimeType);
-  // The hooks are called unconditionally — they internally no-op when the
-  // media kind does not apply. Owning them here guarantees their cleanup
-  // runs when this component unmounts (the Req 17 structural fix).
-  useImageDimensions(signedUrl ?? null, mediaKind);
-  useMediaDuration(signedUrl ?? null, mediaKind);
 
   const currentVersion =
     typeof node.currentVersion === "number" && Number.isFinite(node.currentVersion)
@@ -289,11 +167,14 @@ export function MetadataStrip({
     if (directName) return directName;
     const directUser = typeof node.updatedByUsername === "string" ? node.updatedByUsername.trim() : "";
     if (directUser) return directUser;
+    if (node.updatedById && uploaderNames?.[node.updatedById]) {
+      return uploaderNames[node.updatedById];
+    }
     if (node.createdBy && uploaderNames?.[node.createdBy]) {
       return uploaderNames[node.createdBy];
     }
     return null;
-  }, [node.updatedByName, node.updatedByUsername, node.createdBy, uploaderNames]);
+  }, [node.updatedByName, node.updatedByUsername, node.updatedById, node.createdBy, uploaderNames]);
   const updatedAtValue = node.versionUpdatedAt ?? node.updatedAt;
   const isoTimestamp = toIso(updatedAtValue);
   const relativeTimestamp = formatRelativeTime(updatedAtValue);
@@ -345,7 +226,7 @@ export function MetadataStrip({
         )}
         <Separator />
         <span data-field="mime-type">{mimeLabel(node)}</span>
-        {isLinkedDoc && (
+        {linkedDoc && (
           <>
             <Separator />
             <span className="font-semibold text-zinc-800 dark:text-zinc-200" data-field="used-as-doc">
@@ -370,7 +251,6 @@ export function MetadataStrip({
         onView={onView}
         onRaw={onRaw}
         onEdit={onEdit}
-        onDownload={onDownload}
         onToggleLinkedTasks={onToggleLinkedTasks}
         isLinkedTasksPanelOpen={isLinkedTasksPanelOpen}
         onToggleVersionHistory={onToggleVersionHistory}
@@ -380,8 +260,9 @@ export function MetadataStrip({
         fileName={node.name}
         fileSize={node.size}
         mimeType={node.mimeType}
-        isLinkedDoc={isLinkedDoc}
+        linkedDoc={linkedDoc}
         onNavigateToDoc={onNavigateToDoc}
+        actionsTriggerRef={actionsTriggerRef}
       />
     </div>
   );
