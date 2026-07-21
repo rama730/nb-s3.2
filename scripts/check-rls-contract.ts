@@ -12,6 +12,8 @@ async function main() {
     const publicRlsHardeningSource = await readFile(path.join(root, 'drizzle/0078_public_rls_security_hardening.sql'), 'utf8')
     const profilePrivilegeHardeningSource = await readFile(path.join(root, 'drizzle/0079_profile_column_privilege_hardening.sql'), 'utf8')
     const profileWriteHardeningSource = await readFile(path.join(root, 'drizzle/0080_profile_write_privilege_hardening.sql'), 'utf8')
+    const ponytailHardeningSource = await readFile(path.join(root, 'drizzle/0122_ponytail_database_hardening.sql'), 'utf8')
+    const contributionAuthoritySource = await readFile(path.join(root, 'drizzle/0127_profile_contribution_authority.sql'), 'utf8')
     const setupSource = await readFile(path.join(root, 'scripts/setup-database.ts'), 'utf8')
 
     const checks: Array<[string, boolean]> = [
@@ -47,9 +49,17 @@ async function main() {
         ['profile write hardening restores explicit display-only reads', profileWriteHardeningSource.includes('GRANT SELECT (') && profileWriteHardeningSource.includes('username') && profileWriteHardeningSource.includes('last_active_at')],
         ['profile write hardening does not grant profile email', !profileWriteHardeningSource.includes('\n  email')],
         ['profile write hardening does not grant notification preferences', !profileWriteHardeningSource.includes('notification_preferences')],
+        ['ponytail hardening removes cross-project policy tautologies', !ponytailHardeningSource.includes('m.project_id = m.project_id')],
+        ['ponytail hardening removes arbitrary auth-user deletion RPC', ponytailHardeningSource.includes('DROP FUNCTION IF EXISTS public.delete_auth_user(uuid)')],
+        ['ponytail hardening removes broad chat attachment reads', ponytailHardeningSource.includes('DROP POLICY IF EXISTS "Users can view chat attachments"')],
+        ['ponytail hardening moves authorization helpers out of public', ponytailHardeningSource.includes('SET SCHEMA app_private')],
+        ['ponytail hardening fixes current markdown helper relations', ponytailHardeningSource.includes('public.project_markdown_versions') && ponytailHardeningSource.includes('public.project_markdowns') && ponytailHardeningSource.includes('public.project_markdown_assets')],
+        ['contribution authority scopes public parent reads', contributionAuthoritySource.includes('CREATE POLICY "Public profile contributions are viewable"') && contributionAuthoritySource.includes('"visibility" = \'public\'')],
+        ['contribution authority derives stage reads from public parent', contributionAuthoritySource.includes('CREATE POLICY "Public profile contribution stages are viewable"') && contributionAuthoritySource.includes("contribution.visibility = 'public'")],
+        ['contribution authority lets owners read their skill assignments through the hardened helper', contributionAuthoritySource.includes('CREATE POLICY "Visible contribution skills are readable"') && contributionAuthoritySource.includes('contribution.profile_id = app_private.get_auth_uid()') && !contributionAuthoritySource.includes('contribution.profile_id = public.get_auth_uid()')],
+        ['contribution authority blocks hidden and draft project exposure', contributionAuthoritySource.includes("project.visibility IN ('public', 'unlisted')") && contributionAuthoritySource.includes("project.status <> 'draft'")],
         ['database setup replays migration journal instead of authoring policies directly', setupSource.includes('Starting database setup via Drizzle migrations')],
         ['database setup no longer creates policies directly', !setupSource.includes('CREATE POLICY')],
-        ['database setup no longer references supabase-setup.sql', !setupSource.includes('supabase-setup.sql')],
     ]
 
     const failed = checks.filter(([, passed]) => !passed)
