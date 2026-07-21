@@ -39,12 +39,13 @@ import {
 } from "../../src/lib/notifications/project-policy";
 
 test("project settings exposes enforceable Updates and hides future-only sections", () => {
-    const ids = getVisibleProjectSettingsSections().map((section) => section.id);
+    const ids = getVisibleProjectSettingsSections().map((section) => section.id as string);
     assert.ok(ids.includes("general"));
     assert.ok(ids.includes("danger"));
     assert.ok(ids.includes("readme"));
     assert.ok(ids.includes("updates"));
     assert.ok(!ids.includes("automation"));
+    assert.ok(!ids.includes("data"));
 });
 
 test("project access policy normalizes unknown visibility fail-closed", () => {
