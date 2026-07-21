@@ -1,14 +1,11 @@
 'use server';
 
-import { createClient } from '@/lib/supabase/server';
+import { getAuthUser } from '@/lib/supabase/auth-user';
 import { resolvePrivacyRelationships } from '@/lib/privacy/resolver';
-import { getInboxApplicationsAction } from '@/app/actions/applications';
 import { db } from '@/lib/db';
 import {
     conversationParticipants,
     conversations,
-    messageHiddenForUsers,
-    messages,
     profiles,
     projectMembers,
     projects,
@@ -17,31 +14,15 @@ import {
 import { and, desc, eq, inArray, or, sql } from 'drizzle-orm';
 import {
     ConversationWithDetails,
-    type MessagingStructuredCatalogV2,
     MessageWithSender,
-    ProjectGroupConversation,
     UploadedAttachment,
-    convertMessageToFollowUpActionV2,
-    convertMessageToTaskActionV2,
-    deleteMessage,
-    editMessage,
     getConversations,
     hydrateConversationLastMessageDeliveryMetadata,
-    getMessagingStructuredCatalogV2,
-    getMessageContext,
     getMessages,
     getOrCreateDMConversation,
     getPinnedMessages,
-    getProjectGroups,
-    getUnreadCount,
-    markConversationAsRead,
-    searchMessages,
-    sendMessage,
     sendMessageWithAttachments,
     sendStructuredMessageActionV2,
-    setConversationArchived,
-    setConversationMuted,
-    setMessagePinned,
     resolveMessageWorkflowActionV2,
 } from '@/app/actions/messaging';
 import type { MessageContextChip } from '@/lib/messages/structured';
@@ -96,14 +77,6 @@ interface ActiveApplicationRowV2 {
     status: 'pending' | 'accepted' | 'rejected' | 'project_deleted';
     projectId: string | null;
     updatedAt: Date;
-}
-
-async function getAuthUser() {
-    const supabase = await createClient();
-    const {
-        data: { user },
-    } = await supabase.auth.getUser();
-    return user;
 }
 
 function getDefaultCapability(conversationType: ConversationWithDetails['type']): ConversationCapabilityV2 {
@@ -653,52 +626,6 @@ export async function getConversationThreadPageV2(
     }
 }
 
-export async function getConversationCapabilityV2(params: {
-    conversationId?: string | null;
-    targetUserId?: string | null;
-}): Promise<{ success: boolean; error?: string; capability?: ConversationCapabilityV2 }> {
-    try {
-        const viewer = await getAuthUser();
-        if (!viewer) return { success: false, error: 'Not authenticated' };
-        const targetUserId = params.targetUserId?.trim() || null;
-
-        if (params.conversationId) {
-            const conversation = await getConversationSummarySourceV2(viewer.id, params.conversationId);
-            if (!conversation) {
-                return { success: false, error: 'Conversation not found' };
-            }
-            const [hydratedConversation] = await hydrateConversationSummariesV2(viewer.id, [conversation]);
-            return {
-                success: true,
-                capability: hydratedConversation?.capability ?? getDefaultCapability(conversation.type),
-            };
-        }
-
-        if (!targetUserId) {
-            return { success: false, error: 'Missing conversation context' };
-        }
-
-        const dmCandidate: ConversationWithDetails = {
-            id: `draft:${targetUserId}`,
-            type: 'dm',
-            updatedAt: new Date(),
-            participants: [{ id: targetUserId, username: null, fullName: null, avatarUrl: null }],
-            lastMessage: null,
-            unreadCount: 0,
-            lastReadAt: null,
-            lastReadMessageId: null,
-        };
-
-        return {
-            success: true,
-            capability: await buildConversationCapability(viewer.id, dmCandidate),
-        };
-    } catch (error) {
-        console.error('Error fetching conversation capability v2:', error);
-        return { success: false, error: 'Failed to fetch conversation capability' };
-    }
-}
-
 export async function ensureDirectConversationV2(
     targetUserId: string,
 ): Promise<{ success: boolean; error?: string; conversationId?: string; conversation?: InboxConversationV2 }> {
@@ -786,28 +713,16 @@ export async function sendConversationMessageV2(params: {
         }
 
         const attachments = params.attachments ?? [];
-        const result = attachments.length > 0
-            ? await sendMessageWithAttachments(
-                conversationId,
-                params.content,
-                attachments,
-                {
-                    clientMessageId: params.clientMessageId,
-                    replyToMessageId: params.replyToMessageId ?? null,
-                    contextChips: params.contextChips ?? [],
-                },
-            )
-            : await sendMessage(
-                conversationId,
-                params.content,
-                'text',
-                undefined,
-                {
-                    clientMessageId: params.clientMessageId,
-                    replyToMessageId: params.replyToMessageId ?? null,
-                    contextChips: params.contextChips ?? [],
-                },
-            );
+        const result = await sendMessageWithAttachments(
+            conversationId,
+            params.content,
+            attachments,
+            {
+                clientMessageId: params.clientMessageId,
+                replyToMessageId: params.replyToMessageId ?? null,
+                contextChips: params.contextChips ?? [],
+            },
+        );
 
         const conversation = result.success
             ? await getConversationSummaryV2Internal(user.id, conversationId)
@@ -825,60 +740,6 @@ export async function sendConversationMessageV2(params: {
         console.error('Error sending conversation message v2:', error);
         return { success: false, error: 'Failed to send message' };
     }
-}
-
-export async function markConversationReadV2(
-    conversationId: string,
-    lastReadMessageId?: string,
-) {
-    return markConversationAsRead(conversationId, lastReadMessageId);
-}
-
-export async function setConversationArchivedV2(conversationId: string, archived: boolean) {
-    return setConversationArchived(conversationId, archived);
-}
-
-export async function setConversationMutedV2(conversationId: string, muted: boolean) {
-    return setConversationMuted(conversationId, muted);
-}
-
-export async function setMessagePinnedV2(messageId: string, pinned: boolean) {
-    return setMessagePinned(messageId, pinned);
-}
-
-export async function editMessageV2(messageId: string, content: string) {
-    return editMessage(messageId, content);
-}
-
-export async function deleteMessageV2(messageId: string, mode: 'me' | 'everyone' = 'me') {
-    return deleteMessage(messageId, mode);
-}
-
-export async function getUnreadSummaryV2(): Promise<{ success: boolean; error?: string; count?: number }> {
-    return getUnreadCount();
-}
-
-export async function getApplicationsInboxPageV2(limit: number = 20, offset: number = 0) {
-    return getInboxApplicationsAction(limit, offset);
-}
-
-export async function getProjectGroupsPageV2(limit: number = 20, offset: number = 0) {
-    return getProjectGroups(limit, offset);
-}
-
-export async function searchMessagesV2(query: string) {
-    return searchMessages(query);
-}
-
-export async function getMessageContextV2(conversationId: string, messageId: string) {
-    return getMessageContext(conversationId, messageId);
-}
-
-export async function getMessagingStructuredCatalogPageV2(params: {
-    conversationId?: string | null;
-    targetUserId?: string | null;
-}): Promise<{ success: boolean; error?: string; catalog?: MessagingStructuredCatalogV2 }> {
-    return getMessagingStructuredCatalogV2(params);
 }
 
 export async function sendStructuredConversationMessageV2(params: Parameters<typeof sendStructuredMessageActionV2>[0]): Promise<{
@@ -939,12 +800,4 @@ export async function resolveConversationWorkflowV2(params: Parameters<typeof re
         console.error('Error resolving workflow v2:', error);
         return { success: false, error: 'Failed to resolve workflow' };
     }
-}
-
-export async function convertMessageToTaskV2(params: Parameters<typeof convertMessageToTaskActionV2>[0]) {
-    return convertMessageToTaskActionV2(params);
-}
-
-export async function convertMessageToFollowUpV2(params: Parameters<typeof convertMessageToFollowUpActionV2>[0]) {
-    return convertMessageToFollowUpActionV2(params);
 }
