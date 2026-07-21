@@ -121,6 +121,15 @@ export function patchProjectTaskCaches(
       patchTaskQueryData(existing, incoming, scope),
     );
   }
+  void queryClient.invalidateQueries({
+    queryKey: queryKeys.project.detail.tasksRoot(projectId),
+    predicate: (query) => query.queryKey.length > 5,
+    refetchType: "active",
+  });
+  void queryClient.invalidateQueries({
+    queryKey: queryKeys.globalSearch.projectRoot(),
+    refetchType: "active",
+  });
 }
 
 export function removeTaskFromProjectTaskCaches(
@@ -133,6 +142,15 @@ export function removeTaskFromProjectTaskCaches(
       removeTaskFromQueryData(existing, taskId),
     );
   }
+  void queryClient.invalidateQueries({
+    queryKey: queryKeys.project.detail.tasksRoot(projectId),
+    predicate: (query) => query.queryKey.length > 5,
+    refetchType: "active",
+  });
+  void queryClient.invalidateQueries({
+    queryKey: queryKeys.globalSearch.projectRoot(),
+    refetchType: "active",
+  });
 }
 
 export function findTaskInProjectTaskCaches(
