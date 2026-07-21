@@ -5,7 +5,7 @@ import Image from 'next/image';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Search, Loader2, UserPlus, MessageSquare } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
-import { useDebounce } from '@/hooks/hub/useDebounce';
+import { useDebounce } from 'use-debounce';
 import { getAcceptedConnections } from '@/app/actions/connections';
 import { toast } from 'sonner';
 import { useEnsureDirectConversation } from '@/hooks/useMessagesV2';
@@ -52,7 +52,7 @@ export function NewMessageModalV2({
     const [hasMore, setHasMore] = useState(false);
     const [, setCursor] = useState<string | null>(null);
     const [openingUserId, setOpeningUserId] = useState<string | null>(null);
-    const debouncedQuery = useDebounce(query, 300);
+    const [debouncedQuery] = useDebounce(query, 300);
     const requestTokenRef = useRef(0);
     const cursorRef = useRef<string | null>(null);
 
@@ -197,7 +197,7 @@ export function NewMessageModalV2({
                         <input
                             type="text"
                             placeholder="Search connections..."
-                            className="w-full rounded-lg bg-zinc-100 py-2 pl-9 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:bg-zinc-800"
+                            className="w-full rounded-lg bg-zinc-100 py-2 pl-9 pr-4 text-sm focus:outline-none   dark:bg-zinc-800"
                             value={query}
                             onChange={(event) => setQuery(event.target.value)}
                             autoFocus
