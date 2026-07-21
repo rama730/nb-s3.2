@@ -18,7 +18,6 @@ import { cn } from "@/lib/utils";
 import { FOLDER_LIST_GRID_TEMPLATE } from "./layout";
 
 export interface FolderListHeaderProps {
-  projectId: string;
   className?: string;
 }
 
