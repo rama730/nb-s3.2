@@ -36,6 +36,10 @@ export const AppScrollArea = React.forwardRef<HTMLDivElement, AppScrollAreaProps
     },
     ref,
   ) => {
+    React.useEffect(() => {
+      if (dataScrollRoot) window.dispatchEvent(new Event("route-scroll-root-ready"));
+    }, [dataScrollRoot]);
+
     return (
       <div
         ref={ref}
