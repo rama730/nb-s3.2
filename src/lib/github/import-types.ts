@@ -1,9 +1,12 @@
+import type { ExternalAccountHealth } from "@/lib/types/settingsTypes";
+
 export type GithubImportAccessState = {
   linked: boolean;
   username: string | null;
   repoAccess: boolean;
   refreshRequired: boolean;
   sealedImportToken: unknown | null;
+  accountHealth: ExternalAccountHealth;
 };
 
 export type GithubImportRepoItem = {
