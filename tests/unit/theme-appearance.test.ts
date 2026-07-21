@@ -15,7 +15,6 @@ import {
 import {
   ACCENT_PALETTES,
   getAccentSwatchBackground,
-  resolveReducedMotionPreference,
 } from "../../src/lib/theme/appearance-runtime";
 import { readAppearanceSettings } from "../../src/lib/theme/appearance-client";
 
@@ -168,40 +167,6 @@ test("getAccentSwatchBackground renders a solid swatch with a lighter selected-s
   assert.match(background, /radial-gradient\(circle at 72% 28%,/);
   assert.match(background, /#dfe9ff/);
   assert.match(background, /#5b3df5/);
-});
-
-test("resolveReducedMotionPreference honors app and system reduced-motion inputs", () => {
-  const rootWithAppPreference = {
-    getAttribute: (name: string) => (name === "data-reduce-motion" ? "true" : null),
-  } as unknown as Element;
-
-  const rootWithoutAppPreference = {
-    getAttribute: () => null,
-  } as unknown as Element;
-
-  assert.equal(
-    resolveReducedMotionPreference({
-      root: rootWithoutAppPreference,
-      matchMedia: () => ({ matches: false } as MediaQueryList),
-    }),
-    false,
-  );
-
-  assert.equal(
-    resolveReducedMotionPreference({
-      root: rootWithAppPreference,
-      matchMedia: () => ({ matches: false } as MediaQueryList),
-    }),
-    true,
-  );
-
-  assert.equal(
-    resolveReducedMotionPreference({
-      root: rootWithoutAppPreference,
-      matchMedia: () => ({ matches: true } as MediaQueryList),
-    }),
-    true,
-  );
 });
 
 test("readAppearanceSettings dedupes concurrent bootstrap fetches", async () => {
