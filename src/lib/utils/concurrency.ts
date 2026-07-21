@@ -1,9 +1,10 @@
-export async function runWithConcurrency<T>(
+export async function runWithConcurrency<T, R = void>(
   items: T[],
   concurrency: number,
-  run: (item: T) => Promise<void>
-) {
-  if (items.length === 0) return;
+  run: (item: T) => Promise<R>
+): Promise<R[]> {
+  if (items.length === 0) return [];
+  const results: R[] = new Array(items.length);
   const workerCount = Math.max(1, Math.min(concurrency, items.length));
   let cursor = 0;
   await Promise.all(
@@ -12,9 +13,10 @@ export async function runWithConcurrency<T>(
         const index = cursor++;
         const item = items[index];
         if (item !== undefined) {
-          await run(item);
+          results[index] = await run(item);
         }
       }
     })
   );
+  return results;
 }
