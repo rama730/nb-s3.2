@@ -139,8 +139,6 @@ export function CreateDialog({
   setCreateDialog,
   confirmCreate,
   canEdit,
-  nestedDialogClassName,
-  nestedDialogOverlayClassName,
 }: {
   createDialog:
     | { open: false }
@@ -153,8 +151,6 @@ export function CreateDialog({
   >;
   confirmCreate: () => Promise<void>;
   canEdit: boolean;
-  nestedDialogClassName?: string;
-  nestedDialogOverlayClassName?: string;
 }) {
   return (
     <Dialog
@@ -162,10 +158,7 @@ export function CreateDialog({
       onOpenChange={(open) => setCreateDialog(open ? createDialog : { open: false })}
     >
       {createDialog.open ? (
-        <DialogContent
-          className={nestedDialogClassName}
-          overlayClassName={nestedDialogOverlayClassName}
-        >
+        <DialogContent>
           <DialogHeader>
             <DialogTitle>
               {createDialog.kind === "folder" ? "Create folder" : "Create file"}
@@ -210,8 +203,6 @@ export function RenameDialog({
   setRenameState,
   confirmRename,
   canEdit,
-  nestedDialogClassName,
-  nestedDialogOverlayClassName,
 }: {
   renameState: { nodeId: string | null; value: string; original: string };
   setRenameState: React.Dispatch<
@@ -219,8 +210,6 @@ export function RenameDialog({
   >;
   confirmRename: () => Promise<void>;
   canEdit: boolean;
-  nestedDialogClassName?: string;
-  nestedDialogOverlayClassName?: string;
 }) {
   return (
     <Dialog
@@ -230,10 +219,7 @@ export function RenameDialog({
       }}
     >
       {renameState.nodeId ? (
-        <DialogContent
-          className={nestedDialogClassName}
-          overlayClassName={nestedDialogOverlayClassName}
-        >
+        <DialogContent>
           <DialogHeader>
             <DialogTitle>Rename</DialogTitle>
           </DialogHeader>
@@ -270,15 +256,11 @@ export function DeleteDialog({
   setDeleteDialog,
   confirmDelete,
   canEdit,
-  nestedDialogClassName,
-  nestedDialogOverlayClassName,
 }: {
   deleteDialog: { open: boolean; nodes: ProjectNode[] };
   setDeleteDialog: React.Dispatch<React.SetStateAction<{ open: boolean; nodes: ProjectNode[] }>>;
   confirmDelete: () => Promise<void>;
   canEdit: boolean;
-  nestedDialogClassName?: string;
-  nestedDialogOverlayClassName?: string;
 }) {
   return (
     <Dialog
@@ -287,10 +269,7 @@ export function DeleteDialog({
         setDeleteDialog((d) => ({ ...d, open, nodes: open ? d.nodes : [] }))
       }
     >
-      <DialogContent
-        className={nestedDialogClassName}
-        overlayClassName={nestedDialogOverlayClassName}
-      >
+      <DialogContent>
         <DialogHeader>
           <DialogTitle>Move to Trash</DialogTitle>
         </DialogHeader>
@@ -329,8 +308,6 @@ export function MoveDialog({
   confirmMove,
   canEdit,
   projectId,
-  nestedDialogClassName,
-  nestedDialogOverlayClassName,
 }: {
   moveDialog: {
     open: boolean;
@@ -347,8 +324,6 @@ export function MoveDialog({
   confirmMove: () => Promise<void>;
   canEdit: boolean;
   projectId: string;
-  nestedDialogClassName?: string;
-  nestedDialogOverlayClassName?: string;
 }) {
   return (
     <Dialog
@@ -357,10 +332,7 @@ export function MoveDialog({
         setMoveDialog((d) => ({ ...d, open, nodes: open ? d.nodes : [] }))
       }
     >
-      <DialogContent
-        className={nestedDialogClassName}
-        overlayClassName={nestedDialogOverlayClassName}
-      >
+      <DialogContent>
         <DialogHeader>
           <DialogTitle>Move</DialogTitle>
         </DialogHeader>
@@ -421,24 +393,6 @@ interface ExplorerDialogsHostProps {
     React.SetStateAction<{ open: boolean; nodes: ProjectNode[]; targetFolderId: string | null }>
   >;
   confirmMove: () => Promise<void>;
-  // Quick Open and Command Palette props kept for API compatibility but no longer rendered
-  // (V3 callers always pass { open: false } — the legacy modules have been deleted)
-  quickOpen: { open: boolean; query: string };
-  setQuickOpen: React.Dispatch<React.SetStateAction<{ open: boolean; query: string }>>;
-  commandPalette: { open: boolean; query: string };
-  setCommandPalette: React.Dispatch<React.SetStateAction<{ open: boolean; query: string }>>;
-  selectedNode: ProjectNode | null;
-  storeSelectedNodeIds: string[];
-  nodesById: Record<string, ProjectNode>;
-  recents: string[];
-  handleSelect: (node: ProjectNode) => void;
-  openCreate: (kind: "file" | "folder") => void;
-  openRename: (node: ProjectNode) => void;
-  openMove: (nodeOrNodes: ProjectNode | ProjectNode[]) => void;
-  openDelete: (nodeOrNodes: ProjectNode | ProjectNode[]) => void;
-  toggleFavorite: (projectId: string, nodeId: string) => void;
-  getNodePath: (node: ProjectNode | null | undefined) => string;
-  mode: "default" | "select";
 }
 
 // FW10: Memoize to prevent re-renders from unrelated ExplorerShell state changes
@@ -457,11 +411,7 @@ export const ExplorerDialogsHost = React.memo(function ExplorerDialogsHost({
   moveDialog,
   setMoveDialog,
   confirmMove,
-  mode,
 }: ExplorerDialogsHostProps) {
-  const nestedDialogClassName = mode === "select" ? "z-[360]" : undefined;
-  const nestedDialogOverlayClassName = mode === "select" ? "z-[350]" : undefined;
-
   return (
     <>
       <CreateDialog
@@ -469,8 +419,6 @@ export const ExplorerDialogsHost = React.memo(function ExplorerDialogsHost({
         setCreateDialog={setCreateDialog}
         confirmCreate={confirmCreate}
         canEdit={canEdit}
-        nestedDialogClassName={nestedDialogClassName}
-        nestedDialogOverlayClassName={nestedDialogOverlayClassName}
       />
 
       <RenameDialog
@@ -478,8 +426,6 @@ export const ExplorerDialogsHost = React.memo(function ExplorerDialogsHost({
         setRenameState={setRenameState}
         confirmRename={confirmRename}
         canEdit={canEdit}
-        nestedDialogClassName={nestedDialogClassName}
-        nestedDialogOverlayClassName={nestedDialogOverlayClassName}
       />
 
       <DeleteDialog
@@ -487,8 +433,6 @@ export const ExplorerDialogsHost = React.memo(function ExplorerDialogsHost({
         setDeleteDialog={setDeleteDialog}
         confirmDelete={confirmDelete}
         canEdit={canEdit}
-        nestedDialogClassName={nestedDialogClassName}
-        nestedDialogOverlayClassName={nestedDialogOverlayClassName}
       />
 
       <MoveDialog
@@ -497,8 +441,6 @@ export const ExplorerDialogsHost = React.memo(function ExplorerDialogsHost({
         confirmMove={confirmMove}
         canEdit={canEdit}
         projectId={projectId}
-        nestedDialogClassName={nestedDialogClassName}
-        nestedDialogOverlayClassName={nestedDialogOverlayClassName}
       />
     </>
   );
