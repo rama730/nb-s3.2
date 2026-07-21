@@ -1,7 +1,6 @@
 import {
     deletePushSubscriptionAction,
     savePushSubscriptionAction,
-    touchPushSubscriptionAction,
 } from "@/app/actions/push-subscriptions";
 import { logger } from "@/lib/logger";
 
@@ -20,29 +19,6 @@ function urlBase64ToApplicationServerKey(base64: string): Uint8Array<ArrayBuffer
         view[i] = raw.charCodeAt(i);
     }
     return view;
-}
-
-function extractKey(sub: PushSubscription, name: "p256dh" | "auth"): string | null {
-    const raw = sub.getKey(name);
-    if (!raw) return null;
-    let binary = "";
-    const bytes = new Uint8Array(raw);
-    for (let i = 0; i < bytes.byteLength; i += 1) {
-        binary += String.fromCharCode(bytes[i]!);
-    }
-    return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-function bufferSourceToUint8Array(value: BufferSource): Uint8Array {
-    if (value instanceof ArrayBuffer) return new Uint8Array(value);
-    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-}
-
-function pushSubscriptionKeyMatches(existingKey: BufferSource | null, expectedKey: Uint8Array): boolean {
-    if (!existingKey) return false;
-    const currentKey = bufferSourceToUint8Array(existingKey);
-    return currentKey.length === expectedKey.length
-        && currentKey.every((value, index) => value === expectedKey[index]);
 }
 
 export function isWebPushSupported(): boolean {
@@ -71,9 +47,6 @@ export async function getCurrentPushStatus(): Promise<WebPushClientStatus> {
     if (!reg) return "idle";
     const sub = await reg.pushManager.getSubscription();
     if (!sub) return "idle";
-    void touchPushSubscriptionAction(sub.endpoint).catch(() => {
-        // Best effort freshness marker; status should still reflect browser state.
-    });
     return "subscribed";
 }
 
@@ -94,27 +67,19 @@ export async function subscribeWebPush(): Promise<{ ok: true } | { ok: false; re
     let subscription: PushSubscription;
     try {
         const existing = await reg.pushManager.getSubscription();
-        const expectedKey = urlBase64ToApplicationServerKey(vapidPublicKey);
-        const shouldResubscribe = !existing
-            || !pushSubscriptionKeyMatches(existing.options.applicationServerKey, expectedKey);
-
-        if (existing && shouldResubscribe) {
-            try { await existing.unsubscribe(); } catch { /* best effort */ }
-        }
-
-        subscription = shouldResubscribe
-            ? await reg.pushManager.subscribe({
+        subscription = existing
+            ?? await reg.pushManager.subscribe({
                 userVisibleOnly: true,
-                applicationServerKey: expectedKey,
-            })
-            : existing;
+                applicationServerKey: urlBase64ToApplicationServerKey(vapidPublicKey),
+            });
     } catch (error) {
         logger.warn("web_push.subscribe_failed", { module: "notifications", error });
         return { ok: false, reason: "subscribe_failed" };
     }
 
-    const p256dh = extractKey(subscription, "p256dh");
-    const auth = extractKey(subscription, "auth");
+    const keys = subscription.toJSON().keys;
+    const p256dh = keys?.p256dh ?? null;
+    const auth = keys?.auth ?? null;
     if (!p256dh || !auth) return { ok: false, reason: "key_extract_failed" };
 
     const result = await savePushSubscriptionAction({
@@ -153,17 +118,4 @@ export async function unsubscribeWebPush(): Promise<WebPushUnsubscribeResult> {
         return { ok: true, serverCleanupFailed: true };
     }
     return { ok: true };
-}
-
-export async function touchWebPushSubscription(): Promise<void> {
-    if (!isWebPushSupported()) return;
-    const reg = await navigator.serviceWorker.getRegistration("/sw.js");
-    if (!reg) return;
-    const sub = await reg.pushManager.getSubscription();
-    if (!sub) return;
-    try {
-        await touchPushSubscriptionAction(sub.endpoint);
-    } catch {
-        // non-critical
-    }
 }
