@@ -8,7 +8,7 @@ The repo is split into four runtime paths:
 
 - Request path: Next.js app routes, middleware, route contracts, and authenticated shells.
 - Public read path: CDN plus Redis backed feeds and public cache envelopes.
-- Realtime path: Supabase-backed durable invalidation plus a separate WebSocket presence plane for cursor and typing traffic.
+- Realtime path: Supabase Realtime channels for durable invalidation, cursor presence, and typing traffic.
 - Worker path: Inngest orchestration with worker-only execution for Git sync and project import flows.
 
 The most important architecture docs live here:
@@ -37,16 +37,13 @@ Those contracts are enforced in:
 
 ## Realtime Model
 
-Durable invalidation stays on Supabase-backed wrappers:
+Durable invalidation and ephemeral collaboration use Supabase-backed wrappers:
 
 - [subscriptions.ts](src/lib/realtime/subscriptions.ts)
 - [RealtimeProvider.tsx](src/components/providers/RealtimeProvider.tsx)
-
-Ephemeral collaboration traffic is isolated:
-
-- Presence token API: [route.ts](src/app/api/realtime/presence-token/route.ts)
 - Presence client transport: [presence-client.ts](src/lib/realtime/presence-client.ts)
-- Presence service: [server.ts](services/presence/src/server.ts)
+
+Cursor, typing, and online presence state remains ephemeral and is not written to Postgres.
 
 ## Worker Model
 
@@ -74,11 +71,10 @@ Dedicated runtime commands:
 
 ```bash
 npm run dev
-npm run presence:dev
 npm run run:load-suite -- --base-url=http://127.0.0.1:3000 --auth-cookie="sb-access-token=...; sb-refresh-token=..."
 ```
 
-`npm run dev` starts both the Next.js app and the dedicated local presence service so typing indicators and cursor presence work in local development.
+`npm run dev` starts the Next.js app and the local Yjs collaboration server. Typing indicators and cursor presence connect through Supabase Realtime.
 
 ## Environment
 
@@ -88,8 +84,6 @@ Database replay and credentialed E2E runs require disposable targets. Set `DATAB
 
 The new scale-critical settings are:
 
-- `PRESENCE_TOKEN_SECRET`
-- `NEXT_PUBLIC_PRESENCE_WS_URL`
 - `INNGEST_EXECUTION_ROLE`
 - `LOAD_SHEDDING_ENABLED`
 - `UPSTASH_REDIS_REST_URL`
