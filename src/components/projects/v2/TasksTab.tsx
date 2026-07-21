@@ -1,9 +1,11 @@
 "use client";
 
+import { toast } from "sonner";
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Users, UserPlus, Plus } from "lucide-react";
 import dynamic from "next/dynamic";
+import { useSearchParams } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { AnimatePresence } from "framer-motion";
 import { useRealtimeTasks } from "@/hooks/useRealtimeTasks";
@@ -11,21 +13,20 @@ import { createTaskAction, getProjectTaskDetailAction } from "@/app/actions/proj
 import { useReducedMotionPreference } from "@/components/providers/theme-provider";
 
 import { useTaskFilters } from "./tasks/hooks/useTaskFilters";
+import FocusStrip from "./tasks/components/FocusStrip";
+import KanbanBoard from "@/components/projects/v2/tasks/KanbanBoard";
+import TaskFilters from "@/components/projects/v2/tasks/TaskFilters";
 import { useProjectInfiniteTasks, useProjectSprints, type ProjectTaskScope } from "@/hooks/hub/useProjectTasksData";
 import { patchSprintDetailInfiniteData } from "@/lib/projects/sprint-cache";
-import { normalizeSprintOptions, normalizeTaskSurfaceRecord, type TaskSurfaceRecord } from "@/lib/projects/task-presentation";
+import { normalizeSprintOptions, normalizeTaskSurfaceRecord, toLinkedSprintFiles, type TaskSurfaceRecord } from "@/lib/projects/task-presentation";
 import { buildTaskSubmitPayload } from "@/lib/projects/task-draft";
 import { patchProjectTaskCaches } from "@/lib/projects/task-cache";
-import { useToast } from "@/components/ui-custom/Toast";
 import type { ProjectNode } from "@/lib/db/schema";
 import { queryKeys } from "@/lib/query-keys";
 import type { TaskPanelTab } from "@/hooks/useTaskPanelResource";
 
 const CreateTaskModal = dynamic(() => import("@/components/projects/v2/tasks/CreateTaskModal"), { ssr: false });
 const TaskDetailPanel = dynamic(() => import("@/components/projects/v2/tasks/TaskDetailPanel"), { ssr: false });
-const TaskFilters = dynamic(() => import("@/components/projects/v2/tasks/TaskFilters"), { ssr: false });
-const KanbanBoard = dynamic(() => import("@/components/projects/v2/tasks/KanbanBoard"), { ssr: false });
-const FocusStrip = dynamic(() => import("./tasks/components/FocusStrip"), { ssr: false });
 
 interface TasksTabProps {
     projectId: string;
@@ -33,29 +34,11 @@ interface TasksTabProps {
     currentUserId?: string;
     isOwner?: boolean;
     isOwnerOrMember: boolean;
-    projectCreatorId?: string;
     initialTasks?: any[]; 
-    totalCount?: number;
     members?: any[];
     sprints?: any[];
     initialOpenTaskId?: string | null;
     initialPanelTab?: TaskPanelTab | null;
-}
-
-function toLinkedSprintFiles(nodes: ProjectNode[], taskId: string, occurredAt: string | null) {
-    return nodes.map((node, index) => ({
-        id: `linked-file:${taskId}:${node.id}:${index}`,
-        taskId,
-        nodeId: node.id,
-        nodeName: node.name,
-        nodePath: node.path ?? node.name,
-        nodeType: node.type === "folder" ? ("folder" as const) : ("file" as const),
-        annotation: null,
-        linkedAt: occurredAt,
-        lastEventType: null,
-        lastEventAt: node.updatedAt instanceof Date ? node.updatedAt.toISOString() : null,
-        lastEventBy: null,
-    }));
 }
 
 function isProjectNode(value: unknown): value is ProjectNode {
@@ -70,9 +53,7 @@ export default function TasksTab({
     currentUserId,
     isOwner = false,
     isOwnerOrMember,
-    projectCreatorId,
     initialTasks = [],
-    totalCount = 0,
     members = [],
     sprints = [],
     initialOpenTaskId = null,
@@ -80,7 +61,8 @@ export default function TasksTab({
 }: TasksTabProps) {
     const reduceMotion = useReducedMotionPreference();
     const queryClient = useQueryClient();
-    const { showToast } = useToast();
+    const searchParams = useSearchParams();
+    const taskSearchQuery = (searchParams.get("search") || "").trim().slice(0, 100);
     const activeAssignableMemberIds = useMemo(() => new Set(
         members
             .filter((member) => String(member?.membershipRole ?? member?.role ?? "").toLowerCase() !== "viewer")
@@ -117,7 +99,7 @@ export default function TasksTab({
         fetchNextPage, 
         hasNextPage, 
         isFetchingNextPage 
-    } = useProjectInfiniteTasks(projectId, initialTasks, queryScope);
+    } = useProjectInfiniteTasks(projectId, initialTasks, queryScope, taskSearchQuery);
     
     // Flatten pages for filtering and focus strips
     const fetchedTasks = useMemo(() => {
@@ -221,7 +203,6 @@ export default function TasksTab({
     const { filteredTasks, myFocusTasks, needsOwnerTasks } = useTaskFilters({
         tasks: sprintAwareTasks,
         currentUserId,
-        scope
     });
     const showMyFocusStrip = myFocusTasks.length > 0;
     const showNeedsOwnerStrip = needsOwnerTasks.length > 0;
@@ -268,7 +249,7 @@ export default function TasksTab({
             });
             const message = "Could not open the requested task. It may have been moved, deleted, or unavailable.";
             setInitialTaskLoadError(message);
-            showToast(message, "error");
+            toast.error(message);
         };
 
         void getProjectTaskDetailAction(projectId, initialOpenTaskId).then((result) => {
@@ -300,9 +281,7 @@ export default function TasksTab({
         editingTask,
         openTask,
         projectId,
-        queryClient,
-        showToast,
-        sprintAwareTasks,
+        queryClient,sprintAwareTasks,
         withSprintContext,
     ]);
 
@@ -383,6 +362,7 @@ export default function TasksTab({
                         <p className="mt-0.5 text-sm text-zinc-500">
                             <span className="font-medium text-zinc-900 dark:text-zinc-100">{filteredTasks.length}</span>{" "}
                             {filteredTasks.length === 1 ? "task" : "tasks"} visible
+                            {taskSearchQuery ? ` matching “${taskSearchQuery}”` : ""}
                         </p>
                     </div>
 
