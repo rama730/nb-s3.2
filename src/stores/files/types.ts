@@ -74,6 +74,9 @@ export type SoftLock = {
   nodeId: string;
   lockedBy: string;
   lockedByName?: string | null;
+  clientKind?: "web" | "vscode";
+  acquiredAt?: number;
+  renewedAt?: number;
   expiresAt: number;
 };
 
@@ -230,7 +233,6 @@ export type FilesWorkspaceState = {
   setFoldersFirst: (projectId: string, foldersFirst: boolean) => void;
   addRecent: (projectId: string, nodeId: string) => void;
   toggleFavorite: (projectId: string, nodeId: string) => void;
-  deleteSavedView: (projectId: string, viewId: string) => void;
 
   // cache actions
   upsertNodes: (projectId: string, nodes: ProjectNode[]) => void;
@@ -271,20 +273,8 @@ export type FilesWorkspaceState = {
   ) => void;
 
   // file state actions
-  setFileState: (projectId: string, nodeId: string, state: Partial<FileState>) => void;
 
   // workspace actions
-  setSplitEnabled: (projectId: string, enabled: boolean) => void;
-  setSplitRatio: (projectId: string, ratio: number) => void;
-  closeTab: (projectId: string, paneId: WorkspacePane["id"], nodeId: string) => void;
-  pinTab: (projectId: string, paneId: WorkspacePane["id"], nodeId: string, pinned: boolean) => void;
-  closeOtherTabs: (projectId: string, paneId: WorkspacePane["id"], keepNodeId: string) => void;
-  closeTabsToRight: (projectId: string, paneId: WorkspacePane["id"], fromNodeId: string) => void;
-  setActiveTab: (projectId: string, paneId: WorkspacePane["id"], nodeId: string | null) => void;
-  reorderTabs: (projectId: string, paneId: WorkspacePane["id"], order: string[]) => void;
-  moveTabToPane: (projectId: string, fromPaneId: WorkspacePane["id"], toPaneId: WorkspacePane["id"], nodeId: string, index?: number) => void;
-  /** FW8: Remove tabs whose nodeId no longer exists in nodesById */
-  pruneGhostTabs: (projectId: string) => void;
 
   /**
    * Files tab v3 navigation write path.
@@ -303,12 +293,9 @@ export type FilesWorkspaceState = {
 
   // editor prefs
   setPrefs: (projectId: string, prefs: Partial<EditorPreferences>) => void;
-  setActiveFileSymbols: (projectId: string, symbols: EditorSymbol[]) => void;
-  clearScrollRequest: (projectId: string) => void;
 
   // locks
-  setLock: (projectId: string, lock: SoftLock) => void;
-  clearLock: (projectId: string, nodeId: string) => void;
+  setLocks: (projectId: string, locks: SoftLock[]) => void;
   setLastNodeEventSummary: (projectId: string, nodeId: string, summary: NodeEventSummary) => void;
   clearLastNodeEventSummary: (projectId: string, nodeId: string) => void;
 
@@ -316,30 +303,11 @@ export type FilesWorkspaceState = {
   setGitRepo: (projectId: string, repoUrl: string, branch: string) => void;
   setGitBranch: (projectId: string, branch: string) => void;
   setGitChangedFiles: (projectId: string, files: GitState["changedFiles"]) => void;
-  setGitCommitMessage: (projectId: string, message: string) => void;
-  setGitBranches: (projectId: string, branches: string[]) => void;
-  setGitLastSync: (projectId: string, syncAt: string, commitSha: string) => void;
   setGitStatusLoaded: (projectId: string, loaded: boolean) => void;
-  clearGitState: (projectId: string) => void;
 
   // ui actions
-  setBottomPanelTab: (projectId: string, tab: UiState["bottomPanelTab"]) => void;
-  setLastExecutionOutput: (projectId: string, lines: string[]) => void;
-  setLastExecutionSettingsHref: (projectId: string, href: string | null) => void;
-  setBottomPanelHeight: (projectId: string, height: number) => void;
-  toggleBottomPanel: (projectId: string) => void;
-  setSearchReplaceOpen: (projectId: string, open: boolean) => void;
-  setCommandPaletteOpen: (projectId: string, open: boolean) => void;
   setQuickOpenOpen: (projectId: string, open: boolean) => void;
-  setStdinInputText: (projectId: string, text: string) => void;
-  setProblems: (projectId: string, problems: Problem[]) => void;
-  clearProblems: (projectId: string) => void;
-  applyQuickFix: (projectId: string, problemId: string) => void;
-  pushCommandToHistory: (projectId: string, command: string) => void;
-  setSidebarWidth: (projectId: string, width: number) => void;
   toggleSidebar: (projectId: string) => void;
-  toggleZenMode: (projectId: string) => void;
-  setOutputFilterMode: (projectId: string, mode: "all" | "out" | "err") => void;
 };
 
 // ─── Defaults ────────────────────────────────────────────────────────
