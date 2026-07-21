@@ -28,7 +28,6 @@ export async function applyConnectionsCountIncrements(tx: DbTransaction, increme
 
 export async function revalidateConnectionsPaths() {
     revalidatePath('/people');
-    revalidatePath('/connections');
     revalidatePath('/profile');
     revalidatePath('/messages');
 }
@@ -37,20 +36,27 @@ async function invalidateDiscoverCacheForUser(userId: string) {
     const redisClient = redis;
     if (!redisClient) return;
     try {
-        // Retrieve and delete tracked discover feed keys
-        const discoverSetKey = `discover:keys:${userId}`;
-        const discoverKeys = await redisClient.smembers(discoverSetKey);
-        if (discoverKeys.length > 0) {
-            await Promise.all(discoverKeys.map((key) => redisClient.unlink(key)));
-            await redisClient.del(discoverSetKey);
-        }
+        const patterns = [
+            `discover:profile:${userId}:*`,
+            `connections:inbox_cache:${userId}:*`,
+        ];
 
-        // Retrieve and delete tracked inbox cache keys
-        const inboxSetKey = `inbox_cache:keys:${userId}`;
-        const inboxKeys = await redisClient.smembers(inboxSetKey);
-        if (inboxKeys.length > 0) {
-            await Promise.all(inboxKeys.map((key) => redisClient.unlink(key)));
-            await redisClient.del(inboxSetKey);
+        for (const pattern of patterns) {
+            let cursor = '0';
+            do {
+                const [nextCursor, keys] = await redisClient.scan(cursor, {
+                    match: pattern,
+                    count: 100,
+                });
+                cursor = nextCursor;
+
+                for (let index = 0; index < keys.length; index += 100) {
+                    const batch = keys.slice(index, index + 100);
+                    if (batch.length > 0) {
+                        await Promise.all(batch.map((key) => redisClient.unlink(key)));
+                    }
+                }
+            } while (cursor !== '0');
         }
     } catch (error) {
         console.error('Failed to invalidate discover and inbox cache:', error);
@@ -64,8 +70,7 @@ export async function invalidateDiscoverCacheForUsers(userIds: Iterable<string |
         ),
     );
     if (uniqueUserIds.length === 0) return;
-    // PURE OPTIMIZATION: Execute cache invalidation non-blocking to prevent request hangs
-    Promise.allSettled(uniqueUserIds.map((userId) => invalidateDiscoverCacheForUser(userId))).catch(console.error);
+    await Promise.allSettled(uniqueUserIds.map((userId) => invalidateDiscoverCacheForUser(userId))).catch(console.error);
 }
 
 export async function syncConnectionsToRedis(userId: string) {
