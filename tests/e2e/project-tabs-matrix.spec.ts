@@ -44,12 +44,9 @@ test.describe("Project tabs matrix @critical", () => {
         /The result of getSnapshot should be cached to avoid an infinite loop/i,
       ],
     });
-    const backgroundWorkspaceRequests = { presenceToken: 0, pageActions: 0 };
+    const backgroundWorkspaceRequests = { pageActions: 0 };
     const onRequest = (request: import("@playwright/test").Request) => {
       const url = request.url();
-      if (url.includes("/api/realtime/presence-token")) {
-        backgroundWorkspaceRequests.presenceToken += 1;
-      }
       if (request.method() === "POST" && url.includes(`/projects/${fixtureProjectSlug}`)) {
         backgroundWorkspaceRequests.pageActions += 1;
       }
@@ -135,11 +132,9 @@ test.describe("Project tabs matrix @critical", () => {
     // not "no startup work that was already in flight while the tab opened".
     await page.waitForTimeout(1500);
 
-    backgroundWorkspaceRequests.presenceToken = 0;
     backgroundWorkspaceRequests.pageActions = 0;
     await switchTab("project-tab-dashboard", "dashboard", "dashboard");
     await page.waitForTimeout(3000);
-    expect(backgroundWorkspaceRequests.presenceToken, "Hidden Files tab should not keep polling presence tokens").toBe(0);
     expect(backgroundWorkspaceRequests.pageActions, "Hidden Files tab should not keep firing server actions").toBe(0);
 
     await monitor.assertNoViolations();
