@@ -1,3 +1,5 @@
+import { isLooseUuid } from "@/lib/validations/uuid";
+
 export type ProjectDetailMetadataSource = {
   slug?: string | null;
   title?: string | null;
@@ -9,9 +11,6 @@ export type ProjectDetailMetadataSource = {
   coverImageHeight?: number | null;
 };
 
-const PROJECT_UUID_REGEX =
-  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-
 export function getProjectTitleFromSlug(slug: string) {
   let decoded = "";
   try {
@@ -22,7 +21,7 @@ export function getProjectTitleFromSlug(slug: string) {
     }
     decoded = (slug || "").trim();
   }
-  if (!decoded || PROJECT_UUID_REGEX.test(decoded)) return "Project";
+  if (!decoded || isLooseUuid(decoded)) return "Project";
 
   const normalized = decoded
     .replace(/[-_]+/g, " ")
