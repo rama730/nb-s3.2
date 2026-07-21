@@ -1,12 +1,9 @@
 'use client';
 
 import dynamic from 'next/dynamic';
-import { useEffect, useState } from 'react';
-import type { User } from '@supabase/supabase-js';
+import { usePathname } from 'next/navigation';
 import { PeopleNotificationsProvider } from '@/components/providers/PeopleNotificationsProvider';
 import { RealtimeProvider } from '@/components/providers/RealtimeProvider';
-import { startPresenceHeartbeat, stopPresenceHeartbeat } from '@/hooks/usePresenceStatus';
-import { usePublishOnlinePresence } from '@/hooks/usePublishOnlinePresence';
 
 const LazyChatProvider = dynamic(
   () => import('@/components/chat/ChatProvider').then((mod) => mod.ChatProvider),
@@ -15,58 +12,17 @@ const LazyChatProvider = dynamic(
 
 interface MainRuntimeProvidersProps {
   children: React.ReactNode;
-  initialUser: User | null;
-}
-
-function PresencePublisher() {
-  usePublishOnlinePresence();
-  return null;
 }
 
 export function MainRuntimeProviders({
   children,
-  initialUser,
 }: MainRuntimeProvidersProps) {
-  const [enableChatRuntime, setEnableChatRuntime] = useState(false);
-
-  // Start presence heartbeat when user is authenticated
-  useEffect(() => {
-    if (!initialUser) return;
-    startPresenceHeartbeat();
-    return () => stopPresenceHeartbeat();
-  }, [initialUser]);
-
-  useEffect(() => {
-    let cancelled = false;
-    const activate = () => {
-      if (!cancelled) setEnableChatRuntime(true);
-    };
-
-    const idle = (window as Window & { requestIdleCallback?: (cb: () => void) => number }).requestIdleCallback;
-    if (typeof idle === 'function') {
-      const id = idle(activate);
-      return () => {
-        cancelled = true;
-        const cancelIdle =
-          (window as Window & { cancelIdleCallback?: (id: number) => void }).cancelIdleCallback;
-        if (typeof cancelIdle === 'function') cancelIdle(id);
-      };
-    }
-
-    const timer = window.setTimeout(activate, 250);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, []);
-
   return (
     <>
-      <PresencePublisher />
       <RealtimeProvider>
         <PeopleNotificationsProvider>
           {children}
-          {enableChatRuntime ? <LazyChatProvider /> : null}
+          <LazyChatProvider />
         </PeopleNotificationsProvider>
       </RealtimeProvider>
     </>
