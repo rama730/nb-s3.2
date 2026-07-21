@@ -27,10 +27,43 @@ const REQUIRED_REALTIME_PUBLICATION_TABLES = [
 ] as const;
 
 const REQUIRED_PROJECT_UPDATE_MEDIA_POLICIES = [
-  "project_updates_media_public_read",
-  "project_updates_media_write",
+  "project_updates_media_insert",
   "project_updates_media_delete",
 ] as const;
+
+const MIME_RESTRICTED_BUCKETS = ["project-files", "task-files"] as const;
+
+const ALLOWED_SECURITY_DEFINER_FUNCTIONS = new Map([
+  ["public.handle_message_insert_consistency", "search_path=\"\""],
+  ["public.rls_auto_enable", "search_path=pg_catalog"],
+]);
+
+const ALLOWED_PUBLIC_RLS_NO_POLICY_TABLES = new Set([
+  "app_migration_journal",
+  "extension_device_session_events",
+  "extension_device_sessions",
+  "extension_recovery_sessions",
+  "import_job_files",
+  "import_jobs",
+  "job_heartbeats",
+  "project_git_deltas",
+  "project_node_conflicts",
+  "project_node_events_2026_01",
+  "project_node_events_2026_02",
+  "project_node_events_2026_03",
+  "project_node_events_2026_04",
+  "project_node_events_2026_05",
+  "project_node_events_2026_06",
+  "project_node_events_2026_07",
+  "project_node_events_2026_08",
+  "project_node_events_2026_09",
+  "project_node_events_2026_10",
+  "project_node_events_2026_11",
+  "project_node_events_2026_12",
+  "project_node_events_default",
+  "reserved_usernames",
+  "task_pushes",
+]);
 
 if (!DATABASE_URL) {
   console.error("[db-catalog-drift] DATABASE_URL not found in .env.local");
@@ -127,6 +160,68 @@ async function main() {
   for (const policyName of REQUIRED_PROJECT_UPDATE_MEDIA_POLICIES) {
     if (!storagePolicies.has(policyName)) {
       errors.push(`missing storage.objects policy ${policyName}`);
+    }
+  }
+
+  const restrictedBucketRows = await sql<{ id: string; allowed_mime_types: string[] | null }[]>`
+    SELECT id, allowed_mime_types
+    FROM storage.buckets
+    WHERE id = ANY(${MIME_RESTRICTED_BUCKETS})
+  `;
+  const restrictedBuckets = new Map(restrictedBucketRows.map((row) => [row.id, row.allowed_mime_types]));
+  for (const bucketId of MIME_RESTRICTED_BUCKETS) {
+    const allowedMimeTypes = restrictedBuckets.get(bucketId);
+    if (!allowedMimeTypes?.length) {
+      errors.push(`${bucketId} bucket must have an explicit MIME allowlist`);
+    }
+  }
+
+  const securityDefinerRows = await sql<{ function_name: string; config: string[] | null }[]>`
+    SELECT
+      n.nspname || '.' || p.proname AS function_name,
+      p.proconfig AS config
+    FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE p.prosecdef
+      AND n.nspname = 'public'
+    ORDER BY function_name
+  `;
+  const securityDefiners = new Map(
+    securityDefinerRows.map((row) => [row.function_name, row.config ?? []]),
+  );
+  for (const functionName of securityDefiners.keys()) {
+    if (!ALLOWED_SECURITY_DEFINER_FUNCTIONS.has(functionName)) {
+      errors.push(`unexpected SECURITY DEFINER function ${functionName}`);
+    }
+  }
+  for (const [functionName, expectedSearchPath] of ALLOWED_SECURITY_DEFINER_FUNCTIONS.entries()) {
+    const config = securityDefiners.get(functionName);
+    if (!config) {
+      errors.push(`missing expected SECURITY DEFINER function ${functionName}`);
+      continue;
+    }
+    if (!config.includes(expectedSearchPath)) {
+      errors.push(`${functionName} must set ${expectedSearchPath}`);
+    }
+  }
+
+  const noPolicyRows = await sql<{ table_name: string }[]>`
+    SELECT c.relname AS table_name
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public'
+      AND c.relkind IN ('r', 'p')
+      AND c.relrowsecurity
+      AND NOT EXISTS (
+        SELECT 1
+        FROM pg_policy p
+        WHERE p.polrelid = c.oid
+      )
+    ORDER BY c.relname
+  `;
+  for (const row of noPolicyRows) {
+    if (!ALLOWED_PUBLIC_RLS_NO_POLICY_TABLES.has(row.table_name)) {
+      errors.push(`public.${row.table_name} has RLS enabled with no policy but is not allowlisted`);
     }
   }
 
