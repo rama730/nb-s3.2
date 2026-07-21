@@ -12,7 +12,7 @@ export const MAX_NODE_ACTIVITY_ITEMS = 100;
 export const MAX_NODE_LINKED_TASKS = 100;
 export const MAX_BATCH_REPLACE_FILES = 60;
 export const MAX_BATCH_REPLACE_TOTAL_BYTES = 4 * 1024 * 1024;
-export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+export { UUID_RE } from "@/lib/validations/uuid";
 export const MAX_BATCH_FETCH_PER_PARENT = 200;
 export const MAX_BATCH_FETCH_TOTAL = FILES_RUNTIME_BUDGETS.maxFolderBatchRowsPerInteraction;
 export const BATCH_PARENT_QUERY_CONCURRENCY = 6;
