@@ -44,7 +44,7 @@ async function backfillTags() {
                 let [skill] = await db.select().from(skills).where(eq(skills.slug, slug)).limit(1);
                 if (!skill) {
                     try {
-                        [skill] = await db.insert(skills).values({ name: s, slug }).returning();
+                        [skill] = await db.insert(skills).values({ name: s, slug, canonicalKey: `legacy.${slug}` }).returning();
                     } catch (err: any) {
                         if (err?.code === '23505') {
                             [skill] = await db.select().from(skills).where(eq(skills.slug, slug)).limit(1);
@@ -77,7 +77,7 @@ async function backfillProfileJSONB() {
                 let [skill] = await db.select().from(skills).where(eq(skills.slug, slug)).limit(1);
                 if (!skill) {
                     try {
-                        [skill] = await db.insert(skills).values({ name: s, slug }).returning();
+                        [skill] = await db.insert(skills).values({ name: s, slug, canonicalKey: `legacy.${slug}` }).returning();
                     } catch (err: any) {
                         if (err?.code === '23505') {
                             [skill] = await db.select().from(skills).where(eq(skills.slug, slug)).limit(1);
