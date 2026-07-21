@@ -2,7 +2,7 @@
 
 import type { Profile } from "@/lib/db/schema";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
-import { toFormState } from "@/lib/profile/normalization";
+import type { ProfileCollaborationContribution } from "@/lib/profile/collaboration";
 
 export function normalizeProfileRecord(profile: Record<string, any> | null): Profile | null {
   if (!profile) return null;
@@ -14,7 +14,6 @@ export function normalizeProfileRecord(profile: Record<string, any> | null): Pro
     fullName: profile.full_name,
     bannerUrl: profile.banner_url,
     socialLinks: profile.social_links || {},
-    availabilityStatus: profile.availability_status,
     messagePrivacy: profile.message_privacy,
     connectionPrivacy: profile.connection_privacy,
     openTo: profile.open_to || [],
@@ -36,8 +35,7 @@ export function normalizeProfileRecord(profile: Record<string, any> | null): Pro
 
 export function profileNeedsHydration(profile: Record<string, any> | null): boolean {
   if (!profile || typeof profile !== "object") return false;
-  return (profile.experience ?? profile.experience_data) === undefined
-    || (profile.education ?? profile.education_data) === undefined;
+  return (profile.education ?? profile.education_data) === undefined;
 }
 
 export async function loadBrowserProfile(userId: string): Promise<Profile | null> {
@@ -50,16 +48,56 @@ export async function loadBrowserProfile(userId: string): Promise<Profile | null
   return normalizeProfileRecord(data);
 }
 
-export async function loadProfileEditRefreshState(profileId: string) {
-  const supabase = createSupabaseBrowserClient();
-  const { data, error } = await supabase
-    .from("profiles")
-    .select("id, full_name, username, headline, bio, location, website, avatar_url, banner_url, availability_status, open_to, skills, social_links, experience, education, updated_at")
-    .eq("id", profileId)
-    .single();
-  if (error || !data) return null;
+export type ProfileContributionPage = {
+  contributions: ProfileCollaborationContribution[];
+  total: number;
+  hasMore: boolean;
+};
+
+export async function loadProfileContributionsPage(
+  profileId: string,
+  options: { limit?: number; offset?: number; stageLimit?: number } = {},
+): Promise<ProfileContributionPage> {
+  const limit = Math.min(Math.max(options.limit ?? 50, 1), 50);
+  const offset = Math.max(options.offset ?? 0, 0);
+  const stageLimit = Math.min(Math.max(options.stageLimit ?? 8, 1), 20);
+  const response = await fetch(
+    `/api/v1/profiles/${encodeURIComponent(profileId)}/contributions?limit=${limit}&offset=${offset}&stageLimit=${stageLimit}`,
+    { credentials: "include", cache: "no-store", headers: { accept: "application/json" } },
+  );
+  const body = await response.json().catch(() => null) as {
+    success?: boolean;
+    message?: string;
+    data?: Partial<ProfileContributionPage>;
+  } | null;
+  if (!response.ok || body?.success !== true) {
+    throw new Error(body?.message || "Could not load project contributions");
+  }
+  const contributions = body.data?.contributions ?? [];
+  const total = Number(body.data?.total ?? contributions.length);
   return {
-    formState: toFormState(data),
-    updatedAt: typeof data.updated_at === "string" ? data.updated_at : new Date().toISOString(),
+    contributions,
+    total: Number.isFinite(total) ? total : contributions.length,
+    hasMore: Boolean(body.data?.hasMore),
   };
+}
+
+/** Refreshes only the contribution window already opened by the editor. */
+export async function loadProfileContributionWindow(profileId: string, desiredCount: number) {
+  const target = Math.min(Math.max(desiredCount, 1), 500);
+  const contributions: ProfileCollaborationContribution[] = [];
+  let total = 0;
+  let hasMore = false;
+  for (let offset = 0; offset < target; offset += 50) {
+    const page = await loadProfileContributionsPage(profileId, {
+      limit: Math.min(50, target - offset),
+      offset,
+      stageLimit: 8,
+    });
+    contributions.push(...page.contributions);
+    total = page.total;
+    hasMore = page.hasMore;
+    if (!page.hasMore || page.contributions.length === 0) break;
+  }
+  return { contributions, total, hasMore };
 }
