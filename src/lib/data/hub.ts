@@ -1,15 +1,18 @@
 import { cache } from 'react';
-import { and, asc, desc, eq, ilike, inArray, isNull, ne, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, ilike, inArray, isNull, lte, ne, or, sql, type SQL } from 'drizzle-orm';
 import { FILTER_VIEWS, SORT_OPTIONS, type FilterView } from '@/constants/hub';
 import { db } from '@/lib/db';
-import { profiles, projectFollows, projectMembers, projectOpenRoles, projects } from '@/lib/db/schema';
+import { connections, profiles, projectFollows, projectMembers, projectOpenRoles, projects, roleApplications } from '@/lib/db/schema';
 import { recordHubMetric } from '@/lib/hub/observability';
 import { HUB_RANKING_SCHEMA_VERSION, getHubRankingWeights } from '@/lib/hub/ranking-config';
 import { buildHubSnapshotKey, getHubSnapshotCached } from '@/lib/hub/snapshot-cache';
 import { logger } from '@/lib/logger';
 import { buildProjectOwnerPresentation } from '@/lib/privacy/presentation';
 import { resolvePrivacyRelationships } from '@/lib/privacy/resolver';
+import { getProjectMemberRoleLabel } from '@/lib/projects/settings-policies';
 import { HubFilters, Project } from '@/types/hub';
+import { countCanonicalSkillMatches } from '@/lib/skills/matching';
+import { containsLikePattern, escapeLikePattern, normalizeSearchQuery, tokenizeSearchQuery } from '@/lib/search/query';
 
 export const DEFAULT_FILTERS: HubFilters = {
     status: 'all',
@@ -24,6 +27,7 @@ export const DEFAULT_FILTERS: HubFilters = {
 interface HubQueryOptions {
     view?: FilterView;
     viewerId?: string | null;
+    surface?: 'full' | 'preview';
 }
 
 type ParsedCursor =
@@ -49,6 +53,9 @@ type RawProjectRow = {
     visibility: string | null;
     status: string | null;
     lifecycleStages: string[] | null;
+    importSource: {
+        metadata?: Record<string, unknown>;
+    } | null;
     createdAt: Date;
     updatedAt: Date;
     feedScore: number | null;
@@ -86,13 +93,13 @@ const MAX_TECH_TERMS = 8;
 const MAX_SEARCH_TOKENS = 8;
 
 const normalizeTerm = (value: string) =>
-    value
+    normalizeSearchQuery(value)
         .toLowerCase()
-        .replace(/[^a-z0-9+.#\-\s]/g, ' ')
+        .replace(/[^\p{L}\p{N}+.#\-\s]/gu, ' ')
         .replace(/\s+/g, ' ')
         .trim();
 
-const likePattern = (value: string) => `%${value.replace(/[\\%_]/g, '\\$&')}%`;
+const likePattern = containsLikePattern;
 
 const dedupeTerms = (values: Array<string | null | undefined>, max = MAX_PERSONALIZATION_TERMS) => {
     const unique = new Set<string>();
@@ -206,21 +213,44 @@ const getViewerPersonalizationTerms = cache(async (viewerId: string | null | und
     return dedupeTerms(values, MAX_PERSONALIZATION_TERMS);
 });
 
-const buildTermMatchConditions = (terms: string[]) => {
-    const conditions: SQL<unknown>[] = [];
-
-    for (const term of terms) {
+const buildTermMatchConditions = (terms: string[]) => terms.map((term) => {
         const pattern = likePattern(term);
-        conditions.push(
+        return or(
             ilike(projects.title, pattern),
             ilike(projects.description, pattern),
             sql<boolean>`EXISTS (SELECT 1 FROM project_skills ps JOIN skills s ON ps.skill_id = s.id WHERE ps.project_id = ${projects.id} AND s.name ILIKE ${pattern})`,
             sql<boolean>`EXISTS (SELECT 1 FROM project_tags pt JOIN tags t ON pt.tag_id = t.id WHERE pt.project_id = ${projects.id} AND t.name ILIKE ${pattern})`,
             sql<boolean>`lower(coalesce(${projects.category}, '')) LIKE ${pattern}`,
-        );
-    }
+        )!;
+    });
 
-    return conditions;
+const buildSearchRelevanceExpr = (terms: string[]) => {
+    if (terms.length === 0) return sql<number>`0`;
+    return sql<number>`(${sql.join(terms.map((term) => {
+        const contains = likePattern(term);
+        const prefix = `${escapeLikePattern(term)}%`;
+        return sql<number>`(
+            CASE
+                WHEN ${projects.title} ILIKE ${term} THEN 100
+                WHEN ${projects.title} ILIKE ${prefix} THEN 80
+                WHEN ${projects.title} ILIKE ${contains} THEN 50
+                ELSE 0
+            END
+            + CASE WHEN EXISTS (
+                SELECT 1 FROM project_skills ps
+                JOIN skills s ON ps.skill_id = s.id
+                LEFT JOIN skill_aliases sa ON sa.skill_id = s.id
+                WHERE ps.project_id = ${projects.id}
+                  AND (s.name ILIKE ${term} OR sa.normalized_alias ILIKE ${term})
+            ) THEN 70 ELSE 0 END
+            + CASE WHEN EXISTS (
+                SELECT 1 FROM project_tags pt JOIN tags t ON pt.tag_id = t.id
+                WHERE pt.project_id = ${projects.id} AND t.name ILIKE ${term}
+            ) THEN 60 ELSE 0 END
+            + CASE WHEN ${projects.category} ILIKE ${term} THEN 55 ELSE 0 END
+            + CASE WHEN ${projects.description} ILIKE ${contains} THEN 20 ELSE 0 END
+        )`;
+    }), sql` + `)})`;
 };
 
 const buildRecommendationRelevanceExpr = (terms: string[]) => {
@@ -235,7 +265,14 @@ const buildRecommendationRelevanceExpr = (terms: string[]) => {
         return sql<number>`(
             CASE WHEN lower(coalesce(${projects.title}, '')) LIKE ${pattern} THEN ${weights.recommendation.titleMatch} ELSE 0 END +
             CASE WHEN lower(coalesce(${projects.description}, '')) LIKE ${pattern} THEN ${weights.recommendation.descriptionMatch} ELSE 0 END +
-            CASE WHEN EXISTS (SELECT 1 FROM project_skills ps JOIN skills s ON ps.skill_id = s.id WHERE ps.project_id = ${projects.id} AND s.name ILIKE ${pattern}) THEN ${weights.recommendation.skillsMatch} ELSE 0 END +
+            CASE WHEN EXISTS (
+                SELECT 1
+                FROM project_skills ps
+                JOIN skills s ON ps.skill_id = s.id
+                LEFT JOIN skill_aliases sa ON sa.skill_id = s.id
+                WHERE ps.project_id = ${projects.id}
+                  AND (s.name ILIKE ${pattern} OR sa.normalized_alias ILIKE ${pattern})
+            ) THEN ${weights.recommendation.skillsMatch} ELSE 0 END +
             CASE WHEN EXISTS (SELECT 1 FROM project_tags pt JOIN tags t ON pt.tag_id = t.id WHERE pt.project_id = ${projects.id} AND t.name ILIKE ${pattern}) THEN ${weights.recommendation.tagsMatch} ELSE 0 END +
             CASE WHEN lower(coalesce(${projects.category}, '')) LIKE ${pattern} THEN ${weights.recommendation.categoryMatch} ELSE 0 END
         )`;
@@ -279,12 +316,12 @@ const buildBaseConditions = (
     }
 
     if (filters.search) {
-        const normalizedSearchTerms = dedupeTerms(filters.search.split(/\s+/), MAX_SEARCH_TOKENS);
+        const normalizedSearchTerms = dedupeTerms(tokenizeSearchQuery(filters.search), MAX_SEARCH_TOKENS);
         const searchConditions = buildTermMatchConditions(
             normalizedSearchTerms.length > 0 ? normalizedSearchTerms : [filters.search],
         );
         if (searchConditions.length > 0) {
-            conditions.push(or(...searchConditions)!);
+            conditions.push(...searchConditions);
         }
     }
 
@@ -331,10 +368,12 @@ const countTextMatches = (value: string, terms: string[]) => {
 
 const countArrayMatches = (values: string[] | null, terms: string[]) => {
     if (!values || terms.length === 0) return 0;
+    const canonicalMatches = countCanonicalSkillMatches(values, terms);
     const normalized = values.map((item) => normalizeTerm(item)).filter(Boolean);
-    let count = 0;
+    let count = canonicalMatches;
     for (const term of terms) {
-        if (normalized.some((item) => item.includes(term))) count += 1;
+        const canonical = countCanonicalSkillMatches(values, [term]) > 0;
+        if (!canonical && normalized.some((item) => item.includes(term))) count += 1;
     }
     return count;
 };
@@ -632,6 +671,7 @@ const fetchProjectsByIds = async (projectIds: string[]) => {
                 visibility: projects.visibility,
                 status: projects.status,
                 lifecycleStages: projects.lifecycleStages,
+                importSource: projects.importSource,
                 createdAt: projects.createdAt,
                 updatedAt: projects.updatedAt,
                 feedScore: sql<number>`0`,
@@ -664,6 +704,7 @@ const fetchProjectsByIds = async (projectIds: string[]) => {
                 visibility: projects.visibility,
                 status: projects.status,
                 lifecycleStages: sql<string[] | null>`null`,
+                importSource: sql<RawProjectRow['importSource']>`null`,
                 createdAt: projects.createdAt,
                 updatedAt: projects.updatedAt,
                 feedScore: sql<number>`0`,
@@ -682,15 +723,15 @@ const hydrateProjects = async (
     hasFollowersCountColumn: boolean,
     rankingReasonMap?: Map<string, string[]>,
     viewerId: string | null = null,
+    surface: 'full' | 'preview' = 'full',
 ): Promise<Project[]> => {
     if (rawProjects.length === 0) return [];
 
     const projectIds = rawProjects.map((project) => project.id);
     const ownerIds = Array.from(new Set(rawProjects.map((project) => project.ownerId)));
 
-    const [owners, roles, members, follows] = await Promise.all([
-        db
-            .select({
+    const [owners, roles, members, follows, connectedMembers] = await Promise.all([
+        db.select({
                 id: profiles.id,
                 username: profiles.username,
                 fullName: profiles.fullName,
@@ -709,8 +750,9 @@ const hydrateProjects = async (
                 }
                 throw error;
             }),
-        db
-            .select({
+        surface === 'preview'
+            ? Promise.resolve([])
+            : db.select({
                 member: {
                     id: projectMembers.id,
                     projectId: projectMembers.projectId,
@@ -745,6 +787,64 @@ const hydrateProjects = async (
                 .from(projectFollows)
                 .where(inArray(projectFollows.projectId, projectIds))
                 .groupBy(projectFollows.projectId),
+        surface === 'preview' && viewerId
+            ? (() => {
+                const rankedConnectedMembers = db.select({
+                    projectId: projectMembers.projectId,
+                    userId: projectMembers.userId,
+                    username: profiles.username,
+                    fullName: profiles.fullName,
+                    membershipRole: projectMembers.role,
+                    isProjectOwner: sql<boolean>`${projectMembers.userId} = ${projects.ownerId}`.as('is_project_owner'),
+                    acceptedRoleTitle: sql<string | null>`(
+                        select coalesce(
+                            nullif(${roleApplications.acceptedRoleTitle}, ''),
+                            nullif(${projectOpenRoles.title}, ''),
+                            nullif(${projectOpenRoles.role}, '')
+                        )
+                        from ${roleApplications}
+                        left join ${projectOpenRoles}
+                            on ${projectOpenRoles.id} = ${roleApplications.roleId}
+                        where ${roleApplications.projectId} = ${projectMembers.projectId}
+                          and ${roleApplications.applicantId} = ${projectMembers.userId}
+                          and ${roleApplications.status} = 'accepted'
+                        order by ${roleApplications.updatedAt} desc, ${roleApplications.id} desc
+                        limit 1
+                    )`.as('accepted_role_title'),
+                    connectionRank: sql<number>`row_number() over (
+                        partition by ${projectMembers.projectId}
+                        order by
+                            case when ${projectMembers.userId} = ${projects.ownerId} then 0 else 1 end,
+                            ${projectMembers.joinedAt} desc,
+                            ${projectMembers.userId}
+                    )`.mapWith(Number).as('connection_rank'),
+                    connectedCount: sql<number>`count(*) over (
+                        partition by ${projectMembers.projectId}
+                    )`.mapWith(Number).as('connected_count'),
+                })
+                    .from(projectMembers)
+                    .innerJoin(projects, eq(projects.id, projectMembers.projectId))
+                    .innerJoin(profiles, eq(projectMembers.userId, profiles.id))
+                    .innerJoin(
+                        connections,
+                        and(
+                            eq(connections.status, 'accepted'),
+                            or(
+                                and(eq(connections.requesterId, viewerId), eq(connections.addresseeId, projectMembers.userId)),
+                                and(eq(connections.addresseeId, viewerId), eq(connections.requesterId, projectMembers.userId)),
+                            ),
+                        ),
+                    )
+                    .where(and(
+                        inArray(projectMembers.projectId, projectIds),
+                        ne(projectMembers.userId, viewerId),
+                        isNull(profiles.deletedAt),
+                    ))
+                    .as('ranked_connected_members');
+
+                return db.select().from(rankedConnectedMembers).where(lte(rankedConnectedMembers.connectionRank, 3));
+            })()
+            : Promise.resolve([]),
     ]);
 
     const ownerMap = new Map(owners.map((owner) => [owner.id, owner]));
@@ -755,6 +855,35 @@ const hydrateProjects = async (
             Number(follow.count || 0),
         ]),
     );
+    const leadFocusByProject = new Map(rawProjects.map((project) => {
+        const rawLeadFocus = project.importSource?.metadata?.leadFocus;
+        return [project.id, typeof rawLeadFocus === 'string' ? rawLeadFocus.trim() : ''] as const;
+    }));
+    const connectedMemberMap = new Map<string, {
+        friends: Array<{ userId: string; name: string; role: string }>;
+        totalCount: number;
+        includesOwner: boolean;
+    }>();
+    connectedMembers.forEach((member) => {
+        const name = member.fullName?.trim() || (member.username ? `@${member.username}` : '');
+        if (!name) return;
+        const membershipRoleLabel = getProjectMemberRoleLabel(member.membershipRole);
+        const leadFocus = leadFocusByProject.get(member.projectId) || '';
+        const role = member.isProjectOwner
+            ? leadFocus ? `${membershipRoleLabel} / ${leadFocus}` : membershipRoleLabel
+            : member.acceptedRoleTitle?.trim()
+                ? `${member.acceptedRoleTitle.trim()} · ${membershipRoleLabel}`
+                : membershipRoleLabel;
+        const cluster = connectedMemberMap.get(member.projectId) ?? {
+            friends: [],
+            totalCount: Number(member.connectedCount || 0),
+            includesOwner: false,
+        };
+        cluster.friends.push({ userId: member.userId, name, role });
+        cluster.totalCount = Math.max(cluster.totalCount, Number(member.connectedCount || 0));
+        cluster.includesOwner ||= member.isProjectOwner;
+        connectedMemberMap.set(member.projectId, cluster);
+    });
 
 
     type OpenRoleRow = typeof projectOpenRoles.$inferSelect;
@@ -789,6 +918,22 @@ const hydrateProjects = async (
                 : null,
             ownerRelationshipMap.get(project.ownerId) ?? null,
         );
+        const ownerRelationship = ownerRelationshipMap.get(project.ownerId) ?? null;
+        const connectedOwnerName = ownerRelationship?.isConnected
+            ? owner?.fullName?.trim() || (owner?.username ? `@${owner.username}` : '')
+            : '';
+        const connectedCluster = connectedMemberMap.get(project.id);
+        const leadFocus = leadFocusByProject.get(project.id) || '';
+        const connectedFriends = connectedCluster?.friends.map(({ name, role }) => ({ name, role })) ?? [];
+        let connectedFriendsCount = connectedCluster?.totalCount ?? 0;
+        if (connectedOwnerName && !connectedCluster?.includesOwner) {
+            connectedFriends.unshift({
+                name: connectedOwnerName,
+                role: leadFocus ? `Lead / ${leadFocus}` : 'Lead',
+            });
+            connectedFriendsCount += 1;
+        }
+        const visibleConnectedFriends = connectedFriends.slice(0, 3);
         if (ownerPresentation?.isMasked) {
             logger.metric('privacy.project.owner_masked', {
                 surface: 'hub',
@@ -830,6 +975,8 @@ const hydrateProjects = async (
 
             ownerId: project.ownerId,
             rankingReasons: rankingReasonMap?.get(project.id) || [],
+            connectedFriends: visibleConnectedFriends,
+            additionalConnectedFriendsCount: Math.max(0, connectedFriendsCount - visibleConnectedFriends.length),
             owner: ownerPresentation,
             collaborators: projectMembersRows
                 .map((member) =>
@@ -873,6 +1020,7 @@ export const getHubProjects = cache(async (
     const start = Date.now();
     const view = options.view ?? FILTER_VIEWS.ALL;
     const viewerId = options.viewerId ?? null;
+    const surface = options.surface ?? 'full';
 
     if ((view === FILTER_VIEWS.MY_PROJECTS || view === FILTER_VIEWS.FOLLOWING) && !viewerId) {
         return {
@@ -924,7 +1072,7 @@ export const getHubProjects = cache(async (
         const reasonsMap = new Map(pageItems.map((item) => [item.id, item.reasons]));
 
         const { rows, hasFollowersCountColumn } = await fetchProjectsByIds(pageIds);
-        const mappedProjects = await hydrateProjects(rows, hasFollowersCountColumn, reasonsMap, viewerId);
+        const mappedProjects = await hydrateProjects(rows, hasFollowersCountColumn, reasonsMap, viewerId, surface);
 
         const lastSnapshotItem = pageItems.at(-1);
         const nextCursor =
@@ -964,6 +1112,9 @@ export const getHubProjects = cache(async (
     const recommendationScoreExpr = sql<number>`(${recommendationRelevanceExpr} + (${trendingScoreExpr} * ${weights.recommendation.trendBlend}))`;
 
     const normalizedSort = filters.sort || SORT_OPTIONS.NEWEST;
+    const activeSearchTerms = filters.search
+        ? dedupeTerms(tokenizeSearchQuery(filters.search), MAX_SEARCH_TOKENS)
+        : [];
     const shouldUseTrendingScore = view === FILTER_VIEWS.TRENDING || normalizedSort === SORT_OPTIONS.TRENDING;
     const shouldUseRecommendationScore =
         view === FILTER_VIEWS.RECOMMENDATIONS && personalizationTerms.length > 0;
@@ -973,6 +1124,8 @@ export const getHubProjects = cache(async (
 
     if (shouldUseRecommendationScore) {
         scoreExpr = recommendationScoreExpr;
+    } else if (activeSearchTerms.length > 0 && normalizedSort === SORT_OPTIONS.NEWEST) {
+        scoreExpr = buildSearchRelevanceExpr(activeSearchTerms);
     } else if (shouldUseTrendingScore) {
         scoreExpr = trendingScoreExpr;
     } else if (normalizedSort === SORT_OPTIONS.MOST_VIEWED) {
@@ -1013,31 +1166,59 @@ export const getHubProjects = cache(async (
 
 
     try {
-        rawProjects = await db
-            .select({
-                id: projects.id,
-                ownerId: projects.ownerId,
-                title: projects.title,
-                slug: projects.slug,
-                description: projects.description,
-                shortDescription: projects.shortDescription,
-                coverImage: projects.coverImage,
-                category: projects.category,
-                viewCount: projects.viewCount,
-                followersCount: projects.followersCount,
-                tags: projects.tags,
-                skills: projects.skills,
-                visibility: projects.visibility,
-                status: projects.status,
-                lifecycleStages: projects.lifecycleStages,
-                createdAt: projects.createdAt,
-                updatedAt: projects.updatedAt,
-                feedScore: scoreExpr ?? sql<number>`0`,
-            })
-            .from(projects)
-            .where(and(...conditions))
-            .orderBy(...orderByClauses)
-            .limit(pageSize);
+        const selectFields = surface === 'preview' ? {
+            id: projects.id,
+            ownerId: projects.ownerId,
+            title: projects.title,
+            slug: projects.slug,
+            description: projects.description,
+            shortDescription: projects.shortDescription,
+            coverImage: sql<string | null>`null`,
+            category: sql<string | null>`null`,
+            viewCount: projects.viewCount,
+            followersCount: projects.followersCount,
+            tags: sql<string[] | null>`null`,
+            skills: projects.skills,
+            visibility: sql<string | null>`null`,
+            status: sql<string | null>`null`,
+            lifecycleStages: sql<string[] | null>`null`,
+            importSource: sql<RawProjectRow['importSource']>`null`,
+            createdAt: projects.createdAt,
+            updatedAt: projects.updatedAt,
+            feedScore: scoreExpr ?? sql<number>`0`,
+        } : {
+            id: projects.id,
+            ownerId: projects.ownerId,
+            title: projects.title,
+            slug: projects.slug,
+            description: projects.description,
+            shortDescription: projects.shortDescription,
+            coverImage: projects.coverImage,
+            category: projects.category,
+            viewCount: projects.viewCount,
+            followersCount: projects.followersCount,
+            tags: projects.tags,
+            skills: projects.skills,
+            visibility: projects.visibility,
+            status: projects.status,
+            lifecycleStages: projects.lifecycleStages,
+            importSource: projects.importSource,
+            createdAt: projects.createdAt,
+            updatedAt: projects.updatedAt,
+            feedScore: scoreExpr ?? sql<number>`0`,
+        };
+
+        rawProjects = await db.transaction(async (tx) => {
+            if (surface === 'preview') {
+                await tx.execute(sql`SET LOCAL pg_trgm.similarity_threshold = 0.4`);
+            }
+            return await tx
+                .select(selectFields)
+                .from(projects)
+                .where(and(...conditions))
+                .orderBy(...orderByClauses)
+                .limit(pageSize);
+        });
     } catch (error) {
         if (!isProjectsSelectSchemaError(error)) throw error;
 
@@ -1052,34 +1233,62 @@ export const getHubProjects = cache(async (
                 ? conditions
                 : conditions.filter((condition) => condition !== scoreCursorCondition);
 
-        rawProjects = await db
-            .select({
-                id: projects.id,
-                ownerId: projects.ownerId,
-                title: projects.title,
-                slug: sql<string | null>`null`,
-                description: projects.description,
-                shortDescription: sql<string | null>`null`,
-                coverImage: sql<string | null>`null`,
-                category: projects.category,
-                viewCount: sql<number | null>`null`,
-                followersCount: sql<number | null>`null`,
-                tags: sql<string[] | null>`null`,
-                skills: sql<string[] | null>`null`,
-                visibility: projects.visibility,
-                status: projects.status,
-                lifecycleStages: sql<string[] | null>`null`,
-                createdAt: projects.createdAt,
-                updatedAt: projects.updatedAt,
-                feedScore: sql<number>`0`,
-            })
-            .from(projects)
-            .where(and(...fallbackConditions))
-            .orderBy(...fallbackOrderBy)
-            .limit(pageSize);
+        const fallbackSelectFields = surface === 'preview' ? {
+            id: projects.id,
+            ownerId: projects.ownerId,
+            title: projects.title,
+            slug: sql<string | null>`null`,
+            description: projects.description,
+            shortDescription: sql<string | null>`null`,
+            coverImage: sql<string | null>`null`,
+            category: sql<string | null>`null`,
+            viewCount: sql<number | null>`null`,
+            followersCount: sql<number | null>`null`,
+            tags: sql<string[] | null>`null`,
+            skills: sql<string[] | null>`null`,
+            visibility: sql<string | null>`null`,
+            status: sql<string | null>`null`,
+            lifecycleStages: sql<string[] | null>`null`,
+            importSource: sql<RawProjectRow['importSource']>`null`,
+            createdAt: projects.createdAt,
+            updatedAt: projects.updatedAt,
+            feedScore: sql<number>`0`,
+        } : {
+            id: projects.id,
+            ownerId: projects.ownerId,
+            title: projects.title,
+            slug: sql<string | null>`null`,
+            description: projects.description,
+            shortDescription: sql<string | null>`null`,
+            coverImage: sql<string | null>`null`,
+            category: projects.category,
+            viewCount: sql<number | null>`null`,
+            followersCount: sql<number | null>`null`,
+            tags: sql<string[] | null>`null`,
+            skills: sql<string[] | null>`null`,
+            visibility: projects.visibility,
+            status: projects.status,
+            lifecycleStages: sql<string[] | null>`null`,
+            importSource: sql<RawProjectRow['importSource']>`null`,
+            createdAt: projects.createdAt,
+            updatedAt: projects.updatedAt,
+            feedScore: sql<number>`0`,
+        };
+
+        rawProjects = await db.transaction(async (tx) => {
+            if (surface === 'preview') {
+                await tx.execute(sql`SET LOCAL pg_trgm.similarity_threshold = 0.4`);
+            }
+            return await tx
+                .select(fallbackSelectFields)
+                .from(projects)
+                .where(and(...fallbackConditions))
+                .orderBy(...fallbackOrderBy)
+                .limit(pageSize);
+        });
     }
 
-    const mappedProjects = await hydrateProjects(rawProjects, hasFollowersCountColumn, undefined, viewerId ?? null);
+    const mappedProjects = await hydrateProjects(rawProjects, hasFollowersCountColumn, undefined, viewerId ?? null, surface);
     const lastProject = rawProjects[rawProjects.length - 1];
     const nextCursor = rawProjects.length === pageSize
         ? scoreExpr && lastProject
