@@ -1,9 +1,8 @@
-import { useQuery } from '@tanstack/react-query';
-import { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import { useEffect, useMemo, useState, useCallback, type ReactNode } from "react";
 import {
     Loader2, UserPlus, X, Clock, CheckCheck, Briefcase,
     ChevronDown, ChevronRight, Inbox, History, UserMinus,
-    ArrowDownLeft, ArrowUpRight, Ban, CheckCircle2, Users, MessageSquare, ExternalLink,
+    ArrowDownLeft, ArrowUpRight, Ban, CheckCircle2, Users, MessageSquare,
 } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
@@ -21,22 +20,43 @@ import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { cn } from "@/lib/utils";
 import { getAvatarGradient } from "@/lib/ui/avatar";
-import { Badge } from "@/components/ui/badge";
 import {
     DropdownMenu,
     DropdownMenuContent,
     DropdownMenuItem,
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import PersonCard from "@/components/people/PersonCard";
+import { UserAvatar } from "@/components/ui/UserAvatar";
 import ProjectApplicationsSection from "./ProjectApplicationsSection";
 import type { IncomingApplication, MyApplication } from "./ProjectApplicationsSection";
-import { resolveRelationshipActionModel } from "@/components/people/person-card-model";
 
 interface RequestsTabProps {
     initialUser: { id?: string | null } | null;
     initialRequests?: { incoming: PendingIncomingRequest[]; sent: PendingSentRequest[] };
     initialApplications?: { my: MyApplication[]; incoming: IncomingApplication[] };
+}
+
+type RequestProfile = {
+    id: string;
+    username: string | null;
+    fullName: string | null;
+    avatarUrl: string | null;
+    headline: string | null;
+    location: string | null;
+};
+
+function RequestProfileRow({ profile, requestedAt, actions }: { profile: RequestProfile; requestedAt: Date | string; actions: ReactNode }) {
+    const name = profile.fullName || profile.username || "User";
+    return <div className="flex items-center gap-4 rounded-2xl border border-zinc-200/60 bg-white/80 p-4 backdrop-blur-xl transition-colors hover:border-zinc-300 dark:border-white/5 dark:bg-zinc-900/80 dark:hover:border-zinc-700">
+        <Link href={profileHref(profile)} className="shrink-0"><UserAvatar identity={profile} size={40} /></Link>
+        <Link href={profileHref(profile)} className="min-w-0 flex-1">
+            <h3 className="truncate text-sm font-semibold text-zinc-900 hover:text-primary dark:text-zinc-100">{name}</h3>
+            {profile.headline ? <p className="mt-0.5 truncate text-xs text-zinc-500 dark:text-zinc-400">{profile.headline}</p> : null}
+            {profile.location ? <p className="mt-0.5 truncate text-[11px] text-zinc-400">{profile.location}</p> : null}
+        </Link>
+        <p className="hidden shrink-0 text-xs text-zinc-400 sm:block">{formatDistanceToNow(new Date(requestedAt), { addSuffix: true })}</p>
+        <div className="flex shrink-0 items-center gap-2">{actions}</div>
+    </div>;
 }
 
 // ── Status configuration ────────────────────────────────────────────
@@ -53,10 +73,7 @@ const STATUS_ICONS: Record<string, typeof CheckCircle2> = {
     role_filled: CheckCircle2,
 };
 
-const REQUESTS_INITIAL_BATCH = 24;
-const REQUESTS_BATCH_STEP = 24;
 const HISTORY_INITIAL_BATCH = 20;
-const HISTORY_BATCH_STEP = 20;
 
 // ── History summary ─────────────────────────────────────────────────
 
@@ -274,34 +291,6 @@ function TimelineItem({ item, isLast }: { item: RequestHistoryItem; isLast: bool
     );
 }
 
-// ── Request message preview (7A) ─────────────────────────────────────
-
-function RequestMessagePreview({ message }: { message?: string | null }) {
-    const [expanded, setExpanded] = useState(false);
-
-    if (!message) return null;
-
-    const truncated = message.length > 100;
-    const displayText = expanded ? message : message.slice(0, 100);
-
-    return (
-        <div className="pl-14 pr-4 pb-3 -mt-2">
-            <p className="text-xs text-zinc-400 italic">
-                &ldquo;{displayText}{truncated && !expanded ? "..." : ""}&rdquo;
-            </p>
-            {truncated && (
-                <button
-                    type="button"
-                    onClick={() => setExpanded(!expanded)}
-                    className="text-[11px] text-primary hover:text-primary/80 font-medium mt-0.5 transition-colors"
-                >
-                    {expanded ? "Show less" : "Show more"}
-                </button>
-            )}
-        </div>
-    );
-}
-
 // ── Collapsible section ─────────────────────────────────────────────
 
 function CollapsibleSection({
@@ -357,15 +346,11 @@ function CollapsibleSection({
 
 export default function RequestsTab({ initialUser, initialRequests, initialApplications }: RequestsTabProps) {
     const { data: requestData, isLoading: requestsLoading } = usePendingRequests();
-    // 5I: Align limit with HISTORY_INITIAL_BATCH (20)
     const { data: requestHistoryData, isLoading: historyLoading, fetchNextPage: fetchMoreHistory, hasNextPage: hasMoreHistory, isFetchingNextPage: isFetchingMoreHistory } = useRequestHistory(HISTORY_INITIAL_BATCH);
     const { acceptRequest, rejectRequest, undoRejectRequest, cancelRequest, acceptAllIncoming, rejectAllIncoming, blockProfile, withdrawAllSent } = useConnectionMutations();
 
     const [timelineOpen, setTimelineOpen] = useState(true);
     const [appsOpen, setAppsOpen] = useState(true);
-    const [incomingLimit, setIncomingLimit] = useState(REQUESTS_INITIAL_BATCH);
-    const [sentLimit, setSentLimit] = useState(REQUESTS_INITIAL_BATCH);
-    const [historyLimit, setHistoryLimit] = useState(HISTORY_INITIAL_BATCH);
     const appsPanelId = "project-apps-panel";
     const timelinePanelId = "activity-timeline-panel";
 
@@ -387,67 +372,10 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
         () => requestHistoryData?.pages?.flatMap(page => page.items) ?? [],
         [requestHistoryData?.pages],
     );
-    const visibleIncomingRequests = useMemo(() => incomingRequests.slice(0, incomingLimit), [incomingLimit, incomingRequests]);
-    const visibleSentRequests = useMemo(() => sentRequests.slice(0, sentLimit), [sentLimit, sentRequests]);
-    const visibleHistoryItems = useMemo(() => historyItems.slice(0, historyLimit), [historyItems, historyLimit]);
-    // 7D: Partition history items by source type
-    const connectionHistoryItems = useMemo(
-        () => visibleHistoryItems.filter((item) => item.source === "connection"),
-        [visibleHistoryItems],
-    );
-    const applicationHistoryItems = useMemo(
-        () => visibleHistoryItems.filter((item) => item.source === "application"),
-        [visibleHistoryItems],
-    );
-    const groupedConnectionHistory = useMemo(() => {
-        const groupsMap = new Map<string, any[]>();
-        for (const page of requestHistoryData?.pages ?? []) {
-            if (page.groupedConnectionItems) {
-                for (const group of page.groupedConnectionItems) {
-                    if (!groupsMap.has(group.label)) groupsMap.set(group.label, []);
-                    groupsMap.get(group.label)!.push(...group.items);
-                }
-            }
-        }
-        const result = Array.from(groupsMap.entries()).map(([label, items]) => ({ label, items }));
-        // Slice the items to respect historyLimit (approximate)
-        let totalCount = 0;
-        for (const group of result) {
-            if (totalCount >= historyLimit) { group.items = []; continue; }
-            if (totalCount + group.items.length > historyLimit) {
-                group.items = group.items.slice(0, historyLimit - totalCount);
-            }
-            totalCount += group.items.length;
-        }
-        return result.filter(g => g.items.length > 0);
-    }, [requestHistoryData?.pages, historyLimit]);
-    const groupedApplicationHistory = useMemo(() => groupHistoryByTime(applicationHistoryItems), [applicationHistoryItems]);
-
-    const [connectionActivityOpen, setConnectionActivityOpen] = useState(true);
-    const [applicationActivityOpen, setApplicationActivityOpen] = useState(true);
-    const hasMoreIncoming = incomingRequests.length > visibleIncomingRequests.length;
-    const hasMoreSent = sentRequests.length > visibleSentRequests.length;
-    const hasMoreHistoryLocal = historyItems.length > visibleHistoryItems.length;
-    const viewerId = initialUser?.id ?? null;
-    const historyPageCount = requestHistoryData?.pages.length ?? 0;
-    const previousHistoryPageCountRef = useRef(historyPageCount);
-    const previousHistoryViewerIdRef = useRef(viewerId);
+    const groupedHistory = useMemo(() => groupHistoryByTime(historyItems), [historyItems]);
     const [requestRenderNowMs, setRequestRenderNowMs] = useState(() => Date.now());
 
-    useEffect(() => { setIncomingLimit(REQUESTS_INITIAL_BATCH); }, [viewerId]);
-    useEffect(() => { setSentLimit(REQUESTS_INITIAL_BATCH); }, [viewerId]);
-    useEffect(() => {
-        const previousViewerId = previousHistoryViewerIdRef.current;
-        const previousPageCount = previousHistoryPageCountRef.current;
-
-        if (viewerId !== previousViewerId || historyPageCount < previousPageCount) {
-            setHistoryLimit(HISTORY_INITIAL_BATCH);
-        }
-
-        previousHistoryViewerIdRef.current = viewerId;
-        previousHistoryPageCountRef.current = historyPageCount;
-    }, [historyPageCount, viewerId]);
-    useEffect(() => { setRequestRenderNowMs(Date.now()); }, [incomingRequests.length, sentRequests.length, viewerId]);
+    useEffect(() => { setRequestRenderNowMs(Date.now()); }, [incomingRequests.length, sentRequests.length]);
 
     const handleAccept = async (id: string) => {
         toast.promise(acceptRequest.mutateAsync(id), {
@@ -463,7 +391,6 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
             const result = await rejectRequest.mutateAsync({ id, reason });
             toast.dismiss(pendingToast);
             if (result?.undoUntil) {
-                // 5K: Compute undo duration from server clock
                 const serverOffset = result.serverNow ? Date.now() - new Date(result.serverNow).getTime() : 0;
                 const remainingMs = new Date(result.undoUntil).getTime() - (Date.now() - serverOffset);
                 const toastDuration = Math.max(3000, Math.min(remainingMs, 20000));
@@ -507,58 +434,6 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
     };
 
     const [bulkAction, setBulkAction] = useState<{ type: "accept" | "reject" | "withdraw" } | null>(null);
-    const bulkPollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-    // Clean up bulk polling on unmount
-    useEffect(() => {
-        return () => {
-            if (bulkPollRef.current) clearTimeout(bulkPollRef.current);
-        };
-    }, []);
-
-    // 5L: Exponential backoff polling for bulk actions
-    const [pollingJob, setPollingJob] = useState<{ id: string, count: number, action: "accept" | "reject" | "withdraw" } | null>(null);
-
-    const { data: jobStatus } = useQuery({
-        queryKey: ['bulk-job', pollingJob?.id],
-        queryFn: async () => {
-            const res = await fetch(`/api/v1/jobs/connection-bulk?jobId=${pollingJob?.id}`);
-            if (!res.ok) throw new Error("Failed");
-            const body = await res.json();
-            if (!body?.success || !body?.data) {
-                throw new Error(body?.message ?? "Invalid bulk job status response");
-            }
-            return body.data;
-        },
-        enabled: !!pollingJob?.id,
-        refetchInterval: (query: any) => {
-            if (query.state.data?.status === 'completed' || query.state.data?.status === 'done' || query.state.data?.status === 'failed') return false;
-            // Exponential backoff: start at 2s, multiply by 1.5x each time, max out at 10s
-            const fetchCount = query.state.dataUpdateCount || 0;
-            return Math.min(2000 * Math.pow(1.5, fetchCount), 10000);
-        },
-    });
-
-    useEffect(() => {
-        if (!pollingJob) return;
-        if (jobStatus?.status === 'completed' || jobStatus?.status === 'done') {
-            const completedAction = pollingJob.action === "withdraw" ? "cancelled" : `${pollingJob.action}ed`;
-            toast.dismiss("bulk-job-toast");
-            toast.success(`All ${pollingJob.count} requests ${completedAction} successfully.`);
-            setPollingJob(null);
-        } else if (jobStatus?.status === 'failed') {
-            const failedAction = pollingJob.action === "withdraw" ? "cancellation" : pollingJob.action;
-            toast.dismiss("bulk-job-toast");
-            toast.error(`Bulk ${failedAction} failed. Some requests may not have been processed.`);
-            setPollingJob(null);
-        }
-    }, [jobStatus, pollingJob]);
-
-    const startBulkJobPolling = useCallback((jobId: string, count: number, action: "accept" | "reject" | "withdraw") => {
-        const processingAction = action === "withdraw" ? "cancellation" : action;
-        setPollingJob({ id: jobId, count, action });
-        toast.loading(`Bulk ${processingAction} processing...`, { id: 'bulk-job-toast' });
-    }, []);
 
     const confirmAcceptAll = useCallback(async () => {
         const count = incomingRequests.length;
@@ -566,16 +441,12 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
         try {
             const result = await acceptAllIncoming.mutateAsync(count);
             toast.dismiss(pendingToast);
-            if (result.jobId) {
-                startBulkJobPolling(result.jobId, count, "accept");
-            } else {
-                toast.success(result.queued ? "Accept all queued. Requests will update shortly." : "Accept all started.");
-            }
+            toast.success(result.count ? `Accepted ${result.count} request${result.count === 1 ? "" : "s"}` : "No incoming requests to accept");
         } catch {
             toast.dismiss(pendingToast);
             toast.error("Failed to accept all requests");
         }
-    }, [acceptAllIncoming, incomingRequests.length, startBulkJobPolling]);
+    }, [acceptAllIncoming, incomingRequests.length]);
 
     const confirmRejectAll = useCallback(async () => {
         const count = incomingRequests.length;
@@ -583,16 +454,12 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
         try {
             const result = await rejectAllIncoming.mutateAsync(count);
             toast.dismiss(pendingToast);
-            if (result.jobId) {
-                startBulkJobPolling(result.jobId, count, "reject");
-            } else {
-                toast.success(result.queued ? "Reject all queued. Requests will update shortly." : "Reject all started.");
-            }
+            toast.success(result.count ? `Rejected ${result.count} request${result.count === 1 ? "" : "s"}` : "No incoming requests to reject");
         } catch {
             toast.dismiss(pendingToast);
             toast.error("Failed to reject all requests");
         }
-    }, [rejectAllIncoming, incomingRequests.length, startBulkJobPolling]);
+    }, [rejectAllIncoming, incomingRequests.length]);
 
     const confirmWithdrawAll = useCallback(async () => {
         const pendingToast = toast.loading("Cancelling sent requests...");
@@ -683,50 +550,31 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
                         Incoming
                     </h2>
                     <div className="space-y-3">
-                        {visibleIncomingRequests.map((req) => {
-                            const profile = {
+                        {incomingRequests.map((req) => {
+                            const profile: RequestProfile = {
                                 id: req.requesterId,
                                 username: req.requesterUsername,
                                 fullName: req.requesterFullName,
                                 avatarUrl: req.requesterAvatarUrl,
                                 headline: req.requesterHeadline,
                                 location: req.requesterLocation ?? null,
-                                connectionStatus: "pending_received" as const,
-                                canConnect: true,
-                                mutualConnections: req.mutualCount ?? 0,
-                                skills: req.requesterSkills ?? [],
-                                openTo: req.requesterOpenTo ?? [],
-                                messagePrivacy: req.requesterMessagePrivacy ?? "connections",
-                                canSendMessage: req.requesterCanSendMessage ?? false,
-                                lastActiveAt: req.requesterLastActiveAt ?? null,
                             };
-                            const actionModel = resolveRelationshipActionModel({
-                                state: "pending_received",
-                                canSendMessage: Boolean(req.requesterCanSendMessage),
-                                profileHref: profileHref(profile),
-                                messageHref: `/messages?userId=${req.requesterId}`,
-                                inviteHref: null,
-                            });
                             const isAccepting = acceptRequest.isPending && acceptRequest.variables === req.id;
                             const isRejecting = rejectRequest.isPending && rejectRequest.variables?.id === req.id;
                             const isProcessing = isAccepting || isRejecting;
 
                             return (
                                 <div key={req.id} className="space-y-0">
-                                    <PersonCard
+                                    <RequestProfileRow
                                         profile={profile}
-                                        onConnect={async () => handleAccept(req.id)}
-                                        isConnecting={isProcessing}
-                                        variant="request"
                                         requestedAt={req.createdAt}
                                         actions={
                                             <div className="flex items-center gap-2">
-                                                {/* 7C: Mutual count badge */}
                                                 {(req.mutualCount ?? 0) > 0 && (
-                                                    <Badge variant="secondary" className="text-[11px] px-2 py-0.5 gap-1">
+                                                    <span className={cn("inline-flex items-center justify-center rounded-full border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1", "border-transparent bg-secondary text-secondary-foreground", "text-[11px] px-2 py-0.5 gap-1")}>
                                                         <Users className="w-3 h-3" />
                                                         {req.mutualCount} mutual{req.mutualCount === 1 ? "" : "s"}
-                                                    </Badge>
+                                                    </span>
                                                 )}
                                                 <button
                                                     type="button"
@@ -737,7 +585,6 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
                                                 >
                                                     {isAccepting ? <Loader2 className="w-4 h-4 animate-spin" /> : "Accept"}
                                                 </button>
-                                                {/* 7B: Rejection reason dropdown */}
                                                 <DropdownMenu>
                                                     <DropdownMenuTrigger asChild>
                                                         <button
@@ -780,21 +627,9 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
                                                         </button>
                                                     </DropdownMenuTrigger>
                                                     <DropdownMenuContent align="end" className="w-52">
-                                                        {actionModel.secondaryMenu.filter((action) => action.key !== "view_profile").map((action) => {
-                                                            if (!action.href) return null;
-                                                            return (
-                                                                <DropdownMenuItem key={action.key} asChild>
-                                                                    <Link href={action.href}>
-                                                                        {action.key === "message" ? (
-                                                                            <MessageSquare className="w-4 h-4" />
-                                                                        ) : (
-                                                                            <ExternalLink className="w-4 h-4" />
-                                                                        )}
-                                                                        {action.label}
-                                                                    </Link>
-                                                                </DropdownMenuItem>
-                                                            );
-                                                        })}
+                                                        {req.requesterCanSendMessage ? <DropdownMenuItem asChild>
+                                                            <Link href={`/messages?userId=${req.requesterId}`}><MessageSquare className="w-4 h-4" />Message</Link>
+                                                        </DropdownMenuItem> : null}
                                                         <DropdownMenuItem
                                                             variant="destructive"
                                                             onClick={() => handleBlock(req.requesterId, req.requesterFullName || req.requesterUsername || "User")}
@@ -807,21 +642,11 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
                                             </div>
                                         }
                                     />
-                                    {/* 7A: Request message preview */}
-                                    <RequestMessagePreview message={req.message} />
+                                    {req.message ? <p className="-mt-2 pb-3 pl-14 pr-4 text-xs italic text-zinc-400 line-clamp-2">&ldquo;{req.message}&rdquo;</p> : null}
                                 </div>
                             );
                         })}
                     </div>
-                    {hasMoreIncoming && (
-                        <button
-                            type="button"
-                            onClick={() => setIncomingLimit((prev) => prev + REQUESTS_BATCH_STEP)}
-                            className="w-full mt-3 rounded-xl border border-zinc-200 dark:border-zinc-800 px-3 py-2 text-xs font-medium text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-900 transition-colors"
-                        >
-                            Show {Math.min(REQUESTS_BATCH_STEP, incomingRequests.length - visibleIncomingRequests.length)} more incoming requests
-                        </button>
-                    )}
                 </section>
             )}
 
@@ -843,45 +668,25 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
                         )}
                     </div>
                     <div className="space-y-3">
-                        {visibleSentRequests.map((req) => {
-                            const profile = {
+                        {sentRequests.map((req) => {
+                            const profile: RequestProfile = {
                                 id: req.addresseeId,
                                 username: req.addresseeUsername,
                                 fullName: req.addresseeFullName,
                                 avatarUrl: req.addresseeAvatarUrl,
                                 headline: req.addresseeHeadline,
                                 location: req.addresseeLocation ?? null,
-                                connectionStatus: "pending_sent" as const,
-                                canConnect: false,
-                                skills: req.addresseeSkills ?? [],
-                                openTo: req.addresseeOpenTo ?? [],
-                                messagePrivacy: req.addresseeMessagePrivacy ?? "connections",
-                                canSendMessage: req.addresseeCanSendMessage ?? false,
-                                lastActiveAt: req.addresseeLastActiveAt ?? null,
                             };
-                            const profileLink = profileHref(profile);
-                            const actionModel = resolveRelationshipActionModel({
-                                state: "pending_sent",
-                                canSendMessage: Boolean(req.addresseeCanSendMessage),
-                                profileHref: profileLink,
-                                messageHref: `/messages?userId=${req.addresseeId}`,
-                                inviteHref: null,
-                            });
                             const isProcessing = cancelRequest.isPending && cancelRequest.variables === req.id;
-                            // 5B: Pending days calculation
                             const pendingDays = Math.floor((requestRenderNowMs - new Date(req.createdAt).getTime()) / (1000 * 60 * 60 * 24));
 
                             return (
-                                <PersonCard
+                                <RequestProfileRow
                                     key={req.id}
                                     profile={profile}
-                                    onConnect={async () => {}}
-                                    isConnecting={isProcessing}
-                                    variant="request"
                                     requestedAt={req.createdAt}
                                     actions={
                                         <div className="flex items-center gap-2">
-                                            {/* 5B: Pending duration badge */}
                                             {pendingDays > 0 && (
                                                 <span className="text-xs bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 px-2 py-0.5 rounded-full whitespace-nowrap">
                                                     Pending {pendingDays}d
@@ -896,7 +701,7 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
                                             >
                                                 {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : "Cancel"}
                                             </button>
-                                            {actionModel.canSendMessage ? (
+                                            {req.addresseeCanSendMessage ? (
                                                 <Link
                                                     href={`/messages?userId=${req.addresseeId}`}
                                                     className="px-4 py-1.5 rounded-xl text-sm font-medium text-sky-700 dark:text-sky-300 border border-sky-200 bg-sky-50 dark:border-sky-900/60 dark:bg-sky-950/20 hover:bg-sky-100 dark:hover:bg-sky-950/40 transition-colors inline-flex items-center gap-1.5"
@@ -911,15 +716,6 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
                             );
                         })}
                     </div>
-                    {hasMoreSent && (
-                        <button
-                            type="button"
-                            onClick={() => setSentLimit((prev) => prev + REQUESTS_BATCH_STEP)}
-                            className="w-full mt-3 rounded-xl border border-zinc-200 dark:border-zinc-800 px-3 py-2 text-xs font-medium text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-900 transition-colors"
-                        >
-                            Show {Math.min(REQUESTS_BATCH_STEP, sentRequests.length - visibleSentRequests.length)} more sent requests
-                        </button>
-                    )}
                 </section>
             )}
 
@@ -958,7 +754,7 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
                             ))}
                         </div>
                     </div>
-                ) : visibleHistoryItems.length === 0 ? (
+                ) : historyItems.length === 0 ? (
                     <div className="rounded-2xl border border-zinc-200/60 dark:border-white/5 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl px-6 py-12 text-center">
                         <History className="w-10 h-10 text-zinc-300 dark:text-zinc-600 mx-auto mb-3" />
                         <p className="text-sm font-medium text-zinc-500 dark:text-zinc-400">No activity yet</p>
@@ -967,99 +763,14 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
                         </p>
                     </div>
                 ) : (
-                    <div className="space-y-4">
-                        {/* 7D: Connection Activity sub-section */}
-                        {connectionHistoryItems.length > 0 && (
-                            <CollapsibleSection
-                                title="Connection Activity"
-                                icon={<UserPlus className="w-4 h-4 text-emerald-500" />}
-                                open={connectionActivityOpen}
-                                onToggle={() => setConnectionActivityOpen(!connectionActivityOpen)}
-                                count={connectionHistoryItems.length}
-                                panelId="connection-activity-panel"
-                            >
-                                <div className="rounded-2xl border border-zinc-200/60 dark:border-white/5 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl">
-                                    {groupedConnectionHistory.map((group, groupIdx) => (
-                                        <div key={group.label}>
-                                            <div className={cn(
-                                                "sticky top-0 z-10 px-5 py-2.5 bg-zinc-50/90 dark:bg-zinc-900/90 backdrop-blur-sm",
-                                                groupIdx === 0 ? "rounded-t-2xl" : "border-t border-zinc-200/60 dark:border-white/5",
-                                            )}>
-                                                <span className="text-[11px] font-semibold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider">
-                                                    {group.label}
-                                                </span>
-                                            </div>
-                                            <div className="px-5 py-4">
-                                                {group.items.map((item, itemIdx) => (
-                                                    <TimelineItem
-                                                        key={`${item.source}-${item.id}-${item.status}-${item.eventAt}`}
-                                                        item={item}
-                                                        isLast={itemIdx === group.items.length - 1}
-                                                    />
-                                                ))}
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-                            </CollapsibleSection>
-                        )}
-
-                        {/* 7D: Application Activity sub-section */}
-                        {applicationHistoryItems.length > 0 && (
-                            <CollapsibleSection
-                                title="Application Activity"
-                                icon={<Briefcase className="w-4 h-4 text-violet-500" />}
-                                open={applicationActivityOpen}
-                                onToggle={() => setApplicationActivityOpen(!applicationActivityOpen)}
-                                count={applicationHistoryItems.length}
-                                panelId="application-activity-panel"
-                            >
-                                <div className="rounded-2xl border border-zinc-200/60 dark:border-white/5 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl">
-                                    {groupedApplicationHistory.map((group, groupIdx) => (
-                                        <div key={group.label}>
-                                            <div className={cn(
-                                                "sticky top-0 z-10 px-5 py-2.5 bg-zinc-50/90 dark:bg-zinc-900/90 backdrop-blur-sm",
-                                                groupIdx === 0 ? "rounded-t-2xl" : "border-t border-zinc-200/60 dark:border-white/5",
-                                            )}>
-                                                <span className="text-[11px] font-semibold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider">
-                                                    {group.label}
-                                                </span>
-                                            </div>
-                                            <div className="px-5 py-4">
-                                                {group.items.map((item, itemIdx) => (
-                                                    <TimelineItem
-                                                        key={`${item.source}-${item.id}-${item.status}-${item.eventAt}`}
-                                                        item={item}
-                                                        isLast={itemIdx === group.items.length - 1}
-                                                    />
-                                                ))}
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-                            </CollapsibleSection>
-                        )}
-
-                        {/* Load more */}
-                        {(hasMoreHistory || hasMoreHistoryLocal) && (
-                            <div className="px-5 py-3">
-                                <button
-                                    type="button"
-                                    disabled={isFetchingMoreHistory}
-                                    onClick={() => {
-                                        if (hasMoreHistoryLocal) {
-                                            setHistoryLimit((prev) => prev + HISTORY_BATCH_STEP);
-                                        } else if (hasMoreHistory) {
-                                            setHistoryLimit((prev) => prev + HISTORY_BATCH_STEP);
-                                            fetchMoreHistory();
-                                        }
-                                    }}
-                                    className="w-full rounded-xl px-3 py-2 text-xs font-medium text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors disabled:opacity-50"
-                                >
-                                    {isFetchingMoreHistory ? "Loading..." : "Load more activity"}
-                                </button>
+                    <div className="rounded-2xl border border-zinc-200/60 bg-white/80 backdrop-blur-xl dark:border-white/5 dark:bg-zinc-900/80">
+                        {groupedHistory.map((group, groupIndex) => <div key={group.label}>
+                            <div className={cn("sticky top-0 z-10 px-5 py-2.5 bg-zinc-50/90 backdrop-blur-sm dark:bg-zinc-900/90", groupIndex === 0 ? "rounded-t-2xl" : "border-t border-zinc-200/60 dark:border-white/5")}>
+                                <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">{group.label}</span>
                             </div>
-                        )}
+                            <div className="px-5 py-4">{group.items.map((item, itemIndex) => <TimelineItem key={`${item.source}-${item.id}-${item.status}-${item.eventAt}`} item={item} isLast={itemIndex === group.items.length - 1} />)}</div>
+                        </div>)}
+                        {hasMoreHistory ? <div className="px-5 py-3"><button type="button" disabled={isFetchingMoreHistory} onClick={() => fetchMoreHistory()} className="w-full rounded-xl px-3 py-2 text-xs font-medium text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-700 disabled:opacity-50 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-200">{isFetchingMoreHistory ? "Loading..." : "Load more activity"}</button></div> : null}
                     </div>
                 )}
             </CollapsibleSection>
