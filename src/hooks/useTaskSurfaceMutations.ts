@@ -13,27 +13,12 @@ import {
   normalizeSprintOptions,
   normalizeTaskSurfacePerson,
   normalizeTaskSurfaceRecord,
+  toLinkedSprintFiles,
   type TaskSurfaceRecord,
 } from "@/lib/projects/task-presentation";
 import type { ProjectNode } from "@/lib/db/schema";
 
 type MutableTaskField = "title" | "description" | "priority" | "sprintId" | "dueDate";
-
-function toLinkedSprintFiles(nodes: ProjectNode[], taskId: string, occurredAt: string | null) {
-  return nodes.map((node, index) => ({
-    id: `linked-file:${taskId}:${node.id}:${index}`,
-    taskId,
-    nodeId: node.id,
-    nodeName: node.name,
-    nodePath: node.path ?? node.name,
-    nodeType: node.type === "folder" ? ("folder" as const) : ("file" as const),
-    annotation: null,
-    linkedAt: occurredAt ?? null,
-    lastEventType: null,
-    lastEventAt: node.updatedAt instanceof Date ? node.updatedAt.toISOString() : null,
-    lastEventBy: null,
-  }));
-}
 
 function toSprintMutationRecord(
   task: TaskSurfaceRecord,
@@ -272,15 +257,10 @@ export function useTaskSurfaceMutations(params: {
     }
   }, [applyOptimisticTask, availableMembers, projectId, rollbackOptimisticTask, takeSnapshots, task]);
 
-  const clearMutationError = useCallback(() => setMutationError(null), []);
-  const clearStatusWarnings = useCallback(() => setStatusWarnings([]), []);
-
   return useMemo(() => ({
     isMutating,
     mutationError,
     statusWarnings,
-    clearMutationError,
-    clearStatusWarnings,
     updateField,
     updateStatus,
     updateAssignee,
@@ -288,8 +268,6 @@ export function useTaskSurfaceMutations(params: {
     isMutating,
     mutationError,
     statusWarnings,
-    clearMutationError,
-    clearStatusWarnings,
     updateField,
     updateStatus,
     updateAssignee,
