@@ -5,15 +5,18 @@ import {
   accountDeletions,
   conversationParticipants,
   dmPairs,
+  extensionRecoveryDrafts,
   profiles,
   projects,
 } from "@/lib/db/schema";
+import {
+  deleteExtensionRecoveryDraftsForUser,
+  EXTENSION_RECOVERY_BUCKET,
+} from "@/lib/extension/recovery-drafts";
 import { logger } from "@/lib/logger";
 import { verifySignedJobRequestToken } from "@/lib/security/job-request";
-import { createClient } from "@/lib/supabase/server";
-
-const UUID_RE =
-  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+import { createAdminClient } from "@/lib/supabase/server";
+import { isLooseUuid } from "@/lib/validations/uuid";
 
 export const ACCOUNT_HARD_DELETE_JOB_KIND = "account/hard-delete";
 
@@ -35,10 +38,10 @@ export async function executeHardDelete(
   jobSignature: string,
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    if (!UUID_RE.test(userId)) {
+    if (!isLooseUuid(userId)) {
       return { success: false, error: "Invalid user ID" };
     }
-    if (!UUID_RE.test(deletionId)) {
+    if (!isLooseUuid(deletionId)) {
       return { success: false, error: "Invalid deletion ID" };
     }
 
@@ -80,23 +83,34 @@ export async function executeHardDelete(
       };
     }
 
+    // Recovery drafts contain unpublished source text. Remove their private
+    // storage objects before deleting auth/DB ownership so the cleanup remains
+    // retryable and cannot leave ownerless draft bytes behind.
+    const recoveryDraftCount = await db
+      .select({ id: extensionRecoveryDrafts.id })
+      .from(extensionRecoveryDrafts)
+      .where(eq(extensionRecoveryDrafts.userId, userId));
+    if (recoveryDraftCount.length > 0) {
+      await deleteExtensionRecoveryDraftsForUser(userId);
+      logger.info("account.hard-delete.extension-recovery-drafts.removed", {
+        module: "account",
+        userId,
+        bucket: EXTENSION_RECOVERY_BUCKET,
+        count: recoveryDraftCount.length,
+      });
+    }
+
     // C9: Delete auth user FIRST to avoid orphaned auth records.
     // If auth deletion fails, DB data is preserved and can be retried.
-    const supabase = await createClient();
+    const admin = await createAdminClient();
     let authError: { message: string } | null = null;
     try {
-      const adminResult = await supabase.auth.admin?.deleteUser?.(userId);
-      if (adminResult?.error) {
-        authError = adminResult.error;
-      }
-    } catch {
-      // Admin API not available, try RPC
-      try {
-        const { error } = await supabase.rpc("delete_auth_user", { user_id: userId });
-        if (error) authError = error;
-      } catch {
-        authError = { message: "Auth deletion not available" };
-      }
+      const { error } = await admin.auth.admin.deleteUser(userId);
+      authError = error;
+    } catch (error) {
+      authError = {
+        message: error instanceof Error ? error.message : "Auth deletion not available",
+      };
     }
 
     if (authError) {
