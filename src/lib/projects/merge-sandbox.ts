@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { projects, projectNodes, projectNodeLocks, fileVersions } from "@/lib/db/schema";
+import { projects, projectNodes, fileVersions } from "@/lib/db/schema";
 import { eq, and, sql, isNull } from "drizzle-orm";
 import { recordNodeEvent } from "@/lib/files/internal-helpers";
 
@@ -39,6 +39,24 @@ export async function mergeSandboxTask(
           WHERE project_id = ${projectId}::uuid AND task_id = ${taskId}::uuid AND canonical_node_id IS NOT NULL
       ) FOR UPDATE
     `);
+
+    const activeLease = await tx.execute<{ nodeId: string }>(sql`
+      SELECT locks.node_id AS "nodeId"
+      FROM project_node_locks locks
+      WHERE locks.project_id = ${projectId}::uuid
+        AND locks.expires_at > now()
+        AND locks.node_id IN (
+          SELECT canonical_node_id
+          FROM project_nodes
+          WHERE project_id = ${projectId}::uuid
+            AND task_id = ${taskId}::uuid
+            AND canonical_node_id IS NOT NULL
+        )
+      LIMIT 1
+    `);
+    if (Array.from(activeLease)[0]) {
+      throw new Error("Task merge deferred because a collaborator is editing an affected file");
+    }
 
     // Step 2: Lock parent folders and target paths on the main branch
     await tx.execute(sql`
@@ -245,19 +263,8 @@ export async function mergeSandboxTask(
             )
         );
 
-    // Step 10: Release active session locks for affected nodes only
-    await tx.execute(sql`
-      DELETE FROM project_node_locks 
-      WHERE project_id = ${projectId}::uuid 
-        AND session_id = ${sessionId}::uuid 
-        AND node_id IN (
-          SELECT canonical_node_id FROM project_nodes WHERE project_id = ${projectId}::uuid AND task_id = ${taskId}::uuid AND canonical_node_id IS NOT NULL
-          UNION
-          SELECT id FROM project_nodes WHERE project_id = ${projectId}::uuid AND task_id = ${taskId}::uuid AND canonical_node_id IS NULL
-        )
-    `);
-
-    // Step 11: Cleanup remaining sandbox nodes
+    // Step 10: Cleanup remaining sandbox nodes. Editor leases are never
+    // deleted by a merge; only their exact owner credentials may release them.
     await tx
         .delete(projectNodes)
         .where(
