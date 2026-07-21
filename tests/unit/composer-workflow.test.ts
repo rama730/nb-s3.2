@@ -56,7 +56,7 @@ test('getComposerWorkflowNotice returns the correct connection action state', ()
   assert.equal(notice?.actionLabel, 'Accept request');
 });
 
-test('getComposerWorkflowNotice returns the correct application workflow controls', () => {
+test('getComposerWorkflowNotice does not duplicate inline application-system card actions', () => {
   const notice = getComposerWorkflowNotice(createCapability({
     canSend: true,
     hasActiveApplication: true,
@@ -65,8 +65,5 @@ test('getComposerWorkflowNotice returns the correct application workflow control
     isCreator: true,
   }));
 
-  assert.ok(notice);
-  assert.equal(notice?.badge, 'Application Rejected');
-  assert.equal(notice?.canReopen, true);
-  assert.equal(notice?.canAccept, false);
+  assert.equal(notice, null);
 });
