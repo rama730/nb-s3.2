@@ -4,8 +4,8 @@ import type { QueryClient } from '@tanstack/react-query';
 import {
     getConversationSummaryV2,
     getConversationThreadPageV2,
-    getUnreadSummaryV2,
 } from '@/app/actions/messaging/v2';
+import { getUnreadCount } from '@/app/actions/messaging';
 import {
     replaceThreadSnapshot,
     setUnreadSummary,
@@ -15,7 +15,7 @@ import {
 import { queryKeys } from '@/lib/query-keys';
 
 export async function refreshUnreadCache(queryClient: QueryClient) {
-    const unreadResult = await getUnreadSummaryV2();
+    const unreadResult = await getUnreadCount();
     if (unreadResult.success && typeof unreadResult.count === 'number') {
         setUnreadSummary(queryClient, unreadResult.count);
         return true;
@@ -54,7 +54,7 @@ export async function refreshConversationCache(
 ) {
     const [threadResult, unreadResult] = await Promise.all([
         getConversationThreadPageV2(conversationId, undefined, 30),
-        options?.includeUnread ? getUnreadSummaryV2() : Promise.resolve(null),
+        options?.includeUnread ? getUnreadCount() : Promise.resolve(null),
     ]);
 
     if (threadResult.success && threadResult.page) {
