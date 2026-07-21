@@ -4,30 +4,31 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import { useMemo, useEffect } from 'react';
 import { get as idbGet, set as idbSet } from 'idb-keyval';
 import {
-    convertMessageToFollowUpV2,
-    convertMessageToTaskV2,
     type InboxConversationV2,
     type MessageThreadPageV2,
     ensureDirectConversationV2,
-    getApplicationsInboxPageV2,
-    getConversationCapabilityV2,
     getConversationSummaryV2,
     getConversationThreadPageV2,
     getInboxPageV2,
-    getMessagingStructuredCatalogPageV2,
-    getMessageContextV2,
-    getProjectGroupsPageV2,
-    getUnreadSummaryV2,
-    markConversationReadV2,
     resolveConversationWorkflowV2,
-    searchMessagesV2,
     sendConversationMessageV2,
     sendStructuredConversationMessageV2,
-    setConversationArchivedV2,
-    setConversationMutedV2,
-    setMessagePinnedV2,
 } from '@/app/actions/messaging/v2';
-import type { MessageWithSender, UploadedAttachment } from '@/app/actions/messaging';
+import {
+    convertMessageToFollowUpActionV2,
+    convertMessageToTaskActionV2,
+    getMessageContext,
+    getMessagingStructuredCatalogV2,
+    getProjectGroups,
+    markConversationAsRead,
+    searchMessages,
+    setConversationArchived,
+    setConversationMuted,
+    setMessagePinned,
+    type MessageWithSender,
+    type UploadedAttachment,
+} from '@/app/actions/messaging';
+import { getInboxApplicationsAction } from '@/app/actions/applications';
 import { queryKeys } from '@/lib/query-keys';
 import {
     clearPendingReadCommitState,
@@ -119,12 +120,13 @@ function unwrapThreadPage(value: unknown): MessageThreadPageV2 | null {
     return page as MessageThreadPageV2;
 }
 
-export function useInbox(limit: number = 20) {
+export function useInbox(limit: number = 20, enabled: boolean = true) {
     const queryClient = useQueryClient();
     const queryKey = useMemo(() => queryKeys.messages.v2.inbox(limit), [limit]);
     const storageKey = useMemo(() => queryKey.join('-'), [queryKey]);
 
     useEffect(() => {
+        if (!enabled) return;
         idbGet(storageKey).then((cachedPage) => {
             if (cachedPage) {
                 const currentData = queryClient.getQueryState(queryKey);
@@ -136,11 +138,12 @@ export function useInbox(limit: number = 20) {
                 }
             }
         }).catch(() => {});
-    }, [queryClient, queryKey, storageKey]);
+    }, [enabled, queryClient, queryKey, storageKey]);
 
     const query = useInfiniteQuery({
         queryKey,
         initialPageParam: undefined as string | undefined,
+        enabled,
         queryFn: async ({ pageParam }) => {
             const result = await getInboxPageV2(limit, pageParam);
             if (!result.success || !result.page) {
@@ -214,7 +217,7 @@ export function useConversationThread(conversationId: string | null, limit: numb
         getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
         staleTime: 15_000,
         refetchOnReconnect: true,
-        refetchOnWindowFocus: true,
+        refetchOnWindowFocus: false,
     });
 
     const normalizedPages = useMemo(
@@ -287,40 +290,12 @@ export function useConversationThread(conversationId: string | null, limit: numb
     return result;
 }
 
-export function useConversationCapabilities(conversationId: string | null, targetUserId?: string | null) {
-    return useQuery({
-        queryKey: queryKeys.messages.v2.capabilities(conversationId, targetUserId ?? null),
-        enabled: Boolean(conversationId || targetUserId),
-        queryFn: async () => {
-            const result = await getConversationCapabilityV2({ conversationId, targetUserId });
-            if (!result.success || !result.capability) {
-                throw new Error(result.error || 'Failed to fetch conversation capability');
-            }
-            return result.capability;
-        },
-        staleTime: 15_000,
-    });
-}
-
-export function useUnreadSummary(options?: { enabled?: boolean }) {
-    return useQuery({
-        queryKey: queryKeys.messages.v2.unread(),
-        queryFn: async () => {
-            const result = await getUnreadSummaryV2();
-            if (!result.success) throw new Error(result.error || 'Failed to fetch unread summary');
-            return result.count ?? 0;
-        },
-        staleTime: 15_000,
-        enabled: options?.enabled ?? true,
-    });
-}
-
 export function useMessageSearch(query: string) {
     return useQuery({
         queryKey: queryKeys.messages.v2.search(query),
         enabled: query.trim().length > 0,
         queryFn: async () => {
-            const result = await searchMessagesV2(query);
+            const result = await searchMessages(query);
             if (!result.success) throw new Error(result.error || 'Failed to search messages');
             return result.results ?? [];
         },
@@ -333,7 +308,7 @@ export function useMessagingStructuredCatalog(conversationId: string | null, tar
         queryKey: queryKeys.messages.v2.structuredCatalog(conversationId, targetUserId ?? null),
         enabled: enabled && Boolean(conversationId || targetUserId),
         queryFn: async () => {
-            const result = await getMessagingStructuredCatalogPageV2({
+            const result = await getMessagingStructuredCatalogV2({
                 conversationId,
                 targetUserId: targetUserId ?? null,
             });
@@ -351,7 +326,7 @@ export function useApplicationsInbox(limit: number = 20) {
         queryKey: queryKeys.messages.v2.applications(limit, 0),
         initialPageParam: 0,
         queryFn: async ({ pageParam }) => {
-            const result = await getApplicationsInboxPageV2(limit, pageParam);
+            const result = await getInboxApplicationsAction(limit, pageParam);
             if (!result.success) {
                 const errorMessage = 'error' in result && typeof result.error === 'string'
                     ? result.error
@@ -371,7 +346,7 @@ export function useProjectGroups(limit: number = 20) {
         queryKey: queryKeys.messages.v2.projectGroups(limit, 0),
         initialPageParam: 0,
         queryFn: async ({ pageParam }) => {
-            const result = await getProjectGroupsPageV2(limit, pageParam);
+            const result = await getProjectGroups(limit, pageParam);
             if (!result.success) {
                 const errorMessage = 'error' in result && typeof result.error === 'string'
                     ? result.error
@@ -407,7 +382,7 @@ export function useMessagesActions() {
             const serverReadMessageId = isTemporaryMessageId(params.lastReadMessageId)
                 ? undefined
                 : params.lastReadMessageId;
-            const result = await markConversationReadV2(params.conversationId, serverReadMessageId);
+            const result = await markConversationAsRead(params.conversationId, serverReadMessageId);
             if (!result.success) {
                 throw new Error(result.error || 'Failed to mark conversation read');
             }
@@ -515,7 +490,7 @@ export function useMessagesActions() {
 
     const muteConversation = useMutation({
         mutationFn: async (params: { conversationId: string; muted: boolean }) =>
-            setConversationMutedV2(params.conversationId, params.muted),
+            setConversationMuted(params.conversationId, params.muted),
         onMutate: async (params) => {
             await queryClient.cancelQueries({ queryKey: queryKeys.messages.v2.thread(params.conversationId) });
             await queryClient.cancelQueries({ queryKey: queryKeys.messages.v2.inbox(20) });
@@ -531,7 +506,7 @@ export function useMessagesActions() {
 
     const archiveConversation = useMutation({
         mutationFn: async (params: { conversationId: string; archived: boolean }) =>
-            setConversationArchivedV2(params.conversationId, params.archived),
+            setConversationArchived(params.conversationId, params.archived),
         onMutate: async (params) => {
             await queryClient.cancelQueries({ queryKey: queryKeys.messages.v2.thread(params.conversationId) });
             await queryClient.cancelQueries({ queryKey: queryKeys.messages.v2.inbox(20) });
@@ -712,8 +687,8 @@ export function useMessagesActions() {
     });
 
     const convertMessageToTask = useMutation({
-        mutationFn: async (params: Parameters<typeof convertMessageToTaskV2>[0]) => {
-            const result = await convertMessageToTaskV2(params);
+        mutationFn: async (params: Parameters<typeof convertMessageToTaskActionV2>[0]) => {
+            const result = await convertMessageToTaskActionV2(params);
             if (!result.success || !result.taskId) {
                 throw new Error(result.error || 'Failed to convert message to task');
             }
@@ -735,7 +710,7 @@ export function useMessagesActions() {
 
     const pinMessage = useMutation({
         mutationFn: async (params: { messageId: string; pinned: boolean; conversationId: string }) => {
-            const result = await setMessagePinnedV2(params.messageId, params.pinned);
+            const result = await setMessagePinned(params.messageId, params.pinned);
             if (!result.success) throw new Error(result.error || 'Failed to update pin');
             return params.conversationId;
         },
@@ -766,7 +741,7 @@ export function useMessagesActions() {
     });
 
     const injectMessageContext = async (conversationId: string, messageId: string) => {
-        const result = await getMessageContextV2(conversationId, messageId);
+        const result = await getMessageContext(conversationId, messageId);
         if (!result.success || !result.available || !result.message) {
             return null;
         }
@@ -803,8 +778,8 @@ export function useMessagesActions() {
     };
 
     const convertMessageToFollowUp = useMutation({
-        mutationFn: async (params: Parameters<typeof convertMessageToFollowUpV2>[0] & { conversationId: string }) => {
-            const result = await convertMessageToFollowUpV2(params);
+        mutationFn: async (params: Parameters<typeof convertMessageToFollowUpActionV2>[0] & { conversationId: string }) => {
+            const result = await convertMessageToFollowUpActionV2(params);
             if (!result.success || !result.workflowItemId) {
                 throw new Error(result.error || 'Failed to add follow-up');
             }
