@@ -1,7 +1,8 @@
 "use client";
 
+import { toast } from "sonner";
 import { useDeferredValue, useState, useMemo, useEffect } from "react";
-import { BookOpenText, FileText, Loader2, Plus, Search, X } from "lucide-react";
+import { BookOpenText, FileText, Loader2, Plus, Search } from "lucide-react";
 import { useRouter, usePathname } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -12,7 +13,6 @@ import {
     DialogTitle,
     DialogDescription,
 } from "@/components/ui/dialog";
-import { useToast } from "@/components/ui-custom/Toast";
 import { ProjectDocReferenceOptionCard } from "@/components/projects/doc/ProjectDocReferencePreview";
 import {
     useProjectDocImportCandidates,
@@ -36,8 +36,6 @@ export function ProjectDocLinkDialog({
     const router = useRouter();
     const pathname = usePathname();
     const queryClient = useQueryClient();
-    const { showToast } = useToast();
-
     const [query, setQuery] = useState("");
     const deferredQuery = useDeferredValue(query);
 
@@ -85,7 +83,7 @@ export function ProjectDocLinkDialog({
             const result = await linkProjectDocAction(projectId, selectedNodeId, docSlug);
 
             if (result.success) {
-                showToast("File linked successfully", "success");
+                toast.success("File linked successfully");
                 await Promise.all([
                     queryClient.invalidateQueries({ queryKey: PROJECT_MARKDOWNS_LIST_QUERY_KEY(projectId) }),
                     queryClient.invalidateQueries({ queryKey: PROJECT_DOC_DRAFT_QUERY_KEY(projectId, docSlug) }),
@@ -94,10 +92,40 @@ export function ProjectDocLinkDialog({
                 onClose();
                 router.push(`/projects/${projectSlug}?tab=docs&doc=${docSlug}`, { scroll: false });
             } else {
-                showToast(result.error || "Failed to link file to Document", "error");
+                toast.error(result.error || "Failed to link file to Document");
             }
         } catch (err) {
-            showToast(err instanceof Error ? err.message : "An error occurred", "error");
+            toast.error(err instanceof Error ? err.message : "An error occurred");
+        } finally {
+            setLinking(false);
+        }
+    };
+
+    const handleUnlink = async () => {
+        if (!projectId || !selectedNodeId || linking) return;
+        setLinking(true);
+
+        try {
+            const linkedDoc = markdowns.find((doc) => doc.linkedNodeId === selectedNodeId);
+            if (!linkedDoc) throw new Error("Document is not linked");
+
+            const { unlinkProjectDocAction } = await import("@/app/actions/project/doc");
+            const result = await unlinkProjectDocAction(projectId, linkedDoc.slug);
+
+            if (result.success) {
+                toast.success("File unlinked successfully");
+                await Promise.all([
+                    queryClient.invalidateQueries({ queryKey: PROJECT_MARKDOWNS_LIST_QUERY_KEY(projectId) }),
+                    queryClient.invalidateQueries({ queryKey: PROJECT_DOC_DRAFT_QUERY_KEY(projectId, linkedDoc.slug) }),
+                    queryClient.invalidateQueries({ queryKey: PROJECT_DOC_QUERY_KEY(projectId, linkedDoc.slug) })
+                ]);
+                setSelectedNodeId(null);
+                setSelectedFilename(null);
+            } else {
+                toast.error(result.error || "Failed to unlink file");
+            }
+        } catch (err) {
+            toast.error(err instanceof Error ? err.message : "An error occurred");
         } finally {
             setLinking(false);
         }
@@ -146,14 +174,10 @@ export function ProjectDocLinkDialog({
                                             status: isAlreadyLinked ? "Already Linked" : candidate.status,
                                         }}
                                         selected={selectedNodeId === candidate.id}
-                                        onSelect={
-                                            isAlreadyLinked
-                                                ? undefined
-                                                : () => {
-                                                      setSelectedNodeId(candidate.id);
-                                                      setSelectedFilename(candidate.title);
-                                                  }
-                                        }
+                                        onSelect={() => {
+                                            setSelectedNodeId(candidate.id);
+                                            setSelectedFilename(candidate.title);
+                                        }}
                                     />
                                 );
                             })
@@ -182,23 +206,39 @@ export function ProjectDocLinkDialog({
                 {/* Bottom actions tray */}
                 {selectedNodeId && (
                     <div className="mt-4 flex items-center justify-between border-t border-zinc-100 pt-4 dark:border-zinc-800 shrink-0">
-                        <div className="flex items-center gap-2 text-xs text-zinc-600 dark:text-zinc-400">
-                            <BookOpenText className="h-3.5 w-3.5 text-blue-500 dark:text-blue-400" />
-                            <span>This file is not linked to your project Documents.</span>
-                        </div>
-                        <button
-                            type="button"
-                            onClick={handleLink}
-                            disabled={linking}
-                            className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-blue-600 px-3 text-xs font-semibold text-white hover:bg-blue-500 transition-colors disabled:opacity-50 shrink-0"
-                        >
-                            {linking ? (
-                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            ) : (
-                                <Plus className="h-3.5 w-3.5" />
-                            )}
-                            <span>Link to Doc</span>
-                        </button>
+                        {markdowns.some((doc) => doc.linkedNodeId === selectedNodeId) ? (
+                            <>
+                                <div className="flex items-center gap-2 text-xs text-zinc-600 dark:text-zinc-400">
+                                    <BookOpenText className="h-3.5 w-3.5 text-amber-500 dark:text-amber-400" />
+                                    <span>This file is currently linked as a project Document.</span>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={handleUnlink}
+                                    disabled={linking}
+                                    className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-red-600 px-3 text-xs font-semibold text-white hover:bg-red-500 transition-colors disabled:opacity-50 shrink-0"
+                                >
+                                    {linking ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+                                    <span>Unlink Doc</span>
+                                </button>
+                            </>
+                        ) : (
+                            <>
+                                <div className="flex items-center gap-2 text-xs text-zinc-600 dark:text-zinc-400">
+                                    <BookOpenText className="h-3.5 w-3.5 text-blue-500 dark:text-blue-400" />
+                                    <span>This file is not linked to your project Documents.</span>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={handleLink}
+                                    disabled={linking}
+                                    className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-blue-600 px-3 text-xs font-semibold text-white hover:bg-blue-500 transition-colors disabled:opacity-50 shrink-0"
+                                >
+                                    {linking ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+                                    <span>Link to Doc</span>
+                                </button>
+                            </>
+                        )}
                     </div>
                 )}
             </DialogContent>
