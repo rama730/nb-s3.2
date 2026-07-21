@@ -1,8 +1,7 @@
 import { useMemo, useState } from "react";
 import type { ProjectAnalyticsContextFilters, ProjectAnalyticsTimelineEvent } from "@/lib/projects/analytics";
-import { useProjectAnalyticsMembers, useProjectAnalyticsTimeline } from "@/hooks/hub/useProjectAnalyticsData";
+import { useProjectAnalyticsTimeline } from "@/hooks/hub/useProjectAnalyticsData";
 import {
-    ANALYTICS_DATE_RANGE_OPTIONS,
     AnalyticsEmptyState,
     AnalyticsLoadingState,
     AnalyticsSectionHeader,
@@ -20,17 +19,6 @@ const EVENT_TYPES: Array<ProjectAnalyticsTimelineEvent["type"] | "all"> = [
     "workflow",
     "settings",
 ];
-
-const SOURCE_SURFACES = [
-    { id: "all", label: "All surfaces" },
-    { id: "tasks", label: "Tasks" },
-    { id: "sprints", label: "Sprints" },
-    { id: "files", label: "Files" },
-    { id: "members", label: "Members" },
-    { id: "applications", label: "Applications" },
-    { id: "workflow", label: "Workflow" },
-    { id: "settings", label: "Settings" },
-] as const;
 
 type TimelineGroupEntry =
     | { kind: "event"; event: ProjectAnalyticsTimelineEvent }
@@ -54,7 +42,12 @@ const compactTimelineEntries = (events: ProjectAnalyticsTimelineEvent[]): Timeli
             continue;
         }
         const key = event.actor?.id ?? "unknown";
-        fileGroups.set(key, [...(fileGroups.get(key) ?? []), event]);
+        const group = fileGroups.get(key);
+        if (group) {
+            group.push(event);
+        } else {
+            fileGroups.set(key, [event]);
+        }
     }
     const entries: TimelineGroupEntry[] = passthrough.map((event) => ({ kind: "event", event }));
     for (const [actorId, groupedEvents] of fileGroups.entries()) {
@@ -84,7 +77,12 @@ const groupTimelineByDay = (events: ProjectAnalyticsTimelineEvent[]) => {
     for (const event of events) {
         const date = new Date(event.occurredAt);
         const key = Number.isNaN(date.getTime()) ? "Unknown" : date.toDateString();
-        groups.set(key, [...(groups.get(key) ?? []), event]);
+        const group = groups.get(key);
+        if (group) {
+            group.push(event);
+        } else {
+            groups.set(key, [event]);
+        }
     }
     return [...groups.entries()].map(([id, groupEvents]) => {
         const firstDate = new Date(groupEvents[0]?.occurredAt ?? Date.now());
@@ -99,15 +97,12 @@ const groupTimelineByDay = (events: ProjectAnalyticsTimelineEvent[]) => {
 export function AnalyticsTimeline({
     projectId,
     context,
-    onContextChange,
 }: {
     projectId: string;
     context: ProjectAnalyticsContextFilters;
-    onContextChange: (context: ProjectAnalyticsContextFilters) => void;
 }) {
     const [type, setType] = useState<ProjectAnalyticsTimelineEvent["type"] | "all">("all");
     const [limit, setLimit] = useState(40);
-    const membersQuery = useProjectAnalyticsMembers(projectId);
     const dateFrom = useMemo(() => {
         if (context.dateRange === "all") return null;
         const days = context.dateRange === "7d" ? 7 : context.dateRange === "90d" ? 90 : 30;
@@ -126,7 +121,6 @@ export function AnalyticsTimeline({
     const timelineQuery = useProjectAnalyticsTimeline(projectId, filters);
     if (timelineQuery.isLoading) return <AnalyticsLoadingState label="Loading project timeline..." />;
     const timeline = timelineQuery.data;
-    const members = membersQuery.data ?? [];
     const grouped = groupTimelineByDay(timeline?.items ?? []);
 
     return (
