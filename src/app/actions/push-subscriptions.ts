@@ -1,6 +1,6 @@
 "use server";
 
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { pushSubscriptions } from "@/lib/db/schema";
@@ -107,30 +107,5 @@ export async function deletePushSubscriptionAction(endpoint: string) {
             error: error?.message || String(error),
         });
         return { success: false as const, error: "Failed to remove subscription" };
-    }
-}
-
-export async function touchPushSubscriptionAction(endpoint: string) {
-    try {
-        const supabase = await createClient();
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) return { success: false as const, error: "Unauthorized" };
-        if (typeof endpoint !== "string" || !endpoint) return { success: false as const, error: "Invalid endpoint" };
-
-        await db
-            .update(pushSubscriptions)
-            .set({ lastSeenAt: sql`now()`, failureCount: 0, updatedAt: sql`now()` })
-            .where(and(
-                eq(pushSubscriptions.userId, user.id),
-                eq(pushSubscriptions.endpoint, endpoint),
-            ));
-
-        return { success: true as const };
-    } catch (error: any) {
-        logger.error("push_subscriptions.touch_failed", {
-            module: "notifications",
-            error: error?.message || String(error),
-        });
-        return { success: false as const, error: "Failed to touch subscription" };
     }
 }
