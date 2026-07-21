@@ -1,4 +1,4 @@
-import type { ApplicationCoreStatus, ApplicationLifecycleStatus, ApplicationLifecycleStatusWithNone } from '@/lib/applications/status';
+import type { ApplicationCoreStatus, ApplicationLifecycleStatus } from '@/lib/applications/status';
 import type { ApplicationDecisionReasonCode } from '@/lib/applications/reasons';
 
 export type ApplicationActionErrorCode =
@@ -21,6 +21,8 @@ export type ApplicationActionErrorCode =
 export type ApplicationActionOptions = {
     idempotencyKey?: string | null;
     applicationTraceId?: string | null;
+    applyingProjectId?: string | null;
+    applyingProjectRole?: string | null;
 };
 
 export type ApplicationActionResult = {
@@ -38,7 +40,7 @@ export type ApplicationStatusResult = {
     roleId?: string;
     roleTitle?: string;
     decisionReason?: ApplicationDecisionReasonCode | null;
-    lifecycleStatus?: ApplicationLifecycleStatusWithNone;
+    lifecycleStatus?: ApplicationLifecycleStatus | 'none';
     canReapply?: boolean;
     waitTime?: string;
     updatedAt?: Date;
