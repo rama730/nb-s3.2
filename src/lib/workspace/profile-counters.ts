@@ -1,15 +1,15 @@
 import { sql } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { buildWorkspaceTaskCounterFilters, getWorkspaceCounterWindow } from '@/lib/workspace/counter-logic'
+import { isLooseUuid } from '@/lib/validations/uuid'
 
 type WorkspaceCounterExecutor = Pick<typeof db, 'execute'>
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 function normalizeUserIds(userIds: Array<string | null | undefined>) {
     return [...new Set(
         userIds
             .map((userId) => typeof userId === 'string' ? userId.trim() : '')
-            .filter((userId): userId is string => UUID_REGEX.test(userId)),
+            .filter((userId): userId is string => isLooseUuid(userId)),
     )]
 }
 
