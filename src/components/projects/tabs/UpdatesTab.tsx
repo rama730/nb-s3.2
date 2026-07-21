@@ -6,7 +6,6 @@ import { useRouter } from "next/navigation";
 import {
   useInfiniteQuery,
   useMutation,
-  useQuery,
   useQueryClient,
   type InfiniteData,
 } from "@tanstack/react-query";
@@ -20,10 +19,8 @@ import {
   MessageCircle,
   MoreHorizontal,
   PanelRightOpen,
-  Paperclip,
   Pin,
   Send,
-  Timer,
   Trash2,
   X,
 } from "lucide-react";
@@ -47,22 +44,19 @@ import {
 } from "@/app/actions/project";
 import { Button } from "@/components/ui/button";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Textarea } from "@/components/ui/textarea";
 import { UserAvatar } from "@/components/ui/UserAvatar";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { ProjectUpdateMediaFrame, isProjectUpdateVideoMedia } from "@/components/projects/updates/ProjectUpdateMediaFrame";
+import {
+  ProjectUpdateMediaFrame,
+  ProjectUpdateMediaViewer,
+  isProjectUpdateVideoMedia,
+} from "@/components/projects/updates/ProjectUpdateMediaFrame";
 import { createClient } from "@/lib/supabase/client";
 import { subscribeActiveResource } from "@/lib/realtime/subscriptions";
 import { queryKeys } from "@/lib/query-keys";
@@ -87,7 +81,7 @@ function referenceFallbackHref(reference: { kind: string; id: string }, projectI
   const id = encodeURIComponent(reference.id);
   const kind = normalizeUpdateReferenceLinkKind(reference.kind);
   if (kind === "task") return `/projects/${slug}?tab=tasks&drawerType=task&drawerId=${id}`;
-  if (kind === "sprint") return `/projects/${slug}/sprints/${id}`;
+  if (kind === "sprint") return `/projects/${slug}?tab=sprints&sprintId=${id}`;
   if (kind === "file") return `/projects/${slug}?tab=files&fileId=${id}`;
   return `/projects/${slug}?tab=updates`;
 }
@@ -188,66 +182,47 @@ type UpdatesTabProps = {
   canManageUpdates: boolean;
   initialUpdateId?: string | null;
   initialCommentId?: string | null;
-  initialUpdatesPage?: UpdatesPage | null;
 };
 
 import { ProjectUpdateComposer } from "../updates/ProjectUpdateComposer";
 
-function relativeTime(date: string) {
+const UPDATE_RELATIVE_TIME_UNITS = [
+  ["year", 365 * 24 * 60 * 60 * 1000],
+  ["month", 30 * 24 * 60 * 60 * 1000],
+  ["week", 7 * 24 * 60 * 60 * 1000],
+  ["day", 24 * 60 * 60 * 1000],
+  ["hour", 60 * 60 * 1000],
+  ["minute", 60 * 1000],
+] as const;
+
+const UPDATE_RELATIVE_TIME_FORMATTERS = {
+  narrow: new Intl.RelativeTimeFormat(undefined, { numeric: "auto", style: "narrow" }),
+  long: new Intl.RelativeTimeFormat(undefined, { numeric: "auto", style: "long" }),
+};
+
+function updateRelativeTime(date: string, style: keyof typeof UPDATE_RELATIVE_TIME_FORMATTERS = "narrow") {
   const value = new Date(date);
   const time = value.getTime();
   if (!Number.isFinite(time)) return "";
 
-  const now = new Date();
-  const delta = now.getTime() - time;
-  const minute = 60 * 1000;
-  const hour = 60 * minute;
-  const day = 24 * hour;
+  const now = Date.now();
+  const elapsed = time - now;
+  const delta = Math.abs(elapsed);
+  if (delta < 60 * 1000) return "Just now";
 
-  if (delta < minute) return "Just now";
-  if (delta < hour) return `${Math.floor(delta / minute)}m`;
-  if (delta < day) return `${Math.floor(delta / hour)}h`;
-
-  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  const startOfValue = new Date(value.getFullYear(), value.getMonth(), value.getDate()).getTime();
-  if (startOfToday - startOfValue === day) return "Yesterday";
-  if (delta < 7 * day) return `${Math.floor(delta / day)}d`;
-
-  return value.toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-    ...(value.getFullYear() === now.getFullYear() ? {} : { year: "numeric" }),
-  });
-}
-
-function updateShortcutTime(date: string) {
-  const value = new Date(date);
-  const time = value.getTime();
-  if (!Number.isFinite(time)) return "";
-
-  const delta = Date.now() - time;
-  const minute = 60 * 1000;
-  const hour = 60 * minute;
-  const day = 24 * hour;
-
-  if (delta < minute) return "Just now";
-  if (delta < hour) {
-    const minutes = Math.max(1, Math.floor(delta / minute));
-    return `${minutes} ${minutes === 1 ? "minute" : "minutes"} ago`;
-  }
-  if (delta < day) {
-    const hours = Math.max(1, Math.floor(delta / hour));
-    return `${hours} ${hours === 1 ? "hour" : "hours"} ago`;
-  }
-  if (delta < 7 * day) {
-    const days = Math.max(1, Math.floor(delta / day));
-    return `${days} ${days === 1 ? "day" : "days"} ago`;
+  for (const [unit, unitMs] of UPDATE_RELATIVE_TIME_UNITS) {
+    if (delta >= unitMs) {
+      return UPDATE_RELATIVE_TIME_FORMATTERS[style].format(
+        Math.round(elapsed / unitMs),
+        unit,
+      );
+    }
   }
 
   return value.toLocaleDateString(undefined, {
     month: "short",
     day: "numeric",
-    ...(value.getFullYear() === new Date().getFullYear() ? {} : { year: "numeric" }),
+    ...(value.getFullYear() === new Date(now).getFullYear() ? {} : { year: "numeric" }),
   });
 }
 
@@ -276,68 +251,36 @@ function updateContextItems(update: ProjectUpdateView): ProjectUpdateContextItem
   ].filter((item): item is ProjectUpdateContextItem => Boolean(item));
 }
 
-function UpdateContextIcon({ kind }: { kind: ProjectUpdateContextItem["kind"] }) {
-  if (kind === "task") return <FileText className="h-4 w-4" />;
-  if (kind === "sprint") return <Timer className="h-4 w-4" />;
-  return <Paperclip className="h-4 w-4" />;
-}
-
-function ProjectUpdateMediaViewer({
-  item,
-  onOpenChange,
+function ProjectUpdateContent({
+  content,
+  projectId,
+  projectSlug,
+  className,
 }: {
-  item: ProjectUpdateMediaItem | null;
-  onOpenChange: (open: boolean) => void;
+  content: string;
+  projectId: string;
+  projectSlug?: string | null;
+  className?: string;
 }) {
-  const src = item?.url ?? "";
-  const isVideo = item ? isProjectUpdateVideoMedia(item, src) : false;
-  const title = item?.label || item?.altText || "Project update media";
-
+  if (!content.trim()) return null;
   return (
-    <Dialog open={Boolean(item && src)} onOpenChange={onOpenChange}>
-      <DialogContent
-        className="max-h-[92vh] w-[min(94vw,1040px)] overflow-hidden border-zinc-800 bg-zinc-950 p-0 text-zinc-50 shadow-2xl sm:max-w-[min(94vw,1040px)]"
-        overlayClassName="bg-black/80"
-      >
-        <DialogTitle className="sr-only">{title}</DialogTitle>
-        <DialogDescription className="sr-only">
-          Project update media preview.
-        </DialogDescription>
-        <div className="flex max-h-[92vh] min-h-0 flex-col">
-          <div className="border-b border-white/10 px-4 py-3 pr-12">
-            <p className="truncate text-sm font-semibold text-white">{title}</p>
-            {item?.mimeType ? (
-              <p className="mt-0.5 text-xs text-zinc-400">{item.mimeType}</p>
-            ) : null}
-          </div>
-          <div className="flex min-h-0 flex-1 items-center justify-center bg-black p-3">
-            {isVideo ? (
-              <video
-                className="max-h-[78vh] max-w-full rounded-lg object-contain"
-                controls
-                playsInline
-                src={src}
-              />
-            ) : (
-              <img
-                src={src}
-                alt={item?.altText || item?.label || "Project update media"}
-                className="max-h-[78vh] max-w-full rounded-lg object-contain"
-                decoding="async"
-              />
-            )}
-          </div>
-        </div>
-      </DialogContent>
-    </Dialog>
+    <div className={className}>
+      {splitMarkdownByInlineReferences(content).map((segment, i) => {
+        if (segment.kind === "markdown") return <span key={i}>{segment.content}</span>;
+        return (
+          <ReferenceLink
+            key={i}
+            reference={segment.reference}
+            projectId={projectId}
+            projectSlug={projectSlug}
+          />
+        );
+      })}
+    </div>
   );
 }
 
 function UpdateContextAndMedia({ update }: { update: ProjectUpdateView }) {
-  // We no longer render structured context attachments (tasks, sprints, files)
-  // at the bottom of the update post since they already appear inline.
-  // UpdateContextIcon is kept to satisfy unit test constraints.
-  const _unused = UpdateContextIcon;
   const [viewerMedia, setViewerMedia] = useState<ProjectUpdateMediaItem | null>(null);
   const mediaItems = update.media.filter((item) => item.url || item.label);
 
@@ -759,7 +702,7 @@ function CommentRow({
                             </span>
                           )}
                           <span className="text-[12px] text-zinc-400 dark:text-zinc-500">
-                            · {relativeTime(c.createdAt)}
+                            · {updateRelativeTime(c.createdAt)}
                           </span>
                         </div>
 
@@ -1295,7 +1238,7 @@ function UpdateComments({
                         </span>
                       )}
                       <span className="text-[12px] text-zinc-400 dark:text-zinc-500">
-                        · {relativeTime(c.createdAt)}
+                        · {updateRelativeTime(c.createdAt)}
                       </span>
                     </div>
 
@@ -1780,7 +1723,7 @@ function UpdateCard({
       }}
       className={cn(
         "group border-b border-zinc-200 px-1 py-3 transition-colors dark:border-zinc-800",
-        !isEditing && "cursor-pointer hover:bg-zinc-50/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/60 dark:hover:bg-zinc-900/30",
+        !isEditing && "cursor-pointer hover:bg-zinc-50/70 focus-visible:outline-none    dark:hover:bg-zinc-900/30",
         highlighted && "bg-blue-50/70 dark:bg-blue-950/20",
       )}
     >
@@ -1833,7 +1776,7 @@ function UpdateCard({
                   </span>
                 ) : null}
                 <span className="text-sm text-zinc-400">
-                  · {relativeTime(update.createdAt)}
+                  · {updateRelativeTime(update.createdAt)}
                 </span>
                 {!isDeleted && update.editedAt ? (
                   <span className="text-xs leading-5 text-zinc-400">Edited</span>
@@ -1891,12 +1834,12 @@ function UpdateCard({
 
           {isEditing ? (
             <div className="mt-3">
-              <Textarea
+              <textarea
                 value={draft}
                 onChange={(event) =>
                   setDraft(event.target.value.slice(0, 2_000))
                 }
-                className="min-h-28 resize-none"
+                className="flex min-h-28 w-full resize-none rounded-md border border-input bg-transparent px-3 py-2 text-base shadow-xs outline-none transition-[color,box-shadow] placeholder:text-muted-foreground focus-visible:border-ring   disabled:cursor-not-allowed disabled:opacity-50 md:text-sm dark:bg-input/30"
               />
               <div className="mt-2 flex justify-end gap-2">
                 <Button
@@ -1924,21 +1867,12 @@ function UpdateCard({
               </div>
             </div>
           ) : update.content.trim() ? (
-            <div
+            <ProjectUpdateContent
+              content={update.content}
+              projectId={projectId}
+              projectSlug={projectSlug}
               className="mt-1 block w-full whitespace-pre-wrap break-words text-left text-[15px] leading-5 text-zinc-800 transition group-hover:text-zinc-950 dark:text-zinc-200 dark:group-hover:text-zinc-50"
-            >
-              {splitMarkdownByInlineReferences(update.content).map((segment, i) => {
-                  if (segment.kind === "markdown") return <span key={i}>{segment.content}</span>;
-                  return (
-                      <ReferenceLink
-                          key={i}
-                          reference={segment.reference}
-                          projectId={projectId}
-                          projectSlug={projectSlug}
-                      />
-                  );
-              })}
-            </div>
+            />
           ) : null}
 
           {!isDeleted ? (
@@ -2074,7 +2008,7 @@ function UpdatesRightRail({
                     {authorName}
                   </span>
                   {roleLabel ? <span> · {roleLabel}</span> : null}
-                  <span> · {updateShortcutTime(update.createdAt)}</span>
+                  <span> · {updateRelativeTime(update.createdAt, "long")}</span>
                 </span>
               </button>
             );
@@ -2137,7 +2071,7 @@ function UpdateDetailPanel({
             Threads
           </p>
           <p className="text-xs text-zinc-500">
-            {relativeTime(update.createdAt)}
+            {updateRelativeTime(update.createdAt)}
           </p>
         </div>
         <button
@@ -2194,19 +2128,12 @@ function UpdateDetailPanel({
               </div>
 
               {update.content.trim() ? (
-                <p className="mt-1 whitespace-pre-wrap break-words text-[15px] leading-5 text-zinc-800 dark:text-zinc-200">
-                  {splitMarkdownByInlineReferences(update.content).map((segment, i) => {
-                      if (segment.kind === "markdown") return <span key={i}>{segment.content}</span>;
-                      return (
-                          <ReferenceLink
-                              key={i}
-                              reference={segment.reference}
-                              projectId={projectId}
-                              projectSlug={projectSlug}
-                          />
-                      );
-                  })}
-                </p>
+                <ProjectUpdateContent
+                  content={update.content}
+                  projectId={projectId}
+                  projectSlug={projectSlug}
+                  className="mt-1 whitespace-pre-wrap break-words text-[15px] leading-5 text-zinc-800 dark:text-zinc-200"
+                />
               ) : null}
 
               {!isDeleted ? (
@@ -2256,7 +2183,6 @@ export default function UpdatesTab({
   canManageUpdates,
   initialUpdateId,
   initialCommentId,
-  initialUpdatesPage = null,
 }: UpdatesTabProps) {
   const queryClient = useQueryClient();
   const updatesQueryKey = queryKeys.project.detail.updates(projectId);
@@ -2273,9 +2199,6 @@ export default function UpdatesTab({
   const updatesQuery = useInfiniteQuery({
     queryKey: updatesQueryKey,
     initialPageParam: null as string | null,
-    initialData: initialUpdatesPage
-      ? { pages: [initialUpdatesPage], pageParams: [null] }
-      : undefined,
     queryFn: async ({ pageParam }) => {
       const result = await readProjectUpdatesAction(projectId, {
         cursor: pageParam,
