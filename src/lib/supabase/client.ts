@@ -14,6 +14,12 @@ export function createClient() {
     env.anonKey,
     {
       cookies: browserSessionCookieStore,
+      auth: {
+        persistSession: typeof window !== 'undefined' && window.self === window.top,
+        lock: async (name: string, acquireTimeout: number, acquire: () => Promise<any>) => {
+          return await acquire()
+        },
+      },
     }
   )
   return client;
