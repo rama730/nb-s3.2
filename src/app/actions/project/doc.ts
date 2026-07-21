@@ -24,6 +24,8 @@ import {
     fileVersions,
 } from "@/lib/db/schema";
 import { logger } from "@/lib/logger";
+import { toIsoString as toIso } from "@/lib/utils/date";
+import { isUuid } from "@/lib/validations/uuid";
 import { enqueueProjectNotificationEvent } from "@/lib/notifications/project-events";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { consumeRateLimit } from "@/lib/security/rate-limit";
@@ -64,7 +66,6 @@ import { parseProjectDocSmartBlocks } from "@/lib/projects/doc-blocks";
 const PUBLIC_PROJECT_DETAIL_SHELL_CACHE_TAG = "public-project-detail-shell";
 const PUBLIC_PROJECT_DETAIL_METADATA_CACHE_TAG = "public-project-detail-metadata";
 const PROJECT_DOC_ASSET_ROUTE_PREFIX = "/api/v1/projects";
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const profileDisplayNameSql = (userId: unknown) => sql<string | null>`(
     SELECT COALESCE(NULLIF(full_name, ''), NULLIF(username, ''))
     FROM profiles
@@ -142,11 +143,6 @@ const smartBlockPreviewSchema = z.array(z.object({
     index: z.number().int().min(0).optional(),
     raw: z.string().max(300).optional(),
 })).max(20);
-
-function toIso(value: Date | string | null | undefined) {
-    if (!value) return null;
-    return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
-}
 
 function normalizeStoredQualityReport(value: unknown, fallbackContent: string): ProjectDocQualityReport {
     if (value && typeof value === "object") {
@@ -254,7 +250,7 @@ async function getDocProjectContext(projectId: string, actorUserId: string | nul
         where: and(eq(projectMarkdowns.projectId, projectId), eq(projectMarkdowns.slug, docSlug)),
     });
     const settings = normalizeProjectDocSettings(readme?.settings);
-    const hasPublishedReadme = Boolean(readme?.publishedVersionId);
+    const hasPublishedReadme = Boolean(readme?.publishedVersionId) || Boolean(readme?.linkedNodeId);
     const permission = resolveProjectDocPermission({
         actorUserId,
         projectVisibility: project.visibility,
@@ -321,7 +317,7 @@ function projectTaskHref(project: { id: string; slug: string | null }, taskId: s
 }
 
 function projectSprintHref(project: { id: string; slug: string | null }, sprintId: string) {
-    return `/projects/${encodeURIComponent(project.slug || project.id)}/sprints/${encodeURIComponent(sprintId)}`;
+    return `/projects/${encodeURIComponent(project.slug || project.id)}?tab=sprints&sprintId=${encodeURIComponent(sprintId)}`;
 }
 
 function encodeProjectNodePath(row: { path: string | null; name: string }) {
@@ -495,7 +491,6 @@ function optionFromFile(row: typeof projectNodes.$inferSelect, project: { id: st
         subtitle: row.path || "/",
         status: fileType,
         meta: versions,
-        context: [fileType, versions].filter(Boolean).join(" · "),
         href: projectFileHref(project, row),
     };
 }
@@ -692,7 +687,7 @@ export async function readProjectDocAction(projectId: string, docSlug: string = 
                     s3Key: node.s3Key ?? "",
                 };
                 try {
-                    const content = await getProjectFileContent(projectId, node.id);
+                    const content = await getProjectFileContent(projectId, node.id, { skipFileTabCheck: true });
                     const metadata = buildProjectDocPublishMetadata(content);
                     versionRow = {
                         id: `linked-${node.id}`,
@@ -797,7 +792,7 @@ export async function readProjectDocDraftAction(projectId: string, docSlug: stri
                     s3Key: node.s3Key ?? "",
                 };
                 try {
-                    const fileContent = normalizeProjectDocContent(await getProjectFileContent(projectId, node.id));
+                    const fileContent = normalizeProjectDocContent(await getProjectFileContent(projectId, node.id, { skipFileTabCheck: true }));
                     const fileUpdatedAt = node.updatedAt ? new Date(node.updatedAt).getTime() : 0;
                     const currentDraftUpdatedAt = draftUpdatedAt ? new Date(draftUpdatedAt).getTime() : 0;
                     
@@ -923,7 +918,7 @@ export async function readProjectDocImportCandidatesAction(projectId: string, in
 
         const query = parsed.query?.trim() || "";
         const like = `%${query.replace(/[%_]/g, "\\$&")}%`;
-        const conditions = [eq(projectNodes.projectId, projectId), eq(projectNodes.type, "file"), isNull(projectNodes.deletedAt)];
+        const conditions = [eq(projectNodes.projectId, projectId), eq(projectNodes.type, "file"), isNull(projectNodes.deletedAt), isNull(projectNodes.taskId)];
         conditions.push(or(
             ilike(projectNodes.name, "%.md"),
             ilike(projectNodes.name, "%.mdx"),
@@ -947,13 +942,27 @@ export async function readProjectDocImportCandidatesAction(projectId: string, in
         )!);
         if (query) conditions.push(or(ilike(projectNodes.name, like), ilike(projectNodes.path, like))!);
 
+        const linkedDocs = await db
+            .select({ linkedNodeId: projectMarkdowns.linkedNodeId })
+            .from(projectMarkdowns)
+            .where(eq(projectMarkdowns.projectId, projectId));
+        const linkedNodeIds = new Set(linkedDocs.map((d) => d.linkedNodeId).filter(Boolean));
+
         const rows = await db.query.projectNodes.findMany({
             where: and(...conditions),
             orderBy: [desc(projectNodes.updatedAt)],
             limit: Math.max((parsed.limit ?? 12) * 3, 30),
         });
+
+        const seenPaths = new Set<string>();
         const candidates = rows
-            .filter(isDocImportCandidate)
+            .filter((row) => {
+                if (!isDocImportCandidate(row)) return false;
+                const pathKey = row.path || row.name;
+                if (seenPaths.has(pathKey)) return false;
+                seenPaths.add(pathKey);
+                return true;
+            })
             .slice(0, parsed.limit ?? 12)
             .map((row) => optionFromFile(row, context.project));
 
@@ -984,8 +993,6 @@ export async function importProjectDocFromFileAction(projectId: string, input: u
         const rawContent = await getProjectFileContent(projectId, parsed.nodeId);
         const content = normalizeProjectDocContent(rawContent);
         const readme = await getOrCreateMarkdown(projectId, userId, docSlug, context.settings);
-        const currentUpdatedAt = toIso(readme.draftUpdatedAt);
-
         let publishedVersion: ProjectDocVersion | null = null;
         let updatedDraftAt: string | null = null;
 
@@ -1318,8 +1325,6 @@ export async function publishProjectDocAction(projectId: string, input: unknown)
                 }
             }
 
-            const currentUpdatedAt = toIso(lockedReadme.draftUpdatedAt);
-
             const metadata = buildProjectDocPublishMetadata(parsed.content ?? lockedReadme.draftContent ?? "");
             
             const [latest] = await tx
@@ -1433,7 +1438,7 @@ export async function publishProjectDocAction(projectId: string, input: unknown)
             };
         });
 
-        const { version, metadata, coAuthors, lockedReadme, orphanedAssets, linkedNode } = published;
+        const { version, metadata, lockedReadme, orphanedAssets, linkedNode } = published;
         if (!lockedReadme) throw new Error("Document not found");
 
         // Dispatch background media asset cleanup
@@ -2016,7 +2021,7 @@ export async function readProjectDocSmartBlockPreviewsAction(projectId: string, 
 
         const normalizedBlocks = parsed.map((block, index) => ({
             kind: block.kind,
-            ids: (block.ids ?? []).filter((id) => UUID_RE.test(id)).slice(0, 12),
+            ids: (block.ids ?? []).filter((id) => isUuid(id)).slice(0, 12),
             index: block.index ?? index,
         }));
         const readableKinds = new Set<ProjectDocReferenceKind>();
