@@ -9,6 +9,7 @@ import {
 } from "@/lib/db/schema";
 import { resolvePrivacyRelationship } from "@/lib/privacy/resolver";
 import { MESSAGE_MEDIA_PREVIEW_MAX_WIDTH } from "@/lib/messages/media-metadata";
+import { resolveAttachmentStoragePath } from "@/lib/messages/attachment-storage-path";
 import {
   enforceRouteLimit,
   getRequestId,
@@ -32,26 +33,6 @@ function canServeInline(mimeType: string) {
     || mimeType === "application/pdf"
     || mimeType === "text/plain"
   );
-}
-
-function extractStoragePath(url: string | null | undefined) {
-  if (!url) return null;
-  try {
-    const parsed = new URL(url);
-    const markers = [
-      "/object/sign/chat-attachments/",
-      "/render/image/sign/chat-attachments/",
-    ];
-    for (const marker of markers) {
-      const markerIndex = parsed.pathname.indexOf(marker);
-      if (markerIndex < 0) continue;
-      const encodedPath = parsed.pathname.slice(markerIndex + marker.length);
-      return decodeURIComponent(encodedPath);
-    }
-  } catch {
-    // Ignore malformed legacy URLs.
-  }
-  return null;
 }
 
 export async function GET(
@@ -174,7 +155,10 @@ export async function GET(
     }
   }
 
-  const storagePath = attachment.storagePath || extractStoragePath(attachment.legacyUrl);
+  const storagePath = resolveAttachmentStoragePath({
+    storagePath: attachment.storagePath,
+    url: attachment.legacyUrl,
+  });
   if (!storagePath) {
     logApiRoute(request, {
       requestId,
