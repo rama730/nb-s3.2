@@ -12,7 +12,7 @@ async function ResolvedProviders({
 
   return (
     <AuthRouteProviders initialUser={user} initialProfile={null}>
-      <MainRuntimeProviders initialUser={user}>
+      <MainRuntimeProviders>
         <MainLayout>{children}</MainLayout>
       </MainRuntimeProviders>
     </AuthRouteProviders>
