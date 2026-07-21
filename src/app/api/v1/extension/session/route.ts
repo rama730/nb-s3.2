@@ -1,10 +1,13 @@
 import crypto from "crypto";
 import { and, eq, isNull } from "drizzle-orm";
-import { jsonError, jsonSuccess, getRequestIp } from "@/app/api/v1/_shared";
+import { enforceRouteLimit, jsonError, jsonSuccess, getRequestIp } from "@/app/api/v1/_shared";
 import { db } from "@/lib/db";
 import { extensionDeviceSessionEvents, extensionDeviceSessions } from "@/lib/db/schema";
 import { EXTENSION_DEVICE_SESSION_EVENTS } from "@/lib/extension/session-events";
 import { logger } from "@/lib/logger";
+
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
 function getBearerToken(request: Request) {
   const authHeader = request.headers.get("authorization")?.trim();
@@ -16,8 +19,44 @@ function getBearerToken(request: Request) {
   return token.startsWith("nb_dev_") ? token : null;
 }
 
+export async function GET(request: Request) {
+  const limitResponse = await enforceRouteLimit(request, "api:v1:extension:session:status", 60, 60);
+  if (limitResponse) return limitResponse;
+
+  const token = getBearerToken(request);
+  if (!token) {
+    return jsonError("Not authenticated", 401, "UNAUTHORIZED");
+  }
+
+  const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+  const session = await db.query.extensionDeviceSessions.findFirst({
+    where: eq(extensionDeviceSessions.tokenHash, tokenHash),
+    columns: {
+      id: true,
+      expiresAt: true,
+      revokedAt: true,
+    },
+  });
+  if (!session) {
+    return jsonError("Not authenticated", 401, "UNAUTHORIZED");
+  }
+
+  // ponytail: revoked tokens may read only their own liveness so the IDE can erase them after web-side disconnect.
+  return jsonSuccess(
+    {
+      sessionId: session.id,
+      active: !session.revokedAt && session.expiresAt.getTime() > Date.now(),
+    },
+    undefined,
+    { headers: { "Cache-Control": "no-store" } },
+  );
+}
+
 export async function POST(request: Request) {
   try {
+    const limitResponse = await enforceRouteLimit(request, "api:v1:extension:session:revoke", 30, 60);
+    if (limitResponse) return limitResponse;
+
     const token = getBearerToken(request);
     if (!token) {
       return jsonError("Not authenticated", 401, "UNAUTHORIZED");
@@ -38,7 +77,7 @@ export async function POST(request: Request) {
 
     const now = new Date();
     await db.transaction(async (tx) => {
-      await tx
+      const [revoked] = await tx
         .update(extensionDeviceSessions)
         .set({
           revokedAt: now,
@@ -49,7 +88,10 @@ export async function POST(request: Request) {
             eq(extensionDeviceSessions.id, session.id),
             isNull(extensionDeviceSessions.revokedAt),
           ),
-        );
+        )
+        .returning({ id: extensionDeviceSessions.id });
+
+      if (!revoked) return;
 
       await tx.insert(extensionDeviceSessionEvents).values({
         sessionId: session.id,
