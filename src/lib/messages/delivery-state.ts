@@ -61,34 +61,6 @@ export function getDeliveryStateFromMetadata(
         : null;
 }
 
-export function getDeliveryCountsFromMetadata(
-    metadata: DeliveryMetadata,
-): DeliveryCounts | null {
-    if (!metadata || typeof metadata !== 'object') {
-        return null;
-    }
-
-    const counts = metadata.deliveryCounts;
-    if (!counts || typeof counts !== 'object') {
-        return null;
-    }
-
-    const typedCounts = counts as {
-        total?: number;
-        delivered?: number;
-        read?: number;
-    };
-    const total = typeof typedCounts.total === 'number' ? typedCounts.total : null;
-    const delivered = typeof typedCounts.delivered === 'number' ? typedCounts.delivered : null;
-    const read = typeof typedCounts.read === 'number' ? typedCounts.read : null;
-
-    if (total === null || delivered === null || read === null) {
-        return null;
-    }
-
-    return { total, delivered, read };
-}
-
 export function getLastMessageDeliveryState(
     lastMessage: { metadata?: DeliveryMetadata } | null | undefined,
 ) {
