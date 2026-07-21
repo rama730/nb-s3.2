@@ -1,5 +1,6 @@
 "use client";
 
+import { toast } from "sonner";
 /**
  * Version-history side drawer for a single file node.
  *
@@ -34,7 +35,6 @@ import {
   DialogDescription,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { useToast } from "@/components/ui-custom/Toast";
 import { cn } from "@/lib/utils";
 import type { FileVersion, ProjectNode } from "@/lib/db/schema";
 import {
@@ -94,7 +94,6 @@ export function FileVersionHistoryDrawer({
   uploaderNames,
   onRestored,
 }: FileVersionHistoryDrawerProps) {
-  const { showToast } = useToast();
   const [state, setState] = useState<State>({ kind: "idle" });
   const [pendingAction, setPendingAction] = useState<string | null>(null);
 
@@ -147,12 +146,12 @@ export function FileVersionHistoryDrawer({
       } catch (error) {
         const message =
           error instanceof Error ? error.message : "Download failed";
-        showToast(message, "error");
+        toast.error(message);
       } finally {
         setPendingAction(null);
       }
     },
-    [node.id, node.name, projectId, showToast],
+    [node.id, node.name, projectId],
   );
 
   const handleRestore = useCallback(
@@ -166,21 +165,18 @@ export function FileVersionHistoryDrawer({
           node.id,
           version.version,
         );
-        showToast(
-          `Restored v${version.version} as v${result.version.version}`,
-          "success",
-        );
+        toast.success(`Restored v${version.version} as v${result.version.version}`);
         onRestored?.(result.version);
         await refresh();
       } catch (error) {
         const message =
           error instanceof Error ? error.message : "Restore failed";
-        showToast(message, "error");
+        toast.error(message);
       } finally {
         setPendingAction(null);
       }
     },
-    [canEdit, node.id, onRestored, projectId, refresh, showToast],
+    [canEdit, node.id, onRestored, projectId, refresh],
   );
 
   const uploaderLabel = useCallback(
