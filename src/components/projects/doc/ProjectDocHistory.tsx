@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { CheckCircle2, GitCompareArrows, RotateCcw, Trash2, Users } from "lucide-react";
+import { CheckCircle2, GitCompareArrows, RotateCcw, Trash2 } from "lucide-react";
 
 import type { ProjectDocVersion } from "@/lib/projects/doc";
 import { cn } from "@/lib/utils";
