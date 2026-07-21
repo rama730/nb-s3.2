@@ -1,10 +1,10 @@
 "use client";
 
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { RangeSetBuilder, type Extension } from "@codemirror/state";
 import { Decoration, EditorView, keymap, ViewPlugin, type DecorationSet, type ViewUpdate, WidgetType } from "@codemirror/view";
 import dynamic from "next/dynamic";
-import { AlertTriangle, ArrowLeft, CheckCircle2, Eye, Github, Keyboard, Link, Loader2, Monitor, Save, Send, ShieldAlert, Smartphone, Tablet, X } from "lucide-react";
+import { ArrowLeft, Eye, Github, Keyboard, Link, Loader2, Monitor, Save, Send, ShieldAlert, Smartphone, Tablet } from "lucide-react";
 import { ProjectDocQualityPanel } from "./ProjectDocQualityPanel";
 import { ProjectDocConflictResolver } from "./ProjectDocConflictResolver";
 import { evaluateProjectDocQuality } from "@/lib/projects/doc-quality";
@@ -22,7 +22,7 @@ import {
     type ProjectDocHeading,
 } from "@/lib/projects/doc";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import Button from "@/components/ui-custom/Button";
+import { Button } from "@/components/ui/button";
 import CodeEditor from "@/components/projects/v2/editor/CodeEditor";
 import { ProjectDocWysiwygEditor } from "@/components/projects/doc/ProjectDocWysiwygEditor";
 import {
@@ -38,8 +38,6 @@ import {
     useProjectDocEditorStore,
     type LiveReviewSize,
     type CursorRange,
-    type PreviewRevealTarget,
-    type SourceHighlightTarget,
 } from "@/components/projects/doc/useProjectDocEditorStore";
 import type { Project } from "@/types/hub";
 import {
@@ -522,7 +520,7 @@ export function ProjectDocEditor({
     // Yjs CRDT collaboration is configured and active during editing mode.
     const collaborationConfigured = Boolean(process.env.NEXT_PUBLIC_YJS_WEBSOCKET_URL?.trim());
     const collaborationEnabled = collaborationConfigured;
-    const { ydoc, provider, status: yjsStatus, synced, roomFull: initialRoomFull } = useDocCollaboration(project.id, normalizedDocSlug, currentUserId, currentUserName, collaborationEnabled);
+    const { ydoc, provider, status: yjsStatus, synced } = useDocCollaboration(project.id, normalizedDocSlug, currentUserId, currentUserName, collaborationEnabled);
     const [roomFull, setRoomFull] = useState(false);
     const [pendingPromotionActive, setPendingPromotionActive] = useState(false);
     const [promotionCountdown, setPromotionCountdown] = useState(10);
@@ -910,7 +908,7 @@ export function ProjectDocEditor({
                 setContent(repairCollaborativeContent(ytextContent), { isRemote: true });
             }
         }
-        const observer = (event: any, transaction: any) => {
+        const observer = (_event: any, transaction: any) => {
             if (transaction?.origin === 'local-collaboration-repair') return;
             const isLocal = transaction?.local ?? true;
             const nextContent = repairCollaborativeContent(ytext.toString());
@@ -1056,13 +1054,13 @@ export function ProjectDocEditor({
         [handleSlashCommand],
     );
 
-    const { complete, completion, isLoading: isCompletionLoading } = useCompletion({
+    const { complete } = useCompletion({
         api: '/api/completion',
-        onFinish: (prompt, completion) => {
+        onFinish: (_prompt, completion) => {
             insertAtCursor(completion);
             setLocalNotice("AI Autocomplete finished.");
         },
-        onError: (err) => {
+        onError: () => {
             setLocalNotice("AI Autocomplete failed.");
         }
     });
@@ -1224,12 +1222,6 @@ export function ProjectDocEditor({
         setLocalNotice("Files inserted");
     }, [insertAtCursor, project.id, setLocalNotice]);
 
-    const handleApplyMergedContent = useCallback((nextContent: string) => {
-        updateDocumentContent(nextContent);
-        applyMergedContent(nextContent);
-        focusEditorRange(0);
-    }, [applyMergedContent, focusEditorRange, updateDocumentContent]);
-
     useEffect(() => {
         if (!dirty && !conflict) return undefined;
         const handleBeforeUnload = (event: BeforeUnloadEvent) => {
@@ -1317,14 +1309,6 @@ export function ProjectDocEditor({
             previewScrollFrameRef.current = null;
         };
     }, [previewRevealTarget]);
-
-    const saveStatus = saveState === "saving" || saving || isPending
-        ? { label: "Saving", className: "text-amber-600 dark:text-amber-300" }
-        : saveState === "conflict"
-            ? { label: "Conflict", className: "text-red-600 dark:text-red-300" }
-            : saveState === "dirty"
-                ? { label: "Unsaved", className: "text-blue-600 dark:text-blue-300" }
-                : { label: formatSavedAt(lastSavedAt, nowTick), className: "text-emerald-600 dark:text-emerald-300" };
 
     const panelCopy = activePanel === "style"
         ? { title: "Choose style", description: "Start from a portable document structure that matches the project type." }
@@ -1761,7 +1745,7 @@ export function ProjectDocEditor({
                         <Button type="button" variant="ghost" onClick={() => setShowDiscardConfirm(false)} disabled={discarding}>
                             Keep Editing
                         </Button>
-                        <Button type="button" variant="danger" onClick={handleDiscardConfirm} disabled={discarding}>
+                        <Button type="button" variant="destructive" onClick={handleDiscardConfirm} disabled={discarding}>
                             Discard
                         </Button>
                     </DialogFooter>
