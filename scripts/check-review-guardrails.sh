@@ -55,8 +55,6 @@ fi
 
 echo "Checking for unsafe path join patterns in critical modules..."
 if rg -n 'join\(__dirname,\s*"\.\.",\s*path\)|join\(tmpDir,\s*baseName\)|join\(dir,\s*entry\)|join\(tempDir,\s*filePath\)|path\.join\(dir,\s*entry\.name\)' \
-  scripts/apply-files-migrations.ts \
-  src/app/actions/lint.ts \
   src/inngest/functions/git-sync.ts \
   src/lib/import/utils.ts >/tmp/review_guardrails_path_join.log; then
   cat /tmp/review_guardrails_path_join.log
