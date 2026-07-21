@@ -3,8 +3,8 @@ import "server-only";
 import { and, eq, isNull } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { projectNodes } from "@/lib/db/schema/domains/files";
-import { tasks } from "@/lib/db/schema/domains/projects";
+import { projectNodes, tasks } from "@/lib/db/schema";
+import { isLooseUuid } from "@/lib/validations/uuid";
 
 export async function readProjectFileMetadataTitle(
   projectId: string,
@@ -35,7 +35,7 @@ export async function readProjectTaskMetadataTitle(
   projectId: string,
   drawerId: string,
 ): Promise<string | null> {
-  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(drawerId);
+  const isUuid = isLooseUuid(drawerId);
   const taskNumber = isUuid ? null : parseTaskNumberFromDrawerId(drawerId);
   if (!isUuid && taskNumber === null) return null;
 
