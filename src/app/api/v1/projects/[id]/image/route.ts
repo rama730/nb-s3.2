@@ -7,11 +7,10 @@ import { getProjectAccessById } from "@/lib/data/project-access";
 import { logger } from "@/lib/logger";
 import { createAdminClient, createClient } from "@/lib/supabase/server";
 import { enforceRouteLimit, fetchWithBoundedRetry, jsonError } from "@/app/api/v1/_shared";
+import { isLooseUuid } from "@/lib/validations/uuid";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function GET(
     request: NextRequest,
@@ -21,7 +20,7 @@ export async function GET(
     if (limitResponse) return limitResponse;
 
     const { id: projectId } = await context.params;
-    if (!UUID_RE.test(projectId)) {
+    if (!isLooseUuid(projectId)) {
         return jsonError("Not found", 404, "NOT_FOUND");
     }
 
