@@ -111,7 +111,7 @@ export function NotificationBundleRow(props: { bundle: NotificationBundle } & Ha
                     type="button"
                     onClick={() => void handleOpenLead()}
                     disabled={!lead.href}
-                    className="flex min-w-0 flex-1 items-start gap-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-default"
+                    className="flex min-w-0 flex-1 items-start gap-3 text-left focus-visible:outline-none   disabled:cursor-default"
                 >
                     <div className="relative mt-0.5 shrink-0">
                         {lead.preview?.actorAvatarUrl ? (
