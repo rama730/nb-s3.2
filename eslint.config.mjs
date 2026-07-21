@@ -27,7 +27,6 @@ const eslintConfig = defineConfig([
   {
     files: [
       "src/app/actions/files.ts",
-      "src/app/actions/runner.ts",
       "src/components/projects/intelligence/ProjectIntelligenceProvider.tsx",
       "src/components/projects/v2/FileEditor.tsx",
       "src/components/projects/v2/FileTreePicker.tsx",
@@ -48,7 +47,6 @@ const eslintConfig = defineConfig([
       "src/app/actions/messaging.ts",
       "src/hooks/useChatRealtime.ts",
       "src/hooks/useConnections.ts",
-      "src/hooks/useConnectionsData.ts",
       "src/hooks/useMessagesData.ts",
       "src/hooks/useTypingChannel.ts",
       "src/lib/runner/**/*.ts",
