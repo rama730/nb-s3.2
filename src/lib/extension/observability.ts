@@ -17,6 +17,8 @@ type ExtensionMetricPayload = {
   sizeBytes?: number | null;
   count?: number | null;
   chunkCount?: number | null;
+  revisionMode?: "new_revision" | "active_revision" | null;
+  versionIncremented?: boolean | null;
 };
 
 export function recordExtensionMetric(metric: string, payload: ExtensionMetricPayload) {
