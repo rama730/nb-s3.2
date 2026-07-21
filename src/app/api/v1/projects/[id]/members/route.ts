@@ -31,14 +31,13 @@ import { db } from "@/lib/db";
 import { profiles, projectMembers, projects } from "@/lib/db/schema";
 import { getProjectAccessById } from "@/lib/data/project-access";
 import { isProjectMemberEligibleFor } from "@/lib/projects/collaborator-lifecycle";
+import { isLooseUuid } from "@/lib/validations/uuid";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const MAX_RESULTS = 10;
 const MAX_QUERY_LENGTH = 64;
-const UUID_RE =
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface ProjectMemberSearchResult {
     id: string;
@@ -86,7 +85,7 @@ export async function GET(
 
     const params = await context.params;
     const projectId = params.id;
-    if (!UUID_RE.test(projectId)) {
+    if (!isLooseUuid(projectId)) {
         return jsonError("Invalid project id", 400, "BAD_REQUEST");
     }
 
