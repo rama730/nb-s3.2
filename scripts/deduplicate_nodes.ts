@@ -55,6 +55,19 @@ async function deduplicate() {
             console.log(`Found ${count} duplicate nodes to discard.`);
 
             if (parseInt(count, 10) > 0) {
+                const activeLeaseCountResult = await tx`
+                    SELECT COUNT(*)
+                    FROM project_node_locks
+                    WHERE node_id IN (SELECT id FROM nodes_to_discard)
+                      AND expires_at > NOW();
+                `;
+                const activeLeaseCount = parseInt(activeLeaseCountResult[0]?.count ?? "0", 10);
+                if (activeLeaseCount > 0) {
+                    throw new Error(
+                        `Deduplication aborted: ${activeLeaseCount} duplicate node(s) have active editing leases.`
+                    );
+                }
+
                 // 3. Delete file_versions of discarded nodes
                 console.log("Step 3: Deleting duplicate file_versions...");
                 await tx`
@@ -66,7 +79,8 @@ async function deduplicate() {
                 console.log("Step 4: Deleting locks of duplicate nodes...");
                 await tx`
                     DELETE FROM project_node_locks 
-                    WHERE node_id IN (SELECT id FROM nodes_to_discard);
+                    WHERE node_id IN (SELECT id FROM nodes_to_discard)
+                      AND expires_at <= NOW();
                 `;
 
                 // 5. Update events to point to kept nodes
