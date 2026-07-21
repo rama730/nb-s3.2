@@ -1,6 +1,6 @@
 import PeopleHubClient from '@/components/people/PeopleHubClient'
 import { Suspense } from 'react'
-import { getMyApplicationsAction, getIncomingApplicationsAction } from '@/app/actions/applications'
+import { getPeopleApplications } from '@/app/actions/people-applications'
 import { isHardeningDomainEnabled } from '@/lib/features/hardening'
 import { getViewerAuthContext } from '@/lib/server/viewer-context'
 import { buildRouteMetadata } from '@/lib/metadata/route-metadata'
@@ -29,25 +29,18 @@ async function ResolvedPeople({
         ? resolvedSearchParams.tab.toLowerCase()
         : '';
 
-    // Only prefetch heavy request/applications payload when Requests tab is explicitly requested.
     const shouldPrefetchApplications = !!user && tabParam === 'requests' && peopleHardeningEnabled;
-    const [myAppRes, incomingAppRes] = shouldPrefetchApplications
-        ? await Promise.all([
-            getMyApplicationsAction({ limit: 12 }),
-            getIncomingApplicationsAction({ limit: 12 }),
-        ])
-        : [{ applications: [] }, { applications: [] }];
+    const applications = shouldPrefetchApplications ? await getPeopleApplications(12) : null;
     
     const initialApplications = {
-        my: myAppRes.applications || [],
-        incoming: incomingAppRes.applications || []
+        my: applications?.success ? applications.my : [],
+        incoming: applications?.success ? applications.incoming : []
     };
 
     return (
         <PeopleHubClient
             initialUser={user ? { id: user.id } : null}
             initialApplications={initialApplications}
-            // Other heavy lists (profiles, connections) remain lazy loaded for TTFB
         />
     )
 }
