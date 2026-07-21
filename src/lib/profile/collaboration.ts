@@ -1,16 +1,21 @@
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, isNull, lt, sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import {
   profileCollaborationSummaries,
+  profileContributionSkills,
   profileProjectContributionStages,
   profileProjectContributions,
   profiles,
   projects,
   roleApplications,
+  skills,
 } from "@/lib/db/schema";
 import { logger } from "@/lib/logger";
 import { normalizeProjectDescription, normalizeProjectTitle, trimDisplayText, trimOptionalDisplayText } from "@/lib/profile/display";
+import { syncContributionSkills } from "@/lib/skills/service";
+import { formatProjectTeamRole } from "@/lib/projects/settings-policies";
+import { runInFlightDeduped } from "@/lib/utils/inflight-dedupe";
 
 type DbExecutor = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -42,6 +47,7 @@ export type ProfileCollaborationProject = {
   followersCount: number | null;
   category: string | null;
   visibility: string | null;
+  contributionVisibility: "public" | "private";
   status: string | null;
   skills: string[];
   tags: string[];
@@ -63,17 +69,17 @@ export type ProfileCollaborationRoleStage = {
   source: string;
   verified: boolean;
   verifiedAt: string | null;
-  visibility: "public" | "private";
-  manualOverride: boolean;
-  statusLabel: string;
 };
 
 export type ProfileCollaborationContribution = {
   id: string;
   projectId: string | null;
+  externalKey?: string | null;
+  version?: number;
   title: string;
   projectTitle: string;
   projectHref: string | null;
+  projectUrl?: string | null;
   repoUrl: string | null;
   description: string | null;
   startDate: string | null;
@@ -84,8 +90,6 @@ export type ProfileCollaborationContribution = {
   verified: boolean;
   roleKind?: string;
   roleStages?: ProfileCollaborationRoleStage[];
-  stageCount?: number;
-  statusLabel?: string;
   visibility?: "public" | "private";
 };
 
@@ -93,7 +97,6 @@ export type ProfileCollaborationSummary = {
   version: number;
   generatedAt: string;
   projects: ProfileCollaborationProject[];
-  featuredProjects: ProfileCollaborationProject[];
   contributions: ProfileCollaborationContribution[];
   stats: {
     projectsCount: number;
@@ -137,21 +140,49 @@ type ProfileProjectRow = {
   contribution_source: string | null;
   accepted_role_title: string | null;
   contribution_role_title: string | null;
+  lead_focus: string | null;
   contribution_summary: string | null;
   contribution_skills: unknown;
   member_previews: unknown;
+  total_count: number | string;
+};
+
+type ProfileContributionRow = {
+  contribution_id: string;
+  project_id: string | null;
+  external_key: string | null;
+  version: number | string;
+  project_title_override: string | null;
+  project_url: string | null;
+  repository_url: string | null;
+  project_title: string | null;
+  project_slug: string | null;
+  project_visibility: string | null;
+  project_status: string | null;
+  project_owner_id: string | null;
+  membership_role: string | null;
+  accepted_role_title: string | null;
+  lead_focus: string | null;
+  role_kind: string;
+  role_title: string | null;
+  summary: string | null;
+  canonical_skills: unknown;
+  started_at: Date | string | null;
+  ended_at: Date | string | null;
+  source: string;
+  verified_at: Date | string | null;
+  visibility: "public" | "private";
   role_stages: unknown;
   total_count: number | string;
 };
 
-const SUMMARY_VERSION = 2;
+const SUMMARY_VERSION = 5;
 const SUMMARY_TTL_MS = 10 * 60 * 1000;
 const DEFAULT_LIMIT = 12;
 const EMPTY_SUMMARY: ProfileCollaborationSummary = {
   version: SUMMARY_VERSION,
   generatedAt: "",
   projects: [],
-  featuredProjects: [],
   contributions: [],
   stats: {
     projectsCount: 0,
@@ -239,12 +270,16 @@ function memberPreviews(value: unknown): ProfileCollaborationMemberPreview[] {
 }
 
 function roleLabel(row: ProfileProjectRow) {
-  const specificRole = trimDisplayText(row.contribution_role_title) || trimDisplayText(row.accepted_role_title);
   const roleKind = trimDisplayText(row.user_role) || (row.owner_id ? "member" : "contributor");
-  if (roleKind === "owner") return specificRole ? `${specificRole} - Lead` : "Lead";
-  if (roleKind === "admin") return specificRole ? `${specificRole} - Co-lead` : "Co-lead";
-  if (specificRole) return specificRole;
-  return defaultRoleTitle(roleKind);
+  const projectRoleTitle = trimDisplayText(row.contribution_role_title) || trimDisplayText(row.accepted_role_title);
+  if (!['owner', 'admin', 'member', 'viewer'].includes(roleKind)) {
+    return projectRoleTitle || defaultRoleTitle(roleKind);
+  }
+  return formatProjectTeamRole({
+    membershipRole: roleKind,
+    projectRoleTitle,
+    leadFocus: row.lead_focus,
+  });
 }
 
 function roleStageFromObject(stage: Record<string, unknown>, fallbackContributionId: string | null): ProfileCollaborationRoleStage | null {
@@ -254,7 +289,6 @@ function roleStageFromObject(stage: Record<string, unknown>, fallbackContributio
   if (!id && !roleTitle) return null;
   const endedAt = toIsoDate((stage.endedAt ?? stage.ended_at) as Date | string | null | undefined);
   const verifiedAt = toIsoDate((stage.verifiedAt ?? stage.verified_at) as Date | string | null | undefined);
-  const visibility = trimDisplayText(stage.visibility) === "private" ? "private" : "public";
   const currentlyActive = !endedAt;
   return {
     id: id || `${fallbackContributionId ?? "manual"}:${roleTitle}`,
@@ -262,7 +296,9 @@ function roleStageFromObject(stage: Record<string, unknown>, fallbackContributio
     roleKind,
     roleTitle,
     summary: trimOptionalDisplayText(stage.summary),
-    skills: stringArray(stage.skills),
+    // Stage-specific JSON skills are retired. The normalized contribution edge
+    // is applied after parsing so one relational source drives every stage.
+    skills: [],
     startDate: toShortDate((stage.startedAt ?? stage.started_at) as Date | string | null | undefined),
     endDate: toShortDate((stage.endedAt ?? stage.ended_at) as Date | string | null | undefined),
     startedAt: toIsoDate((stage.startedAt ?? stage.started_at) as Date | string | null | undefined),
@@ -271,9 +307,6 @@ function roleStageFromObject(stage: Record<string, unknown>, fallbackContributio
     source: trimDisplayText(stage.source) || "membership",
     verified: Boolean(verifiedAt),
     verifiedAt,
-    visibility,
-    manualOverride: Boolean(stage.manualOverride ?? stage.manual_override),
-    statusLabel: currentlyActive ? "Current" : "Past role",
   };
 }
 
@@ -313,6 +346,7 @@ function projectFromRow(row: ProfileProjectRow): ProfileCollaborationProject {
     followersCount: numberOrNull(row.followers_count),
     category: trimOptionalDisplayText(row.category),
     visibility: trimOptionalDisplayText(row.visibility),
+    contributionVisibility: row.contribution_visibility === "private" ? "private" : "public",
     status: trimOptionalDisplayText(row.status),
     skills: stringArray(row.contribution_skills).length ? stringArray(row.contribution_skills) : stringArray(row.skills),
     tags: stringArray(row.tags),
@@ -320,108 +354,69 @@ function projectFromRow(row: ProfileProjectRow): ProfileCollaborationProject {
   };
 }
 
-function manualContributionFromExperience(entry: Record<string, unknown>, index: number): ProfileCollaborationContribution | null {
-  const projectTitle = trimDisplayText(entry.company) || trimDisplayText(entry.projectTitle) || trimDisplayText(entry.name);
-  const title = trimDisplayText(entry.title) || "Contributor";
-  if (!projectTitle && !title) return null;
-  return {
-    id: trimDisplayText(entry.id) || `manual:${index}`,
-    projectId: trimOptionalDisplayText(entry.projectId),
-    title,
-    projectTitle: projectTitle || "External project",
-    projectHref: trimOptionalDisplayText(entry.projectUrl || entry.link),
-    repoUrl: trimOptionalDisplayText(entry.repoUrl),
-    description: trimOptionalDisplayText(entry.description),
-    startDate: trimOptionalDisplayText(entry.startDate),
-    endDate: trimOptionalDisplayText(entry.endDate),
-    currentlyActive: Boolean(entry.currentlyActive),
-    skills: stringArray(entry.techTags),
-    source: "manual",
-    verified: false,
-    roleKind: "contributor",
-    roleStages: [{
-      id: trimDisplayText(entry.id) || `manual:${index}:stage`,
-      contributionId: null,
-      roleKind: "contributor",
-      roleTitle: title,
-      summary: trimOptionalDisplayText(entry.description),
-      skills: stringArray(entry.techTags),
-      startDate: trimOptionalDisplayText(entry.startDate),
-      endDate: trimOptionalDisplayText(entry.endDate),
-      startedAt: trimOptionalDisplayText(entry.startDate),
-      endedAt: trimOptionalDisplayText(entry.endDate),
-      currentlyActive: Boolean(entry.currentlyActive),
-      source: "manual",
-      verified: false,
-      verifiedAt: null,
-      visibility: "public",
-      manualOverride: true,
-      statusLabel: Boolean(entry.currentlyActive) ? "Current" : "Past role",
-    }],
-    stageCount: 1,
-    statusLabel: Boolean(entry.currentlyActive) ? "Current" : "Past project",
-    visibility: "public",
-  };
+function contributionRoleLabel(row: ProfileContributionRow) {
+  if (!row.project_id) return trimDisplayText(row.role_title) || "Contributor";
+  const membershipRole = trimDisplayText(row.membership_role) || trimDisplayText(row.role_kind) || "member";
+  const projectRoleTitle = trimOptionalDisplayText(row.role_title) ?? trimOptionalDisplayText(row.accepted_role_title);
+  if (!["owner", "admin", "member", "viewer"].includes(membershipRole)) {
+    return projectRoleTitle || defaultRoleTitle(membershipRole);
+  }
+  return formatProjectTeamRole({ membershipRole, projectRoleTitle, leadFocus: row.lead_focus });
 }
 
-function contributionFromProject(project: ProfileCollaborationProject, row: ProfileProjectRow, manual?: ProfileCollaborationContribution | null): ProfileCollaborationContribution {
-  const stages = roleStages(row.role_stages, row.contribution_id);
+function contributionFromRow(row: ProfileContributionRow): ProfileCollaborationContribution {
+  const visibility: "public" | "private" = row.visibility === "private" ? "private" : "public";
+  const contributionSkills = stringArray(row.canonical_skills);
+  const formattedRole = contributionRoleLabel(row);
+  const stages = roleStages(row.role_stages, row.contribution_id).map((stage) => ({
+    ...stage,
+    skills: contributionSkills,
+  }));
   const fallbackStage: ProfileCollaborationRoleStage = {
-    id: row.contribution_id ? `${row.contribution_id}:current` : `verified:${project.id}:current`,
+    id: `${row.contribution_id}:current`,
     contributionId: row.contribution_id,
-    roleKind: project.roleKind,
-    roleTitle: manual?.title && manual.title !== "Contributor" ? manual.title : project.userRole,
-    summary: trimOptionalDisplayText(row.contribution_summary) ?? manual?.description ?? null,
-    skills: manual?.skills.length ? manual.skills : project.skills,
-    startDate: manual?.startDate ?? toShortDate(row.contribution_started_at) ?? toShortDate(row.joined_at) ?? toShortDate(row.created_at),
-    endDate: manual?.endDate ?? toShortDate(row.contribution_ended_at),
-    startedAt: toIsoDate(row.contribution_started_at) ?? toIsoDate(row.joined_at) ?? toIsoDate(row.created_at),
-    endedAt: toIsoDate(row.contribution_ended_at),
-    currentlyActive: !row.contribution_ended_at,
-    source: trimDisplayText(row.accepted_role_title) ? "application" : "membership",
-    verified: true,
-    verifiedAt: null,
-    visibility: row.contribution_visibility === "private" ? "private" : "public",
-    manualOverride: false,
-    statusLabel: row.contribution_ended_at ? "Past role" : "Current",
+    roleKind: trimDisplayText(row.role_kind) || "contributor",
+    roleTitle: formattedRole,
+    summary: trimOptionalDisplayText(row.summary),
+    skills: contributionSkills,
+    startDate: toShortDate(row.started_at),
+    endDate: toShortDate(row.ended_at),
+    startedAt: toIsoDate(row.started_at),
+    endedAt: toIsoDate(row.ended_at),
+    currentlyActive: !row.ended_at,
+    source: trimDisplayText(row.source) || "membership",
+    verified: Boolean(row.verified_at),
+    verifiedAt: toIsoDate(row.verified_at),
   };
   const normalizedStages = stages.length ? stages : [fallbackStage];
   const activeStage = normalizedStages.find((stage) => stage.currentlyActive) ?? normalizedStages[0] ?? fallbackStage;
-  const currentlyActive = normalizedStages.some((stage) => stage.currentlyActive) && !row.contribution_ended_at;
-  const startDate = normalizedStages[normalizedStages.length - 1]?.startDate ?? fallbackStage.startDate;
-  const endDate = currentlyActive ? null : (normalizedStages[0]?.endDate ?? fallbackStage.endDate);
+  const projectTitle = row.project_id
+    ? normalizeProjectTitle(row.project_title)
+    : trimDisplayText(row.project_title_override) || "External project";
+  const projectHref = row.project_id
+    ? buildProjectHref({ id: row.project_id, slug: row.project_slug })
+    : trimOptionalDisplayText(row.project_url);
   return {
-    id: row.contribution_id ?? `verified:${project.id}`,
-    projectId: project.id,
-    title: activeStage.roleTitle,
-    projectTitle: project.title,
-    projectHref: project.href,
-    repoUrl: manual?.repoUrl ?? null,
-    description: activeStage.summary ?? trimOptionalDisplayText(row.contribution_summary) ?? manual?.description ?? null,
-    startDate,
-    endDate,
-    currentlyActive,
-    skills: activeStage.skills.length ? activeStage.skills : (manual?.skills.length ? manual.skills : project.skills),
-    source: row.contribution_source || (trimDisplayText(row.accepted_role_title) ? "application" : "membership"),
-    verified: true,
-    roleKind: activeStage.roleKind,
-    roleStages: normalizedStages.map((stage) => ({
-      ...stage,
-      statusLabel: stage.currentlyActive ? "Current" : "Past role",
-    })),
-    stageCount: normalizedStages.length,
-    statusLabel: currentlyActive ? "Current" : "Former collaborator",
-    visibility: row.contribution_visibility === "private" ? "private" : "public",
+    id: row.contribution_id,
+    projectId: row.project_id,
+    externalKey: row.external_key,
+    version: Number(row.version) || 1,
+    title: row.project_id ? formattedRole : activeStage.roleTitle,
+    projectTitle,
+    projectHref,
+    projectUrl: trimOptionalDisplayText(row.project_url),
+    repoUrl: trimOptionalDisplayText(row.repository_url),
+    description: trimOptionalDisplayText(row.summary) ?? activeStage.summary,
+    startDate: toShortDate(row.started_at),
+    endDate: toShortDate(row.ended_at),
+    currentlyActive: !row.ended_at,
+    skills: contributionSkills,
+    source: trimDisplayText(row.source) || "membership",
+    verified: Boolean(row.verified_at) || Boolean(row.project_id),
+    roleKind: trimDisplayText(row.role_kind) || "contributor",
+    roleStages: normalizedStages,
+    visibility,
   };
-}
-
-async function readProfileExperience(profileId: string) {
-  const [profile] = await db
-    .select({ experience: profiles.experience })
-    .from(profiles)
-    .where(and(eq(profiles.id, profileId), isNull(profiles.deletedAt)))
-    .limit(1);
-  return objectArray(profile?.experience);
 }
 
 async function queryProfileProjectRows(profileId: string, options: {
@@ -467,8 +462,9 @@ async function queryProfileProjectRows(profileId: string, options: {
         pc.source AS contribution_source,
         ra.accepted_role_title,
         pc.role_title AS contribution_role_title,
+        NULLIF(p.import_source->'metadata'->>'leadFocus', '') AS lead_focus,
         pc.summary AS contribution_summary,
-        pc.skills AS contribution_skills,
+        COALESCE(pc_skills.labels, '[]'::jsonb) AS contribution_skills,
         count(*) OVER()::int AS total_count
       FROM ${projects} p
       LEFT JOIN project_members pm_self
@@ -478,6 +474,13 @@ async function queryProfileProjectRows(profileId: string, options: {
         ON pc.project_id = p.id
        AND pc.profile_id = ${profileId}
        AND pc.deleted_at IS NULL
+      LEFT JOIN LATERAL (
+        SELECT jsonb_agg(skill.name ORDER BY edge.display_order, skill.name) AS labels
+        FROM ${profileContributionSkills} edge
+        INNER JOIN ${skills} skill ON skill.id = edge.skill_id
+        WHERE edge.contribution_id = pc.id
+          AND skill.status NOT IN ('hidden', 'merged')
+      ) pc_skills ON true
       LEFT JOIN LATERAL (
         SELECT accepted_role_title
         FROM ${roleApplications}
@@ -496,8 +499,7 @@ async function queryProfileProjectRows(profileId: string, options: {
     )
     SELECT
       ps.*,
-      COALESCE(members.member_previews, '[]'::jsonb) AS member_previews,
-      COALESCE(stages.role_stages, '[]'::jsonb) AS role_stages
+      COALESCE(members.member_previews, '[]'::jsonb) AS member_previews
     FROM project_scope ps
     LEFT JOIN LATERAL (
       SELECT jsonb_agg(
@@ -539,75 +541,155 @@ async function queryProfileProjectRows(profileId: string, options: {
       ) ranked
       WHERE ranked.member_rank <= 3
     ) members ON true
-    LEFT JOIN LATERAL (
-      SELECT jsonb_agg(
-        jsonb_build_object(
-          'id', pcs.id,
-          'contributionId', pcs.contribution_id,
-          'roleKind', pcs.role_kind,
-          'roleTitle', pcs.role_title,
-          'summary', pcs.summary,
-          'skills', pcs.skills,
-          'startedAt', pcs.started_at,
-          'endedAt', pcs.ended_at,
-          'source', pcs.source,
-          'verifiedAt', pcs.verified_at,
-          'visibility', pcs.visibility,
-          'manualOverride', pcs.manual_override
-        )
-        ORDER BY
-          CASE WHEN pcs.ended_at IS NULL THEN 0 ELSE 1 END,
-          pcs.started_at DESC NULLS LAST,
-          pcs.created_at DESC,
-          pcs.id DESC
-      ) AS role_stages
-      FROM ${profileProjectContributionStages} pcs
-      WHERE pcs.contribution_id = ps.contribution_id
-        AND pcs.deleted_at IS NULL
-        AND (${includePrivate ? sql`TRUE` : sql`pcs.visibility = 'public'`})
-    ) stages ON true
     ORDER BY ps.view_count DESC NULLS LAST, ps.updated_at DESC, ps.created_at DESC, ps.project_id DESC
   `);
 
   return Array.from(rows);
 }
 
-function buildSummaryFromRows(rows: ProfileProjectRow[], experience: Array<Record<string, unknown>>): ProfileCollaborationSummary {
-  const manualByProject = new Map<string, ProfileCollaborationContribution>();
-  const manualExternal: ProfileCollaborationContribution[] = [];
-  experience.forEach((entry, index) => {
-    const manual = manualContributionFromExperience(entry, index);
-    if (!manual) return;
-    if (manual.projectId) {
-      manualByProject.set(manual.projectId, manual);
-    } else {
-      manualExternal.push(manual);
-    }
-  });
+async function queryProfileContributionRows(profileId: string, options: {
+  includePrivate?: boolean;
+  limit?: number;
+  offset?: number;
+  stageLimit?: number;
+}) {
+  const includePrivate = Boolean(options.includePrivate);
+  const limit = Math.min(Math.max(options.limit ?? 24, 1), 50);
+  const offset = Math.max(options.offset ?? 0, 0);
+  const stageLimit = Math.min(Math.max(options.stageLimit ?? 8, 1), 20);
+  const rows = await db.execute<ProfileContributionRow>(sql`
+    SELECT
+      contribution.id AS contribution_id,
+      contribution.project_id,
+      contribution.external_key,
+      contribution.version,
+      contribution.project_title AS project_title_override,
+      contribution.project_url,
+      contribution.repository_url,
+      project.title AS project_title,
+      project.slug AS project_slug,
+      project.visibility AS project_visibility,
+      project.status AS project_status,
+      project.owner_id AS project_owner_id,
+      CASE
+        WHEN project.owner_id = ${profileId} THEN 'owner'
+        ELSE member.role
+      END AS membership_role,
+      application.accepted_role_title,
+      NULLIF(project.import_source->'metadata'->>'leadFocus', '') AS lead_focus,
+      contribution.role_kind,
+      contribution.role_title,
+      contribution.summary,
+      COALESCE(contribution_skills.labels, '[]'::jsonb) AS canonical_skills,
+      contribution.started_at,
+      contribution.ended_at,
+      contribution.source,
+      contribution.verified_at,
+      contribution.visibility,
+      COALESCE(stages.role_stages, '[]'::jsonb) AS role_stages,
+      count(*) OVER()::int AS total_count
+    FROM ${profileProjectContributions} contribution
+    LEFT JOIN ${projects} project
+      ON project.id = contribution.project_id
+     AND project.deleted_at IS NULL
+    LEFT JOIN project_members member
+      ON member.project_id = contribution.project_id
+     AND member.user_id = ${profileId}
+    LEFT JOIN LATERAL (
+      SELECT accepted_role_title
+      FROM ${roleApplications}
+      WHERE project_id = contribution.project_id
+        AND applicant_id = ${profileId}
+        AND status = 'accepted'
+      ORDER BY updated_at DESC
+      LIMIT 1
+    ) application ON true
+    LEFT JOIN LATERAL (
+      SELECT jsonb_agg(skill.name ORDER BY edge.display_order, skill.name) AS labels
+      FROM ${profileContributionSkills} edge
+      INNER JOIN ${skills} skill ON skill.id = edge.skill_id
+      WHERE edge.contribution_id = contribution.id
+        AND skill.status NOT IN ('hidden', 'merged')
+    ) contribution_skills ON true
+    LEFT JOIN LATERAL (
+      SELECT
+        jsonb_agg(
+          jsonb_build_object(
+            'id', ranked.id,
+            'contributionId', ranked.contribution_id,
+            'roleKind', ranked.role_kind,
+            'roleTitle', ranked.role_title,
+            'summary', ranked.summary,
+            'startedAt', ranked.started_at,
+            'endedAt', ranked.ended_at,
+            'source', ranked.source,
+            'verifiedAt', ranked.verified_at
+          ) ORDER BY ranked.stage_rank
+        ) AS role_stages
+      FROM (
+        SELECT
+          stage.*,
+          row_number() OVER (
+            ORDER BY CASE WHEN stage.ended_at IS NULL THEN 0 ELSE 1 END,
+              stage.started_at DESC NULLS LAST, stage.created_at DESC, stage.id DESC
+          ) AS stage_rank
+        FROM ${profileProjectContributionStages} stage
+        WHERE stage.contribution_id = contribution.id
+          AND stage.deleted_at IS NULL
+        ORDER BY CASE WHEN stage.ended_at IS NULL THEN 0 ELSE 1 END,
+          stage.started_at DESC NULLS LAST, stage.created_at DESC, stage.id DESC
+        LIMIT ${stageLimit}
+      ) ranked
+    ) stages ON true
+    WHERE contribution.profile_id = ${profileId}
+      AND contribution.deleted_at IS NULL
+      AND (${includePrivate ? sql`TRUE` : sql`contribution.visibility = 'public'`})
+      AND (
+        contribution.project_id IS NULL
+        OR (
+          project.id IS NOT NULL
+          AND (${includePrivate ? sql`TRUE` : sql`project.visibility IN ('public', 'unlisted') AND project.status <> 'draft'`})
+        )
+      )
+    ORDER BY
+      CASE WHEN contribution.ended_at IS NULL THEN 0 ELSE 1 END,
+      contribution.started_at DESC NULLS LAST,
+      contribution.updated_at DESC,
+      contribution.id DESC
+    LIMIT ${limit} OFFSET ${offset}
+  `);
+  return Array.from(rows);
+}
 
-  const projectsList = rows.map(projectFromRow);
-  const contributions = [
-    ...projectsList.map((project, index) => contributionFromProject(project, rows[index]!, manualByProject.get(project.id))),
-    ...manualExternal,
-  ].slice(0, 24);
-  const totalCount = Number(rows[0]?.total_count ?? projectsList.length);
+function buildSummaryFromRows(
+  projectRows: ProfileProjectRow[],
+  contributionRows: ProfileContributionRow[],
+): ProfileCollaborationSummary {
+  const projectsList = projectRows.map(projectFromRow);
+  const contributions = contributionRows.map(contributionFromRow);
+  const projectsCount = Number(projectRows[0]?.total_count ?? projectsList.length);
+  const contributionCount = Number(contributionRows[0]?.total_count ?? contributions.length);
 
   return {
     version: SUMMARY_VERSION,
     generatedAt: nowIso(),
     projects: projectsList.slice(0, 4),
-    featuredProjects: projectsList.slice(0, 2),
     contributions,
     stats: {
-      projectsCount: totalCount,
-      visibleProjectsCount: totalCount,
-      contributionCount: contributions.length,
+      projectsCount,
+      visibleProjectsCount: projectsCount,
+      contributionCount,
     },
   };
 }
 
-async function writePublicSummary(profileId: string, summary: ProfileCollaborationSummary) {
-  await db
+async function writePublicSummary(
+  profileId: string,
+  summary: ProfileCollaborationSummary,
+  generationStartedAt: Date,
+) {
+  const writtenAt = new Date();
+  const written = await db
     .insert(profileCollaborationSummaries)
     .values({
       profileId,
@@ -617,8 +699,8 @@ async function writePublicSummary(profileId: string, summary: ProfileCollaborati
       visibleProjectCount: summary.stats.visibleProjectsCount,
       contributionCount: summary.stats.contributionCount,
       stale: false,
-      refreshedAt: new Date(),
-      updatedAt: new Date(),
+      refreshedAt: writtenAt,
+      updatedAt: writtenAt,
     })
     .onConflictDoUpdate({
       target: profileCollaborationSummaries.profileId,
@@ -629,10 +711,15 @@ async function writePublicSummary(profileId: string, summary: ProfileCollaborati
         visibleProjectCount: summary.stats.visibleProjectsCount,
         contributionCount: summary.stats.contributionCount,
         stale: false,
-        refreshedAt: new Date(),
-        updatedAt: new Date(),
+        refreshedAt: writtenAt,
+        updatedAt: writtenAt,
       },
-    });
+      // A mutation may mark this row stale while the read query is running.
+      // Never let an older snapshot overwrite that newer invalidation.
+      where: lt(profileCollaborationSummaries.updatedAt, generationStartedAt),
+    })
+    .returning({ profileId: profileCollaborationSummaries.profileId });
+  return written.length > 0;
 }
 
 export async function getProfileCollaborationSummary(profileId: string, options: {
@@ -640,10 +727,25 @@ export async function getProfileCollaborationSummary(profileId: string, options:
   preferCached?: boolean;
   maxAgeMs?: number;
 } = {}): Promise<ProfileCollaborationSummary> {
-  const startedAt = Date.now();
   const includePrivate = Boolean(options.includePrivate);
   const preferCached = options.preferCached !== false && !includePrivate;
   const maxAgeMs = options.maxAgeMs ?? SUMMARY_TTL_MS;
+  const dedupeKey = `profile-collaboration:${profileId}:${includePrivate ? "owner" : "public"}:${preferCached}:${maxAgeMs}`;
+  return runInFlightDeduped(dedupeKey, () => readProfileCollaborationSummary(profileId, {
+    includePrivate,
+    preferCached,
+    maxAgeMs,
+  }));
+}
+
+async function readProfileCollaborationSummary(profileId: string, options: {
+  includePrivate: boolean;
+  preferCached: boolean;
+  maxAgeMs: number;
+}): Promise<ProfileCollaborationSummary> {
+  const startedAt = Date.now();
+  const generationStartedAt = new Date(startedAt);
+  const { includePrivate, preferCached, maxAgeMs } = options;
 
   if (!profileId) return { ...EMPTY_SUMMARY, cacheStatus: "miss" };
 
@@ -669,14 +771,20 @@ export async function getProfileCollaborationSummary(profileId: string, options:
     }
   }
 
-  const [rows, experience] = await Promise.all([
+  const [projectRows, contributionRows] = await Promise.all([
     queryProfileProjectRows(profileId, { includePrivate, limit: DEFAULT_LIMIT, offset: 0 }),
-    readProfileExperience(profileId),
+    queryProfileContributionRows(profileId, { includePrivate, limit: 24, offset: 0, stageLimit: 8 }),
   ]);
-  const summary = buildSummaryFromRows(rows, experience);
+  const summary = buildSummaryFromRows(projectRows, contributionRows);
 
   if (!includePrivate) {
-    await writePublicSummary(profileId, summary);
+    const cacheWritten = await writePublicSummary(profileId, summary, generationStartedAt);
+    if (!cacheWritten) {
+      logger.metric("profile.collaboration.cache_write_skipped", {
+        profileId,
+        reason: "newer_invalidation",
+      });
+    }
   }
 
   logger.metric("profile.collaboration.summary", {
@@ -688,6 +796,30 @@ export async function getProfileCollaborationSummary(profileId: string, options:
     durationMs: Date.now() - startedAt,
   });
   return { ...summary, cacheStatus: includePrivate ? "bypass" : "miss" };
+}
+
+export async function getProfileContributions(profileId: string, options: {
+  includePrivate?: boolean;
+  limit?: number;
+  offset?: number;
+  stageLimit?: number;
+} = {}) {
+  const startedAt = Date.now();
+  const rows = await queryProfileContributionRows(profileId, options);
+  const contributions = rows.map(contributionFromRow);
+  const total = Number(rows[0]?.total_count ?? contributions.length);
+  logger.metric("profile.collaboration.contributions", {
+    profileId,
+    includePrivate: Boolean(options.includePrivate),
+    count: contributions.length,
+    total,
+    durationMs: Date.now() - startedAt,
+  });
+  return {
+    contributions,
+    total,
+    hasMore: (options.offset ?? 0) + contributions.length < total,
+  };
 }
 
 export async function getProfilePortfolioProjects(profileId: string, options: {
@@ -730,6 +862,7 @@ export async function getProfileInviteProjectOptions(inviterId: string, targetPr
       ON target_pm.project_id = p.id
      AND target_pm.user_id = ${targetProfileId}
     WHERE p.deleted_at IS NULL
+      AND p.open_roles_count > 0
       AND target_pm.id IS NULL
       AND (
         p.owner_id = ${inviterId}
@@ -897,6 +1030,7 @@ export async function upsertProfileProjectContributionFromMembership(
         })
         .onConflictDoNothing();
     }
+    await syncContributionSkills(executor, contribution.id, stringArray(contribution.skills), params.profileId);
   }
   await markProfileCollaborationSummaryStale(params.profileId, executor);
 }
@@ -925,84 +1059,6 @@ export async function endProfileProjectContributionMembership(
       isNull(profileProjectContributionStages.deletedAt),
     ));
   await markProfileCollaborationSummaryStale(params.profileId, executor);
-}
-
-export async function updateProfileProjectContributionStage(
-  profileId: string,
-  stageId: string,
-  updates: {
-    roleTitle?: string | null;
-    summary?: string | null;
-    skills?: string[];
-    visibility?: "public" | "private";
-  },
-) {
-  const [stage] = await db
-    .update(profileProjectContributionStages)
-    .set({
-      ...(updates.roleTitle !== undefined ? { roleTitle: trimOptionalDisplayText(updates.roleTitle) } : {}),
-      ...(updates.summary !== undefined ? { summary: trimOptionalDisplayText(updates.summary) } : {}),
-      ...(updates.skills !== undefined ? { skills: updates.skills.map((skill) => trimDisplayText(skill)).filter(Boolean).slice(0, 24) } : {}),
-      ...(updates.visibility !== undefined ? { visibility: updates.visibility } : {}),
-      manualOverride: true,
-      updatedAt: new Date(),
-    })
-    .where(and(
-      eq(profileProjectContributionStages.id, stageId),
-      eq(profileProjectContributionStages.profileId, profileId),
-      isNull(profileProjectContributionStages.deletedAt),
-    ))
-    .returning({
-      id: profileProjectContributionStages.id,
-      contributionId: profileProjectContributionStages.contributionId,
-      projectId: profileProjectContributionStages.projectId,
-      roleTitle: profileProjectContributionStages.roleTitle,
-      summary: profileProjectContributionStages.summary,
-      skills: profileProjectContributionStages.skills,
-      visibility: profileProjectContributionStages.visibility,
-    });
-
-  if (!stage) return null;
-
-  if (updates.visibility !== undefined) {
-    await db
-      .update(profileProjectContributions)
-      .set({ visibility: updates.visibility, updatedAt: new Date() })
-      .where(and(
-        eq(profileProjectContributions.id, stage.contributionId),
-        eq(profileProjectContributions.profileId, profileId),
-        isNull(profileProjectContributions.deletedAt),
-      ));
-  }
-
-  const [currentStage] = await db
-    .select({ id: profileProjectContributionStages.id })
-    .from(profileProjectContributionStages)
-    .where(and(
-      eq(profileProjectContributionStages.id, stageId),
-      isNull(profileProjectContributionStages.endedAt),
-      isNull(profileProjectContributionStages.deletedAt),
-    ))
-    .limit(1);
-
-  if (currentStage) {
-    await db
-      .update(profileProjectContributions)
-      .set({
-        ...(updates.roleTitle !== undefined ? { roleTitle: stage.roleTitle } : {}),
-        ...(updates.summary !== undefined ? { summary: stage.summary } : {}),
-        ...(updates.skills !== undefined ? { skills: stage.skills } : {}),
-        updatedAt: new Date(),
-      })
-      .where(and(
-        eq(profileProjectContributions.id, stage.contributionId),
-        eq(profileProjectContributions.profileId, profileId),
-        isNull(profileProjectContributions.deletedAt),
-      ));
-  }
-
-  await markProfileCollaborationSummaryStale(profileId);
-  return stage;
 }
 
 export async function markProjectCollaboratorsSummaryStale(projectId: string, executor: DbExecutor = db) {
