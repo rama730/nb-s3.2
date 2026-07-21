@@ -43,6 +43,8 @@
 
 "use client";
 
+import { toast } from "sonner";
+
 import * as React from "react";
 import {
   AlertTriangle,
@@ -51,25 +53,14 @@ import {
   Upload,
   VideoOff,
   VolumeOff,
-  BookOpenText,
-  ExternalLink,
-  Plus,
-  Loader2,
 } from "lucide-react";
 
 import { useRouter, usePathname } from "next/navigation";
-import { useQueryClient } from "@tanstack/react-query";
-import {
-  useProjectMarkdowns,
-  PROJECT_MARKDOWNS_LIST_QUERY_KEY,
-  PROJECT_DOC_QUERY_KEY,
-  PROJECT_DOC_DRAFT_QUERY_KEY,
-} from "@/hooks/hub/useProjectDocData";
+import { useProjectMarkdowns } from "@/hooks/hub/useProjectDocData";
 
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { ComponentErrorBoundary } from "@/components/ui/ComponentErrorBoundary";
-import { useToast } from "@/components/ui-custom/Toast";
 import { getProjectFileSignedUrl } from "@/app/actions/files/content";
 import { getProjectFileContent } from "@/app/actions/files/content";
 import { listFileVersions } from "@/app/actions/files/versions";
@@ -82,7 +73,6 @@ import { useFileVersions } from "@/hooks/useFileVersions";
 import { useProjectMembers } from "@/hooks/hub/useProjectMembers";
 
 import { fileKind, type FileKind } from "../../utils/fileKind";
-import { formatBytes } from "../folder/format";
 import AssetPreview from "../../preview/AssetPreview";
 import MarkdownPreview from "../../preview/MarkdownPreview";
 
@@ -94,6 +84,8 @@ import { TextViewer, type TextViewerMode } from "./TextViewer";
 import { isAssetKind, isEmptyMedia, isMarkdownNode } from "./previewPicker";
 import { RevisionControlModal } from "@/components/ui/RevisionControlModal";
 import { createClient } from "@/lib/supabase/client";
+import { useFileLease, type FileLeaseStatus } from "../hooks/useFileLease";
+import type { BrowserFileLease, FileLeaseView } from "@/lib/files/file-lease-client";
 
 // ---------------------------------------------------------------------------
 // Props
@@ -131,6 +123,7 @@ export interface FileViewProps {
 // it structurally.
 
 type FileViewMode = "view" | "raw" | "edit";
+type FileInspectorPanel = "linked_tasks" | "version_history" | null;
 
 // ---------------------------------------------------------------------------
 // Component
@@ -141,8 +134,6 @@ export function FileView({
   node,
   canEdit,
 }: FileViewProps): React.JSX.Element {
-  const { showToast } = useToast();
-
   // ── Fetch project members for uploader profiles ────────────────────
   const { data: membersData } = useProjectMembers(projectId);
   const uploaderNames = React.useMemo(() => {
@@ -197,73 +188,63 @@ export function FileView({
   }, [node.id]);
 
   const [mode, setMode] = React.useState<FileViewMode>("view");
+  const [editorDirty, setEditorDirty] = React.useState(false);
+  const fileLease = useFileLease(projectId, node.id);
 
   const onView = React.useCallback(() => {
+    if (mode === "edit" && editorDirty) {
+      const discard = window.confirm("Discard your unsaved changes and leave edit mode?");
+      if (!discard) return;
+    }
+    if (mode === "edit") void fileLease.release();
+    setEditorDirty(false);
     setMode("view");
-  }, []);
+  }, [editorDirty, fileLease, mode]);
 
   const router = useRouter();
-  const queryClient = useQueryClient();
   const pathname = usePathname();
   const projectSlug = pathname?.split("/")[2] || "";
 
   // Query list of documents to see if this node is linked to any of them
-  const { data: markdowns = [], isLoading: isLoadingMarkdowns } = useProjectMarkdowns(projectId);
+  const { data: markdowns = [] } = useProjectMarkdowns(projectId);
   const linkedDoc = React.useMemo(() => {
     return markdowns.find((doc: any) => doc.linkedNodeId === node.id);
   }, [markdowns, node.id]);
-  const isLinked = !!linkedDoc;
-
-  const [isLinkingDoc, setIsLinkingDoc] = React.useState(false);
-
-  const handleLinkToDoc = async () => {
-    if (!projectId || !node.id || isLinkingDoc) return;
-    setIsLinkingDoc(true);
-    try {
-      const filename = node.name || "document.md";
-      const docSlug = normalizeProjectDocSlug(filename, "doc");
-
-      const { linkProjectDocAction } = await import("@/app/actions/project/doc");
-      const result = await linkProjectDocAction(projectId, node.id, docSlug);
-      if (result.success) {
-        showToast("File linked to Documents successfully", "success");
-        await Promise.all([
-          queryClient.invalidateQueries({ queryKey: PROJECT_MARKDOWNS_LIST_QUERY_KEY(projectId) }),
-          queryClient.invalidateQueries({ queryKey: PROJECT_DOC_DRAFT_QUERY_KEY(projectId, docSlug) }),
-          queryClient.invalidateQueries({ queryKey: PROJECT_DOC_QUERY_KEY(projectId, docSlug) })
-        ]);
-        router.push(`/projects/${projectSlug}?tab=docs&doc=${docSlug}`, { scroll: false });
-      } else {
-        showToast(result.error || "Failed to link file", "error");
-      }
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : "An error occurred", "error");
-    } finally {
-      setIsLinkingDoc(false);
-    }
-  };
 
   const handleNavigateToDoc = React.useCallback((slug: string) => {
     router.push(`/projects/${projectSlug}?tab=docs&doc=${normalizeProjectDocSlug(slug)}`, { scroll: false });
   }, [router, projectSlug]);
 
   // ── LinkedTasksPanel toggle state (Req 8.1, 8.6) ───────────────────
-  const [isLinkedTasksPanelOpen, setIsLinkedTasksPanelOpen] =
-    React.useState(false);
+  const [activeInspectorPanel, setActiveInspectorPanel] =
+    React.useState<FileInspectorPanel>(null);
+  const actionsTriggerRef = React.useRef<HTMLButtonElement>(null);
+  const isLinkedTasksPanelOpen = activeInspectorPanel === "linked_tasks";
+  const isVersionHistoryPanelOpen = activeInspectorPanel === "version_history";
   const onToggleLinkedTasks = React.useCallback(() => {
-    setIsLinkedTasksPanelOpen((prev) => !prev);
+    setActiveInspectorPanel((current) =>
+      current === "linked_tasks" ? null : "linked_tasks",
+    );
   }, []);
 
   // ── FileVersionHistoryPanel toggle state (Req 10.1, 10.2, 10.3) ────
-  const [isVersionHistoryPanelOpen, setIsVersionHistoryPanelOpen] =
-    React.useState(false);
   const onToggleVersionHistory = React.useCallback(() => {
-    setIsVersionHistoryPanelOpen((prev) => !prev);
+    setActiveInspectorPanel((current) =>
+      current === "version_history" ? null : "version_history",
+    );
   }, []);
+
+  const closeInspectorPanel = React.useCallback(() => {
+    setActiveInspectorPanel(null);
+    window.requestAnimationFrame(() => actionsTriggerRef.current?.focus());
+  }, []);
+
+  React.useEffect(() => {
+    setActiveInspectorPanel(null);
+  }, [node.id]);
 
   // ── Drop-zone state (Req 12.1–12.5, 24.4) ─────────────────────────
   const [isDragActive, setIsDragActive] = React.useState(false);
-  const [isDropProcessing, setIsDropProcessing] = React.useState(false);
   const [hashMatchPromptFile, setHashMatchPromptFile] =
     React.useState<File | null>(null);
   const dragCounterRef = React.useRef(0);
@@ -311,7 +292,7 @@ export function FileView({
 
       // Req 12.5: Multi-file drop → ignore and show toast
       if (files.length > 1) {
-        showToast("Only single-file drops accepted", "error");
+        toast.error("Only single-file drops accepted");
         return;
       }
 
@@ -321,7 +302,6 @@ export function FileView({
 
       // Req 12.3, 12.4: Hash-check and re-upload prompt
       void (async () => {
-        setIsDropProcessing(true);
         try {
           if (!droppedFile) return;
 
@@ -329,8 +309,7 @@ export function FileView({
           const expectedExt = extOf(node.name);
           const uploadedExt = extOf(droppedFile.name);
           if (expectedExt !== uploadedExt) {
-            showToast(`Extension mismatch: Expected .${expectedExt} but received .${uploadedExt}`, "error");
-            setIsDropProcessing(false);
+            toast.error(`Extension mismatch: Expected .${expectedExt} but received .${uploadedExt}`);
             return;
           }
 
@@ -349,7 +328,6 @@ export function FileView({
           ) {
             // Req 12.4: Hash matches — prompt "File is identical — re-upload anyway?"
             setHashMatchPromptFile(droppedFile);
-            setIsDropProcessing(false);
             return;
           }
 
@@ -359,13 +337,11 @@ export function FileView({
         } catch (err) {
           const message =
             err instanceof Error ? err.message : "Drop failed";
-          showToast(message, "error");
-        } finally {
-          setIsDropProcessing(false);
+          toast.error(message);
         }
       })();
     },
-    [canEdit, projectId, node.id, node.name, saveAsNewVersion, showToast],
+    [canEdit, projectId, node.id, node.name, saveAsNewVersion],
   );
 
   const handleDropRevisionOptionSelected = React.useCallback(
@@ -373,53 +349,42 @@ export function FileView({
       if (!pendingDropFile) return;
       const file = pendingDropFile;
       setPendingDropFile(null);
-      setIsDropProcessing(true);
 
       try {
         if (choice.option === "commit") {
           const result = await saveAsNewVersion(file, { comment: choice.comment });
           if (result.success) {
-            showToast(`New revision committed successfully`, "success");
+            toast.success(`New revision committed successfully`);
             // Set node in store
             useFilesWorkspaceStore.getState().setNodes(projectId, [result.node]);
           } else {
-            showToast(result.error || "Failed to commit revision", "error");
+            toast.error(result.error || "Failed to commit revision");
           }
         } else {
-          // Direct overwrite S3 object path
-          if (!node.s3Key) {
-            showToast("Cannot overwrite: Active file has no storage key.", "error");
-            return;
-          }
-          const supabase = createClient();
-          const { error: uploadError } = await supabase.storage
-            .from("project-files")
-            .update(node.s3Key, file, { upsert: true });
-
-          if (uploadError) throw uploadError;
-
-          const { updateProjectFileStats } = await import("@/app/actions/files/content");
-          const updatedNode = (await updateProjectFileStats(
+          const { saveFileRevision } = await import("@/hooks/useFileVersions");
+          const result = await saveFileRevision({
             projectId,
-            node.id,
-            file.size
-          )) as any;
+            nodeId: node.id,
+            file,
+            mode: "active_revision",
+            comment: choice.comment,
+            baseVersion: node.currentVersion,
+            supabase: createClient(),
+          });
 
-          if (updatedNode) {
-            useFilesWorkspaceStore.getState().setNodes(projectId, [updatedNode]);
-            showToast("Active revision updated in-place", "success");
+          if (result.success) {
+            useFilesWorkspaceStore.getState().setNodes(projectId, [result.node]);
+            toast.success("Active revision updated successfully");
           } else {
-            throw new Error("Failed to update database record stats.");
+            throw new Error(result.error || "Failed to update active revision");
           }
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : "Upload failed";
-        showToast(message, "error");
-      } finally {
-        setIsDropProcessing(false);
+        toast.error(message);
       }
     },
-    [pendingDropFile, projectId, node.id, node.s3Key, saveAsNewVersion, showToast]
+    [pendingDropFile, projectId, node.id, node.s3Key, saveAsNewVersion]
   );
 
   const handleHashMatchConfirm = React.useCallback(async () => {
@@ -431,13 +396,13 @@ export function FileView({
     const expectedExt = extOf(node.name);
     const uploadedExt = extOf(file.name);
     if (expectedExt !== uploadedExt) {
-      showToast(`Extension mismatch: Expected .${expectedExt} but received .${uploadedExt}`, "error");
+      toast.error(`Extension mismatch: Expected .${expectedExt} but received .${uploadedExt}`);
       return;
     }
 
     setPendingDropFile(file);
     setIsDropModalOpen(true);
-  }, [hashMatchPromptFile, node.name, showToast]);
+  }, [hashMatchPromptFile, node.name]);
 
   // Signed URL for asset / markdown / binary previews and for the
   // Download + Raw-on-binary actions. Fetched lazily and cached at the
@@ -530,6 +495,12 @@ export function FileView({
 
   const onRaw = React.useCallback(() => {
     if (textLike) {
+      if (mode === "edit" && editorDirty) {
+        const discard = window.confirm("Discard your unsaved changes and leave edit mode?");
+        if (!discard) return;
+      }
+      if (mode === "edit") void fileLease.release();
+      setEditorDirty(false);
       setMode("raw");
       return;
     }
@@ -543,47 +514,31 @@ export function FileView({
           url = res?.url ?? null;
         }
         if (!url) {
-          showToast("Could not prepare raw file", "error");
+          toast.error("Could not prepare raw file");
           return;
         }
         window.open(url, "_blank", "noopener,noreferrer");
       } catch (err) {
         const message =
           err instanceof Error ? err.message : "Could not prepare raw file";
-        showToast(message, "error");
+        toast.error(message);
       }
     })();
-  }, [textLike, signedUrl, projectId, node.id, showToast]);
+  }, [textLike, signedUrl, projectId, node.id,mode, editorDirty, fileLease]);
 
   const onEdit = React.useCallback(() => {
     if (!canEdit) return;
     if (!textLike) {
-      showToast("This file type is not editable in place", "error");
+      toast.error("This file type is not editable in place");
       return;
     }
-    setMode("edit");
-  }, [canEdit, textLike, showToast]);
-
-  const onDownload = React.useCallback(() => {
-    (async () => {
-      try {
-        let url = signedUrl;
-        if (!url) {
-          const res = await getProjectFileSignedUrl(projectId, node.id, 300);
-          url = res?.url ?? null;
-        }
-        if (!url) {
-          showToast("Could not prepare download", "error");
-          return;
-        }
-        window.open(url, "_blank", "noopener,noreferrer");
-      } catch (err) {
-        const message =
-          err instanceof Error ? err.message : "Could not prepare download";
-        showToast(message, "error");
-      }
-    })();
-  }, [signedUrl, projectId, node.id, showToast]);
+    void fileLease.acquire()
+      .then(() => setMode("edit"))
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : "Could not start editing";
+        toast.error(message);
+      });
+  }, [canEdit, textLike,fileLease]);
 
   // ── Render ──────────────────────────────────────────────────────────
 
@@ -631,22 +586,20 @@ export function FileView({
 
       <MetadataStrip
         node={node as MetadataStripNode}
-        canEdit={canEdit}
-        signedUrl={signedUrl}
         projectId={projectId}
         taskLinkCount={taskLinkCount}
         mode={mode}
         onView={onView}
         onRaw={onRaw}
         onEdit={onEdit}
-        onDownload={onDownload}
         onToggleLinkedTasks={onToggleLinkedTasks}
         isLinkedTasksPanelOpen={isLinkedTasksPanelOpen}
         onToggleVersionHistory={onToggleVersionHistory}
         isVersionHistoryPanelOpen={isVersionHistoryPanelOpen}
         uploaderNames={uploaderNames}
-        isLinkedDoc={isLinked}
+        linkedDoc={linkedDoc}
         onNavigateToDoc={handleNavigateToDoc}
+        actionsTriggerRef={actionsTriggerRef}
       />
 
       <div className="flex min-h-0 flex-1 flex-col">
@@ -666,7 +619,6 @@ export function FileView({
                   baseVersion={compareVersion}
                   targetVersion={node.currentVersion ?? 1}
                   onClose={() => setCompareVersion(null)}
-                  canEdit={canEdit && !restoringActive}
                 />
               ) : (
                 renderPreviewRegion({
@@ -682,6 +634,11 @@ export function FileView({
                   mdContent,
                   mdError,
                   projectId,
+                  lease: fileLease.lease,
+                  leaseStatus: fileLease.status,
+                  leaseConflict: fileLease.conflict,
+                  onDirtyChange: setEditorDirty,
+                  onCancel: onView,
                 })
               )}
             </ComponentErrorBoundary>
@@ -689,11 +646,12 @@ export function FileView({
 
           {/* LinkedTasksPanel — collapsible right-side drawer (Req 8.1, 8.6) */}
           {isLinkedTasksPanelOpen && (
-            <div className="w-80 shrink-0 border-l border-zinc-200 dark:border-zinc-800">
+            <div className="w-80 shrink-0 border-l border-zinc-200 bg-white shadow-xl dark:border-zinc-800 dark:bg-zinc-950 max-lg:absolute max-lg:inset-y-0 max-lg:right-0 max-lg:z-20 max-lg:w-[min(20rem,85vw)]">
               <LinkedTasksPanel
                 projectId={projectId}
                 nodeId={node.id}
                 canEdit={canEdit}
+                onClose={closeInspectorPanel}
                 onOpenTask={(taskId) => {
                   // Open task panel with initialTab="files" (Req 8.3).
                   // The task panel opening mechanism is handled by the parent
@@ -712,7 +670,7 @@ export function FileView({
           {/* FileVersionHistoryPanel — collapsible right-side drawer (Req 10.1, 10.2, 10.3) */}
           {isVersionHistoryPanelOpen && (
             <div
-              className="w-80 shrink-0 border-l border-zinc-200 dark:border-zinc-800"
+              className="w-80 shrink-0 border-l border-zinc-200 bg-white shadow-xl dark:border-zinc-800 dark:bg-zinc-950 max-lg:absolute max-lg:inset-y-0 max-lg:right-0 max-lg:z-20 max-lg:w-[min(20rem,85vw)]"
               data-testid="files-tab-version-history-drawer"
             >
               <FileVersionHistoryPanel
@@ -724,6 +682,7 @@ export function FileView({
                 isDeleted={node.deletedAt != null}
                 uploaderNames={uploaderNames}
                 onCompareClick={setCompareVersion}
+                onClose={closeInspectorPanel}
               />
             </div>
           )}
@@ -764,6 +723,11 @@ interface PreviewRegionProps {
   mdContent: string | null;
   mdError: string | null;
   projectId: string;
+  lease: BrowserFileLease | null;
+  leaseStatus: FileLeaseStatus;
+  leaseConflict: FileLeaseView | null;
+  onDirtyChange: (dirty: boolean) => void;
+  onCancel?: () => void;
 }
 
 function renderPreviewRegion(p: PreviewRegionProps): React.JSX.Element {
@@ -777,13 +741,18 @@ function renderPreviewRegion(p: PreviewRegionProps): React.JSX.Element {
 
   // Edit mode (text / markdown only). `onEdit` refuses to set this mode
   // for non-text kinds, so we only need to check text-likeness.
-  if (p.mode === "edit" && p.canEdit && p.textLike) {
+  if (p.mode === "edit" && p.textLike) {
     return (
       <TextViewer
         projectId={p.projectId}
         node={p.node}
-        canEdit={p.canEdit}
+        canEdit={p.canEdit && p.leaseStatus === "owned"}
         mode="edit"
+        lease={p.lease}
+        leaseStatus={p.leaseStatus}
+        leaseConflict={p.leaseConflict}
+        onDirtyChange={p.onDirtyChange}
+        onCancel={p.onCancel}
       />
     );
   }
