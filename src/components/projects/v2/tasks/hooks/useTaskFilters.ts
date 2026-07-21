@@ -1,47 +1,35 @@
 import { useMemo } from "react";
-import { Task } from "../TaskCard";
 import { rankFocusTasks } from "@/lib/projects/task-focus";
+import type { TaskSurfaceRecord } from "@/lib/projects/task-presentation";
 
 interface UseTaskFiltersProps {
-    tasks: Task[];
+    tasks: TaskSurfaceRecord[];
     currentUserId?: string;
-    scope: 'all' | 'backlog' | 'sprint';
 }
 
-export function useTaskFilters({ tasks, currentUserId, scope }: UseTaskFiltersProps) {
-
-    const filteredTasks = useMemo(() => {
-        if (scope === 'backlog') {
-            return tasks.filter((t) => !t.sprintId);
-        }
-        if (scope === 'sprint') {
-            return tasks.filter((t) => !!t.sprintId);
-        }
-
-        return tasks;
-    }, [tasks, scope]);
+export function useTaskFilters({ tasks, currentUserId }: UseTaskFiltersProps) {
 
     const myFocusTasks = useMemo(() => {
         if (!currentUserId) return [];
         return rankFocusTasks(
-            filteredTasks.filter(t =>
+            tasks.filter(t =>
                 t.assigneeId === currentUserId &&
                 t.status !== 'done'
             ),
         );
-    }, [filteredTasks, currentUserId]);
+    }, [tasks, currentUserId]);
 
     const needsOwnerTasks = useMemo(() => {
         return rankFocusTasks(
-            filteredTasks.filter(t =>
+            tasks.filter(t =>
                 !t.assigneeId &&
                 t.status !== 'done'
             ),
         );
-    }, [filteredTasks]);
+    }, [tasks]);
 
     return {
-        filteredTasks,
+        filteredTasks: tasks,
         myFocusTasks,
         needsOwnerTasks
     };
