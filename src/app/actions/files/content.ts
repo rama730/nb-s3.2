@@ -5,7 +5,7 @@ import { projectNodes, fileVersions, profiles } from "@/lib/db/schema";
 import type { ProjectNode } from "@/lib/db/schema";
 import { eq, and, inArray } from "drizzle-orm";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
-import { runInFlightDeduped } from "@/lib/async/inflight-dedupe";
+import { runInFlightDeduped } from "@/lib/utils/inflight-dedupe";
 import { revalidatePath } from "next/cache";
 import { parseProjectFileKey } from "@/lib/storage/project-file-key";
 import {
@@ -21,13 +21,25 @@ import {
     type FilesActionResult,
 } from "./_constants";
 
-export async function getProjectFileContent(projectId: string, nodeId: string) {
+export async function getProjectFileContent(
+    projectId: string,
+    nodeId: string,
+    options?: { skipFileTabCheck?: boolean },
+) {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
     const actorId = user?.id ?? null;
     return await runInFlightDeduped(`files:content:${projectId}:${nodeId}:${actorId ?? "anon"}`, async () => {
         // Verify read access (works for public projects too)
-        await assertProjectFileReadAccess(projectId, actorId);
+        // When called from the doc system for linked-node content, skip the
+        // Files-tab visibility gate — the doc layer already verified doc-level
+        // permissions so we only need basic project read access here.
+        if (options?.skipFileTabCheck) {
+            const { assertProjectReadAccess } = await import("@/lib/files/internal-helpers");
+            await assertProjectReadAccess(projectId, actorId);
+        } else {
+            await assertProjectFileReadAccess(projectId, actorId);
+        }
 
         const node = await db.query.projectNodes.findFirst({
             where: and(eq(projectNodes.id, nodeId), eq(projectNodes.projectId, projectId)),
