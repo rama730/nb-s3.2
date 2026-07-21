@@ -2,10 +2,15 @@
 
 import { db } from '@/lib/db';
 import { projectGitDeltas, projectNodeConflicts, projectNodes, fileVersions } from '@/lib/db/schema';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { createAdminClient, createClient } from '@/lib/supabase/server';
 import { buildProjectFileKey } from '@/lib/storage/project-file-key';
 import { randomUUID, createHash } from 'crypto';
+import {
+    acquireFileLease,
+    assertOwnedFileLease,
+    releaseFileLease,
+} from '@/lib/files/file-lock-service';
 
 function computeSha256(content: string): string {
     return createHash('sha256').update(content).digest('hex');
@@ -97,7 +102,28 @@ export async function resolveConflictAction(
             finalContent = mergedContent || '';
         }
 
+        const lease = await acquireFileLease({
+            projectId: conflict.projectId,
+            nodeId: node.id,
+            userId: user.id,
+            sessionId: randomUUID(),
+            clientKind: 'web',
+            ttlSeconds: 60,
+        });
+
+        try {
         await db.transaction(async (tx) => {
+            await tx
+                .select({ id: projectNodes.id })
+                .from(projectNodes)
+                .where(eq(projectNodes.id, node.id))
+                .for('update');
+            await assertOwnedFileLease(tx, {
+                projectId: conflict.projectId,
+                nodeId: node.id,
+                userId: user.id,
+                credentials: lease,
+            });
             if (resolution !== 'keep_mine') {
                 const adminClient = await createAdminClient();
                 const storageKey = buildProjectFileKey(conflict.projectId, `conflicts/${conflict.id}-${Date.now()}`);
@@ -165,6 +191,14 @@ export async function resolveConflictAction(
                     )
                 );
         });
+        } finally {
+            await releaseFileLease({
+                projectId: conflict.projectId,
+                nodeId: node.id,
+                userId: user.id,
+                credentials: lease,
+            }).catch(() => false);
+        }
 
         return { success: true };
     } catch (err: any) {
