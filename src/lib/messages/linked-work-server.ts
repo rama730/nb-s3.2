@@ -1,4 +1,4 @@
-import { and, eq, isNotNull, isNull, or } from "drizzle-orm";
+import { and, eq, isNotNull, isNull } from "drizzle-orm";
 import { messageWorkLinks, type MessageWorkLink, type NewMessageWorkLink } from "@/lib/db/schema";
 
 export type MessageWorkLinkInsert = Omit<NewMessageWorkLink, "id" | "createdAt" | "updatedAt" | "deletedAt">;
@@ -73,15 +73,4 @@ export async function upsertMessageWorkLink(
     if (restored) return restored;
 
     throw new Error("Failed to create message work link");
-}
-
-export function visibleMessageWorkLinkPredicate(userId: string) {
-    return and(
-        isNull(messageWorkLinks.deletedAt),
-        or(
-            eq(messageWorkLinks.visibility, "shared"),
-            eq(messageWorkLinks.ownerUserId, userId),
-            eq(messageWorkLinks.createdBy, userId),
-        ),
-    );
 }
