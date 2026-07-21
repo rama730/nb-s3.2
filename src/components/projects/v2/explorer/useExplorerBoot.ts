@@ -219,11 +219,28 @@ export function useExplorerBoot(options: {
       bootedRef.current = true;
 
       try {
-        // Materialized Path Flat Tree Load
-        const { nodes: allNodes, isComplete } = await getProjectTreeFlat(projectId, {
-          maxNodes: FILES_RUNTIME_BUDGETS.maxFlatTreeBootNodes,
-        });
+        // Fetch flat tree and root directory content concurrently to minimize roundtrips
+        const [flatTreeResult, rootFolderResult] = await Promise.all([
+          getProjectTreeFlat(projectId, {
+            maxNodes: FILES_RUNTIME_BUDGETS.maxFlatTreeBootNodes,
+          }).catch((err) => {
+            console.error("Flat tree boot pre-fetch failed, falling back", err);
+            return { nodes: [], isComplete: false };
+          }),
+          (filesFeatureFlags.storeBatching || filesFeatureFlags.wave2StoreBatching)
+            ? getProjectNodesWithCounts(projectId, null, undefined, 100).catch((err) => {
+                console.error("Root directory boot pre-fetch failed", err);
+                return { success: false as const, message: String(err) };
+              })
+            : getProjectNodes(projectId, null, undefined, 100).catch((err) => {
+                console.error("Root directory boot pre-fetch failed", err);
+                return { nodes: [], nextCursor: null };
+              })
+        ]);
+
         if (!isActiveRef.current) return;
+
+        const { nodes: allNodes, isComplete } = flatTreeResult;
 
         if (isComplete && allNodes && allNodes.length > 0) {
           const grouped: Record<string, string[]> = {};
@@ -266,10 +283,49 @@ export function useExplorerBoot(options: {
           }
         } else {
           // Provisioning is an explicit command so directory reads remain side-effect free.
-          if (canEdit) {
+          // Only initialize the workspace root if the project is small and actually empty (isComplete is true).
+          // If isComplete is false, it means the project has > maxFlatTreeBootNodes files, so it's definitely not empty!
+          if (isComplete && canEdit) {
             await initializeProjectWorkspaceRoot(projectId);
+            await loadFolderContent(null, "refresh");
+          } else {
+            // Apply pre-fetched root folder results directly to save a request
+            if ('success' in rootFolderResult) {
+              if (rootFolderResult.success && rootFolderResult.data) {
+                const { nodes: newNodes, nextCursor, taskLinkCounts } = rootFolderResult.data;
+                const mergedChildIds = newNodes.map((n) => n.id);
+                setNodesAndChildren(projectId, newNodes, null, mergedChildIds, {
+                  nextCursor,
+                  hasMore: !!nextCursor,
+                  loaded: true,
+                });
+                if (taskLinkCounts) {
+                  setTaskLinkCounts(projectId, taskLinkCounts);
+                }
+              } else {
+                await loadFolderContent(null, "refresh");
+              }
+            } else {
+              const res = rootFolderResult as { nodes: ProjectNode[]; nextCursor: string | null } | ProjectNode[];
+              const newNodes = Array.isArray(res) ? res : res.nodes;
+              const nextCursor = !Array.isArray(res) ? res.nextCursor : null;
+
+              if (newNodes.length > 0) {
+                upsertNodes(projectId, newNodes);
+              }
+              const mergedChildIds = newNodes.map((n) => n.id);
+              setNodesAndChildren(projectId, newNodes, null, mergedChildIds, {
+                nextCursor,
+                hasMore: !!nextCursor,
+                loaded: true,
+              });
+              const fileIds = newNodes.filter((n) => n.type === "file").map((n) => n.id);
+              if (fileIds.length > 0) {
+                const counts = await getTaskLinkCounts(projectId, fileIds);
+                setTaskLinkCounts(projectId, counts);
+              }
+            }
           }
-          await loadFolderContent(null, "refresh");
         }
       } catch (e) {
         console.error("Flat tree load failed, falling back to paginated loader", e);
@@ -299,7 +355,7 @@ export function useExplorerBoot(options: {
     } else {
       setIsBooting(false);
     }
-  }, [canEdit, projectId, loadFolderContent, toggleExpanded]);
+  }, [canEdit, projectId, loadFolderContent, toggleExpanded, setNodesAndChildren, setTaskLinkCounts, upsertNodes, batchUpdateStore]);
 
   useEffect(() => {
     if (!isActive) return;
@@ -310,12 +366,16 @@ export function useExplorerBoot(options: {
   const prevSyncStatus = useRef(syncStatus);
   useEffect(() => {
     if (!isActive) return;
-    if (prevSyncStatus.current !== "ready" && syncStatus === "ready") {
+    const wasSyncing =
+      prevSyncStatus.current === "pending" ||
+      prevSyncStatus.current === "cloning" ||
+      prevSyncStatus.current === "indexing";
+    if (!isBooting && wasSyncing && syncStatus === "ready") {
       console.log("Sync finished, refreshing file explorer...");
       void loadFolderContent(null, "refresh");
     }
     prevSyncStatus.current = syncStatus;
-  }, [isActive, syncStatus, loadFolderContent]);
+  }, [isActive, isBooting, syncStatus, loadFolderContent]);
 
   // 2. Batch Hydration (Session Restore)
   useEffect(() => {
