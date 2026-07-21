@@ -3,14 +3,13 @@ import { createClient } from "@/lib/supabase/server";
 import { resolvePrivacyRelationship } from "@/lib/privacy/resolver";
 import { getProfilePortfolioProjects } from "@/lib/profile/collaboration";
 import { logger } from "@/lib/logger";
+import { isUuid } from "@/lib/validations/uuid";
+import { z } from "zod";
 
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
-function boundedNumber(value: string | null, fallback: number, max: number) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return fallback;
-  return Math.min(Math.max(Math.trunc(parsed), 0), max);
-}
+const querySchema = z.object({
+  limit: z.coerce.number().int().catch(12).transform((value) => Math.min(Math.max(value, 0), 48)),
+  offset: z.coerce.number().int().catch(0).transform((value) => Math.min(Math.max(value, 0), 5_000)),
+});
 
 export async function GET(
   request: Request,
@@ -19,14 +18,16 @@ export async function GET(
   const startedAt = Date.now();
   const requestId = getRequestId(request);
   const { id } = await params;
-  if (!UUID_PATTERN.test(id)) {
+  if (!isUuid(id)) {
     return jsonError("Invalid profile id", 400, "BAD_REQUEST");
   }
 
   try {
     const url = new URL(request.url);
-    const limit = boundedNumber(url.searchParams.get("limit"), 12, 48);
-    const offset = boundedNumber(url.searchParams.get("offset"), 0, 5_000);
+    const { limit, offset } = querySchema.parse({
+      limit: url.searchParams.get("limit") ?? undefined,
+      offset: url.searchParams.get("offset") ?? undefined,
+    });
     const supabase = await createClient();
     const { data } = await supabase.auth.getUser();
     const viewerId = data.user?.id ?? null;
