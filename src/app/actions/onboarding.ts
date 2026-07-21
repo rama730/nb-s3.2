@@ -3,7 +3,6 @@
 import { db } from '@/lib/db'
 import { onboardingDrafts, onboardingEvents, onboardingSubmissions, profiles, usernameAliases } from '@/lib/db/schema'
 import {
-    ONBOARDING_AVAILABILITY_VALUES,
     ONBOARDING_EXPERIENCE_LEVEL_VALUES,
     ONBOARDING_GENDER_VALUES,
     ONBOARDING_HOURS_PER_WEEK_VALUES,
@@ -11,7 +10,6 @@ import {
     ONBOARDING_SOCIAL_KEYS,
     ONBOARDING_TOTAL_STEPS,
     ONBOARDING_VISIBILITY_VALUES,
-    type OnboardingAvailabilityStatus,
     type OnboardingExperienceLevel,
     type OnboardingGenderIdentity,
     type OnboardingHoursPerWeek,
@@ -28,7 +26,7 @@ import { isEmailVerified } from '@/lib/auth/email-verification'
 import type { OnboardingPayloadInput } from '@/lib/validations/onboarding'
 import { normalizeOnboardingPayload } from '@/lib/validations/onboarding'
 import { normalizeUsername, sanitizeUsernameInput, validateUsername } from '@/lib/validations/username'
-import { and, eq, inArray, isNotNull, sql } from 'drizzle-orm'
+import { and, eq, sql } from 'drizzle-orm'
 import { headers } from 'next/headers'
 import { getTrustedHeadersIp } from '@/lib/security/request-ip'
 import type { User } from '@supabase/supabase-js'
@@ -39,6 +37,9 @@ import {
     normalizeOnboardingSection,
 } from '@/lib/onboarding/state'
 import type { OnboardingStep2SectionId } from '@/lib/onboarding/config'
+import { syncProfileSkills } from '@/lib/skills/service'
+import { getRolePreferences } from '@/lib/profile/role-preferences'
+import { ensureProfileShell } from '@/lib/services/profile-service'
 
 const ONBOARDING_COMPLETE_LIMIT = 10
 const ONBOARDING_COMPLETE_WINDOW_SECONDS = 60
@@ -71,7 +72,6 @@ type DraftPayload = {
     skills?: string[]
     interests?: string[]
     openTo?: string[]
-    availabilityStatus?: OnboardingAvailabilityStatus
     messagePrivacy?: OnboardingMessagePrivacy
     socialLinks?: OnboardingSocialLinks
     experienceLevel?: OnboardingExperienceLevel
@@ -128,20 +128,8 @@ function sanitizeDraftTagList(value: unknown): string[] | undefined {
 }
 
 function sanitizeDraftOpenToList(value: unknown): string[] | undefined {
-    if (!Array.isArray(value)) return undefined
-    const seen = new Set<string>()
-    const list: string[] = []
-    for (const item of value) {
-        if (typeof item !== 'string') continue
-        const normalized = item.trim().slice(0, MAX_DRAFT_TAG_ITEM_CHARS)
-        if (!normalized) continue
-        const key = normalized.toLowerCase()
-        if (seen.has(key)) continue
-        seen.add(key)
-        list.push(normalized)
-        if (list.length >= MAX_DRAFT_OPEN_TO_ITEMS) break
-    }
-    return list
+    const roles = getRolePreferences(value).slice(0, MAX_DRAFT_OPEN_TO_ITEMS)
+    return roles.length > 0 ? roles : undefined
 }
 
 function sanitizeDraftSocialLinks(value: unknown): OnboardingSocialLinks | undefined {
@@ -159,10 +147,6 @@ function sanitizeDraftSocialLinks(value: unknown): OnboardingSocialLinks | undef
 function sanitizeOnboardingDraft(input: unknown): DraftPayload {
     const source = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>
     const visibility = source.visibility
-    const availabilityStatus = sanitizeEnum(
-        source.availabilityStatus,
-        ONBOARDING_AVAILABILITY_VALUES
-    )
     const messagePrivacy = sanitizeEnum(
         source.messagePrivacy,
         ONBOARDING_MESSAGE_PRIVACY_VALUES
@@ -190,7 +174,6 @@ function sanitizeOnboardingDraft(input: unknown): DraftPayload {
         skills: sanitizeDraftTagList(source.skills),
         interests: sanitizeDraftTagList(source.interests),
         openTo: sanitizeDraftOpenToList(source.openTo),
-        availabilityStatus,
         messagePrivacy,
         socialLinks: sanitizeDraftSocialLinks(source.socialLinks),
         experienceLevel,
@@ -224,9 +207,6 @@ function sanitizeOnboardingDraftPatch(input: unknown): Partial<DraftPayload> {
     if ('skills' in source) patch.skills = sanitizeDraftTagList(source.skills)
     if ('interests' in source) patch.interests = sanitizeDraftTagList(source.interests)
     if ('openTo' in source) patch.openTo = sanitizeDraftOpenToList(source.openTo)
-    if ('availabilityStatus' in source) {
-        patch.availabilityStatus = sanitizeEnum(source.availabilityStatus, ONBOARDING_AVAILABILITY_VALUES)
-    }
     if ('messagePrivacy' in source) {
         patch.messagePrivacy = sanitizeEnum(source.messagePrivacy, ONBOARDING_MESSAGE_PRIVACY_VALUES)
     }
@@ -405,7 +385,6 @@ function buildProfileOnboardingValues(params: {
         skills: params.payload.skills,
         interests: params.payload.interests,
         openTo: params.payload.openTo,
-        availabilityStatus: params.payload.availabilityStatus,
         messagePrivacy: params.payload.messagePrivacy,
         socialLinks: params.payload.socialLinks,
         experienceLevel: params.payload.experienceLevel || null,
@@ -416,70 +395,22 @@ function buildProfileOnboardingValues(params: {
     }
 }
 
-function readAuthMetadataString(metadata: User['user_metadata'], key: string): string | null {
-    const value = metadata?.[key]
-    return typeof value === 'string' && value.trim() ? value.trim() : null
-}
-
-function buildProfileShellName(userEmail: string, metadata: User['user_metadata']): string | null {
-    return (
-        readAuthMetadataString(metadata, 'full_name') ||
-        readAuthMetadataString(metadata, 'name') ||
-        userEmail.split('@')[0]?.replace(/[._-]+/g, ' ').trim() ||
-        null
-    )
-}
-
 async function ensureOnboardingProfileShell(params: {
     userId: string
     userEmail: string | null | undefined
     metadata: User['user_metadata']
 }): Promise<{ success: true } | { success: false; error: OnboardingError }> {
-    const existing = await db.query.profiles.findFirst({
-        where: eq(profiles.id, params.userId),
-        columns: { id: true },
-    })
-    if (existing) return { success: true }
-
-    const userEmail = params.userEmail?.trim()
-    if (!userEmail) {
+    const result = await ensureProfileShell(params)
+    if (result.success) return result
+    if (result.error === 'missing_email') {
         return {
             success: false,
             error: onboardingError('INVALID_INPUT', 'Account email is missing. Please re-authenticate.'),
         }
     }
-
-    try {
-        const inserted = await db
-            .insert(profiles)
-            .values({
-                id: params.userId,
-                email: userEmail,
-                fullName: buildProfileShellName(userEmail, params.metadata),
-                avatarUrl: readAuthMetadataString(params.metadata, 'avatar_url'),
-                updatedAt: new Date(),
-            })
-            .onConflictDoNothing()
-            .returning({ id: profiles.id })
-
-        if (inserted.length > 0) return { success: true }
-
-        const recovered = await db.query.profiles.findFirst({
-            where: eq(profiles.id, params.userId),
-            columns: { id: true },
-        })
-        if (recovered) return { success: true }
-
-        return {
-            success: false,
-            error: onboardingError('DB_ERROR', 'Unable to prepare your account profile', true),
-        }
-    } catch (error) {
-        console.error('Error preparing onboarding profile shell:', error)
-        return {
-            success: false,
-            error: onboardingError('DB_ERROR', 'Unable to prepare your account profile', true),
-        }
+    return {
+        success: false,
+        error: onboardingError('DB_ERROR', 'Unable to prepare your account profile', true),
     }
 }
 
@@ -766,6 +697,12 @@ export async function completeOnboarding(
                     },
                 })
 
+            const resolvedSkills = await syncProfileSkills(tx, user.id, payload.skills)
+            await tx
+                .update(profiles)
+                .set({ skills: resolvedSkills.map((skill) => skill.name) })
+                .where(eq(profiles.id, user.id))
+
             if (previousUsername && previousUsername !== payload.username) {
                 await tx
                     .update(usernameAliases)
@@ -824,7 +761,6 @@ export async function completeOnboarding(
             context: 'submit_profile_saved',
             metadata: {
                 visibility: payload.visibility,
-                availabilityStatus: payload.availabilityStatus,
                 messagePrivacy: payload.messagePrivacy,
                 hasHeadline: Boolean(payload.headline),
                 hasBio: Boolean(payload.bio),
@@ -937,70 +873,6 @@ export async function getUsernameSuggestions(fullName: string): Promise<{ sugges
     } catch (error) {
         console.error('Error building username suggestions:', error)
         return { suggestions: [] }
-    }
-}
-
-export async function getOnboardingDraft(): Promise<{
-    success: boolean
-    draft?: DraftPayload
-    step?: number
-    completedThrough?: number
-    activeSection?: OnboardingStep2SectionId
-    version?: number
-    schemaVersion?: number
-    updatedAt?: string
-    error?: string
-    errorDetails?: OnboardingError
-}> {
-    try {
-        const supabase = await createClient()
-        const { data: authData } = await supabase.auth.getUser()
-        const user = authData.user
-        if (!user) return { success: false, error: 'Not authenticated' }
-
-        const row = await db.query.onboardingDrafts.findFirst({
-            where: eq(onboardingDrafts.userId, user.id),
-            columns: {
-                step: true,
-                completedThrough: true,
-                activeSection: true,
-                version: true,
-                schemaVersion: true,
-                draft: true,
-                expiresAt: true,
-                updatedAt: true,
-            },
-        })
-
-        if (!row || (row.expiresAt && row.expiresAt.getTime() <= Date.now())) {
-            if (row) {
-                await db.delete(onboardingDrafts).where(eq(onboardingDrafts.userId, user.id))
-            }
-            return {
-                success: true,
-                step: ONBOARDING_STEP_MIN,
-                completedThrough: 0,
-                activeSection: normalizeOnboardingSection(null),
-                version: 0,
-                schemaVersion: ONBOARDING_SCHEMA_VERSION,
-                draft: {},
-            }
-        }
-
-        return {
-            success: true,
-            step: clampStep(row.step),
-            completedThrough: clampCompletedThrough(row.completedThrough),
-            activeSection: normalizeOnboardingSection(row.activeSection),
-            version: row.version,
-            schemaVersion: row.schemaVersion,
-            draft: sanitizeOnboardingDraft(row.draft),
-            updatedAt: row.updatedAt.toISOString(),
-        }
-    } catch (error) {
-        console.error('Error loading onboarding draft:', error)
-        const details = onboardingError('DB_ERROR', 'Unable to load onboarding draft', true)
-        return { success: false, error: details.message, errorDetails: details }
     }
 }
 
