@@ -3,7 +3,6 @@
 import { useRef } from 'react'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
 import { Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -85,9 +84,9 @@ export function Step1Identity({
 
       {/* Full Name field */}
       <div className="space-y-2">
-        <Label htmlFor="fullName">
+        <label htmlFor="fullName" className="text-sm font-medium leading-none">
           Full name <span className="text-destructive">*</span>
-        </Label>
+        </label>
         <Input
           id="fullName"
           placeholder="John Doe"
