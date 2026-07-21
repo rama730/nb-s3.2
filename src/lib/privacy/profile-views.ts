@@ -1,112 +1,71 @@
 import { normalizeProfile } from "@/lib/utils/normalize-profile";
 import type { PrivacyRelationshipState } from "@/lib/privacy/relationship-state";
 
-type ViewerScopedProfileSource = Record<string, unknown> & {
-  id: string;
-};
-
-export type PublicProfileView = ReturnType<typeof normalizeProfile>;
-export type ViewerScopedProfileView = ReturnType<typeof normalizeProfile>;
-export type PrivateProfileSecurityState = {
-  hasRecoveryCodes: boolean;
-  recoveryCodesGeneratedAt: Date | null;
-};
-
-function shouldExposeIdentity(relationship: PrivacyRelationshipState | null, isOwner: boolean) {
-  if (isOwner) return true;
-  if (!relationship) return false;
-  if (relationship.blockedByTarget || relationship.blockedByViewer) {
-    return false;
-  }
-  return true;
-}
-
-function shouldExposeFullProfile(relationship: PrivacyRelationshipState | null, isOwner: boolean) {
-  if (isOwner) return true;
-  return !!relationship?.canViewProfile;
-}
-
-function shouldExposeLastActiveAt(relationship: PrivacyRelationshipState | null, isOwner: boolean) {
-  if (isOwner) return true;
-  return !!relationship?.canViewProfile && !relationship.blockedByTarget && !relationship.blockedByViewer;
-}
-
-function buildSafeProfileShape(normalized: NonNullable<ReturnType<typeof normalizeProfile>>, options: {
-  exposeIdentity: boolean;
-  exposeFullProfile: boolean;
-  exposeLastActive: boolean;
-}) {
-  const identity = {
-    id: normalized.id,
-    username: options.exposeIdentity ? normalized.username : null,
-    fullName: options.exposeIdentity ? normalized.fullName : null,
-    avatarUrl: options.exposeIdentity ? normalized.avatarUrl : null,
-    headline: options.exposeIdentity ? normalized.headline : null,
-    location: options.exposeIdentity ? normalized.location : null,
-    visibility: normalized.visibility ?? "public",
-    availabilityStatus: normalized.availabilityStatus,
-    profileStrength: normalized.profileStrength,
-    completionMissing: normalized.completionMissing,
-    connectionsCount: normalized.connectionsCount,
-    projectsCount: normalized.projectsCount,
-    followersCount: normalized.followersCount,
-  };
-
-  if (!options.exposeFullProfile) {
-    return {
-      ...identity,
-      bio: null,
-      website: null,
-      bannerUrl: null,
-      socialLinks: {},
-      openTo: [],
-      skills: [],
-      interests: [],
-      experience: [],
-      education: [],
-      lastActiveAt: null,
-      messagePrivacy: null,
-      connectionPrivacy: null,
-      createdAt: null,
-      updatedAt: null,
-    };
-  }
-
-  return {
-    ...identity,
-    bio: normalized.bio,
-    website: normalized.website,
-    bannerUrl: normalized.bannerUrl,
-    socialLinks: normalized.socialLinks,
-    openTo: normalized.openTo,
-    skills: normalized.skills,
-    interests: normalized.interests,
-    experience: normalized.experience,
-    education: normalized.education,
-    lastActiveAt: options.exposeLastActive ? normalized.lastActiveAt ?? null : null,
-    messagePrivacy: normalized.messagePrivacy ?? null,
-    connectionPrivacy: normalized.connectionPrivacy ?? null,
-    createdAt: normalized.createdAt ?? null,
-    updatedAt: normalized.updatedAt ?? null,
-  };
-}
+type ViewerScopedProfileSource = Record<string, unknown> & { id: string };
+export type ProfileView = ReturnType<typeof normalizeProfile>;
 
 export function buildViewerScopedProfileView(params: {
   profile: ViewerScopedProfileSource | null | undefined;
   relationship: PrivacyRelationshipState | null;
   isOwner?: boolean;
-}): ViewerScopedProfileView | null {
-  const normalized = normalizeProfile(params.profile);
-  if (!normalized) return null;
+}): ProfileView | null {
+  const profile = normalizeProfile(params.profile);
+  if (!profile) return null;
 
   const isOwner = params.isOwner ?? false;
-  const exposeIdentity = shouldExposeIdentity(params.relationship, isOwner);
-  const exposeFullProfile = shouldExposeFullProfile(params.relationship, isOwner);
-  const exposeLastActive = shouldExposeLastActiveAt(params.relationship, isOwner);
+  const blocked = Boolean(params.relationship?.blockedByTarget || params.relationship?.blockedByViewer);
+  const exposeIdentity = isOwner || Boolean(params.relationship && !blocked);
+  const exposeFullProfile = isOwner || Boolean(params.relationship?.canViewProfile);
+  const safe = {
+    id: profile.id,
+    username: exposeIdentity ? profile.username : null,
+    fullName: exposeIdentity ? profile.fullName : null,
+    avatarUrl: exposeIdentity ? profile.avatarUrl : null,
+    headline: exposeIdentity ? profile.headline : null,
+    location: exposeIdentity ? profile.location : null,
+    visibility: profile.visibility ?? "public",
+    profileStrength: profile.profileStrength,
+    completionMissing: profile.completionMissing,
+    connectionsCount: profile.connectionsCount,
+    projectsCount: profile.projectsCount,
+    followersCount: profile.followersCount,
+    bio: profile.bio,
+    website: profile.website,
+    bannerUrl: profile.bannerUrl,
+    socialLinks: profile.socialLinks,
+    openTo: profile.openTo,
+    experienceLevel: profile.experienceLevel,
+    hoursPerWeek: profile.hoursPerWeek,
+    skills: profile.skills,
+    interests: profile.interests,
+    // Legacy profile JSON is an owner-only edit document. Public project
+    // contributions are served from the normalized, visibility-scoped API.
+    experience: isOwner ? profile.experience : [],
+    education: profile.education,
+    lastActiveAt: !blocked && (isOwner || params.relationship?.canViewProfile) ? profile.lastActiveAt ?? null : null,
+    messagePrivacy: profile.messagePrivacy ?? null,
+    connectionPrivacy: profile.connectionPrivacy ?? null,
+    createdAt: profile.createdAt ?? null,
+    updatedAt: profile.updatedAt ?? null,
+  };
 
-  return buildSafeProfileShape(normalized, {
-    exposeIdentity,
-    exposeFullProfile,
-    exposeLastActive,
-  });
+  return exposeFullProfile ? safe : {
+    ...safe,
+    bio: null,
+    website: null,
+    bannerUrl: null,
+    socialLinks: {},
+    openTo: [],
+    experienceLevel: null,
+    hoursPerWeek: null,
+    skills: [],
+    interests: [],
+    experience: [],
+    education: [],
+    lastActiveAt: null,
+    messagePrivacy: null,
+    connectionPrivacy: null,
+    createdAt: null,
+    updatedAt: null,
+  };
 }
