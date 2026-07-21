@@ -48,14 +48,6 @@ function getRequestIp(request: Request) {
     return `missing-ip:${fingerprint}`
 }
 
-function parsePositiveInt(value: string | null, fallback: number) {
-    if (value === null || value.trim() === '') return { ok: true as const, value: fallback }
-    if (!/^\d+$/.test(value)) return { ok: false as const, value: fallback }
-    const parsed = Number(value)
-    if (!Number.isFinite(parsed)) return { ok: false as const, value: fallback }
-    return { ok: true as const, value: parsed }
-}
-
 function cacheHeaders(state: 'fresh' | 'stale') {
     if (state === 'stale') {
         return {
