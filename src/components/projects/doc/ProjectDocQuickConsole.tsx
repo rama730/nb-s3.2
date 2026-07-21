@@ -2,10 +2,9 @@
 
 import { memo, useCallback, useEffect, useId, useMemo, useReducer, useRef, useState, type KeyboardEvent } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Check, ClipboardList, Copy, ExternalLink, FileText, Hash, Link2, SquareTerminal, ChevronDown, Plus, X, Search, Loader2, Pencil } from "lucide-react";
+import { Check, ClipboardList, Copy, ExternalLink, FileText, Hash, Link2, SquareTerminal, Plus, X, Search, Loader2, Pencil } from "lucide-react";
 import { Virtuoso } from "react-virtuoso";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
-import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
 import {
@@ -24,13 +23,8 @@ import {
 import type { ProjectDocRailAction, ProjectDocRailTabId } from "@/lib/projects/doc-view-model";
 import { buildProjectDocPlainText } from "@/lib/projects/doc-plain-text";
 import { cn } from "@/lib/utils";
-import {
-    useProjectMarkdowns,
-    PROJECT_MARKDOWNS_LIST_QUERY_KEY,
-    PROJECT_DOC_DRAFT_QUERY_KEY,
-    PROJECT_DOC_QUERY_KEY,
-} from "@/hooks/hub/useProjectDocData";
-import { createProjectMarkdownAction, readProjectMarkdownSearchAction } from "@/app/actions/project";
+import { useProjectMarkdowns } from "@/hooks/hub/useProjectDocData";
+import { readProjectMarkdownSearchAction } from "@/app/actions/project";
 import { ProjectDocLinkDialog } from "@/components/projects/doc/ProjectDocLinkDialog";
 
 
@@ -154,7 +148,7 @@ function ReadmeRailTabButton({
             aria-controls={`readme-rail-${instanceId}-panel-${id}`}
             onClick={() => onToggle(id)}
             className={cn(
-                "relative inline-flex min-h-9 min-w-0 items-center justify-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition-[background-color,border-color,color,box-shadow] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40",
+                "relative inline-flex min-h-9 min-w-0 items-center justify-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition-[background-color,border-color,color,box-shadow] focus-visible:outline-none  ",
                 active
                     ? "border-blue-300 bg-blue-50 text-blue-700 shadow-sm dark:border-blue-500/60 dark:bg-blue-500/10 dark:text-blue-300"
                     : "border-zinc-200 bg-zinc-50 text-zinc-600 hover:border-blue-200 hover:text-blue-600 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-400 dark:hover:border-blue-500/50 dark:hover:text-blue-300",
@@ -232,7 +226,7 @@ const ReferenceRow = memo(function ReferenceRow({
             <button
                 type="button"
                 onClick={() => onExecuteAction(action)}
-                className="flex min-w-0 flex-1 items-center gap-2 rounded-xl px-2 py-2 text-left transition hover:bg-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 dark:hover:bg-zinc-900"
+                className="flex min-w-0 flex-1 items-center gap-2 rounded-xl px-2 py-2 text-left transition hover:bg-zinc-100 focus-visible:outline-none   dark:hover:bg-zinc-900"
                 aria-current={active ? "location" : undefined}
                 title={`Show ${label}`}
             >
@@ -242,7 +236,7 @@ const ReferenceRow = memo(function ReferenceRow({
             {action.openHref ? (
                 <a
                     href={action.openHref}
-                    className="mr-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-zinc-400 transition hover:bg-white hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 dark:hover:bg-zinc-950 dark:hover:text-blue-300"
+                    className="mr-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-zinc-400 transition hover:bg-white hover:text-blue-600 focus-visible:outline-none   dark:hover:bg-zinc-950 dark:hover:text-blue-300"
                     aria-label={`Open ${label}`}
                     title={`Open ${label}`}
                 >
@@ -282,7 +276,7 @@ const CommandShortcutRow = memo(function CommandShortcutRow({
                 type="button"
                 onClick={copyCommand}
                 aria-current={active ? "location" : undefined}
-                className="min-w-0 flex-1 rounded-lg px-1.5 py-1 text-left outline-none transition focus-visible:ring-2 focus-visible:ring-blue-500/40"
+                className="min-w-0 flex-1 rounded-lg px-1.5 py-1 text-left outline-none transition  "
                 title={`Copy and show ${command.label}`}
             >
                 <span className="mb-1.5 flex min-w-0 flex-wrap items-center gap-1.5">
@@ -349,7 +343,7 @@ const CommandShortcutRow = memo(function CommandShortcutRow({
                 type="button"
                 onClick={copyCommand}
                 className={cn(
-                    "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-zinc-200 bg-white text-zinc-500 transition hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400 dark:hover:text-blue-300",
+                    "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-zinc-200 bg-white text-zinc-500 transition hover:text-blue-600 focus-visible:outline-none   dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400 dark:hover:text-blue-300",
                     active && "border-blue-200 text-blue-600 dark:border-blue-500/50 dark:text-blue-300",
                 )}
                 aria-label={`Copy ${command.label}`}
@@ -391,7 +385,7 @@ const HeadingRow = memo(function HeadingRow({
             }}
             aria-current={active ? "location" : undefined}
             className={cn(
-                "block truncate rounded-lg px-2 py-1 text-sm text-zinc-500 outline-none transition-[background-color,box-shadow,color] hover:bg-zinc-100 hover:text-blue-600 focus-visible:ring-2 focus-visible:ring-blue-500/40 dark:hover:bg-zinc-900 dark:hover:text-blue-300",
+                "block truncate rounded-lg px-2 py-1 text-sm text-zinc-500 outline-none transition-[background-color,box-shadow,color] hover:bg-zinc-100 hover:text-blue-600   dark:hover:bg-zinc-900 dark:hover:text-blue-300",
                 heading.level > 2 && "pl-4 text-xs",
                 heading.level > 3 && "pl-6",
                 active && "bg-blue-50 font-semibold text-blue-700 dark:bg-blue-500/10 dark:text-blue-300",
