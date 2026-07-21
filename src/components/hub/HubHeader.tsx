@@ -162,7 +162,7 @@ const HubHeader = memo(function HubHeader({
                                                     hideOpened: newValue 
                                                 });
                                             }}
-                                            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 dark:focus:ring-offset-zinc-900 ${
+                                            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none    dark: ${
                                                 filters.hideOpened ? 'bg-primary' : 'bg-zinc-200 dark:bg-zinc-700'
                                             }`}
                                         >
