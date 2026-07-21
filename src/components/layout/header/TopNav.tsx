@@ -1,10 +1,9 @@
 "use client";
 
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import Link from "next/link";
-import { useEffect, useState, Suspense, useMemo, useCallback } from "react";
-import { createSupabaseBrowserClient } from "@/lib/supabase/client";
-import { Menu, LayoutGrid, Users, Settings, MessageSquare } from "lucide-react";
+import { useCallback, useEffect, useState, Suspense } from "react";
+import { Menu } from "lucide-react";
 import Logo from "./Logo";
 import NavLink from "./NavLink";
 import ThemeToggle from "./ThemeToggle";
@@ -16,21 +15,24 @@ const NotificationPreview = dynamic(() => import("./NotificationPreview"), { ssr
 
 import GlobalSearch from "./GlobalSearch";
 import WorkspaceIndicator from "./WorkspaceIndicator";
-import { ProfileAvatar } from "./ProfileMenu";
+import { ProfileAvatar } from "./ProfileAvatar";
 import { useScrollShadow } from "@/hooks/useScrollShadow";
 
 import { useAuth } from "@/lib/hooks/use-auth";
 import { useNotifications } from "@/hooks/useNotifications";
 import { usePeopleNotifications } from "@/hooks/usePeopleNotifications";
 import { ROUTES } from "@/constants/routes";
-import { logger } from "@/lib/logger";
 import { resolveTopNavAuthUiState } from "./topnav-auth-state";
+import { MAIN_NAV_ITEMS, isMainNavRouteActive } from "./nav-items";
+import {
+    OPEN_MESSAGES_SEARCH_EVENT,
+    resolveGlobalSearchContext,
+    type GlobalSearchContext,
+} from "./global-search";
 
 export default function TopNav() {
     const pathname = usePathname();
-    const router = useRouter();
-    const supabase = useMemo(() => createSupabaseBrowserClient(), []);
-    const { isAuthenticated: isSignedIn, isLoading: authLoading, profile, signOut } = useAuth();
+    const { user, isAuthenticated: isSignedIn, isLoading: authLoading, profile, signOut } = useAuth();
 
     const notifications = useNotifications();
     const { totalPending } = usePeopleNotifications();
@@ -44,7 +46,25 @@ export default function TopNav() {
     const [showMobileMenu, setShowMobileMenu] = useState(false);
     const [showCommandPalette, setShowCommandPalette] = useState(false);
     const [commandPaletteQuery, setCommandPaletteQuery] = useState("");
-    const [commandPaletteContext, setCommandPaletteContext] = useState("default");
+    const [commandPaletteContext, setCommandPaletteContext] = useState<GlobalSearchContext | undefined>();
+
+    const closeGlobalSearch = useCallback(() => {
+        setShowCommandPalette(false);
+        setCommandPaletteQuery("");
+        setCommandPaletteContext(undefined);
+    }, []);
+
+    const openGlobalSearch = useCallback((query = "", requestedContext?: GlobalSearchContext) => {
+        const nextContext = requestedContext ?? resolveGlobalSearchContext(pathname).context;
+        if (nextContext === "messages") {
+            closeGlobalSearch();
+            window.dispatchEvent(new Event(OPEN_MESSAGES_SEARCH_EVENT));
+            return;
+        }
+        setCommandPaletteQuery(query);
+        setCommandPaletteContext(nextContext);
+        setShowCommandPalette(true);
+    }, [closeGlobalSearch, pathname]);
 
     const hasScrolled = useScrollShadow();
 
@@ -56,60 +76,28 @@ export default function TopNav() {
     // Global keyboard shortcut for command palette
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
-            const target = e.target as HTMLElement;
-            if (
-                target.tagName === "INPUT" ||
-                target.tagName === "TEXTAREA" ||
-                target.isContentEditable
-            ) {
-                return;
-            }
-
-            if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+            if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
                 e.preventDefault();
                 if (showCommandPalette) {
-                    setShowCommandPalette(false);
-                    setCommandPaletteQuery("");
-                    setCommandPaletteContext("default");
+                    closeGlobalSearch();
                 } else {
-                    setShowCommandPalette(true);
+                    openGlobalSearch();
                 }
             }
         };
 
         window.addEventListener("keydown", handleKeyDown);
         return () => window.removeEventListener("keydown", handleKeyDown);
-    }, [showCommandPalette]);
+    }, [closeGlobalSearch, openGlobalSearch, showCommandPalette]);
     // Listen for custom event to open command palette
     useEffect(() => {
-        const handleOpenCommandPalette = (e: CustomEvent<{ query?: string; context?: string }>) => {
-            if (e.detail?.query) {
-                setCommandPaletteQuery(e.detail.query);
-            }
-            if (e.detail?.context) {
-                setCommandPaletteContext(e.detail.context);
-            }
-            setShowCommandPalette(true);
+        const handleOpenCommandPalette = (e: CustomEvent<{ query?: string; context?: GlobalSearchContext }>) => {
+            openGlobalSearch(e.detail?.query ?? "", e.detail?.context);
         };
 
         window.addEventListener("open-command-palette", handleOpenCommandPalette as EventListener);
         return () => window.removeEventListener("open-command-palette", handleOpenCommandPalette as EventListener);
-    }, []);
-
-    const navItems = useMemo(
-        () => [
-            { href: ROUTES.HUB, label: "Hub", icon: LayoutGrid },
-            { href: ROUTES.PEOPLE, label: "Connections", icon: Users },
-            { href: ROUTES.MESSAGES, label: "Messages", icon: MessageSquare },
-            { href: ROUTES.SETTINGS, label: "Settings", icon: Settings },
-        ],
-        []
-    );
-
-
-    useEffect(() => {
-        document.documentElement.style.setProperty("--header-height", "var(--ui-topnav-height)");
-    }, []);
+    }, [openGlobalSearch]);
 
     return (
         <header
@@ -119,7 +107,7 @@ export default function TopNav() {
             <div className="mx-auto max-w-7xl px-4 sm:px-6 flex items-center justify-between gap-4 h-[var(--ui-topnav-height)] transition-all duration-300">
                 <div className="flex items-center gap-4">
                     <div className="transition-transform duration-300">
-                        <Logo />
+                        <Logo href={authUiState === "signed-in" ? ROUTES.HUB : ROUTES.HOME} />
                     </div>
 
                     {authUiState === "signed-in" && (
@@ -130,50 +118,48 @@ export default function TopNav() {
                     )}
                 </div>
 
-                <nav
-                    className="hidden md:flex items-center gap-1 flex-1 justify-center max-w-2xl"
-                    aria-label="Main navigation"
-                >
-                    {navItems.map((item) => {
-                        const isActive =
-                            (item.href as string) === ROUTES.HOME
-                                ? pathname === ROUTES.HOME
-                                : pathname?.startsWith(item.href);
+                <div className="hidden min-w-0 flex-1 items-center justify-end gap-4 md:flex">
+                    <nav
+                        className="flex shrink-0 items-center gap-1"
+                        aria-label="Main navigation"
+                    >
+                        {MAIN_NAV_ITEMS.map((item) => {
+                            const isActive = isMainNavRouteActive(pathname, item.href);
 
-                        let badge;
-                        if (item.href === ROUTES.PEOPLE && totalPending > 0) {
-                            badge = (
-                                <div className="absolute right-1 top-1 h-2 w-2 rounded-full bg-red-500 ring-2 ring-white dark:ring-zinc-950" />
+                            let badge;
+                            if (item.href === ROUTES.PEOPLE && totalPending > 0) {
+                                badge = (
+                                    <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-red-500 ring-2 ring-white dark:ring-zinc-950" aria-hidden />
+                                );
+                            }
+
+                            return (
+                                <NavLink
+                                    key={item.href}
+                                    href={item.href}
+                                    icon={item.icon}
+                                    label={item.label}
+                                    isActive={isActive}
+                                    badge={badge}
+                                    aria-label={item.href === ROUTES.PEOPLE && totalPending > 0
+                                        ? `${item.label}, ${totalPending} pending connection request${totalPending === 1 ? "" : "s"}`
+                                        : item.label}
+                                />
                             );
-                        }
+                        })}
+                    </nav>
 
-                        return (
-                            <NavLink
-                                key={item.href}
-                                href={item.href}
-                                icon={item.icon}
-                                label={item.label}
-                                isActive={!!isActive}
-                                badge={badge}
-                            />
-                        );
-                    })}
-                </nav>
-
-                <div className="flex items-center gap-2">
                     {authUiState === "signed-in" && (
-                        <Suspense fallback={<div className="hidden md:block w-9 h-9 bg-zinc-100 dark:bg-zinc-800 rounded-full animate-pulse" />}>
+                        <Suspense fallback={<div className="h-10 w-60 shrink-0 rounded-xl bg-zinc-100 dark:bg-zinc-800" />}>
                             <GlobalSearch
                                 condensed={false}
-                                onOpenCommandPalette={(query, context) => {
-                                    if (query) setCommandPaletteQuery(query);
-                                    if (context) setCommandPaletteContext(context);
-                                    setShowCommandPalette(true);
-                                }}
+                                onOpenCommandPalette={openGlobalSearch}
                             />
                         </Suspense>
                     )}
+                </div>
 
+                <div className="flex items-center gap-2">
                     {authUiState === "signed-in" && (
                         <NotificationPreview
                             unreadCount={notifications.unreadCount}
@@ -185,6 +171,7 @@ export default function TopNav() {
                             hasMore={notifications.hasMore}
                             isLoadingMore={notifications.isLoadingMore}
                             isRealtimeHealthy={notifications.isRealtimeHealthy}
+                            isMarkingAllRead={notifications.isMarkingAllRead}
                             onOpenChange={notifications.setTrayOpen}
                             onFilterChange={notifications.setActiveFilter}
                             onOpenItem={notifications.openItem}
@@ -211,6 +198,7 @@ export default function TopNav() {
                             {authUiState === "signed-in" ? (
                                 <Link
                                     href={ROUTES.PROFILE}
+                                    prefetch={false}
                                     className="flex items-center gap-2 rounded-lg px-2 hover:bg-zinc-100 dark:bg-zinc-900 dark:hover:bg-zinc-800 transition-colors group focus:outline-none app-density-nav-item"
                                     aria-label="Go to profile"
                                 >
@@ -222,7 +210,7 @@ export default function TopNav() {
                             ) : (
                                 <Link
                                     href={ROUTES.LOGIN}
-                                    className="rounded-lg border border-zinc-200 dark:border-zinc-800 px-4 py-1.5 text-sm font-medium hover:bg-zinc-50 dark:bg-zinc-900 dark:hover:bg-zinc-900 transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 dark:focus:ring-offset-zinc-900"
+                                    className="rounded-lg border border-zinc-200 dark:border-zinc-800 px-4 py-1.5 text-sm font-medium hover:bg-zinc-50 dark:bg-zinc-900 dark:hover:bg-zinc-900 transition-colors focus:outline-none    dark:"
                                 >
                                     Sign in
                                 </Link>
@@ -233,9 +221,10 @@ export default function TopNav() {
                     {authUiState === "signed-in" && (
                         <button
                             onClick={() => setShowMobileMenu(true)}
-                            className="md:hidden p-2 rounded-lg hover:bg-zinc-100 dark:bg-zinc-900 dark:hover:bg-zinc-800 transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 dark:focus:ring-offset-zinc-900"
+                            className="md:hidden p-2 rounded-lg hover:bg-zinc-100 dark:bg-zinc-900 dark:hover:bg-zinc-800 transition-colors focus:outline-none    dark:"
                             aria-label="Open mobile menu"
                             aria-expanded={showMobileMenu}
+                            aria-controls="mobile-menu"
                         >
                             <Menu className="w-5 h-5" />
                         </button>
@@ -254,20 +243,21 @@ export default function TopNav() {
                                 setShowMobileMenu(false);
                                 notifications.openTray();
                             }}
+                            onOpenSearch={() => {
+                                setShowMobileMenu(false);
+                                openGlobalSearch();
+                            }}
                         />
                     </Suspense>
                 )}
 
-                {mounted && authUiState === "signed-in" && (
+                {mounted && authUiState === "signed-in" && showCommandPalette && (
                     <CommandPalette
                         isOpen={showCommandPalette}
-                        onClose={() => {
-                            setShowCommandPalette(false);
-                            setCommandPaletteQuery("");
-                            setCommandPaletteContext("default");
-                        }}
+                        onClose={closeGlobalSearch}
                         initialQuery={commandPaletteQuery}
                         context={commandPaletteContext}
+                        recentSearchOwnerId={user?.id}
                     />
                 )}
             </div>
