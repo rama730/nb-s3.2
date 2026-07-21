@@ -6,11 +6,13 @@ import { withDbRetry } from "@/lib/db/retry";
 import { getTrustedHeadersIp } from "@/lib/security/request-ip";
 import { createClient } from "@/lib/supabase/server";
 import { headers } from "next/headers";
-import { eq, and } from "drizzle-orm";
+import { eq, and, isNull } from "drizzle-orm";
 import crypto from "crypto";
 import { issueExtensionAuthCode } from "@/lib/extension/auth-code";
 import { EXTENSION_DEVICE_SESSION_EVENTS } from "@/lib/extension/session-events";
 import { listActiveExtensionSessionsForUser } from "@/lib/extension/active-sessions";
+import { buildExtensionRevocationUri, inferExtensionCallbackUri, normalizeExtensionCallbackUri } from "@/lib/extension/session-callback";
+import { z } from "zod";
 
 type ExtensionTokenAuthMethod = "web_login" | "manual_token";
 
@@ -22,7 +24,10 @@ type GenerateExtensionTokenOptions = {
     editorPlatform?: string;
     editorVersion?: string;
     requestState?: string | null;
+    callbackUri?: string | null;
 };
+
+const extensionSessionIdSchema = z.string().uuid();
 
 function normalizeSessionMetadata(value: unknown, maxLength = 120) {
     if (typeof value !== "string") return null;
@@ -65,6 +70,10 @@ export async function getActiveExtensionSessions(
 
 export async function revokeExtensionSession(sessionId: string) {
     try {
+        if (!extensionSessionIdSchema.safeParse(sessionId).success) {
+            return { success: false as const, error: "Invalid editor session" };
+        }
+
         const supabase = await createClient();
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) {
@@ -82,25 +91,43 @@ export async function revokeExtensionSession(sessionId: string) {
             return { success: false as const, error: "Session not found" };
         }
 
-        // Set revoked_at in a transaction and log revocation event
-        await db.transaction(async (tx) => {
-            await tx
+        const now = new Date();
+        const headerStore = await headers();
+        const revoked = await withDbRetry("extension.revoke_session", () => db.transaction(async (tx) => {
+            const [updated] = await tx
                 .update(extensionDeviceSessions)
                 .set({
-                    revokedAt: new Date(),
-                    revocationReason: "user_logout",
+                    revokedAt: now,
+                    revocationReason: "user_settings_disconnect",
                 })
-                .where(eq(extensionDeviceSessions.id, sessionId));
+                .where(and(
+                    eq(extensionDeviceSessions.id, sessionId),
+                    eq(extensionDeviceSessions.userId, user.id),
+                    isNull(extensionDeviceSessions.revokedAt),
+                ))
+                .returning({ id: extensionDeviceSessions.id });
+
+            if (!updated) return false;
 
             await tx.insert(extensionDeviceSessionEvents).values({
                 sessionId,
                 eventType: EXTENSION_DEVICE_SESSION_EVENTS.revocation,
-                metadata: { reason: "user_logout" },
-                createdAt: new Date(),
+                ipAddress: getTrustedHeadersIp(headerStore),
+                userAgent: headerStore.get("user-agent")?.trim() || null,
+                metadata: { reason: "user_settings_disconnect" },
+                createdAt: now,
             });
-        });
+            return true;
+        }), { module: "extension" });
 
-        return { success: true as const };
+        return {
+            success: true as const,
+            alreadyRevoked: !revoked,
+            disconnectUri: buildExtensionRevocationUri(
+                session.callbackUri ?? inferExtensionCallbackUri(session.editorHost, session.editorName),
+                session.id,
+            ),
+        };
     } catch (e) {
         console.error("Failed to revoke extension session:", e);
         return { success: false as const, error: "Failed to revoke extension session" };
@@ -126,6 +153,7 @@ export async function generateExtensionToken(
         const editorName = normalizeSessionMetadata(options.editorName, 120);
         const editorPlatform = normalizeSessionMetadata(options.editorPlatform, 80);
         const editorVersion = normalizeSessionMetadata(options.editorVersion, 80);
+        const callbackUri = normalizeExtensionCallbackUri(options.callbackUri);
 
         // Generate token and hash
         const rawToken = "nb_dev_" + crypto.randomBytes(24).toString("hex");
@@ -153,6 +181,7 @@ export async function generateExtensionToken(
                         editorName,
                         editorPlatform,
                         editorVersion,
+                        callbackUri,
                         expiresAt,
                         createdAt,
                         lastSeenAt: createdAt,
@@ -200,8 +229,16 @@ export async function generateExtensionAuthCode(
     deviceName: string,
     options: GenerateExtensionTokenOptions = {},
 ) {
+    const callbackUri = normalizeExtensionCallbackUri(options.callbackUri);
+    const requestState = typeof options.requestState === "string" ? options.requestState : "";
+    if (!callbackUri || !requestState || requestState.length > 256) {
+        return { success: false as const, error: "Invalid editor authorization request" };
+    }
+
+    const requestStateHash = crypto.createHash("sha256").update(requestState).digest("hex");
     const result = await generateExtensionToken(deviceName, {
         ...options,
+        callbackUri,
         authMethod: options.authMethod ?? "web_login",
     });
 
@@ -227,7 +264,7 @@ export async function generateExtensionAuthCode(
                     codeHash: issued.codeHash,
                     codeId: issued.codeId,
                     expiresAt: issued.expiresAt.toISOString(),
-                    requestStatePresent: Boolean(options.requestState),
+                    requestStateHash,
                 },
                 createdAt: new Date(),
             });
