@@ -3,11 +3,17 @@ export type ProjectAnalyticsAccessLevel = "public" | "viewer" | "member" | "co_l
 export type ProjectAnalyticsTabId =
     | "overview"
     | "members"
-    | "workflow"
-    | "sprints"
-    | "files"
-    | "risks"
     | "timeline";
+
+type ProjectAnalyticsActionSurface =
+    | ProjectAnalyticsTabId
+    | "dashboard"
+    | "readme"
+    | "tasks"
+    | "settings"
+    | "files"
+    | "sprints"
+    | "workflow";
 
 export type ProjectAnalyticsContextDateRange = "all" | "7d" | "30d" | "90d";
 
@@ -20,7 +26,7 @@ export type ProjectAnalyticsContextFilters = {
 export type ProjectAnalyticsActionLink = {
     label: string;
     href: string;
-    tab?: ProjectAnalyticsTabId | "dashboard" | "readme" | "tasks" | "settings";
+    tab?: ProjectAnalyticsActionSurface;
     entityId?: string | null;
 };
 
@@ -107,66 +113,6 @@ export type ProjectAnalyticsMemberDetail = {
     collaborationActivity: ProjectAnalyticsTimelineEvent[];
 };
 
-export type ProjectAnalyticsWorkflow = {
-    statusCounts: Record<string, number>;
-    friction: ProjectAnalyticsInsight[];
-    unassigned: ProjectAnalyticsTaskRef[];
-    blocked: ProjectAnalyticsTaskRef[];
-    stale: ProjectAnalyticsTaskRef[];
-    removedMemberAssignments: ProjectAnalyticsTaskRef[];
-};
-
-export type ProjectAnalyticsSprintSummary = {
-    id: string;
-    name: string;
-    status: string;
-    startDate: string | null;
-    endDate: string | null;
-    planned: number;
-    active: number;
-    completed: number;
-    blocked: number;
-    carriedForward: number;
-    story: string;
-    actionLink: ProjectAnalyticsActionLink;
-};
-
-export type ProjectAnalyticsFiles = {
-    active: ProjectAnalyticsFileRef[];
-    needsReview: ProjectAnalyticsFileRef[];
-    recentlyChanged: ProjectAnalyticsFileRef[];
-    linkedToWork: ProjectAnalyticsFileRef[];
-    possiblyStale: ProjectAnalyticsFileRef[];
-    memberContributions: Array<{ person: ProjectAnalyticsPerson; files: number; versions: number }>;
-    activityBatches: ProjectAnalyticsFileActivityBatch[];
-};
-
-export type ProjectAnalyticsFileActivityBatch = {
-    id: string;
-    label: string;
-    count: number;
-    versions: number;
-    occurredAt: string;
-    contributor: ProjectAnalyticsPerson | null;
-    actionLink: ProjectAnalyticsActionLink;
-};
-
-export type ProjectAnalyticsRiskSignal = {
-    id: string;
-    severity: "low" | "medium" | "high";
-    lifecycleStatus: ProjectAnalyticsRiskLifecycleStatus;
-    title: string;
-    signal?: string;
-    reason: string;
-    affectedItem: string;
-    affectedSurface?: string;
-    owner?: ProjectAnalyticsPerson | null;
-    suggestedAction: string;
-    actionLink: ProjectAnalyticsActionLink;
-};
-
-export type ProjectAnalyticsRiskLifecycleStatus = "active" | "acknowledged" | "resolved" | "dismissed";
-
 export type ProjectAnalyticsComparisonSummary = {
     label: string;
     currentWindow: string;
@@ -177,18 +123,6 @@ export type ProjectAnalyticsComparisonSummary = {
     currentCompleted: number;
     previousCompleted: number;
     completedDelta: number;
-};
-
-export type ProjectAnalyticsSnapshot = {
-    overview: ProjectAnalyticsOverview;
-    members: ProjectAnalyticsMemberSummary[];
-    workflow: ProjectAnalyticsWorkflow;
-    sprints: ProjectAnalyticsSprintSummary[];
-    files: ProjectAnalyticsFiles;
-    risks: ProjectAnalyticsRiskSignal[];
-    timeline: { items: ProjectAnalyticsTimelineEvent[]; nextCursor: string | null; total: number };
-    context: ProjectAnalyticsContextFilters;
-    generatedAt: string;
 };
 
 export type ProjectAnalyticsTimelineEvent = {
@@ -215,17 +149,6 @@ export type ProjectAnalyticsTaskRef = {
     assigneeName: string;
     ageDays: number;
     updatedAt: string;
-    actionLink: ProjectAnalyticsActionLink;
-};
-
-export type ProjectAnalyticsFileRef = {
-    id: string;
-    name: string;
-    type: string;
-    updatedAt: string;
-    contributorId: string | null;
-    source: ProjectAnalyticsFileSource;
-    publicVisible: boolean;
     actionLink: ProjectAnalyticsActionLink;
 };
 
@@ -382,8 +305,6 @@ export type ProjectAnalyticsTimelineFilters = {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const STALE_DAYS = 7;
-const BLOCKED_ATTENTION_DAYS = 3;
-
 export const PROJECT_ANALYTICS_DATASET_LIMITS = {
     members: 200,
     tasks: 500,
@@ -553,10 +474,10 @@ const routeBase = (input: BuildProjectAnalyticsInput) => `/projects/${input.proj
 const actionLink = (
     input: BuildProjectAnalyticsInput,
     label: string,
-    tab: ProjectAnalyticsTabId | "dashboard" | "readme" | "tasks" | "settings",
+    tab: ProjectAnalyticsActionSurface,
     entityId?: string | null,
 ): ProjectAnalyticsActionLink => {
-    const surfaceTab = tab === "workflow" ? "tasks" : tab === "overview" || tab === "members" || tab === "risks" || tab === "timeline" ? "analytics" : tab;
+    const surfaceTab = tab === "workflow" ? "tasks" : tab === "overview" || tab === "members" || tab === "timeline" ? "analytics" : tab;
     const params = new URLSearchParams({ tab: surfaceTab });
     if (surfaceTab === "analytics") params.set("analyticsTab", tab);
     if (entityId) {
@@ -877,7 +798,7 @@ export function buildProjectAnalyticsOverview(
             body: "Blocked work is visible so the team can help without turning analytics into a blame board.",
             tone: "danger",
             metric: blockedTasks.length,
-            actionLink: actionLink(input, "Open blocked work", "risks", blockedTasks[0]?.id),
+            actionLink: actionLink(input, "Open blocked work", "workflow", blockedTasks[0]?.id),
         });
     }
     if (insights.length === 0) {
@@ -1053,252 +974,6 @@ export function buildProjectAnalyticsMemberDetail(
     };
 }
 
-export function buildProjectAnalyticsWorkflow(input: BuildProjectAnalyticsInput): ProjectAnalyticsWorkflow {
-    const now = asDate(input.now, new Date());
-    const activeMembers = activeMemberUserIds(input);
-    const statusCounts = input.tasks.reduce<Record<string, number>>((acc, task) => {
-        acc[task.status] = (acc[task.status] ?? 0) + 1;
-        return acc;
-    }, {});
-    const unassigned = input.tasks.filter((task) => isActive(task) && !task.assigneeId).map((task) => toTaskRef(task, input, now));
-    const blocked = input.tasks.filter(isBlocked).map((task) => toTaskRef(task, input, now));
-    const stale = staleTasks(input, now).map((task) => toTaskRef(task, input, now));
-    const removedMemberAssignments = input.tasks
-        .filter((task) => isActive(task) && task.assigneeId && !activeMembers.has(task.assigneeId))
-        .map((task) => toTaskRef(task, input, now));
-    const friction: ProjectAnalyticsInsight[] = [];
-    if (unassigned.length) {
-        friction.push({
-            id: "unassigned-work",
-            title: `${unassigned.length} unassigned active ${unassigned.length === 1 ? "task" : "tasks"}`,
-            body: "Active work is easier to finish when there is a clear owner.",
-            tone: "warning",
-            metric: unassigned.length,
-            actionLink: actionLink(input, "Review unassigned work", "workflow", unassigned[0]?.id),
-        });
-    }
-    if (blocked.length) {
-        friction.push({
-            id: "blocked-too-long",
-            title: `${blocked.length} blocked ${blocked.length === 1 ? "task" : "tasks"}`,
-            body: "Blocked tasks should be treated as a team support signal.",
-            tone: "danger",
-            metric: blocked.length,
-            actionLink: actionLink(input, "Open blocked work", "workflow", blocked[0]?.id),
-        });
-    }
-    if (removedMemberAssignments.length) {
-        friction.push({
-            id: "former-assignee",
-            title: `${removedMemberAssignments.length} task ${removedMemberAssignments.length === 1 ? "needs" : "need"} reassignment`,
-            body: "Some active work still points to a former collaborator.",
-            tone: "danger",
-            metric: removedMemberAssignments.length,
-            actionLink: actionLink(input, "Reassign work", "workflow", removedMemberAssignments[0]?.id),
-        });
-    }
-    return { statusCounts, friction, unassigned, blocked, stale, removedMemberAssignments };
-}
-
-export function buildProjectAnalyticsSprints(input: BuildProjectAnalyticsInput): ProjectAnalyticsSprintSummary[] {
-    return input.sprints
-        .map((sprint) => {
-            const sprintTasks = input.tasks.filter((task) => task.sprintId === sprint.id);
-            const active = sprintTasks.filter(isActive).length;
-            const completed = sprintTasks.filter(isDone).length;
-            const blocked = sprintTasks.filter(isBlocked).length;
-            const story = sprintTasks.length === 0
-                ? "No tasks are attached to this sprint yet."
-                : `Started with ${sprintTasks.length} ${sprintTasks.length === 1 ? "task" : "tasks"}, completed ${completed}, and ${blocked} ${blocked === 1 ? "is" : "are"} blocked.`;
-            return {
-                id: sprint.id,
-                name: sprint.name,
-                status: sprint.status ?? "planning",
-                startDate: sprint.startDate ? iso(sprint.startDate) : null,
-                endDate: sprint.endDate ? iso(sprint.endDate) : null,
-                planned: sprintTasks.length,
-                active,
-                completed,
-                blocked,
-                carriedForward: sprintTasks.filter((task) => isActive(task) && task.updatedAt && sprint.endDate && asDate(task.updatedAt) > asDate(sprint.endDate)).length,
-                story,
-                actionLink: actionLink(input, "Open sprint", "sprints", sprint.id),
-            };
-        })
-        .sort((a, b) => (b.startDate ?? "").localeCompare(a.startDate ?? ""));
-}
-
-export function buildProjectAnalyticsFiles(input: BuildProjectAnalyticsInput): ProjectAnalyticsFiles {
-    const now = asDate(input.now, new Date());
-    const profiles = profileMap(input);
-    const memberByUserId = new Map(input.members.map((member) => [member.userId, member]));
-    const visibleFiles = analyticsVisibleFiles(input);
-    const visibleFileIds = new Set(visibleFiles.map((file) => file.id));
-    const versionsByNode = versionsByNodeLatestFirst(input.fileVersions);
-    const toFileRef = (file: ProjectAnalyticsFileInput): ProjectAnalyticsFileRef => ({
-        id: file.id,
-        name: fileDisplayName(file),
-        type: file.type ?? "file",
-        updatedAt: iso(fileActivityAt(file, versionsByNode)),
-        contributorId: fileActivityContributorId(file, versionsByNode),
-        source: normalizeFileSource(file, input),
-        publicVisible: file.publicVisible !== false,
-        actionLink: actionLink(input, "Open file", "files", file.id),
-    });
-    const linkedNodeIds = new Set(input.taskFileLinks.map((link) => link.nodeId));
-    const reviewNodeIds = new Set(pendingReviewLinks(input).map((link) => link.nodeId));
-    const active = visibleFiles.map(toFileRef);
-    const memberContributions = buildProjectAnalyticsMemberSummaries(input)
-        .map((summary) => ({
-            person: summary.person,
-            files: visibleFiles.filter((file) => fileActivityContributorId(file, versionsByNode) === summary.person.id).length,
-            versions: input.fileVersions.filter((version) => version.uploadedBy === summary.person.id && visibleFileIds.has(version.nodeId)).length,
-        }))
-        .filter((entry) => entry.files + entry.versions > 0);
-    const batchMap = new Map<string, {
-        contributorId: string | null;
-        day: string;
-        source: ProjectAnalyticsFileSource;
-        count: number;
-        versions: number;
-        fileId: string | null;
-        latest: string;
-    }>();
-    for (const file of visibleFiles) {
-        const updated = iso(fileActivityAt(file, versionsByNode));
-        const day = updated.slice(0, 10);
-        const contributorId = fileActivityContributorId(file, versionsByNode);
-        const source = normalizeFileSource(file, input);
-        const key = `${day}:${source}:${contributorId ?? "unknown"}`;
-        const current = batchMap.get(key) ?? {
-            contributorId,
-            day,
-            source,
-            count: 0,
-            versions: 0,
-            fileId: file.id,
-            latest: updated,
-        };
-        current.count += 1;
-        current.versions += versionsByNode.get(file.id)?.length ?? 0;
-        if (asDate(updated) > asDate(current.latest)) {
-            current.latest = updated;
-            current.fileId = file.id;
-        }
-        batchMap.set(key, current);
-    }
-    const activityBatches = [...batchMap.values()]
-        .sort((a, b) => asDate(b.latest).getTime() - asDate(a.latest).getTime())
-        .map((batch) => ({
-            id: `${batch.day}:${batch.source}:${batch.contributorId ?? "unknown"}`,
-            label: batch.source === "github"
-                ? `${batch.count} repository ${batch.count === 1 ? "file" : "files"} indexed`
-                : `${batch.count} ${batch.count === 1 ? "file" : "files"} changed`,
-            count: batch.count,
-            versions: batch.versions,
-            occurredAt: batch.latest,
-            contributor: batch.contributorId
-                ? formatProjectAnalyticsPerson(profiles.get(batch.contributorId), memberByUserId.get(batch.contributorId) ?? null, input.project.ownerId)
-                : null,
-            actionLink: actionLink(input, "Open file workspace", "files", batch.fileId),
-        }));
-    return {
-        active,
-        needsReview: visibleFiles.filter((file) => reviewNodeIds.has(file.id)).map(toFileRef),
-        recentlyChanged: visibleFiles
-            .filter((file) => daysOld(fileActivityAt(file, versionsByNode), now) <= 7)
-            .map(toFileRef),
-        linkedToWork: visibleFiles.filter((file) => linkedNodeIds.has(file.id)).map(toFileRef),
-        possiblyStale: visibleFiles
-            .filter((file) => daysOld(fileActivityAt(file, versionsByNode), now) >= 30 && !linkedNodeIds.has(file.id))
-            .map(toFileRef),
-        memberContributions,
-        activityBatches,
-    };
-}
-
-export function buildProjectAnalyticsRisks(input: BuildProjectAnalyticsInput): ProjectAnalyticsRiskSignal[] {
-    const now = asDate(input.now, new Date());
-    const workflow = buildProjectAnalyticsWorkflow(input);
-    const risks: ProjectAnalyticsRiskSignal[] = [];
-    const lifecycleByRiskId = new Map<string, ProjectAnalyticsRiskLifecycleStatus>();
-    for (const event of [...input.events].sort((a, b) => asDate(a.createdAt).getTime() - asDate(b.createdAt).getTime())) {
-        if (event.type !== "project_analytics.risk_lifecycle_changed") continue;
-        const riskId = typeof event.metadata?.riskId === "string" ? event.metadata.riskId : null;
-        const status = event.metadata?.status;
-        if (!riskId) continue;
-        if (status === "active" || status === "acknowledged" || status === "resolved" || status === "dismissed") {
-            lifecycleByRiskId.set(riskId, status);
-        }
-    }
-    const ownerForTask = (task?: ProjectAnalyticsTaskRef | null) => {
-        if (!task?.assigneeId) return null;
-        const profiles = profileMap(input);
-        const member = input.members.find((entry) => entry.userId === task.assigneeId);
-        return formatProjectAnalyticsPerson(profiles.get(task.assigneeId), member ?? null, input.project.ownerId);
-    };
-    const addRisk = (
-        id: string,
-        severity: ProjectAnalyticsRiskSignal["severity"],
-        title: string,
-        signal: string,
-        reason: string,
-        affectedItem: string,
-        affectedSurface: string,
-        suggestedAction: string,
-        action: ProjectAnalyticsActionLink,
-        owner?: ProjectAnalyticsPerson | null,
-    ) => risks.push({
-        id,
-        severity,
-        lifecycleStatus: lifecycleByRiskId.get(id) ?? "active",
-        title,
-        signal,
-        reason,
-        affectedItem,
-        affectedSurface,
-        suggestedAction,
-        actionLink: action,
-        owner,
-    });
-    if (workflow.blocked.length) {
-        addRisk("blocked-tasks", "high", "Blocked work needs support", `${workflow.blocked.length} blocked`, "Blocked tasks can stall dependent work.", `${workflow.blocked.length} blocked tasks`, "Tasks", "Open the blocked tasks and decide the next unblock step.", actionLink(input, "Review blocked work", "workflow", workflow.blocked[0]?.id), ownerForTask(workflow.blocked[0]));
-    }
-    if (workflow.stale.length) {
-        addRisk("stale-tasks", "medium", "Stale work has gone quiet", `${STALE_DAYS}+ days quiet`, `No recent movement for at least ${STALE_DAYS} days.`, `${workflow.stale.length} stale tasks`, "Tasks", "Confirm whether each task is still needed or needs a smaller next step.", actionLink(input, "Review stale work", "workflow", workflow.stale[0]?.id), ownerForTask(workflow.stale[0]));
-    }
-    if (workflow.unassigned.length) {
-        addRisk("unassigned-work", "medium", "Active work is unassigned", `${workflow.unassigned.length} unowned`, "Unowned active work is easy to miss.", `${workflow.unassigned.length} unassigned tasks`, "Tasks", "Assign an eligible member or move the work back to backlog.", actionLink(input, "Assign work", "workflow", workflow.unassigned[0]?.id));
-    }
-    if (workflow.removedMemberAssignments.length) {
-        addRisk("removed-member-assignment", "high", "Former collaborator still owns active work", "Former assignee", "Removed members should not remain responsible for active project work.", `${workflow.removedMemberAssignments.length} tasks need reassignment`, "Collaborators", "Reassign active tasks to an active member.", actionLink(input, "Reassign former-member work", "workflow", workflow.removedMemberAssignments[0]?.id), ownerForTask(workflow.removedMemberAssignments[0]));
-    }
-    const overloaded = buildProjectAnalyticsMemberSummaries(input).filter((member) => member.activeTasks >= 6);
-    if (overloaded.length) {
-        addRisk("overloaded-members", "medium", "Workload may be concentrated", "6+ active tasks", "One or more members are carrying six or more active tasks.", `${overloaded.length} members`, "Members", "Review member detail and redistribute work where helpful.", actionLink(input, "Open member workload", "members", overloaded[0]?.person.id), overloaded[0]?.person ?? null);
-    }
-    const reviews = pendingReviewLinks(input);
-    if (reviews.length) {
-        addRisk("pending-file-reviews", "medium", "File review queue is waiting", `${reviews.length} reviews`, "Review annotations are present on linked files.", `${reviews.length} file reviews`, "Files", "Open the files intelligence view and resolve review items.", actionLink(input, "Open file reviews", "files", reviews[0]?.nodeId));
-    }
-    const pendingApplications = input.applications.filter((application) => application.status === "pending");
-    if (pendingApplications.length) {
-        addRisk("pending-applications", "medium", "Applications are waiting", `${pendingApplications.length} pending`, "Pending applications may block role capacity or collaborator onboarding.", `${pendingApplications.length} pending applications`, "Roles & applications", "Review applications and route decisions.", actionLink(input, "Open roles", "overview", pendingApplications[0]?.id));
-    }
-    const activeSprintWithDrift = input.sprints.find((sprint) => sprint.status === "active" && sprint.endDate && asDate(sprint.endDate) < now);
-    if (activeSprintWithDrift) {
-        addRisk("sprint-drift", "medium", "Active sprint is past its end date", "Past end date", "Sprint cadence may need a closeout or carry-forward decision.", activeSprintWithDrift.name, "Sprints", "Review the sprint story and close or update the sprint.", actionLink(input, "Open sprint", "sprints", activeSprintWithDrift.id));
-    }
-    if (recentTaskMovement(input, now).length === 0 && input.tasks.length > 0) {
-        addRisk("low-recent-movement", "low", "Project movement is quiet", "No task movement", "No task movement was detected in the last week.", "Project timeline", "Timeline", "Check whether the project is paused or needs a planning update.", actionLink(input, "Open timeline", "timeline"));
-    }
-    const openRolesNoProgress = input.roles.filter((role) => (role.count ?? 0) > (role.filled ?? 0));
-    if (openRolesNoProgress.length && pendingApplications.length === 0) {
-        addRisk("open-roles-no-progress", "low", "Open roles have no applicant movement", "Open capacity", "Open capacity exists but no pending application activity is visible.", `${openRolesNoProgress.length} open roles`, "Roles & applications", "Review role copy or share the project with suitable collaborators.", actionLink(input, "Review roles", "overview", openRolesNoProgress[0]?.id));
-    }
-    return risks;
-}
-
 export function buildProjectAnalyticsTimeline(
     input: BuildProjectAnalyticsInput,
     filters: ProjectAnalyticsTimelineFilters = {},
@@ -1455,71 +1130,4 @@ export function buildProjectAnalyticsTimeline(
         nextCursor: filtered.length > limit ? filtered[limit - 1]?.occurredAt ?? null : null,
         total: filtered.length,
     };
-}
-
-export function buildProjectAnalyticsSnapshot(
-    input: BuildProjectAnalyticsInput,
-    contextInput?: Partial<ProjectAnalyticsContextFilters> | null,
-): ProjectAnalyticsSnapshot {
-    const context = normalizeProjectAnalyticsContext(contextInput);
-    const scoped = filterProjectAnalyticsDatasetByContext(input, context);
-    const timelineFilters: ProjectAnalyticsTimelineFilters = {
-        memberId: context.memberId,
-        source: context.source,
-        limit: 40,
-    };
-    return {
-        overview: buildProjectAnalyticsOverview(scoped, context, input),
-        members: scoped.accessLevel === "public" ? [] : buildProjectAnalyticsMemberSummaries(scoped),
-        workflow: scoped.accessLevel === "public"
-            ? { statusCounts: {}, friction: [], unassigned: [], blocked: [], stale: [], removedMemberAssignments: [] }
-            : buildProjectAnalyticsWorkflow(scoped),
-        sprints: scoped.accessLevel === "public" ? [] : buildProjectAnalyticsSprints(scoped),
-        files: buildProjectAnalyticsFiles(scoped.accessLevel === "public" ? { ...scoped, taskFileLinks: [] } : scoped),
-        risks: scoped.accessLevel === "owner" || scoped.accessLevel === "co_leader" ? buildProjectAnalyticsRisks(scoped) : [],
-        timeline: buildProjectAnalyticsTimeline(
-            scoped.accessLevel === "public" ? { ...scoped, events: [], comments: [], workflows: [] } : scoped,
-            timelineFilters,
-        ),
-        context,
-        generatedAt: iso(input.now ?? new Date()),
-    };
-}
-
-export function buildProjectAnalyticsReport(snapshot: ProjectAnalyticsSnapshot): string {
-    const overview = snapshot.overview;
-    const comparison = overview.comparison;
-    const riskLines = snapshot.risks.slice(0, 8).map((risk) => `- [${risk.severity}] ${risk.title}: ${risk.suggestedAction}`);
-    const memberLines = snapshot.members.slice(0, 8).map((member) =>
-        `- ${member.person.name} (${member.person.roleLabel}): ${member.activeTasks} active, ${member.completedTasks} completed, ${member.fileContributions} file contributions`);
-    const fileLines = snapshot.files.activityBatches.slice(0, 8).map((batch) =>
-        `- ${batch.label} by ${batch.contributor?.name ?? "Unknown contributor"} on ${batch.occurredAt.slice(0, 10)}`);
-    return [
-        "# Project Analytics Report",
-        "",
-        `Generated: ${snapshot.generatedAt}`,
-        `Context: member=${snapshot.context.memberId ?? "all"}, surface=${snapshot.context.source}, window=${snapshot.context.dateRange}`,
-        "",
-        "## Pulse",
-        `- Active work: ${overview.pulse.activeWork}`,
-        `- Completed work: ${overview.pulse.completedWork}`,
-        `- Blocked work: ${overview.pulse.blockedWork}`,
-        `- Stale work: ${overview.pulse.staleWork}`,
-        `- Pending reviews: ${overview.pulse.pendingReviews}`,
-        "",
-        "## Compare",
-        `- ${comparison.label}`,
-        `- Movement: ${comparison.currentMovement} (${comparison.movementDelta >= 0 ? "+" : ""}${comparison.movementDelta})`,
-        `- Completed: ${comparison.currentCompleted} (${comparison.completedDelta >= 0 ? "+" : ""}${comparison.completedDelta})`,
-        "",
-        "## Members",
-        ...(memberLines.length ? memberLines : ["- No member contribution rows matched this context."]),
-        "",
-        "## Risks",
-        ...(riskLines.length ? riskLines : ["- No operational risk signals matched this context."]),
-        "",
-        "## File Movement",
-        ...(fileLines.length ? fileLines : ["- No file movement batches matched this context."]),
-        "",
-    ].join("\n");
 }
