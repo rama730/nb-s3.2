@@ -1,5 +1,11 @@
 'use client';
 
+import {
+    detectPackageTechnologies,
+    detectRepositoryFileTechnologies,
+    mergeDetectedTechnologies,
+} from '@/lib/skills/repository-detection';
+
 /**
  * Analyze uploaded folder to auto-detect project metadata.
  * Scans for package.json and README.md in the FileList.
@@ -12,26 +18,6 @@ export interface FolderAnalysis {
     technologies: string[];
     detectedFramework: string | null;
 }
-
-// Tech detection patterns (same as GitHub analyzer)
-const TECH_PATTERNS: Record<string, string[]> = {
-    'React': ['react', 'react-dom'],
-    'Next.js': ['next'],
-    'Vue': ['vue'],
-    'Nuxt': ['nuxt'],
-    'Angular': ['@angular/core'],
-    'Svelte': ['svelte'],
-    'Express': ['express'],
-    'Fastify': ['fastify'],
-    'NestJS': ['@nestjs/core'],
-    'TypeScript': ['typescript'],
-    'Tailwind CSS': ['tailwindcss'],
-    'Prisma': ['prisma', '@prisma/client'],
-    'Drizzle': ['drizzle-orm'],
-    'Vite': ['vite'],
-    'Jest': ['jest'],
-    'Vitest': ['vitest'],
-};
 
 /**
  * Analyze a folder from FileList to extract metadata.
@@ -48,13 +34,16 @@ export async function analyzeUploadedFolder(files: FileList, signal?: AbortSigna
     let packageJsonFile: File | null = null;
     let readmeFile: File | null = null;
 
-    // PURE OPTIMIZATION: Use native for loop to avoid Array.from memory allocation
+    const repositoryPaths: string[] = [];
+
+    // Keep a bounded path sample for stack markers without allocating an array for the whole FileList.
     // Especially important if someone drops a folder with 1M files (e.g. node_modules)
     for (let i = 0; i < files.length; i++) {
         if (signal?.aborted) return result;
         const file = files[i];
         if (!file) continue;
         const name = file.name.toLowerCase();
+        if (repositoryPaths.length < 10_000) repositoryPaths.push(file.webkitRelativePath || file.name);
 
         if (name === 'package.json') {
             packageJsonFile = file;
@@ -62,11 +51,12 @@ export async function analyzeUploadedFolder(files: FileList, signal?: AbortSigna
             readmeFile = file;
         }
 
-        // Early break if both found
-        if (packageJsonFile && readmeFile) break;
     }
 
-    if (!packageJsonFile && !readmeFile) return result;
+    if (!packageJsonFile && !readmeFile) {
+        result.technologies = detectRepositoryFileTechnologies(repositoryPaths);
+        return result;
+    }
 
     if (signal?.aborted) return result;
 
@@ -84,10 +74,9 @@ export async function analyzeUploadedFolder(files: FileList, signal?: AbortSigna
             if (pkg.name) result.title = pkg.name.replace(/-/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase());
             if (pkg.description) result.description = pkg.description;
 
-            const deps = { ...pkg.dependencies, ...pkg.devDependencies };
-            for (const [tech, patterns] of Object.entries(TECH_PATTERNS)) {
-                if (patterns.some(p => deps[p])) result.technologies.push(tech);
-            }
+            const detected = detectPackageTechnologies(pkg);
+            result.technologies = detected.technologies;
+            result.detectedFramework = detected.detectedFramework;
         } catch { /* Invalid JSON */ }
     }
 
@@ -97,6 +86,9 @@ export async function analyzeUploadedFolder(files: FileList, signal?: AbortSigna
         if (lines.length) result.description = lines.slice(0, 2).join(' ').substring(0, 200);
     }
 
-    result.technologies = result.technologies.slice(0, 6);
+    result.technologies = mergeDetectedTechnologies(
+        result.technologies,
+        detectRepositoryFileTechnologies(repositoryPaths),
+    );
     return result;
 }
