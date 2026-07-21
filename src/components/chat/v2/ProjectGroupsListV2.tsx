@@ -5,7 +5,7 @@ import Image from 'next/image';
 import { formatDistanceToNow } from 'date-fns';
 import { BellOff, Folder, Search, Users } from 'lucide-react';
 import { Virtuoso } from 'react-virtuoso';
-import type { getProjectGroupsPageV2 } from '@/app/actions/messaging/v2';
+import type { getProjectGroups } from '@/app/actions/messaging';
 import { cn } from '@/lib/utils';
 import { useProjectGroups } from '@/hooks/useMessagesV2';
 import { StackedAvatars } from '@/components/ui/StackedAvatars';
@@ -18,7 +18,7 @@ interface ProjectGroupsListV2Props {
 }
 
 type ProjectGroupListItem = NonNullable<
-    Awaited<ReturnType<typeof getProjectGroupsPageV2>>['projectGroups']
+    Awaited<ReturnType<typeof getProjectGroups>>['projectGroups']
 >[number];
 
 export function ProjectGroupsListV2({
