@@ -2,7 +2,7 @@
 
 import React from "react";
 import { cn } from "@/lib/utils";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 
 type AvatarGroupTooltipProps = {
     children: React.ReactNode;
@@ -44,7 +44,7 @@ export function AvatarGroup({ children, className }: AvatarGroupProps) {
     const items = React.Children.toArray(children).filter(React.isValidElement);
 
     return (
-        <TooltipProvider delayDuration={100} skipDelayDuration={300}>
+        <TooltipPrimitive.Provider delayDuration={100} skipDelayDuration={300}>
             <div className={cn("flex items-center overflow-visible -space-x-3 isolate [contain:layout]", className)}>
                 {items.map((child, index) => {
                     const avatarNode = child as React.ReactElement<any>;
@@ -62,13 +62,13 @@ export function AvatarGroup({ children, className }: AvatarGroupProps) {
                     }
 
                     return (
-                        <Tooltip
+                        <TooltipPrimitive.Root
                             key={avatarNode.key ?? index}
                             open={tooltipNode.props.open}
                             onOpenChange={tooltipNode.props.onOpenChange}
                         >
-                            <TooltipTrigger asChild>{avatar}</TooltipTrigger>
-                            <TooltipContent
+                            <TooltipPrimitive.Trigger asChild>{avatar}</TooltipPrimitive.Trigger>
+                            <TooltipPrimitive.Content
                                 side="top"
                                 align="center"
                                 sideOffset={10}
@@ -76,11 +76,11 @@ export function AvatarGroup({ children, className }: AvatarGroupProps) {
                                 className="!animate-none bg-black text-white border-0 rounded-lg px-3 py-2 text-xs text-center motion-reduce:transition-none opacity-0 data-[state=delayed-open]:opacity-100 data-[state=instant-open]:opacity-100 data-[state=closed]:opacity-0 transition-opacity duration-75"
                             >
                                 {tooltipNode.props.children}
-                            </TooltipContent>
-                        </Tooltip>
+                            </TooltipPrimitive.Content>
+                        </TooltipPrimitive.Root>
                     );
                 })}
             </div>
-        </TooltipProvider>
+        </TooltipPrimitive.Provider>
     );
 }
