@@ -6,9 +6,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { useAuth } from '@/lib/hooks/use-auth'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
-import { Separator } from '@/components/ui/separator'
 import TurnstileWidget, { hasTurnstileSiteKey } from '@/components/auth/TurnstileWidget'
 import { Github, Mail, Loader2, Eye, EyeOff, User, Check, X } from 'lucide-react'
 import { buildAuthPageHref, resolveAuthRedirectPath } from '@/lib/auth/redirects'
@@ -205,7 +203,7 @@ function SignupPageInner() {
 
                         <div className="relative">
                             <div className="absolute inset-0 flex items-center">
-                                <Separator className="w-full" />
+                                <hr className="w-full border-border" />
                             </div>
                             <div className="relative flex justify-center text-xs uppercase">
                                 <span className="bg-card px-2 text-muted-foreground">
@@ -228,7 +226,7 @@ function SignupPageInner() {
                             )}
 
                             <div className="space-y-2">
-                                <Label htmlFor="fullName">Full Name</Label>
+                                <label htmlFor="fullName" className="text-sm font-medium leading-none">Full Name</label>
                                 <div className="relative">
                                     <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                                     <Input
@@ -245,7 +243,7 @@ function SignupPageInner() {
                             </div>
 
                             <div className="space-y-2">
-                                <Label htmlFor="email">Email</Label>
+                                <label htmlFor="email" className="text-sm font-medium leading-none">Email</label>
                                 <div className="relative">
                                     <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                                     <Input
@@ -262,7 +260,7 @@ function SignupPageInner() {
                             </div>
 
                             <div className="space-y-2">
-                                <Label htmlFor="password">Password</Label>
+                                <label htmlFor="password" className="text-sm font-medium leading-none">Password</label>
                                 <div className="relative">
                                     <Input
                                         id="password"
