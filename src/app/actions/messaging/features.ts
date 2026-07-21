@@ -8,23 +8,15 @@ import {
     messageDeliveryReceipts,
     conversationParticipants,
     messages,
-    profiles,
 } from '@/lib/db/schema';
-import { createClient } from '@/lib/supabase/server';
-import { eq, and, desc, inArray, sql } from 'drizzle-orm';
+import { getAuthUser } from '@/lib/supabase/auth-user';
+import { eq, and, inArray, sql } from 'drizzle-orm';
 import { consumeRateLimit } from '@/lib/security/rate-limit';
 import {
     buildReactionSummaryByMessage,
     toPersistedReactionSummary,
     type MessageReactionSummary,
 } from '@/lib/messages/reactions';
-
-// Auth helper — same pattern as _all.ts
-async function getAuthUser() {
-    const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    return user;
-}
 
 async function listAccessibleMessages(messageIds: string[], userId: string) {
     const uniqueIds = Array.from(new Set(messageIds.filter(Boolean)));
@@ -364,85 +356,5 @@ export async function recordDeliveryReceipts(
     } catch (error) {
         console.error('Error recording delivery receipts:', error);
         return { success: false, error: 'Failed to record delivery receipts' };
-    }
-}
-
-/**
- * Get read receipts for a specific message. Returns who has read it.
- */
-export async function getMessageReadReceipts(
-    messageId: string
-): Promise<{ success: boolean; error?: string; readBy?: Array<{ id: string; username: string | null; fullName: string | null; avatarUrl: string | null; readAt: Date }> }> {
-    try {
-        const user = await getAuthUser();
-        if (!user) return { success: false, error: 'Not authenticated' };
-
-        const messageRow = await assertMessageAccess(messageId, user.id);
-        if (!messageRow) {
-            return { success: false, error: 'Not authorized' };
-        }
-
-        const rows = await db
-            .select({
-                userId: messageReadReceipts.userId,
-                readAt: messageReadReceipts.readAt,
-                username: profiles.username,
-                fullName: profiles.fullName,
-                avatarUrl: profiles.avatarUrl,
-            })
-            .from(messageReadReceipts)
-            .innerJoin(profiles, eq(messageReadReceipts.userId, profiles.id))
-            .where(eq(messageReadReceipts.messageId, messageId))
-            .orderBy(desc(messageReadReceipts.readAt))
-            .limit(50);
-
-        return {
-            success: true,
-            readBy: rows.map((r) => ({
-                id: r.userId,
-                username: r.username,
-                fullName: r.fullName,
-                avatarUrl: r.avatarUrl,
-                readAt: r.readAt,
-            })),
-        };
-    } catch (error) {
-        console.error('Error getting read receipts:', error);
-        return { success: false, error: 'Failed to get read receipts' };
-    }
-}
-
-// ============================================================================
-// CONVERSATION PINNING
-// ============================================================================
-
-/**
- * Pin or unpin a conversation for the current user.
- */
-export async function setConversationPinned(
-    conversationId: string,
-    pinned: boolean
-): Promise<{ success: boolean; error?: string }> {
-    try {
-        const user = await getAuthUser();
-        if (!user) return { success: false, error: 'Not authenticated' };
-
-        const { allowed } = await consumeRateLimit(`pin:${user.id}`, 60, 60);
-        if (!allowed) return { success: false, error: 'Rate limit exceeded' };
-
-        await db
-            .update(conversationParticipants)
-            .set({ pinnedAt: pinned ? new Date() : null })
-            .where(
-                and(
-                    eq(conversationParticipants.conversationId, conversationId),
-                    eq(conversationParticipants.userId, user.id)
-                )
-            );
-
-        return { success: true };
-    } catch (error) {
-        console.error('Error pinning conversation:', error);
-        return { success: false, error: 'Failed to pin conversation' };
     }
 }
