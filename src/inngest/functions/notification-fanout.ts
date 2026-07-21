@@ -1,8 +1,5 @@
-import { and, eq, isNull, lte, sql } from "drizzle-orm";
-
 import { inngest } from "@/inngest/client";
 import { db } from "@/lib/db";
-import { userNotifications } from "@/lib/db/schema";
 import { logger } from "@/lib/logger";
 import { deliverNotificationFanout } from "@/lib/notifications/fanout";
 import type { NotificationFanoutEvent, NotificationFanoutWrite } from "@/lib/notifications/types";
@@ -42,7 +39,7 @@ export const notificationFanout = inngest.createFunction(
             timeout: "2s",
         },
     },
-    [{ event: "notification/fanout" }, { event: "notification/burst" }],
+    { event: "notification/fanout" },
     async ({ events, step }) => {
         const results = await step.run("deliver-notifications", async () => {
             const settled = await Promise.allSettled(
@@ -108,38 +105,6 @@ export const notificationFanout = inngest.createFunction(
             failed: results.failed,
             requeued: results.requeueEvents.length,
             dropped: results.dropped,
-        };
-    },
-);
-
-export const notificationDeliveryRefresh = inngest.createFunction(
-    {
-        id: "notification-delivery-refresh",
-        name: "Notification Delivery Refresh",
-    },
-    { event: "notification/delivery.refresh" },
-    async ({ event, step }) => {
-        const refreshed = await step.run("refresh-visible-delayed-rows", async () => {
-            const now = new Date();
-            const rows = await db
-                .update(userNotifications)
-                .set({
-                    snoozedUntil: null,
-                    updatedAt: now,
-                })
-                .where(and(
-                    event.data.userId ? eq(userNotifications.userId, event.data.userId) : undefined,
-                    isNull(userNotifications.dismissedAt),
-                    lte(userNotifications.snoozedUntil, now),
-                    sql`${userNotifications.snoozedUntil} IS NOT NULL`,
-                ))
-                .returning({ id: userNotifications.id });
-            return rows.length;
-        });
-
-        return {
-            refreshed,
-            reason: event.data.reason ?? "manual",
         };
     },
 );
