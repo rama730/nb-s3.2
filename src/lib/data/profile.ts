@@ -1,30 +1,27 @@
 import { db } from '@/lib/db'
 import { profiles } from '@/lib/db/schema'
-import { eq, or, and, desc, isNull } from 'drizzle-orm'
+import { eq, or, and, isNull } from 'drizzle-orm'
 import { cache } from 'react'
 import type { User } from '@supabase/supabase-js'
 import type { ConnectionState, ProfileViewerUser } from '@/components/profile/v2/types'
 import { recordPrivacyReadEvent } from '@/lib/privacy/audit'
 import { buildViewerScopedProfileView } from '@/lib/privacy/profile-views'
 import { createClient } from '@/lib/supabase/server'
-import { type StandardProfile } from '@/lib/services/profile-service'
+import type { Profile } from '@/lib/db/schema'
 import { resolvePrivacyRelationship } from '@/lib/privacy/resolver'
 import { logger } from '@/lib/logger'
 import { normalizeUsername, validateUsername } from '@/lib/validations/username'
-import {
-    buildProfileMetadataDescription,
-    buildPublicProfileTitle,
-} from '@/lib/profile/display'
+import { isUuid } from '@/lib/validations/uuid'
 import { normalizeNotificationPreferences } from '@/lib/notifications/preferences'
 export { normalizeProfile } from '@/lib/utils/normalize-profile'
 import { normalizeProfile } from '@/lib/utils/normalize-profile'
 import {
     getProfileCollaborationSummary,
-    type ProfileCollaborationProject,
     type ProfileCollaborationSummary,
-    type ProfileCollaborationMemberPreview,
 } from '@/lib/profile/collaboration'
 import { getRedisClient } from '@/lib/redis'
+
+type StandardProfile = Omit<Profile, 'workspaceLayout'> & { hasRecoveryCodes: boolean }
 
 function toBootstrapProfile(
     profile: Pick<
@@ -41,10 +38,8 @@ function toBootstrapProfile(
         | 'website'
         | 'skills'
         | 'interests'
-        | 'experience'
         | 'education'
         | 'openTo'
-        | 'availabilityStatus'
         | 'socialLinks'
         | 'visibility'
         | 'messagePrivacy'
@@ -68,10 +63,11 @@ function toBootstrapProfile(
         ...profile,
         skills: profile.skills ?? [],
         interests: profile.interests ?? [],
-        experience: profile.experience ?? [],
+        // Project contributions are loaded from normalized contribution rows.
+        // The retired JSON field must never hydrate a second UI authority.
+        experience: [],
         education: profile.education ?? [],
         openTo: profile.openTo ?? [],
-        availabilityStatus: profile.availabilityStatus ?? 'available',
         socialLinks: profile.socialLinks ?? {},
         notificationPreferences: normalizeNotificationPreferences(profile.notificationPreferences),
         experienceLevel: null,
@@ -84,31 +80,8 @@ function toBootstrapProfile(
         onboardingVersion: profile.onboardingVersion ?? 1,
         lastActiveAt: null,
         hasRecoveryCodes: false,
-    }
-}
-
-function toLockedShellProfile(profile: ReturnType<typeof normalizeProfile>) {
-    if (!profile) return null
-    return {
-        id: profile.id,
-        username: profile.username,
-        fullName: profile.fullName,
-        avatarUrl: profile.avatarUrl,
-        headline: profile.headline,
-        location: profile.location,
-        visibility: profile.visibility,
-        messagePrivacy: profile.messagePrivacy,
-        connectionPrivacy: profile.connectionPrivacy,
-        availabilityStatus: profile.availabilityStatus,
-        bio: null,
-        website: null,
-        bannerUrl: null,
-        socialLinks: {},
-        openTo: [],
-        skills: [],
-        experience: [],
-        education: [],
-        profileStrength: profile.profileStrength,
+        openToCustomRoles: (profile as any).openToCustomRoles ?? [],
+        preferredCategories: (profile as any).preferredCategories ?? [],
     }
 }
 
@@ -130,10 +103,8 @@ export const getUserProfile = cache(async (userId: string) => {
                 website: profiles.website,
                 skills: profiles.skills,
                 interests: profiles.interests,
-                experience: profiles.experience,
                 education: profiles.education,
                 openTo: profiles.openTo,
-                availabilityStatus: profiles.availabilityStatus,
                 socialLinks: profiles.socialLinks,
                 visibility: profiles.visibility,
                 messagePrivacy: profiles.messagePrivacy,
@@ -175,31 +146,19 @@ interface ProfileDetailsOptions {
     recordViewEvent?: boolean;
 }
 
-export type ProfileProjectMemberPreview = ProfileCollaborationMemberPreview;
-export type ProfileProjectPreview = ProfileCollaborationProject;
-
-export interface ProfileMetadataRead {
-    title: string;
-    description: string;
-    image: string | null;
-}
-
 export type ProfilePrivacyStatus = 'not_found' | 'private' | 'public';
 
 export interface ProfileDetailsResult {
     privacyStatus: ProfilePrivacyStatus;
     visibilityReason?: string;
     profile: ReturnType<typeof normalizeProfile> | null;
-    projects: ProfileProjectPreview[];
     collaborationSummary: ProfileCollaborationSummary;
-    posts: any[];
     stats: {
         connectionsCount: number;
         projectsCount: number;
         followersCount: number;
         mutualCount?: number;
     };
-    metadata: ProfileMetadataRead | null;
     connectionStatus: ConnectionState;
     privacyRelationship: {
         canViewProfile: boolean;
@@ -219,7 +178,6 @@ const EMPTY_COLLABORATION_SUMMARY: ProfileCollaborationSummary = {
     version: 1,
     generatedAt: '',
     projects: [],
-    featuredProjects: [],
     contributions: [],
     stats: {
         projectsCount: 0,
@@ -257,17 +215,7 @@ async function getProfileMutualCount(viewerId: string, profileId: string) {
             });
         }
     }
-
-    try {
-        const supabase = await createClient();
-        const res = await supabase.rpc('get_mutual_connections', {
-            p_viewer_id: viewerId,
-            p_profile_id: profileId,
-        });
-        return (res.data as { count?: number } | null)?.count || 0;
-    } catch {
-        return 0;
-    }
+    return 0;
 }
 
 const PROFILE_DETAIL_COLUMNS = {
@@ -282,10 +230,10 @@ const PROFILE_DETAIL_COLUMNS = {
     website: true,
     skills: true,
     interests: true,
-    experience: true,
     education: true,
     openTo: true,
-    availabilityStatus: true,
+    experienceLevel: true,
+    hoursPerWeek: true,
     socialLinks: true,
     visibility: true,
     messagePrivacy: true,
@@ -307,13 +255,13 @@ export async function getProfileDetails(username?: string, options: ProfileDetai
     if (username) {
         const normalizedUsername = normalizeUsername(username)
         // We do a soft UUID format check. If it matches a UUID format, we can safely attempt ID lookup fallback
-        const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(username);
+        const isProfileId = isUuid(username);
 
-        if (!isUuid && !validateUsername(normalizedUsername).valid) {
+        if (!isProfileId && !validateUsername(normalizedUsername).valid) {
             profileData = null
         } else {
             profileData = await db.query.profiles.findFirst({
-                where: isUuid
+                where: isProfileId
                     ? and(or(eq(profiles.username, normalizedUsername), eq(profiles.id, username)), isNull(profiles.deletedAt))
                     : and(eq(profiles.username, normalizedUsername), isNull(profiles.deletedAt)),
                 columns: PROFILE_DETAIL_COLUMNS,
@@ -330,8 +278,6 @@ export async function getProfileDetails(username?: string, options: ProfileDetai
         return {
             privacyStatus: 'not_found',
             profile: null,
-            projects: [],
-            posts: [],
             stats: {
                 connectionsCount: 0,
                 projectsCount: 0,
@@ -339,7 +285,6 @@ export async function getProfileDetails(username?: string, options: ProfileDetai
                 mutualCount: 0,
             },
             collaborationSummary: EMPTY_COLLABORATION_SUMMARY,
-            metadata: null,
             connectionStatus: 'none',
             privacyRelationship: null,
             lockedShell: false,
@@ -351,24 +296,15 @@ export async function getProfileDetails(username?: string, options: ProfileDetai
     const isOwner = viewerUser?.id === profileData.id;
     const shouldResolveViewerState = !!viewerUser && !isOwner;
 
-    // Resolve privacy, collaboration, and mutual count in parallel to avoid waterfall
-    const [privacyRelationship, collaborationSummaryRaw, mutualCountRaw] = await Promise.all([
-        resolvePrivacyRelationship(viewerUser?.id ?? null, profileData.id),
-        getProfileCollaborationSummary(profileData.id, {
-            includePrivate: !!isOwner && !options.skipHeavyData,
-            preferCached: !isOwner,
-        }),
-        shouldResolveViewerState && viewerUser
-            ? getProfileMutualCount(viewerUser.id, profileData.id)
-            : Promise.resolve(0),
-    ]);
+    // Resolve authorization before any contribution/member aggregation. A
+    // locked profile must not pay for, cache, or briefly materialize private
+    // collaboration data in the request process.
+    const privacyRelationship = await resolvePrivacyRelationship(viewerUser?.id ?? null, profileData.id);
 
     if (!privacyRelationship) {
         return {
             privacyStatus: 'not_found',
             profile: null,
-            projects: [],
-            posts: [],
             stats: {
                 connectionsCount: 0,
                 projectsCount: 0,
@@ -376,7 +312,6 @@ export async function getProfileDetails(username?: string, options: ProfileDetai
                 mutualCount: 0,
             },
             collaborationSummary: EMPTY_COLLABORATION_SUMMARY,
-            metadata: null,
             connectionStatus: 'none',
             privacyRelationship: null,
             lockedShell: false,
@@ -396,8 +331,19 @@ export async function getProfileDetails(username?: string, options: ProfileDetai
         });
     }
 
-    const collaborationSummary = canViewProfile ? collaborationSummaryRaw : EMPTY_COLLABORATION_SUMMARY;
-    const mutualCount = (shouldResolveViewerState && canViewProfile) ? mutualCountRaw : 0;
+    const [collaborationSummary, mutualCount] = canViewProfile
+        ? await Promise.all([
+            options.skipHeavyData
+                ? Promise.resolve(EMPTY_COLLABORATION_SUMMARY)
+                : getProfileCollaborationSummary(profileData.id, {
+                    includePrivate: !!isOwner,
+                    preferCached: !isOwner,
+                }),
+            shouldResolveViewerState && viewerUser
+                ? getProfileMutualCount(viewerUser.id, profileData.id)
+                : Promise.resolve(0),
+        ])
+        : [EMPTY_COLLABORATION_SUMMARY, 0];
 
     const connectionStatus: ConnectionState =
         privacyRelationship.connectionState === 'connected'
@@ -411,22 +357,6 @@ export async function getProfileDetails(username?: string, options: ProfileDetai
                         : 'none';
 
     const normalizedProfile = normalizeProfile(profileData)
-    const metadata = normalizedProfile
-        ? {
-            title: buildPublicProfileTitle({
-                username: normalizedProfile.username,
-                fullName: normalizedProfile.fullName,
-            }),
-            description: buildProfileMetadataDescription({
-                username: normalizedProfile.username,
-                fullName: normalizedProfile.fullName,
-                headline: normalizedProfile.headline,
-                location: normalizedProfile.location,
-                bio: normalizedProfile.bio,
-            }),
-            image: normalizedProfile.avatarUrl,
-        }
-        : null
     const visibleProfile = normalizedProfile
         ? buildViewerScopedProfileView({
             profile: normalizedProfile as Record<string, unknown> & { id: string },
@@ -452,16 +382,13 @@ export async function getProfileDetails(username?: string, options: ProfileDetai
         privacyStatus: lockedShell ? 'private' : 'public',
         visibilityReason: privacyRelationship.visibilityReason,
         profile: visibleProfile,
-        projects: [],
         collaborationSummary: canViewProfile ? collaborationSummary : EMPTY_COLLABORATION_SUMMARY,
-        posts: [],
         stats: {
             connectionsCount: profileData.connectionsCount || 0,
             projectsCount: collaborationSummary.stats.projectsCount || profileData.projectsCount || 0,
             followersCount: profileData.followersCount || 0,
             mutualCount,
         },
-        metadata: canViewProfile && !lockedShell ? metadata : null,
         connectionStatus,
         privacyRelationship: {
             canViewProfile: privacyRelationship.canViewProfile,
@@ -477,68 +404,3 @@ export async function getProfileDetails(username?: string, options: ProfileDetai
         currentUser: toProfileViewerUser(viewerUser),
     } satisfies ProfileDetailsResult;
 }
-
-export const getProfileVisibilityMeta = cache(async (username: string) => {
-    if (!username) return null;
-    const normalizedUsername = normalizeUsername(username)
-    if (!validateUsername(normalizedUsername).valid) return null
-    const [profile] = await db
-        .select({
-            id: profiles.id,
-            visibility: profiles.visibility,
-        })
-        .from(profiles)
-        .where(and(eq(profiles.username, normalizedUsername), isNull(profiles.deletedAt)))
-        .limit(1);
-
-    return profile || null;
-});
-
-export const getPublicProfileMeta = cache(async (username: string) => {
-    if (!username) return null;
-    const normalizedUsername = normalizeUsername(username)
-    if (!validateUsername(normalizedUsername).valid) return null
-    try {
-        const [profile] = await db
-            .select({
-                id: profiles.id,
-                username: profiles.username,
-                fullName: profiles.fullName,
-                bio: profiles.bio,
-                headline: profiles.headline,
-                location: profiles.location,
-                avatarUrl: profiles.avatarUrl,
-            })
-            .from(profiles)
-            .where(
-                and(
-                    eq(profiles.username, normalizedUsername),
-                    eq(profiles.visibility, 'public'),
-                    isNull(profiles.deletedAt),
-                )
-            )
-            .limit(1);
-
-        return profile || null;
-    } catch (error) {
-        logger.error('[profile.data] failed to fetch public profile metadata', {
-            module: 'profile',
-            username: normalizedUsername,
-            error: error instanceof Error ? error.message : String(error),
-            stack: error instanceof Error ? error.stack : undefined,
-        });
-        return null;
-    }
-});
-
-// For generateStaticParams
-export const getPopularUsernames = cache(async (limit = 100) => {
-    const data = await db
-        .select({ username: profiles.username })
-        .from(profiles)
-        .where(isNull(profiles.deletedAt))
-        .orderBy(desc(profiles.createdAt))
-        .limit(limit);
-
-    return data.map(p => p.username).filter(Boolean) as string[];
-});
