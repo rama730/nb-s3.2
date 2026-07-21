@@ -1,6 +1,6 @@
+import { cn } from "@/lib/utils";
 import React, { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { Badge } from "@/components/ui/badge";
 import { subscribeActiveResource } from "@/lib/realtime/subscriptions";
 
 export interface HydrationProgressBannerProps {
@@ -14,7 +14,18 @@ export function HydrationProgressBanner({ projectId }: HydrationProgressBannerPr
   
   useEffect(() => {
     let active = true;
+    let timeout: ReturnType<typeof setTimeout> | null = null;
     const supabase = createClient();
+
+    const clearPoll = () => {
+      if (timeout) clearTimeout(timeout);
+      timeout = null;
+    };
+
+    const queuePoll = () => {
+      clearPoll();
+      if (active) timeout = setTimeout(fetchProgress, 5000);
+    };
 
     const fetchProgress = async () => {
       if (!active) return;
@@ -28,6 +39,8 @@ export function HydrationProgressBanner({ projectId }: HydrationProgressBannerPr
       if (meta && active) {
         setHydration(meta);
       }
+      if (meta?.status === "in_progress") queuePoll();
+      else clearPoll();
     };
 
     // Initial fetch
@@ -49,18 +62,17 @@ export function HydrationProgressBanner({ projectId }: HydrationProgressBannerPr
             if (meta && active) {
               setHydration(meta);
             }
+            if (meta?.status === "in_progress") queuePoll();
+            else clearPoll();
           },
         },
       ],
     });
 
-    // Fallback polling (guaranteed updates every 5s if realtime misses events)
-    const interval = setInterval(fetchProgress, 5000);
-
     return () => {
       active = false;
       void supabase.removeChannel(channel);
-      clearInterval(interval);
+      clearPoll();
     };
   }, [projectId]);
 
@@ -78,9 +90,9 @@ export function HydrationProgressBanner({ projectId }: HydrationProgressBannerPr
             <span className="text-lg">🚀</span>
             <span className="font-medium text-sm">Securing files in background...</span>
           </div>
-          <Badge variant="secondary" className="font-mono">
+          <span className={cn("inline-flex items-center justify-center rounded-full border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1", "border-transparent bg-secondary text-secondary-foreground", "font-mono")}>
             {hydration.completed.toLocaleString()} / {hydration.total.toLocaleString()}
-          </Badge>
+          </span>
         </div>
         <div className="h-2 w-full bg-secondary rounded-full overflow-hidden">
           <div className="h-full bg-primary transition-all duration-300 ease-out" style={{ width: `${percent}%` }} />
