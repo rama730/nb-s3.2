@@ -7,6 +7,7 @@ import { z } from "zod";
 
 import type { SprintListItem } from "@/lib/projects/sprint-detail";
 import {
+  addDaysToSprintDateInput,
   buildSprintEditorDraft,
   createSprintDraftSchema,
   getSprintDurationSummary,
@@ -113,7 +114,7 @@ function Field({
 
 function inputClassName(hasError: boolean) {
   return cn(
-    "w-full rounded-xl border bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none transition focus:ring-2 focus:ring-blue-500/20 dark:bg-zinc-900 dark:text-zinc-100",
+    "w-full rounded-xl border bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none transition   dark:bg-zinc-900 dark:text-zinc-100",
     hasError
       ? "border-rose-300 focus:border-rose-400 dark:border-rose-800 dark:focus:border-rose-700"
       : "border-zinc-200 focus:border-blue-500 dark:border-zinc-700 dark:focus:border-blue-500",
@@ -220,12 +221,7 @@ export default function SprintEditorModal({
 
   const setDuration = React.useCallback((days: number) => {
     if (!draft.startDate) return;
-    const endDate = new Date(`${draft.startDate}T00:00:00.000Z`);
-    endDate.setUTCDate(endDate.getUTCDate() + days);
-    const year = endDate.getUTCFullYear();
-    const month = String(endDate.getUTCMonth() + 1).padStart(2, "0");
-    const date = String(endDate.getUTCDate()).padStart(2, "0");
-    handleFieldChange("endDate", `${year}-${month}-${date}`);
+    handleFieldChange("endDate", addDaysToSprintDateInput(draft.startDate, days));
   }, [draft.startDate, handleFieldChange]);
 
   if (!isOpen) return null;
