@@ -60,6 +60,19 @@ export function LifecycleEditor({ stages, onChange, currentStageIndex = 0 }: Lif
         onChange(newOrder);
     };
 
+    const handleStageChange = (index: number, value: string) => {
+        const cleaned = value.replace(/[^\p{L}\p{N}\s&]/gu, "");
+        let msg = "";
+        const trimmed = cleaned.trim().replace(/\s+/g, " ");
+        if (cleaned !== value) {
+            msg = "Only letters, numbers, spaces, and & are allowed";
+        } else if (trimmed && stages.some((stage, i) => i !== index && stage.toLowerCase() === trimmed.toLowerCase())) {
+            msg = "Stage name already exists";
+        }
+        setErrorMsg(msg);
+        onChange(stages.map((stage, i) => (i === index ? cleaned : stage)));
+    };
+
     const handleKeyDown = (e: React.KeyboardEvent) => {
         if (e.key === "Enter") {
             e.preventDefault();
@@ -77,7 +90,7 @@ export function LifecycleEditor({ stages, onChange, currentStageIndex = 0 }: Lif
                         onKeyDown={handleKeyDown}
                         maxLength={35}
                         placeholder="Add a stage (e.g. 'Design Review')"
-                        className="flex-1 px-4 py-2 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-sm focus:ring-2 focus:ring-indigo-500/20 outline-none"
+                        className="flex-1 px-4 py-2 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-sm   outline-none"
                     />
                     <button
                         type="button"
@@ -108,9 +121,13 @@ export function LifecycleEditor({ stages, onChange, currentStageIndex = 0 }: Lif
                         )}
                     >
                         <GripVertical className="w-4 h-4 text-zinc-400" />
-                        <span className="flex-1 text-sm font-medium text-zinc-700 dark:text-zinc-200">
-                            {stage}
-                        </span>
+                        <input
+                            value={stage}
+                            onChange={(event) => handleStageChange(index, event.target.value)}
+                            maxLength={35}
+                            className="flex-1 bg-transparent text-sm font-medium text-zinc-700 outline-none  dark:text-zinc-200"
+                            aria-label={`Stage ${index + 1} name`}
+                        />
                         
                         {index === currentStageIndex && (
                             <span className="text-[10px] uppercase font-bold text-indigo-600 bg-indigo-50 dark:bg-indigo-900/30 px-2 py-0.5 rounded-full mr-2">
