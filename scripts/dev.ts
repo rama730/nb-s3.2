@@ -1,10 +1,48 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { config as loadDotenv } from 'dotenv'
 
+const REQUIRED_HEAP_OPTION = "--max-old-space-size=4096";
+
+function tokenizeNodeOptions(value: string) {
+  return value.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? [];
+}
+
+function normalizedFlag(token: string) {
+  return token.replace(/^['"]|['"]$/g, "").replaceAll("_", "-");
+}
+
+function buildDevNodeOptions(value: string | undefined) {
+  const tokens = tokenizeNodeOptions(value ?? "");
+  const retained: string[] = [];
+
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index]!;
+    const flag = normalizedFlag(token);
+
+    if (flag === "--optimize-for-size" || flag.startsWith("--optimize-for-size=")) {
+      continue;
+    }
+
+    if (flag === "--max-old-space-size") {
+      if (tokens[index + 1] && !tokens[index + 1]!.startsWith("-")) index += 1;
+      continue;
+    }
+
+    if (flag.startsWith("--max-old-space-size=")) {
+      continue;
+    }
+
+    retained.push(token);
+  }
+
+  retained.push(REQUIRED_HEAP_OPTION);
+  return retained.join(" ");
+}
+
 loadDotenv({ path: '.env.local' })
 loadDotenv()
 
-process.env.NODE_OPTIONS = `${process.env.NODE_OPTIONS || ''} --max-old-space-size=4096`.trim()
+process.env.NODE_OPTIONS = buildDevNodeOptions(process.env.NODE_OPTIONS)
 
 type ProcSpec = {
     name: string
@@ -63,12 +101,6 @@ process.on('SIGINT', () => shutdown('SIGINT'))
 process.on('SIGTERM', () => shutdown('SIGTERM'))
 
 startProcess({
-    name: 'presence',
-    command: 'npm',
-    args: ['run', 'presence:dev'],
-})
-
-startProcess({
     name: 'yjs',
     command: 'npm',
     args: ['run', 'yjs:dev'],
@@ -77,5 +109,5 @@ startProcess({
 startProcess({
     name: 'next',
     command: 'next',
-    args: ['dev', '--webpack'],
+    args: ['dev', '--turbo'],
 })
