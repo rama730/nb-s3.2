@@ -7,6 +7,15 @@ This runbook covers the VS Code-compatible NB Workspace extension flow:
 - Workspace, folder, task, file, lock, and sync routes authenticate with the stored `nb_dev_...` device token.
 - Large file reads use a signed download URL plus byte ranges.
 - Large file saves use `/api/v1/extension/file-upload` to create a signed upload intent, upload directly to storage, and finalize the version through the API.
+- Unsaved text uses `/api/v1/extension/recovery-drafts` for private, checksum-verified account recovery without creating a file revision.
+- Recovery-session start, heartbeat, and clean-close state uses `/api/v1/extension/recovery-sessions` to distinguish silent current snapshots from interrupted-session incidents.
+
+## Recovery protection signals
+
+- `extension.recovery.session` records start, heartbeat, and clean-close outcomes without file paths or draft content.
+- Healthy local/account snapshot success remains diagnostic-only and must not generate user-facing sidebar activity.
+- Repeated cloud failures remain silent during bounded retries; after five minutes Changes may show one stable “account backup delayed” warning while local protection remains active.
+- Local snapshot failures are higher priority because they compromise the primary safety layer and surface once until a successful snapshot clears the condition.
 
 ## Required Dashboards
 
@@ -20,6 +29,7 @@ Minimum panels:
 - Signed range probe p95 latency from `qa/load/extension-sync.k6.js`.
 - Large upload intent and finalize success rates.
 - Large upload finalize p95 latency.
+- Recovery intent/finalize success rate and p95 latency.
 - Webview error/warn log counts by action.
 
 ## Load Probe
@@ -57,3 +67,10 @@ If upload finalize fails:
 2. Confirm the extension is sending the latest base version/hash.
 3. Check whether the upload intent expired before finalize.
 4. Confirm storage object reads are healthy from the app region.
+
+If recovery uploads fail:
+
+1. Confirm migrations `0100_extension_recovery_drafts` and `0102_extension_recovery_sessions` are applied and the private `extension-recovery-drafts` bucket exists.
+2. Compare `extension.recovery.intent` and `extension.recovery.finalize` failures. Intent failures point to auth/access/storage setup; finalize failures point to missing bytes, size drift, or checksum mismatch.
+3. Confirm the editor still has a valid device token. Local current/previous snapshots continue working while offline.
+4. Check the `extension-recovery-retention` heartbeat before investigating expired drafts; finalized drafts expire after 30 days and retain the newest three generations per device/file.
