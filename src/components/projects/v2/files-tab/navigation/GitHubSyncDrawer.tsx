@@ -1,15 +1,14 @@
 'use client';
 
-import React, { useEffect, useState, useTransition } from 'react';
+import { toast } from "sonner";
+import React, { useEffect, useState } from 'react';
 import {
     GitBranch,
-    GitCommit,
     UploadCloud,
     RefreshCw,
     AlertTriangle,
     X,
     CheckCircle2,
-    Play,
     Loader2,
     FileText
 } from 'lucide-react';
@@ -19,18 +18,17 @@ import {
     resolveConflictAction
 } from '@/app/actions/files/gitActions';
 import { pushToGitHub, pullFromGitHub } from '@/app/actions/git';
-import { useToast } from '@/components/ui-custom/Toast';
 
 interface GitHubSyncDrawerProps {
     projectId: string;
     onClose: () => void;
 }
 
+const TARGET_BRANCH = 'main';
+
 export function GitHubSyncDrawer({ projectId, onClose }: GitHubSyncDrawerProps): React.JSX.Element {
-    const { showToast } = useToast();
     const [pendingDeltas, setPendingDeltas] = useState<any[]>([]);
     const [conflicts, setConflicts] = useState<any[]>([]);
-    const [targetBranch, setTargetBranch] = useState('main');
     const [commitMessage, setCommitMessage] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     
@@ -39,16 +37,13 @@ export function GitHubSyncDrawer({ projectId, onClose }: GitHubSyncDrawerProps):
     const [customMergeContent, setCustomMergeContent] = useState<Record<string, string>>({});
     const [resolvingId, setResolvingId] = useState<string | null>(null);
 
-    const [isPending, startTransition] = useTransition();
-
-    const fetchSyncData = () => {
-        startTransition(async () => {
-            const deltasRes = await getPendingDeltasAction(projectId, targetBranch);
+    const fetchSyncData = React.useCallback(async () => {
+            const deltasRes = await getPendingDeltasAction(projectId, TARGET_BRANCH);
             if (deltasRes.success && deltasRes.deltas) {
                 setPendingDeltas(deltasRes.deltas);
             }
 
-            const conflictsRes = await getProjectConflictsAction(projectId, targetBranch);
+            const conflictsRes = await getProjectConflictsAction(projectId, TARGET_BRANCH);
             if (conflictsRes.success && conflictsRes.conflicts) {
                 setConflicts(conflictsRes.conflicts);
                 // Initialize default resolutions and contents
@@ -61,30 +56,29 @@ export function GitHubSyncDrawer({ projectId, onClose }: GitHubSyncDrawerProps):
                 setSelectedResolution(resolutions);
                 setCustomMergeContent(contents);
             }
-        });
-    };
+    }, [projectId]);
 
     useEffect(() => {
-        fetchSyncData();
-    }, [projectId, targetBranch]);
+        void fetchSyncData();
+    }, [fetchSyncData]);
 
     const handlePush = async () => {
         if (!commitMessage.trim()) {
-            showToast('Commit message is required before pushing changes.', 'error');
+            toast.error('Commit message is required before pushing changes.');
             return;
         }
         setIsLoading(true);
         try {
             const res = await pushToGitHub(projectId, commitMessage);
             if (res.success) {
-                showToast('GitHub push job triggered successfully!', 'success');
+                toast.success('GitHub push job triggered successfully!');
                 setCommitMessage('');
                 fetchSyncData();
             } else {
-                showToast(`Push failed: ${res.error}`, 'error');
+                toast.error(`Push failed: ${res.error}`);
             }
         } catch (err: any) {
-            showToast(`Error: ${err.message}`, 'error');
+            toast.error(`Error: ${err.message}`);
         } finally {
             setIsLoading(false);
         }
@@ -95,13 +89,13 @@ export function GitHubSyncDrawer({ projectId, onClose }: GitHubSyncDrawerProps):
         try {
             const res = await pullFromGitHub(projectId);
             if (res.success) {
-                showToast('GitHub pull job triggered successfully!', 'success');
+                toast.success('GitHub pull job triggered successfully!');
                 fetchSyncData();
             } else {
-                showToast(`Pull failed: ${res.error}`, 'error');
+                toast.error(`Pull failed: ${res.error}`);
             }
         } catch (err: any) {
-            showToast(`Error: ${err.message}`, 'error');
+            toast.error(`Error: ${err.message}`);
         } finally {
             setIsLoading(false);
         }
@@ -115,13 +109,13 @@ export function GitHubSyncDrawer({ projectId, onClose }: GitHubSyncDrawerProps):
         try {
             const res = await resolveConflictAction(conflictId, resolution, content);
             if (res.success) {
-                showToast('Conflict resolved successfully!', 'success');
+                toast.success('Conflict resolved successfully!');
                 fetchSyncData();
             } else {
-                showToast(`Failed to resolve conflict: ${res.error}`, 'error');
+                toast.error(`Failed to resolve conflict: ${res.error}`);
             }
         } catch (err: any) {
-            showToast(`Error: ${err.message}`, 'error');
+            toast.error(`Error: ${err.message}`);
         } finally {
             setResolvingId(null);
         }
@@ -154,7 +148,7 @@ export function GitHubSyncDrawer({ projectId, onClose }: GitHubSyncDrawerProps):
                     <label className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">Sync Branch</label>
                     <div className="flex items-center gap-2 bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg p-2.5 shadow-sm">
                         <GitBranch className="w-4 h-4 text-zinc-500" />
-                        <span className="text-xs font-medium text-zinc-800 dark:text-zinc-200">{targetBranch}</span>
+                        <span className="text-xs font-medium text-zinc-800 dark:text-zinc-200">{TARGET_BRANCH}</span>
                     </div>
                 </div>
 
@@ -184,7 +178,7 @@ export function GitHubSyncDrawer({ projectId, onClose }: GitHubSyncDrawerProps):
                                                 name={`resolution-${c.id}`}
                                                 checked={selectedResolution[c.id] === 'keep_mine'}
                                                 onChange={() => setSelectedResolution((prev) => ({ ...prev, [c.id]: 'keep_mine' }))}
-                                                className="text-indigo-600 focus:ring-indigo-500 h-3 w-3"
+                                                className="text-indigo-600  h-3 w-3"
                                             />
                                             <span className="text-[11px] text-zinc-700 dark:text-zinc-300">Keep Local (Mine)</span>
                                         </label>
@@ -194,7 +188,7 @@ export function GitHubSyncDrawer({ projectId, onClose }: GitHubSyncDrawerProps):
                                                 name={`resolution-${c.id}`}
                                                 checked={selectedResolution[c.id] === 'keep_remote'}
                                                 onChange={() => setSelectedResolution((prev) => ({ ...prev, [c.id]: 'keep_remote' }))}
-                                                className="text-indigo-600 focus:ring-indigo-500 h-3 w-3"
+                                                className="text-indigo-600  h-3 w-3"
                                             />
                                             <span className="text-[11px] text-zinc-700 dark:text-zinc-300">Keep GitHub (Remote)</span>
                                         </label>
@@ -204,7 +198,7 @@ export function GitHubSyncDrawer({ projectId, onClose }: GitHubSyncDrawerProps):
                                                 name={`resolution-${c.id}`}
                                                 checked={selectedResolution[c.id] === 'merge'}
                                                 onChange={() => setSelectedResolution((prev) => ({ ...prev, [c.id]: 'merge' }))}
-                                                className="text-indigo-600 focus:ring-indigo-500 h-3 w-3"
+                                                className="text-indigo-600  h-3 w-3"
                                             />
                                             <span className="text-[11px] text-zinc-700 dark:text-zinc-300">Merge Content</span>
                                         </label>
@@ -216,7 +210,7 @@ export function GitHubSyncDrawer({ projectId, onClose }: GitHubSyncDrawerProps):
                                             value={customMergeContent[c.id] || ''}
                                             onChange={(e) => setCustomMergeContent((prev) => ({ ...prev, [c.id]: e.target.value }))}
                                             rows={5}
-                                            className="w-full text-[10px] font-mono p-1.5 border border-zinc-200 dark:border-zinc-800 rounded bg-white dark:bg-zinc-950 text-zinc-800 dark:text-zinc-200 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                                            className="w-full text-[10px] font-mono p-1.5 border border-zinc-200 dark:border-zinc-800 rounded bg-white dark:bg-zinc-950 text-zinc-800 dark:text-zinc-200 focus:outline-none  "
                                             placeholder="Write merged file contents..."
                                         />
                                     )}
@@ -283,7 +277,7 @@ export function GitHubSyncDrawer({ projectId, onClose }: GitHubSyncDrawerProps):
                             onChange={(e) => setCommitMessage(e.target.value)}
                             disabled={isLoading || conflicts.length > 0}
                             placeholder="Enter commit message..."
-                            className="w-full text-xs p-2.5 border border-zinc-200 dark:border-zinc-800 rounded-lg bg-white dark:bg-zinc-950 text-zinc-800 dark:text-zinc-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 transition-all resize-none disabled:opacity-50"
+                            className="w-full text-xs p-2.5 border border-zinc-200 dark:border-zinc-800 rounded-lg bg-white dark:bg-zinc-950 text-zinc-800 dark:text-zinc-200 focus:outline-none   transition-all resize-none disabled:opacity-50"
                             rows={3}
                         />
                         <button
