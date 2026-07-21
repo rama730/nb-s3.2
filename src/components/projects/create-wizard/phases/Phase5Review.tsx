@@ -4,6 +4,7 @@ import { useFormContext } from 'react-hook-form';
 import { CreateProjectInput } from '@/lib/validations/project';
 import { WizardContextType } from '../useCreateProjectWizard';
 import { BookOpen, Edit3, Globe, Lock, Users, Tag } from 'lucide-react';
+import { SkillList } from '@/components/skills/SkillList';
 
 interface Phase5ReviewProps {
     wizardContext: WizardContextType;
@@ -143,11 +144,7 @@ export default function Phase5Review({ wizardContext, goToPhase }: Phase5ReviewP
                                 {tag}
                             </span>
                         ))}
-                        {formData.technologies_used?.map((tech) => (
-                            <span key={tech} className="px-3 py-1 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400 rounded-full text-sm">
-                                {tech}
-                            </span>
-                        ))}
+                        <SkillList skills={formData.technologies_used ?? []} size="sm" />
                     </div>
                 </div>
             )}
