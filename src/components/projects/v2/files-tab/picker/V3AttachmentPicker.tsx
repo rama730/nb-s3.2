@@ -415,7 +415,7 @@ export function V3AttachmentPicker({
                   placeholder="Search files..."
                   aria-label="Search files"
                   data-testid="v3-attachment-picker-search"
-                  className="w-full h-8 pl-8 pr-3 text-sm bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-md text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-300"
+                  className="w-full h-8 pl-8 pr-3 text-sm bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-md text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 outline-none focus:border-indigo-400  "
                 />
               </div>
             </div>
