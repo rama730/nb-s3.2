@@ -94,9 +94,12 @@ export default async function RootLayout({
     <html lang="en" data-scroll-behavior="smooth" data-csp-nonce={nonce} suppressHydrationWarning>
       <head>
         <meta content="#ffffff" data-app-theme-color="true" name="theme-color" />
-        <Script id="theme-prehydrate" nonce={nonce} strategy="beforeInteractive">
-          {THEME_PREHYDRATE_SCRIPT}
-        </Script>
+        <script
+          id="theme-prehydrate"
+          nonce={nonce}
+          dangerouslySetInnerHTML={{ __html: THEME_PREHYDRATE_SCRIPT }}
+          suppressHydrationWarning
+        />
       </head>
       <body className={`${geistSans.variable} ${geistMono.variable} font-sans antialiased`}>
         <SecurityRuntimeProvider nonce={nonce ?? null}>
