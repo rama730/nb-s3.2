@@ -1,10 +1,4 @@
-// Task 8.1 — `FilesTabRoot` for the Files tab v3 (GitHub redesign).
-//
-// Replaces `WorkspaceShell` as the top-level Files-tab entry point behind
-// the `filesTabV3Enabled` feature flag. This module owns the top-level
-// mount sequence and the wiring between the four observable surfaces
-// (sidebar tree, breadcrumb, main area, URL) defined in design.md
-// § Component Tree / § Data Flow.
+// Files tab root: owns boot, URL/deep-link sync, realtime, quick open, and role context.
 //
 // Responsibilities (per design.md § FilesTabRoot and tasks.md § 8.1):
 //
@@ -27,9 +21,8 @@
 //      than live URL, so the URL sync's root-state stripping (see
 //      `useFilesTabUrlSync` Effect 1) cannot race the resolver and erase
 //      the `?path=` before it runs. See the `initialSearch` state below
-//      for the snapshot logic — it also honours the legacy
-//      `initialOpenPath` prop by synthesising a `?path=` fallback when the
-//      URL has none (design.md § Coexistence / `adaptToV3Props`).
+//      for the snapshot logic — it also honours `initialOpenPath` by
+//      synthesising a `?path=` fallback when the URL has none.
 //   5. Wire `useFilesTabUrlSync(projectId, ...)` so `currentLocationId`
 //      mirrors into `?path=` via `history.replaceState` and `popstate`
 //      flows through `navigateTo`.
@@ -60,6 +53,8 @@
 
 "use client";
 
+import { toast } from "sonner";
+
 import React, {
   useCallback,
   useEffect,
@@ -69,7 +64,6 @@ import React, {
 } from "react";
 
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
-import { useToast } from "@/components/ui-custom/Toast";
 import { createClient } from "@/lib/supabase/client";
 import { subscribeProjectFilesChannel } from "@/lib/realtime/project-files-channel";
 import { getTaskLinkCounts } from "@/app/actions/files/links";
@@ -91,6 +85,14 @@ import { useFilesTabStartupStage } from "./hooks/useFilesTabStartupStage";
 import { useDeepLinkResolver } from "./hooks/useDeepLinkResolver";
 import { useFilesTabUrlSync } from "./hooks/useFilesTabUrlSync";
 import { useNavigateTo } from "./hooks/useNavigateTo";
+import { fetchProjectFileLeases } from "@/lib/files/file-lease-client";
+
+function showFilesToast(message: string, type: "success" | "error" | "info" | "warning" = "info") {
+  if (type === "success") toast.success(message);
+  else if (type === "error") toast.error(message);
+  else if (type === "warning") toast.warning(message);
+  else toast.info(message);
+}
 
 // ─── Public API ──────────────────────────────────────────────────────
 
@@ -116,12 +118,10 @@ export interface FilesTabRootProps {
   /** GitHub import / clone sync status, forwarded to the boot hook. */
   syncStatus?: "pending" | "cloning" | "indexing" | "ready" | "failed";
   /**
-   * Legacy deep-link path (decoded segments joined by `/`). Honoured as a
+   * Deep-link path (decoded segments joined by `/`). Honoured as a
    * fallback only when the URL has no `?path=` at mount. The V3 URL
    * contract uses per-segment `encodeURIComponent` joined by `/`, so we
-   * re-encode segments before feeding this into the resolver. The
-   * `initialOpenLine` / `initialOpenColumn` legacy props are intentionally
-   * dropped — V3 has no line targeting.
+   * re-encode segments before feeding this into the resolver.
    */
   initialOpenPath?: string | null;
   /**
@@ -148,9 +148,6 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
     initialOpenPath,
     initialOpenFileId,
   } = props;
-
-  const { showToast } = useToast();
-
   // ── 1. Ensure the project workspace entry exists ──────────────────
   const ensureProjectWorkspace = useFilesWorkspaceStore(
     (s) => s.ensureProjectWorkspace,
@@ -176,20 +173,14 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
 
   // ── 4. Single explorer boot + FilesTabBootContext provision ───────
   //
-  // `useExplorerBoot` is re-entrant — calling it in multiple subtrees
-  // produces duplicate batch fetches because each instance owns its own
-  // `bootedRef`. To avoid that, we call it exactly once here and hand
-  // `loadFolderContent` down through `FilesTabBootContext` for future
-  // consumers (`useFolderContents`). Today's `FilesTabSidebar` and
-  // `FolderListView` still call `useExplorerBoot` themselves — that is a
-  // pre-existing audit item flagged in tasks.md § 8.1, to be reconciled
-  // in follow-up tasks.
+  // Boot the explorer exactly once here and publish folder loaders through
+  // context so sidebar/main children cannot double-fetch.
   const { isBooting, accessError, loadFolderContent, handleToggleFolder, handleLoadMore } = useExplorerBoot({
     projectId,
     canEdit,
     isActive,
     syncStatus,
-    showToast,
+    showToast: showFilesToast,
   });
   useEffect(() => {
     if (!isBooting) signalStageComplete("explorer");
@@ -218,8 +209,7 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
   // still uses the live `window` (inside `useFilesTabUrlSync`), so
   // browser back/forward continue to re-resolve from the current URL.
   //
-  // This also provides a clean entry point for the legacy
-  // `initialOpenPath` prop: when the URL has no `?path=` but the prop is
+  // This also provides a clean entry point for `initialOpenPath`: when the URL has no `?path=` but the prop is
   // set, we synthesise a `?path=` into the snapshot (re-encoding
   // segments so the V3 URL contract is honoured). The live URL is never
   // touched — `useFilesTabUrlSync` will write it for us once
@@ -283,12 +273,12 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
           : failure.kind === "empty"
             ? "The deep link is empty."
             : "Deep link target not found.";
-      showToast(reason, "error");
+      toast.error(reason);
     },
   });
 
   const navigateToInitialFile = useNavigateTo(projectId);
-  const upsertInitialFileNodes = useFilesWorkspaceStore((s) => s.upsertNodes);
+  const upsertNodes = useFilesWorkspaceStore((s) => s.upsertNodes);
   const initialOpenFileExists = useFilesWorkspaceStore((s) =>
     Boolean(
       initialOpenFileId &&
@@ -324,17 +314,17 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
       .then((result) => {
         if (cancelled) return;
         if (!result.success) {
-          showToast(result.message || "The requested file is not available.", "error");
+          toast.error(result.message || "The requested file is not available.");
           return;
         }
 
         const node = result.data.nodes.find((candidate) => candidate.id === initialOpenFileId);
         if (!node || node.type !== "file") {
-          showToast("The requested file is not available or you do not have access.", "error");
+          toast.error("The requested file is not available or you do not have access.");
           return;
         }
 
-        upsertInitialFileNodes(projectId, result.data.nodes);
+        upsertNodes(projectId, result.data.nodes);
         handledInitialFileIdRef.current = initialOpenFileId;
         navigateToInitialFile(initialOpenFileId);
       })
@@ -345,7 +335,7 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
           fileId: initialOpenFileId,
           error,
         });
-        showToast("The requested file is not available or you do not have access.", "error");
+        toast.error("The requested file is not available or you do not have access.");
       })
       .finally(() => {
         if (resolvingInitialFileIdRef.current === initialOpenFileId) {
@@ -361,8 +351,7 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
     initialOpenFileId,
     navigateToInitialFile,
     projectId,
-    showToast,
-    upsertInitialFileNodes,
+    upsertNodes,
   ]);
 
   useEffect(() => {
@@ -374,7 +363,7 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
   // ── 7. URL sync (replaceState mirror + popstate handler) ──────────
   useFilesTabUrlSync(projectId, {
     onPopStateError: () => {
-      showToast("Deep link target not found.", "error");
+      toast.error("Deep link target not found.");
     },
   });
 
@@ -385,7 +374,7 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
   // bindings. On unmount (or navigation away), we unsubscribe to free the
   // channel budget.
   const setTaskLinkCounts = useFilesWorkspaceStore((s) => s.setTaskLinkCounts);
-  const patchNodeVersion = useFilesWorkspaceStore((s) => s.patchNodeVersion);
+  const setLocks = useFilesWorkspaceStore((s) => s.setLocks);
 
   useEffect(() => {
     if (!isActive) return;
@@ -393,6 +382,52 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
     ACTIVE_SUBSCRIPTIONS.add(projectId);
 
     const supabase = createClient();
+    let reconcileTimer: number | null = null;
+    let versionReconcileTimer: number | null = null;
+    let versionReconcileInFlight = false;
+    let disposed = false;
+    const pendingVersionNodeIds = new Set<string>();
+
+    const flushVersionReconciliation = async () => {
+      versionReconcileTimer = null;
+      if (disposed || versionReconcileInFlight || pendingVersionNodeIds.size === 0) return;
+      const nodeIds = Array.from(pendingVersionNodeIds);
+      pendingVersionNodeIds.clear();
+      versionReconcileInFlight = true;
+      try {
+        const result = await getNodeMetadataBatch(projectId, nodeIds);
+        if (!disposed && result.success) {
+          upsertNodes(projectId, result.data.nodes);
+        }
+      } catch (error) {
+        console.warn("[files-tab] failed to reconcile file version metadata", error);
+      } finally {
+        versionReconcileInFlight = false;
+        if (!disposed && pendingVersionNodeIds.size > 0 && versionReconcileTimer === null) {
+          versionReconcileTimer = window.setTimeout(() => {
+            void flushVersionReconciliation();
+          }, 75);
+        }
+      }
+    };
+
+    const reconcileVersionNode = (nodeId: string) => {
+      pendingVersionNodeIds.add(nodeId);
+      if (versionReconcileTimer !== null || versionReconcileInFlight) return;
+      versionReconcileTimer = window.setTimeout(() => {
+        void flushVersionReconciliation();
+      }, 75);
+    };
+
+    const reconcileLocks = () => {
+      if (reconcileTimer) window.clearTimeout(reconcileTimer);
+      reconcileTimer = window.setTimeout(() => {
+        void fetchProjectFileLeases(projectId)
+          .then((locks) => setLocks(projectId, locks))
+          .catch((error) => console.warn("[files-tab] failed to reconcile file leases", error));
+      }, 100);
+    };
+    reconcileLocks();
 
     const channel = subscribeProjectFilesChannel(supabase, {
       projectId,
@@ -406,15 +441,28 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
         });
       },
       onFileVersionChange: (event) => {
-        patchNodeVersion(projectId, event.nodeId, event.newVersion);
+        reconcileVersionNode(event.nodeId);
+      },
+      onFileLeaseChange: reconcileLocks,
+      onStatus: (status) => {
+        if (status === "SUBSCRIBED") reconcileLocks();
       },
     });
 
+    const expirySweep = window.setInterval(() => {
+      const current = useFilesWorkspaceStore.getState().byProjectId[projectId]?.locksByNodeId ?? {};
+      setLocks(projectId, Object.values(current).filter((lock) => lock.expiresAt > Date.now()));
+    }, 5_000);
+
     return () => {
+      disposed = true;
       ACTIVE_SUBSCRIPTIONS.delete(projectId);
+      if (reconcileTimer) window.clearTimeout(reconcileTimer);
+      if (versionReconcileTimer) window.clearTimeout(versionReconcileTimer);
+      window.clearInterval(expirySweep);
       channel.unsubscribe();
     };
-  }, [projectId, isActive, setTaskLinkCounts, patchNodeVersion]);
+  }, [projectId, isActive, setTaskLinkCounts, setLocks, upsertNodes]);
 
   // ── 9. Quick Open state + ⌘P / Ctrl+P toggle (Req 9.1) ────────────
   const [quickOpenOpen, setQuickOpenOpen] = useState(false);
@@ -475,17 +523,11 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
           <HydrationProgressBanner projectId={projectId} />
           <FilesTabSidebar
             projectId={projectId}
-            role={role}
             canEdit={canEdit}
             projectName={projectName}
-            syncStatus={syncStatus}
-            isActive={isActive}
           />
           <FilesTabMain
             projectId={projectId}
-            projectName={projectName}
-            isActive={isActive}
-            syncStatus={syncStatus}
             onToggleGitHubSync={() => setGithubSyncOpen((open) => !open)}
           />
           {githubSyncOpen && (
