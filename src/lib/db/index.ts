@@ -15,17 +15,17 @@ function readIntEnv(name: string, fallback: number, min: number, max: number) {
     return Math.min(max, Math.max(min, Math.trunc(parsed)))
 }
 
-function resolvePoolerConnectionString(raw: string) {
+function resolvePoolerConnectionString(raw: string, targetPort: string = '6543') {
     if (isDevelopment || process.env.DB_USE_SUPAVISOR_PORT === 'false') return raw
 
     try {
         const url = new URL(raw)
         if (url.port === '5432') {
-            url.port = '6543'
+            url.port = targetPort
         }
         return url.toString()
     } catch {
-        return raw.replace(':5432/', ':6543/')
+        return raw.replace(':5432/', `:${targetPort}/`)
     }
 }
 
@@ -74,7 +74,7 @@ const client = globalForDb.conn ?? postgres(resolvedConnectionString, {
 
 // Read Client (Replica Fallback)
 const readConnectionStringRaw = env.READ_DATABASE_URL || connectionString
-const resolvedReadConnectionString = resolvePoolerConnectionString(readConnectionStringRaw)
+const resolvedReadConnectionString = resolvePoolerConnectionString(readConnectionStringRaw, '6544')
 const readDbPreparedStatementsEnabled = resolvePreparedStatementsEnabled(resolvedReadConnectionString)
 
 const readClient = globalForDb.readConn ?? (
