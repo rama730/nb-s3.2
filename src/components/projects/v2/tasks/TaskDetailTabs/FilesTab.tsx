@@ -1,5 +1,6 @@
 "use client";
 
+import { toast } from "sonner";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
@@ -12,7 +13,7 @@ import { getTaskLinkCounts } from "@/app/actions/files/links";
 import { TaskFilesExplorer } from "@/components/projects/v2/tasks/components/TaskFilesExplorer";
 import { TaskFilesActionMenu } from "@/components/projects/v2/tasks/components/TaskFilesActionMenu";
 import { SingleAttachmentPicker } from "@/components/projects/v2/files-tab/picker/SingleAttachmentPicker";
-import { TaskFileDecisionDialog } from "@/components/projects/v2/tasks/components/TaskFileDecisionDialog";
+import { TaskFileDecisionDialog, type TaskFileDecisionDialogProps } from "@/components/projects/v2/tasks/components/TaskFileDecisionDialog";
 import { TaskFileUploadQueueList } from "@/components/projects/v2/tasks/components/TaskFileUploadQueueList";
 import { TaskFilesEmptyState } from "@/components/projects/v2/tasks/components/TaskFilesEmptyState";
 import { TaskFilesWarningBanner } from "@/components/projects/v2/tasks/components/TaskFilesWarningBanner";
@@ -23,7 +24,6 @@ import {
 } from "@/lib/projects/task-file-intelligence";
 import type { TaskFilePendingResolution, TaskFileUploadStatus } from "@/hooks/useTaskFileMutations";
 import { cn } from "@/lib/utils";
-import { useToast } from "@/components/ui-custom/Toast";
 import { computeContentHash } from "@/lib/files/content-hash";
 import { findSessionByFilename, clearSession } from "@/lib/files/open-file-sessions";
 import {
@@ -64,7 +64,6 @@ interface FilesTabProps {
   onUploadFolders?: (
     folders: DroppedFolder[],
   ) => Promise<{ success: boolean; error?: string }>;
-  onAttachExisting: (node: ProjectNode) => Promise<{ success: boolean; error?: string }>;
   onUnlink: (nodeId: string) => Promise<{ success: boolean; error?: string }>;
   onOpenFile: (node: ProjectNode) => Promise<void> | void;
   onResolvePendingResolution: (
@@ -112,13 +111,11 @@ export default function FilesTab({
   isUploading,
   onUploadFiles,
   onUploadFolders,
-  onAttachExisting,
   onUnlink,
   onOpenFile,
   onResolvePendingResolution,
   onSaveAsNewVersion,
 }: FilesTabProps) {
-  const { showToast } = useToast();
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -174,7 +171,7 @@ export default function FilesTab({
             session.originalHash &&
             hashResult.hashHex === session.originalHash
           ) {
-            showToast(`No changes since open — ${file.name} is identical.`, "info");
+            toast.info(`No changes since open — ${file.name} is identical.`);
             continue;
           }
 
@@ -198,7 +195,7 @@ export default function FilesTab({
         setIsProcessingDrop(false);
       }
     },
-    [attachments, canEdit, onSaveAsNewVersion, onUploadFiles, showToast],
+    [attachments, canEdit, onSaveAsNewVersion, onUploadFiles],
   );
 
   const handleDropZoneDragEnter = useCallback(
@@ -294,14 +291,14 @@ export default function FilesTab({
     setReuploadPrompt(null);
     const result = await onSaveAsNewVersion(nodeId, file);
     if (result.success) {
-      showToast(`Saved ${file.name} as a new version.`, "success");
+      toast.success(`Saved ${file.name} as a new version.`);
       // Best-effort: clear the IDB session so the next drop of the same
       // filename won't re-match against stale state.
       await clearSession(`${nodeId}::${file.name}`).catch(() => null);
     } else {
-      showToast(result.error || "Failed to save new version", "error");
+      toast.error(result.error || "Failed to save new version");
     }
-  }, [onSaveAsNewVersion, reuploadPrompt, showToast]);
+  }, [onSaveAsNewVersion, reuploadPrompt]);
 
   const attachAsNewFromPrompt = useCallback(async () => {
     if (!reuploadPrompt) return;
@@ -359,12 +356,138 @@ export default function FilesTab({
   const matchedNodeSharedCount = pendingResolution?.resolution.matchedNodeId
     ? linkCounts[pendingResolution.resolution.matchedNodeId] ?? 0
     : 0;
+  const decisionDialog = useMemo<TaskFileDecisionDialogProps | null>(() => {
+    if (pendingResolution) {
+      return {
+        open: true,
+        title: pendingResolution.candidateType === "folder" ? "Resolve folder placement" : "Resolve file action",
+        description:
+          pendingResolution.candidateType === "folder"
+            ? `Folder "${pendingResolution.candidateName}" overlaps with something already linked. Decide whether this should be a new root folder, a subfolder, or part of an existing folder context.`
+            : `${pendingResolution.candidateName} needs a quick decision so the task file list stays clean and version choices stay obvious.`,
+        summary: (
+          <div>
+            <div className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
+              {pendingResolution.resolution.reason}
+            </div>
+            <div className="mt-2 grid gap-2 text-xs text-zinc-500 sm:grid-cols-2">
+              <div>
+                <span className="font-medium text-zinc-700 dark:text-zinc-300">Suggested action:</span>{" "}
+                {getTaskFileResolutionChoiceCopy(
+                  pendingResolution.resolution.recommendedChoice,
+                  pendingResolution.candidateType,
+                ).label}
+              </div>
+              <div>
+                <span className="font-medium text-zinc-700 dark:text-zinc-300">Confidence:</span>{" "}
+                {pendingResolution.resolution.confidence}
+              </div>
+              {pendingResolution.resolution.matchedNodeName ? (
+                <div className="sm:col-span-2">
+                  <span className="font-medium text-zinc-700 dark:text-zinc-300">Matched item:</span>{" "}
+                  {pendingResolution.resolution.matchedNodeName}
+                  {matchedNodeSharedCount > 1 ? ` • Shared across ${matchedNodeSharedCount} tasks` : ""}
+                </div>
+              ) : null}
+              {pendingResolution.resolution.linkedFolderName ? (
+                <div className="sm:col-span-2">
+                  <span className="font-medium text-zinc-700 dark:text-zinc-300">Linked folder:</span>{" "}
+                  {pendingResolution.resolution.linkedFolderName}
+                </div>
+              ) : null}
+              <div className="sm:col-span-2">
+                <span className="font-medium text-zinc-700 dark:text-zinc-300">After this choice:</span>{" "}
+                {buildTaskFileChoicePreview(
+                  pendingResolution.resolution.recommendedChoice,
+                  pendingResolution.candidateType,
+                ).detail}
+              </div>
+            </div>
+          </div>
+        ),
+        error: resolutionError,
+        isSubmitting: isResolving,
+        footerHint: "We always ask before replacing, merging, or folding files into an existing folder context, so task attachments stay predictable.",
+        options: pendingResolution.options.map((choice) => {
+          const copy = getTaskFileResolutionChoiceCopy(choice, pendingResolution.candidateType);
+          return {
+            value: choice,
+            label: copy.label,
+            description: copy.description,
+            recommended: pendingResolution.resolution.recommendedChoice === choice,
+          };
+        }),
+        onSelect: async (value) => {
+          const choice = value as TaskFileResolutionChoice;
+          setResolutionError(null);
+          setIsResolving(true);
+          const result = await onResolvePendingResolution(choice);
+          if (!result.success) {
+            setResolutionError(result.error || "Could not apply that file choice.");
+          }
+          setIsResolving(false);
+        },
+      };
+    }
+
+    if (!reuploadPrompt) return null;
+    return {
+      open: true,
+      title: "You edited this file",
+      description:
+        reuploadPrompt.confidence === "changed"
+          ? `${reuploadPrompt.filename} looks different from when you opened it. Decide whether this should become the next version or a separate task file.`
+          : `${reuploadPrompt.filename} was opened from this task. Decide whether it should become the next version or stay separate.`,
+      options: [
+        {
+          value: "replace",
+          label: "Save as new version",
+          description: "Keeps the current version history intact and makes this the latest file.",
+          recommended: true,
+        },
+        {
+          value: "attach_new",
+          label: "Attach as a new file",
+          description: "Uploads alongside the original and lets you decide later how it relates.",
+        },
+        {
+          value: "cancel",
+          label: "Cancel",
+          description: "Leave the current attachment untouched for now.",
+        },
+      ],
+      footerHint: "Version updates stay downloadable from the history drawer, so using a new version is the cleanest option when this file edits an existing attachment.",
+      onSelect: async (value) => {
+        if (value === "replace") {
+          await confirmSaveAsNewVersion();
+          return;
+        }
+        if (value === "attach_new") {
+          await attachAsNewFromPrompt();
+          return;
+        }
+        setReuploadPrompt(null);
+      },
+      onOpenChange: (open) => {
+        if (!open) setReuploadPrompt(null);
+      },
+    };
+  }, [
+    attachAsNewFromPrompt,
+    confirmSaveAsNewVersion,
+    isResolving,
+    matchedNodeSharedCount,
+    onResolvePendingResolution,
+    pendingResolution,
+    resolutionError,
+    reuploadPrompt,
+  ]);
 
   const handleOpenInWorkspace = useCallback(
     (node: ProjectNode) => {
       const nodePath = node.path?.trim() || node.name?.trim();
       if (!nodePath) {
-        showToast("This file does not have a workspace path yet.", "error");
+        toast.error("This file does not have a workspace path yet.");
         return;
       }
 
@@ -375,7 +498,7 @@ export default function FilesTab({
       nextParams.delete("column");
       router.push(`${pathname}?${nextParams.toString()}`);
     },
-    [pathname, router, searchParams, showToast],
+    [pathname, router, searchParams],
   );
 
   return (
@@ -541,12 +664,9 @@ export default function FilesTab({
                 ? async (node, file) => {
                     const result = await onSaveAsNewVersion(node.id, file);
                     if (result.success) {
-                      showToast(`Saved ${file.name} as a new version.`, "success");
+                      toast.success(`Saved ${file.name} as a new version.`);
                     } else {
-                      showToast(
-                        result.error || "Failed to save new version",
-                        "error",
-                      );
+                      toast.error(result.error || "Failed to save new version");
                     }
                     return result;
                   }
@@ -569,85 +689,7 @@ export default function FilesTab({
         existingAttachments={attachments}
       />
 
-      {pendingResolution ? (
-        <TaskFileDecisionDialog
-          open
-          title={pendingResolution.candidateType === "folder" ? "Resolve folder placement" : "Resolve file action"}
-          description={
-            pendingResolution.candidateType === "folder"
-              ? `Folder "${pendingResolution.candidateName}" overlaps with something already linked. Decide whether this should be a new root folder, a subfolder, or part of an existing folder context.`
-              : `${pendingResolution.candidateName} needs a quick decision so the task file list stays clean and version choices stay obvious.`
-          }
-          summary={
-            <div>
-              <div className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
-                {pendingResolution.resolution.reason}
-              </div>
-              <div className="mt-2 grid gap-2 text-xs text-zinc-500 sm:grid-cols-2">
-                <div>
-                  <span className="font-medium text-zinc-700 dark:text-zinc-300">Suggested action:</span>{" "}
-                  {
-                      getTaskFileResolutionChoiceCopy(
-                        pendingResolution.resolution.recommendedChoice,
-                        pendingResolution.candidateType,
-                      ).label
-                  }
-                </div>
-                <div>
-                  <span className="font-medium text-zinc-700 dark:text-zinc-300">Confidence:</span>{" "}
-                  {pendingResolution.resolution.confidence}
-                </div>
-                {pendingResolution.resolution.matchedNodeName ? (
-                  <div className="sm:col-span-2">
-                    <span className="font-medium text-zinc-700 dark:text-zinc-300">Matched item:</span>{" "}
-                    {pendingResolution.resolution.matchedNodeName}
-                    {matchedNodeSharedCount > 1 ? ` • Shared across ${matchedNodeSharedCount} tasks` : ""}
-                  </div>
-                ) : null}
-                {pendingResolution.resolution.linkedFolderName ? (
-                  <div className="sm:col-span-2">
-                    <span className="font-medium text-zinc-700 dark:text-zinc-300">Linked folder:</span>{" "}
-                    {pendingResolution.resolution.linkedFolderName}
-                  </div>
-                ) : null}
-                <div className="sm:col-span-2">
-                  <span className="font-medium text-zinc-700 dark:text-zinc-300">
-                    After this choice:
-                  </span>{" "}
-                  {
-                    buildTaskFileChoicePreview(
-                      pendingResolution.resolution.recommendedChoice,
-                      pendingResolution.candidateType,
-                    ).detail
-                  }
-                </div>
-              </div>
-            </div>
-          }
-          error={resolutionError}
-          isSubmitting={isResolving}
-          footerHint="We always ask before replacing, merging, or folding files into an existing folder context, so task attachments stay predictable."
-          options={pendingResolution.options.map((choice) => {
-            const copy = getTaskFileResolutionChoiceCopy(choice, pendingResolution.candidateType);
-            return {
-              value: choice,
-              label: copy.label,
-              description: copy.description,
-              recommended: pendingResolution.resolution.recommendedChoice === choice,
-            };
-          })}
-          onSelect={async (value) => {
-            const choice = value as TaskFileResolutionChoice;
-            setResolutionError(null);
-            setIsResolving(true);
-            const result = await onResolvePendingResolution(choice);
-            if (!result.success) {
-              setResolutionError(result.error || "Could not apply that file choice.");
-            }
-            setIsResolving(false);
-          }}
-        />
-      ) : null}
+      {decisionDialog ? <TaskFileDecisionDialog {...decisionDialog} /> : null}
 
       {historyNode ? (
         <FileVersionHistoryDrawer
@@ -661,50 +703,6 @@ export default function FilesTab({
         />
       ) : null}
 
-      {reuploadPrompt ? (
-        <TaskFileDecisionDialog
-          open
-          title="You edited this file"
-          description={
-            reuploadPrompt.confidence === "changed"
-              ? `${reuploadPrompt.filename} looks different from when you opened it. Decide whether this should become the next version or a separate task file.`
-              : `${reuploadPrompt.filename} was opened from this task. Decide whether it should become the next version or stay separate.`
-          }
-          options={[
-            {
-              value: "replace",
-              label: "Save as new version",
-              description: "Keeps the current version history intact and makes this the latest file.",
-              recommended: true,
-            },
-            {
-              value: "attach_new",
-              label: "Attach as a new file",
-              description: "Uploads alongside the original and lets you decide later how it relates.",
-            },
-            {
-              value: "cancel",
-              label: "Cancel",
-              description: "Leave the current attachment untouched for now.",
-            },
-          ]}
-          footerHint="Version updates stay downloadable from the history drawer, so using a new version is the cleanest option when this file edits an existing attachment."
-          onSelect={async (value) => {
-            if (value === "replace") {
-              await confirmSaveAsNewVersion();
-              return;
-            }
-            if (value === "attach_new") {
-              await attachAsNewFromPrompt();
-              return;
-            }
-            setReuploadPrompt(null);
-          }}
-          onOpenChange={(open) => {
-            if (!open) setReuploadPrompt(null);
-          }}
-        />
-      ) : null}
     </div>
   );
 }
