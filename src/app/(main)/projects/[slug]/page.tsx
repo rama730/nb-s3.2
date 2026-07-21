@@ -12,7 +12,7 @@ import { readProjectFileMetadataTitle, readProjectTaskMetadataTitle } from '@/li
 
 const readProjectDetailMetadataCached = cache((slugOrId: string, actorUserId: string | null) => readProjectDetailMetadata({ slugOrId, actorUserId }));
 const readProjectDetailShellCached = cache((slugOrId: string, actorUserId: string | null) => readProjectDetailShell({ slugOrId, actorUserId }));
-const readProjectSprintDetailCached = cache((slugOrId: string, actorUserId: string | null, limit?: number) => readProjectSprintDetail({ slugOrId, actorUserId, limit }));
+const readProjectSprintDetailCached = cache((slugOrId: string, actorUserId: string | null, limit?: number, sprintId?: string) => readProjectSprintDetail({ slugOrId, actorUserId, limit, sprintId }));
 
 export async function generateMetadata({
     params,
@@ -41,11 +41,17 @@ export async function generateMetadata({
     const metadataInput = buildProjectDetailMetadataInput(slug, project);
 
     const tab = _searchParams?.tab || "dashboard";
-    let tabTitle = "";
+    const tabTitleMap: Record<string, string> = {
+        updates: "Project Feed",
+        sprints: "Sprints",
+        analytics: "Project Analytics",
+        settings: "Settings",
+        readme: "Docs",
+        docs: "Docs",
+    };
+    let tabTitle = tabTitleMap[tab] ?? "";
 
-    if (tab === "updates") {
-        tabTitle = "Project Feed";
-    } else if (tab === "files") {
+    if (tab === "files") {
         tabTitle = "Files";
         const fileId = _searchParams?.fileId;
         if (fileId) {
@@ -72,14 +78,6 @@ export async function generateMetadata({
                 // Ignore query error, fallback to 'Tasks'
             }
         }
-    } else if (tab === "sprints") {
-        tabTitle = "Sprints";
-    } else if (tab === "analytics") {
-        tabTitle = "Project Analytics";
-    } else if (tab === "settings") {
-        tabTitle = "Settings";
-    } else if (tab === "readme" || tab === "docs") {
-        tabTitle = "Docs";
     }
 
     if (tabTitle) {
@@ -94,10 +92,11 @@ async function ResolvedProjectDashboard({
     searchParams
 }: {
     params: Promise<{ slug: string }>;
-    searchParams: Promise<{ tab?: string; updateId?: string; commentId?: string }>;
+    searchParams: Promise<{ tab?: string; updateId?: string; commentId?: string; sprintId?: string }>;
 }) {
     const [{ slug }, _searchParams] = await Promise.all([params, searchParams]);
     const selectedTab = _searchParams?.tab || "dashboard";
+    const sprintId = _searchParams?.sprintId;
     const viewer = await getViewerProfileContext();
     const { user } = viewer;
     const clientViewer = toClientViewer(viewer);
@@ -118,10 +117,9 @@ async function ResolvedProjectDashboard({
         publicTabVisibility: project.publicTabVisibility,
     });
     const sprintResult = selectedTab === "sprints" && canViewSprints
-        ? await readProjectSprintDetailCached(slug, user?.id ?? null, 24)
+        ? await readProjectSprintDetailCached(slug, user?.id ?? null, 24, sprintId)
         : null;
 
-    const shellHardeningEnabled = isHardeningDomainEnabled('shellV1', user?.id ?? null);
     const dataHardeningEnabled = isHardeningDomainEnabled('dataV1', user?.id ?? null);
     const filesHardeningEnabled = isHardeningDomainEnabled('filesV1', user?.id ?? null);
     const peopleHardeningEnabled = isHardeningDomainEnabled('peopleV1', user?.id ?? null);
@@ -129,7 +127,6 @@ async function ResolvedProjectDashboard({
     return (
         <div
             className="h-full min-h-0 flex flex-col"
-            data-hardening-shell={shellHardeningEnabled ? "v1" : "off"}
             data-hardening-data={dataHardeningEnabled ? "v1" : "off"}
             data-hardening-files={filesHardeningEnabled ? "v1" : "off"}
             data-hardening-people={peopleHardeningEnabled ? "v1" : "off"}
