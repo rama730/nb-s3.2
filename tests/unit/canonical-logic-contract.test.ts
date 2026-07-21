@@ -16,7 +16,6 @@ function seedCanonicalModules(rootDir: string) {
   write(path.join(rootDir, "src/lib/ui/identity.ts"), "export const identity = true;");
   write(path.join(rootDir, "src/lib/ui/status-config.ts"), "export const status = true;");
   write(path.join(rootDir, "src/lib/profile/display.ts"), "export const display = true;");
-  write(path.join(rootDir, "src/components/people/person-card-model.ts"), "export const model = true;");
   write(path.join(rootDir, "src/lib/import/import-filters.ts"), "export const filters = true;");
 }
 
