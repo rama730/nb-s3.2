@@ -48,7 +48,11 @@ test('viewer-scoped profile view strips non-display profile fields', () => {
             notificationPreferences: { messages: true },
             workspaceLayout: { version: 1, widgets: [] },
             workspaceInboxCount: 9,
+            availabilityStatus: 'available',
             bio: 'Public bio',
+            openTo: ['Full-time roles'],
+            experienceLevel: 'senior',
+            hoursPerWeek: 'h_10_20',
             visibility: 'public',
             messagePrivacy: 'connections',
             connectionPrivacy: 'everyone',
@@ -59,7 +63,11 @@ test('viewer-scoped profile view strips non-display profile fields', () => {
     assert.equal(view.notificationPreferences, undefined)
     assert.equal(view.workspaceLayout, undefined)
     assert.equal(view.workspaceInboxCount, undefined)
+    assert.equal(view.availabilityStatus, undefined)
     assert.equal(view.bio, 'Public bio')
+    assert.deepEqual(view.openTo, ['Full-time roles'])
+    assert.equal(view.experienceLevel, 'senior')
+    assert.equal(view.hoursPerWeek, 'h_10_20')
 })
 
 test('viewer-scoped locked profile keeps only limited identity fields', () => {
@@ -79,6 +87,9 @@ test('viewer-scoped locked profile keeps only limited identity fields', () => {
             website: 'https://example.com',
             socialLinks: { github: 'https://github.com/example' },
             skills: ['React'],
+            openTo: ['Full-time roles'],
+            experienceLevel: 'senior',
+            hoursPerWeek: 'h_10_20',
             visibility: 'private',
             messagePrivacy: 'connections',
             connectionPrivacy: 'everyone',
@@ -90,5 +101,8 @@ test('viewer-scoped locked profile keeps only limited identity fields', () => {
     assert.equal(view.bio, null)
     assert.deepEqual(view.socialLinks, {})
     assert.deepEqual(view.skills, [])
+    assert.deepEqual(view.openTo, [])
+    assert.equal(view.experienceLevel, null)
+    assert.equal(view.hoursPerWeek, null)
     assert.equal(view.messagePrivacy, null)
 })
