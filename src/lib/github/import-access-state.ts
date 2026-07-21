@@ -3,6 +3,7 @@ import { persistGithubImportAccessCookie, readGithubImportAccessCookie } from '@
 import { buildGithubAccountConnectionState } from '@/lib/github/connection-state';
 import type { GithubImportAccessState } from '@/lib/github/import-types';
 import { openGithubImportToken, sealGithubImportToken } from '@/lib/github/repo-security';
+import { resolveGithubExternalAccountHealth } from '@/lib/github/account-health';
 
 export async function getGithubImportAccessState() {
   const supabase = await createClient();
@@ -44,12 +45,21 @@ export async function getGithubImportAccessState() {
     await persistGithubImportAccessCookie(sealedImportToken);
   }
 
+  const plainImportToken = openGithubImportToken(sealedImportToken);
+  const accountHealth = await resolveGithubExternalAccountHealth({
+    linked: githubConnection.linked,
+    username: githubConnection.username,
+  });
+  const accountCanAuthorize = accountHealth.state !== 'unavailable';
+
   const result: GithubImportAccessState = {
     linked: githubConnection.linked,
     username: githubConnection.username,
-    repoAccess: Boolean(openGithubImportToken(sealedImportToken)),
-    refreshRequired: githubConnection.linked && !openGithubImportToken(sealedImportToken),
+    repoAccess: accountCanAuthorize && Boolean(plainImportToken),
+    refreshRequired:
+      githubConnection.linked && (!plainImportToken || accountHealth.state === 'unavailable'),
     sealedImportToken: sealedImportToken ?? null,
+    accountHealth,
   };
 
   return {
