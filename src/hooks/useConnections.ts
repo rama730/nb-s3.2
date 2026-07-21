@@ -11,25 +11,15 @@ import {
 import {
     acceptAllIncomingConnectionRequests,
     acceptConnectionRequest,
-    bulkDisconnectConnections,
-    bulkUpdateConnectionTags,
     cancelConnectionRequest,
     withdrawAllSentConnectionRequests,
     dismissConnectionSuggestion,
-    getConnectionTags,
-    getConnectionStats,
-    getConnectionRequestHistory,
     getConnectionsFeed,
-    getMutualSuggestions,
-    getRoleSuggestions,
     rejectAllIncomingConnectionRequests,
     rejectConnectionRequest,
     removeConnection,
     sendConnectionRequest,
-    undoDismissConnectionSuggestion,
     undoRejectConnectionRequest,
-    updateConnectionTags,
-    type ConnectionRequestHistoryItem,
     type ConnectionStats,
     type ConnectionsFeedInput,
     type ConnectionsFeedTab,
@@ -37,13 +27,17 @@ import {
     type HistoryFilters,
     type SuggestedProfile,
 } from '@/app/actions/connections';
-import {
-    getApplicationRequestHistory,
-    type ApplicationRequestHistoryItem,
-} from '@/app/actions/applications';
+import { getUnifiedRequestHistory, type UnifiedRequestHistoryItem } from '@/app/actions/request-history';
 import { queryKeys } from '@/lib/query-keys';
 
 export type FeedStats = Pick<ConnectionStats, 'totalConnections' | 'pendingIncoming' | 'pendingSent'>;
+
+export function getConnectionRequestSuccessMessage(status?: string) {
+    if (status === 'pending_sent') return 'Connection request already pending';
+    if (status === 'pending_received') return 'They already sent you a request';
+    if (status === 'connected') return 'Already connected';
+    return 'Connection request sent';
+}
 
 export type NetworkConnectionItem = {
     id: string;
@@ -53,8 +47,6 @@ export type NetworkConnectionItem = {
     status: string;
     createdAt: Date;
     updatedAt: Date;
-    tags?: string[];
-    isActive?: boolean;
     otherUser: {
         id: string;
         username: string | null;
@@ -116,11 +108,9 @@ type FeedPage<T> = {
     items: T[];
     hasMore: boolean;
     nextCursor: string | null;
-    stats: FeedStats & { connectionsThisMonth?: number; connectionsGained?: number };
+    stats: FeedStats;
     viewerProjectIds?: string[];
     viewerSkills?: string[];
-    viewerLocation?: string | null;
-    lanePreferences?: Record<string, number>;
 };
 
 type FeedErrorPage = {
@@ -178,15 +168,7 @@ export type PendingRequestsData = {
     stats: FeedStats;
 };
 
-export type RequestHistoryConnectionItem = ConnectionRequestHistoryItem & {
-    source: 'connection';
-};
-
-export type RequestHistoryApplicationItem = ApplicationRequestHistoryItem & {
-    source: 'application';
-};
-
-export type RequestHistoryItem = RequestHistoryConnectionItem | RequestHistoryApplicationItem;
+export type RequestHistoryItem = UnifiedRequestHistoryItem;
 
 export type RequestHistoryData = {
     items: RequestHistoryItem[];
@@ -206,7 +188,6 @@ export const CONNECTIONS_QUERY_KEYS = {
     pendingRequests: (limit: number) => ['connections', 'pending-requests', limit] as const,
     requestHistory: (limit: number) => ['connections', 'request-history', limit] as const,
     suggestions: (limit: number, search?: string) => ['connections', 'suggestions', limit, search || ''] as const,
-    stats: (userId: string) => ['connections', 'stats', userId] as const,
 };
 
 function normalizeFeedResult<T>(result: FeedPage<T> | FeedErrorPage): FeedPage<T> {
@@ -229,27 +210,6 @@ function updateFeedQueries<T>(
             pages: data.pages.map((page) => updater(page)),
         };
         queryClient.setQueryData(key, next);
-    }
-}
-
-type DiscoverFeedSnapshot = Array<[QueryKey, InfiniteData<FeedPage<DiscoverConnectionItem>>]>;
-
-function collectDiscoverFeedSnapshots(
-    queryClient: ReturnType<typeof useQueryClient>,
-): DiscoverFeedSnapshot {
-    return queryClient
-        .getQueriesData<InfiniteData<FeedPage<DiscoverConnectionItem>>>({
-            queryKey: ['connections', 'feed', 'discover'],
-        })
-        .filter((entry): entry is [QueryKey, InfiniteData<FeedPage<DiscoverConnectionItem>>] => Boolean(entry[1]));
-}
-
-function restoreDiscoverFeedSnapshots(
-    queryClient: ReturnType<typeof useQueryClient>,
-    snapshots: DiscoverFeedSnapshot,
-) {
-    for (const [key, data] of snapshots) {
-        queryClient.setQueryData(key, data);
     }
 }
 
@@ -316,22 +276,17 @@ function patchDiscoverAndSuggestionStatus(
         items: page.items.map(patch),
     }));
 
-    for (const queryKey of [
-        ['connections', 'suggestions'],
-        ['connections', 'mutual-suggestions'],
-        ['connections', 'role-suggestions'],
-    ] as const) {
-        queryClient.setQueriesData({ queryKey }, (old: any) => {
-            if (!old?.pages) return old;
-            return {
-                ...old,
-                pages: old.pages.map((page: any) => ({
-                    ...page,
-                    items: page.items?.map(patch),
-                })),
-            };
-        });
-    }
+    queryClient.setQueriesData<Array<{
+        kind: string;
+        userId?: string;
+        connectionStatus?: DiscoverConnectionItem['connectionStatus'];
+        canConnect?: boolean;
+    }>>({ queryKey: queryKeys.globalSearch.peopleRoot() }, (items) => items?.map((item) =>
+        item.kind === 'profile' && item.userId && userIds.has(item.userId)
+            ? { ...item, connectionStatus: input.status, canConnect: input.canConnect }
+            : item,
+    ));
+
 }
 
 function invalidateConnectionsScoped(queryClient: ReturnType<typeof useQueryClient>) {
@@ -361,7 +316,6 @@ export function useConnectionsFeed<TTab extends ConnectionsFeedTab>(
         filters?: DiscoverFilters;
         historyFilters?: HistoryFilters;
         requestSortBy?: 'recent' | 'mutual' | 'oldest';
-        tagFilter?: string;
     },
 ) {
     const limit = options?.limit ?? 20;
@@ -371,15 +325,13 @@ export function useConnectionsFeed<TTab extends ConnectionsFeedTab>(
     const filters = options?.filters;
     const historyFilters = options?.historyFilters;
     const requestSortBy = options?.requestSortBy;
-    const tagFilter = options?.tagFilter;
 
     // 2J: Include filters and requestSortBy in queryKey for cache separation
     const filtersKey = filters ? JSON.stringify(filters) : '';
     const requestSortKey = requestSortBy || '';
-    const tagFilterKey = tagFilter || '';
 
     return useInfiniteQuery({
-        queryKey: [...CONNECTIONS_QUERY_KEYS.feed(tab, limit, search), sortBy || 'recent', filtersKey, requestSortKey, tagFilterKey] as const,
+        queryKey: [...CONNECTIONS_QUERY_KEYS.feed(tab, limit, search), sortBy || 'recent', filtersKey, requestSortKey] as const,
         queryFn: async ({ pageParam }: { pageParam: string | undefined }) => {
             const result = await getConnectionsFeed({
                 tab,
@@ -390,7 +342,6 @@ export function useConnectionsFeed<TTab extends ConnectionsFeedTab>(
                 filters,
                 historyFilters,
                 requestSortBy,
-                tagFilter,
             } satisfies ConnectionsFeedInput);
 
             return normalizeFeedResult(result as FeedPage<FeedItemByTab[TTab]> | FeedErrorPage);
@@ -403,35 +354,12 @@ export function useConnectionsFeed<TTab extends ConnectionsFeedTab>(
     });
 }
 
-export function useConnections(limit = 50, search?: string, sortBy?: 'recent' | 'name' | 'oldest', tagFilter?: string) {
-    return useConnectionsFeed('network', { limit, search, sortBy, tagFilter });
+export function useConnections(limit = 50, search?: string, sortBy?: 'recent' | 'name' | 'oldest') {
+    return useConnectionsFeed('network', { limit, search, sortBy });
 }
 
 export function useSuggestedPeople(limit = 20, search?: string, filters?: DiscoverFilters) {
-    const query = useConnectionsFeed('discover', { limit, search, filters });
-    const { data, isFetching, fetchNextPage } = query;
-    const filtersKey = filters ? JSON.stringify(filters) : '';
-
-    // 2B: Prefetch page 2 after first page loads
-    const hasPrefetched = useRef(false);
-    useEffect(() => {
-        hasPrefetched.current = false;
-    }, [limit, search, filtersKey]);
-
-    useEffect(() => {
-        const firstPage = data?.pages[0];
-        if (
-            data?.pages.length === 1 &&
-            firstPage?.nextCursor &&
-            !hasPrefetched.current &&
-            !isFetching
-        ) {
-            hasPrefetched.current = true;
-            void fetchNextPage();
-        }
-    }, [data?.pages, fetchNextPage, isFetching]);
-
-    return query;
+    return useConnectionsFeed('discover', { limit, search, filters });
 }
 
 function mapIncomingRequest(item: RequestConnectionItem): PendingIncomingRequest {
@@ -506,104 +434,34 @@ export function usePendingRequests(limit = 20) {
 }
 
 export type RequestHistoryPage = {
-    groupedConnectionItems?: { label: string; items: RequestHistoryConnectionItem[] }[];
     items: RequestHistoryItem[];
     hasMore: boolean;
     nextCursor: string | null;
     warning?: string | null;
 };
 
+function connectionMutationTargetId(variables: unknown) {
+    if (typeof variables === 'string') return variables;
+    if (!variables || typeof variables !== 'object') return undefined;
+    const record = variables as Record<string, unknown>;
+    for (const key of ['userId', 'targetUserId', 'profileId', 'id'] as const) {
+        if (typeof record[key] === 'string') return record[key];
+    }
+    return undefined;
+}
+
 export function useRequestHistory(limit = 40, historyFilters?: HistoryFilters) {
     const filtersKey = historyFilters ? JSON.stringify(historyFilters) : '';
     return useInfiniteQuery({
         queryKey: [...CONNECTIONS_QUERY_KEYS.requestHistory(limit), filtersKey] as const,
         queryFn: async ({ pageParam }: { pageParam: string | undefined }): Promise<RequestHistoryPage> => {
-            const [connectionsHistory, applicationsHistory] = await Promise.all([
-                getConnectionRequestHistory(limit, pageParam, historyFilters),
-                // Applications don't paginate in sync — only fetch on first page
-                pageParam ? Promise.resolve({ success: true as const, items: [] }) : getApplicationRequestHistory(limit),
-            ]);
-
-            const failures: string[] = [];
-            if (!connectionsHistory.success) {
-                failures.push(`connections: ${connectionsHistory.error || 'unknown error'}`);
-            }
-            if (!applicationsHistory.success) {
-                failures.push(`applications: ${applicationsHistory.error || 'unknown error'}`);
-            }
-            if (failures.length === 2) {
-                throw new Error(`Failed to load request history (${failures.join('; ')})`);
-            }
-            if (failures.length > 0) {
-                console.error('Partial request history fetch failure', { failures });
-            }
-
-            const connectionItems = connectionsHistory.success
-                ? connectionsHistory.items.map<RequestHistoryConnectionItem>((item) => ({
-                    ...item,
-                    source: 'connection',
-                }))
-                : [];
-
-            const applicationItems = applicationsHistory.success
-                ? applicationsHistory.items.map<RequestHistoryApplicationItem>((item) => ({
-                    ...item,
-                    source: 'application',
-                }))
-                : [];
-
-            const items = [...connectionItems, ...applicationItems]
-                .sort((a, b) => new Date(b.eventAt).getTime() - new Date(a.eventAt).getTime());
-
-            const hasMore = connectionsHistory.success && 'hasMore' in connectionsHistory
-                ? !!(connectionsHistory as { hasMore?: boolean }).hasMore
-                : connectionItems.length >= limit;
-            const nextCursor = connectionsHistory.success && 'nextCursor' in connectionsHistory
-                ? (connectionsHistory as { nextCursor?: string | null }).nextCursor ?? null
-                : null;
-
-            const groupedConnectionItems = connectionsHistory.success && 'groupedItems' in connectionsHistory
-                ? (connectionsHistory as any).groupedItems.map((group: any) => ({
-                    label: group.label,
-                    items: group.items.map((item: any) => ({ ...item, source: 'connection' as const }))
-                }))
-                : [];
-
-            return {
-                items,
-                groupedConnectionItems,
-                hasMore,
-                nextCursor,
-                warning: failures.length > 0 ? failures.join('; ') : null,
-            };
+            const result = await getUnifiedRequestHistory(limit, pageParam, historyFilters);
+            if (!result.success) throw new Error(`Failed to load request history (${result.error})`);
+            return result;
         },
         initialPageParam: undefined as string | undefined,
         getNextPageParam: (lastPage) => lastPage.nextCursor || undefined,
         staleTime: 20_000,
-    });
-}
-
-export function useConnectionStats(userId?: string) {
-    const scope = userId || 'me';
-    return useQuery({
-        queryKey: CONNECTIONS_QUERY_KEYS.stats(scope),
-        queryFn: () => getConnectionStats(userId),
-        staleTime: 60_000,
-    });
-}
-
-// 2G: Mutual connections list query (lazy)
-export function useMutualConnections(userId: string | null, enabled = false) {
-    return useQuery({
-        queryKey: ['connections', 'mutual-list', userId] as const,
-        queryFn: async () => {
-            if (!userId) return { users: [] };
-            // TODO: Implement a dedicated server-side mutual connections endpoint.
-            // Until then, avoid making placeholder network requests for an empty result.
-            return { users: [] as Array<{ id: string; username: string | null; fullName: string | null; avatarUrl: string | null }> };
-        },
-        enabled: enabled && !!userId,
-        staleTime: 5 * 60_000,
     });
 }
 
@@ -617,6 +475,14 @@ export function useConnectionMutations() {
         }
         invalidateTimeoutRef.current = setTimeout(() => {
             invalidateConnectionsScoped(queryClient);
+            void queryClient.invalidateQueries({
+                queryKey: queryKeys.globalSearch.peopleRoot(),
+                refetchType: 'active',
+            });
+            void queryClient.invalidateQueries({
+                queryKey: queryKeys.globalSearch.hubRoot(),
+                refetchType: 'active',
+            });
             if (targetId) {
                 void queryClient.invalidateQueries({ queryKey: queryKeys.profile.byTarget(targetId) });
             }
@@ -633,9 +499,9 @@ export function useConnectionMutations() {
     }, []);
 
     const sendRequest = useMutation({
-        mutationFn: async ({ userId, message, lane }: { userId: string; message?: string; lane?: string }) => {
+        mutationFn: async ({ userId, message }: { userId: string; message?: string }) => {
             const idempotencyKey = crypto.randomUUID();
-            const result = await sendConnectionRequest(userId, idempotencyKey, message, lane);
+            const result = await sendConnectionRequest(userId, idempotencyKey, message);
             if (!result.success) throw new Error(result.error || 'Failed to send request');
             return { ...result, userId };
         },
@@ -653,7 +519,7 @@ export function useConnectionMutations() {
                 pendingSent: stats.pendingSent + 1,
             }));
         },
-        onError: (_err, vars) => invalidateAll((vars as any)?.userId || (vars as any)?.id),
+        onError: (_err, vars) => invalidateAll(connectionMutationTargetId(vars)),
         onSuccess: (result) => {
             if (result.status !== 'created') {
                 updateStatsQueries(queryClient, (stats) => ({
@@ -681,7 +547,7 @@ export function useConnectionMutations() {
                 connectionId: result.connectionId,
             });
         },
-        onSettled: (_data, _err, vars) => invalidateAll((vars as any)?.userId || (vars as any)?.id),
+        onSettled: (_data, _err, vars) => invalidateAll(connectionMutationTargetId(vars)),
     });
 
     const cancelRequest = useMutation({
@@ -752,7 +618,6 @@ export function useConnectionMutations() {
                         status: 'accepted',
                         createdAt: req.createdAt,
                         updatedAt: new Date(),
-                        tags: [],
                         otherUser: {
                             id: req.requesterId,
                             username: req.requesterUsername,
@@ -800,8 +665,8 @@ export function useConnectionMutations() {
                 pendingIncoming: Math.max(0, stats.pendingIncoming - 1),
             }));
         },
-        onError: (_err, vars) => invalidateAll((vars as any)?.userId || (vars as any)?.id),
-        onSettled: (_data, _err, vars) => invalidateAll((vars as any)?.userId || (vars as any)?.id),
+        onError: (_err, vars) => invalidateAll(connectionMutationTargetId(vars)),
+        onSettled: (_data, _err, vars) => invalidateAll(connectionMutationTargetId(vars)),
     });
 
     const rejectRequest = useMutation({
@@ -831,8 +696,8 @@ export function useConnectionMutations() {
                 pendingIncoming: Math.max(0, stats.pendingIncoming - 1),
             }));
         },
-        onError: (_err, vars) => invalidateAll((vars as any)?.userId || (vars as any)?.id),
-        onSettled: (_data, _err, vars) => invalidateAll((vars as any)?.userId || (vars as any)?.id),
+        onError: (_err, vars) => invalidateAll(connectionMutationTargetId(vars)),
+        onSettled: (_data, _err, vars) => invalidateAll(connectionMutationTargetId(vars)),
     });
 
     const dismissSuggestion = useMutation({
@@ -848,23 +713,9 @@ export function useConnectionMutations() {
                 items: page.items.filter((item) => item.id !== profileId),
             }));
         },
-        onError: (_err, vars) => invalidateAll((vars as any)?.userId || (vars as any)?.id),
-        onSettled: (_data, _err, vars) => invalidateAll((vars as any)?.userId || (vars as any)?.id),
+        onError: (_err, vars) => invalidateAll(connectionMutationTargetId(vars)),
+        onSettled: (_data, _err, vars) => invalidateAll(connectionMutationTargetId(vars)),
     });
-
-    const optimisticallyDismissSuggestion = async (profileId: string) => {
-        await cancelConnectionsScoped(queryClient);
-        const snapshots = collectDiscoverFeedSnapshots(queryClient);
-        updateFeedQueries<DiscoverConnectionItem>(queryClient, ['connections', 'feed', 'discover'], (page) => ({
-            ...page,
-            items: page.items.filter((item) => item.id !== profileId),
-        }));
-        return snapshots;
-        };
-
-    const restoreDismissedSuggestion = (snapshots: DiscoverFeedSnapshot) => {
-        restoreDiscoverFeedSnapshots(queryClient, snapshots);
-    };
 
     const undoRejectRequest = useMutation({
         mutationFn: async (id: string) => {
@@ -872,7 +723,7 @@ export function useConnectionMutations() {
             if (!result.success) throw new Error(result.error || 'Failed to undo reject');
             return { id };
         },
-        onSettled: (_data, _err, vars) => invalidateAll((vars as any)?.userId || (vars as any)?.id),
+        onSettled: (_data, _err, vars) => invalidateAll(connectionMutationTargetId(vars)),
     });
 
     const acceptAllIncoming = useMutation({
@@ -1044,35 +895,7 @@ export function useConnectionMutations() {
             // Re-fetch to restore the canonical sorted state on failure.
             invalidateAll();
         },
-        onSettled: (_data, _err, vars) => invalidateAll((vars as any)?.userId || (vars as any)?.id),
-    });
-
-    const undoDismiss = useMutation({
-        mutationFn: async (profileId: string) => {
-            const result = await undoDismissConnectionSuggestion(profileId);
-            if (!result.success) throw new Error(result.error || 'Failed to undo dismiss');
-            return { profileId };
-        },
-        onSettled: (_data, _err, vars) => invalidateAll((vars as any)?.userId || (vars as any)?.id),
-    });
-
-    const updateTags = useMutation({
-        mutationFn: async ({ connectionId, tags }: { connectionId: string; tags: string[] }) => {
-            const result = await updateConnectionTags(connectionId, tags);
-            if (!result.success) throw new Error(result.error || 'Failed to update tags');
-            return { connectionId, tags };
-        },
-        onMutate: async ({ connectionId, tags }) => {
-            await cancelConnectionsScoped(queryClient);
-            updateFeedQueries<NetworkConnectionItem>(queryClient, ['connections', 'feed', 'network'], (page) => ({
-                ...page,
-                items: page.items.map((item) =>
-                    item.id === connectionId ? { ...item, tags } : item,
-                ),
-            }));
-        },
-        onError: (_err, vars) => invalidateAll((vars as any)?.userId || (vars as any)?.id),
-        onSettled: (_data, _err, vars) => invalidateAll((vars as any)?.userId || (vars as any)?.id),
+        onSettled: (_data, _err, vars) => invalidateAll(connectionMutationTargetId(vars)),
     });
 
     const blockProfile = useMutation({
@@ -1096,8 +919,8 @@ export function useConnectionMutations() {
                 sent: prev.sent.filter((item) => item.addresseeId !== targetUserId),
             }));
         },
-        onError: (_err, vars) => invalidateAll((vars as any)?.userId || (vars as any)?.id),
-        onSettled: (_data, _err, vars) => invalidateAll((vars as any)?.userId || (vars as any)?.id),
+        onError: (_err, vars) => invalidateAll(connectionMutationTargetId(vars)),
+        onSettled: (_data, _err, vars) => invalidateAll(connectionMutationTargetId(vars)),
     });
 
     const result = useMemo(() => ({
@@ -1107,14 +930,10 @@ export function useConnectionMutations() {
         acceptRequest,
         rejectRequest,
         dismissSuggestion,
-        optimisticallyDismissSuggestion,
-        restoreDismissedSuggestion,
-        undoDismiss,
         undoRejectRequest,
         acceptAllIncoming,
         rejectAllIncoming,
         disconnect,
-        updateTags,
         blockProfile,
     }), [
         sendRequest,
@@ -1123,79 +942,12 @@ export function useConnectionMutations() {
         acceptRequest,
         rejectRequest,
         dismissSuggestion,
-        optimisticallyDismissSuggestion,
-        restoreDismissedSuggestion,
-        undoDismiss,
         undoRejectRequest,
         acceptAllIncoming,
         rejectAllIncoming,
         disconnect,
-        updateTags,
         blockProfile,
     ]);
 
     return result;
-}
-
-export function useConnectionTags() {
-    return useQuery({
-        queryKey: ['connections', 'tags'],
-        queryFn: async () => {
-            const res = await getConnectionTags();
-            if (!res.success) throw new Error(res.error || 'Failed to fetch tags');
-            return res.tags;
-        }
-    });
-}
-
-export function useBulkConnectionsActions() {
-    const queryClient = useQueryClient();
-
-    const disconnect = useMutation({
-        mutationFn: async (ids: string[]) => {
-            const res = await bulkDisconnectConnections(ids);
-            if (!res.success) throw new Error(res.error);
-            return res;
-        },
-        onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: ['connections', 'feed'] });
-            queryClient.invalidateQueries({ queryKey: ['connections', 'stats'] });
-        }
-    });
-
-    const updateTags = useMutation({
-        mutationFn: async ({ ids, tags }: { ids: string[], tags: string[] }) => {
-            const res = await bulkUpdateConnectionTags(ids, tags);
-            if (!res.success) throw new Error(res.error);
-            return res;
-        },
-        onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: ['connections', 'feed'] });
-            queryClient.invalidateQueries({ queryKey: ['connections', 'tags'] });
-        }
-    });
-
-    return { disconnect, updateTags };
-}
-
-export function useMutualSuggestions(limit = 6, search?: string) {
-    return useQuery({
-        queryKey: ['connections', 'suggestions', 'mutual', limit, search || ''],
-        queryFn: async () => {
-            const res = await getMutualSuggestions(limit, search);
-            if (!res.success) throw new Error(res.error);
-            return res.items;
-        }
-    });
-}
-
-export function useRoleSuggestions(limit = 6, search?: string) {
-    return useQuery({
-        queryKey: ['connections', 'suggestions', 'role', limit, search || ''],
-        queryFn: async () => {
-            const res = await getRoleSuggestions(limit, search);
-            if (!res.success) throw new Error(res.error);
-            return res.items;
-        }
-    });
 }
