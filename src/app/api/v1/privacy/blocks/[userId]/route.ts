@@ -1,4 +1,3 @@
-import { eq } from "drizzle-orm";
 import {
   enforceRouteLimit,
   getRequestId,
@@ -7,11 +6,8 @@ import {
   logApiRoute,
   requireAuthenticatedUser,
 } from "@/app/api/v1/_shared";
-import { db } from "@/lib/db";
-import { profiles } from "@/lib/db/schema";
 import { logger } from "@/lib/logger";
-import { recordPrivacyEvent } from "@/lib/privacy/audit";
-import { unblockUser } from "@/lib/privacy/blocks";
+import { setUserBlocked } from "@/lib/privacy/blocks";
 import { validateCsrf } from "@/lib/security/csrf";
 
 export async function DELETE(request: Request, context: { params: Promise<{ userId: string }> }) {
@@ -31,20 +27,8 @@ export async function DELETE(request: Request, context: { params: Promise<{ user
   if (!userId) return jsonError("User is required", 400, "BAD_REQUEST");
 
   try {
-    const [target] = await db
-      .select({ id: profiles.id, username: profiles.username })
-      .from(profiles)
-      .where(eq(profiles.id, userId))
-      .limit(1);
+    const target = await setUserBlocked({ blockerId: auth.user.id, targetUserId: userId, blocked: false, request });
     if (!target) return jsonError("User not found", 404, "NOT_FOUND");
-
-    await unblockUser(auth.user.id, userId);
-    await recordPrivacyEvent({
-      userId: auth.user.id,
-      eventType: "account_unblocked",
-      request,
-      metadata: { targetUserId: userId, targetUsername: target.username ?? null },
-    });
     logger.metric("privacy.block.result", {
       viewerId: auth.user.id,
       targetUserId: userId,
