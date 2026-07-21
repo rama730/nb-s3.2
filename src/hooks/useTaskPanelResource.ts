@@ -39,7 +39,6 @@ export type TaskPanelSubtask = {
 };
 
 type LoadingState = {
-  counts: boolean;
   comments: boolean;
   subtasks: boolean;
   attachments: boolean;
@@ -122,7 +121,6 @@ export function useTaskPanelResource(params: {
     summary: null,
   });
   const [loading, setLoading] = useState<LoadingState>({
-    counts: true,
     comments: false,
     subtasks: true,
     attachments: true,
@@ -134,13 +132,20 @@ export function useTaskPanelResource(params: {
     attachments: null,
     activity: null,
   });
-  const [loadedTabs, setLoadedTabs] = useState<Record<TaskPanelTab, boolean>>({
-    details: true,
-    subtasks: true,
+  const [loadedDeferredTabs, setLoadedDeferredTabs] = useState({
     comments: false,
-    files: true,
     activity: false,
   });
+  const loadedTabs = useMemo<Record<TaskPanelTab, boolean>>(
+    () => ({
+      details: true,
+      subtasks: true,
+      comments: loadedDeferredTabs.comments,
+      files: true,
+      activity: loadedDeferredTabs.activity,
+    }),
+    [loadedDeferredTabs.activity, loadedDeferredTabs.comments],
+  );
 
   const refreshTimersRef = useRef<Partial<Record<"attachments" | "activity", ReturnType<typeof setTimeout>>>>({});
   const resourceConnectedRef = useRef(false);
@@ -159,21 +164,15 @@ export function useTaskPanelResource(params: {
   }, []);
 
   const loadCounts = useCallback(async () => {
-    setLoading((current) => ({ ...current, counts: true }));
     try {
-      const [subtasksCount, commentsCount, filesCount] = await Promise.all([
-        supabase.from("task_subtasks").select("*", { count: "exact", head: true }).eq("task_id", task.id),
-        supabase.from("task_comments").select("*", { count: "exact", head: true }).eq("task_id", task.id),
-        countTaskAttachments(task.id),
-      ]);
+      const commentsCount = await supabase
+        .from("task_comments")
+        .select("*", { count: "exact", head: true })
+        .eq("task_id", task.id);
 
-      setCounts({
-        subtasks: subtasksCount.count || 0,
-        comments: commentsCount.count || 0,
-        files: filesCount || 0,
-      });
-    } finally {
-      setLoading((current) => ({ ...current, counts: false }));
+      setCounts((current) => ({ ...current, comments: commentsCount.count || 0 }));
+    } catch {
+      // Counts are badge hints; tab bodies own user-visible load errors.
     }
   }, [supabase, task.id]);
 
@@ -268,10 +267,12 @@ export function useTaskPanelResource(params: {
 
   const ensureTabLoaded = useCallback(async (tab: TaskPanelTab) => {
     const alreadyLoaded = loadedTabsRef.current[tab];
-    setLoadedTabs((current) => {
-      if (current[tab]) return current;
-      return { ...current, [tab]: true };
-    });
+    if (tab === "comments" || tab === "activity") {
+      setLoadedDeferredTabs((current) => {
+        if (current[tab]) return current;
+        return { ...current, [tab]: true };
+      });
+    }
 
     if (alreadyLoaded) {
       return;
@@ -469,11 +470,9 @@ export function useTaskPanelResource(params: {
     unclassifiedUploadCount,
     uploadFiles,
     uploadFolders,
-    attachExisting,
     unlinkAttachment,
     resolvePendingResolution,
     saveAsNewVersion,
-    clearPendingFileWarnings,
     downloadAttachment,
   } =
     useTaskFileMutations({
@@ -617,24 +616,20 @@ export function useTaskPanelResource(params: {
     isUploading,
     uploadFiles,
     uploadFolders,
-    attachExisting,
     unlinkAttachment,
     pendingResolution,
     resolvePendingResolution,
     saveAsNewVersion,
-    clearPendingFileWarnings,
     downloadAttachment,
   }), [
     uploadQueue,
     isUploading,
     uploadFiles,
     uploadFolders,
-    attachExisting,
     unlinkAttachment,
     pendingResolution,
     resolvePendingResolution,
     saveAsNewVersion,
-    clearPendingFileWarnings,
     downloadAttachment,
   ]);
 
