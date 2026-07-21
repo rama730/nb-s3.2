@@ -1,5 +1,7 @@
 'use client';
 
+import { detectPackageTechnologies, mergeDetectedTechnologies } from '@/lib/skills/repository-detection';
+
 /**
  * Lightweight GitHub repo analyzer.
  * Fetches package.json and Doc to auto-detect tech stack.
@@ -12,37 +14,6 @@ interface RepoAnalysis {
     technologies: string[];
     detectedFramework: string | null;
 }
-
-// Tech detection patterns from package.json dependencies
-const TECH_PATTERNS: Record<string, string[]> = {
-    'React': ['react', 'react-dom'],
-    'Next.js': ['next'],
-    'Vue': ['vue'],
-    'Nuxt': ['nuxt'],
-    'Angular': ['@angular/core'],
-    'Svelte': ['svelte'],
-    'Express': ['express'],
-    'Fastify': ['fastify'],
-    'NestJS': ['@nestjs/core'],
-    'TypeScript': ['typescript'],
-    'Tailwind CSS': ['tailwindcss'],
-    'Prisma': ['prisma', '@prisma/client'],
-    'Drizzle': ['drizzle-orm'],
-    'PostgreSQL': ['pg', 'postgres'],
-    'MongoDB': ['mongodb', 'mongoose'],
-    'Redis': ['redis', 'ioredis'],
-    'GraphQL': ['graphql', '@apollo/server'],
-    'tRPC': ['@trpc/server'],
-    'Supabase': ['@supabase/supabase-js'],
-    'Firebase': ['firebase'],
-    'AWS SDK': ['aws-sdk', '@aws-sdk/client-s3'],
-    'Docker': [], // Detected via Dockerfile
-    'Vite': ['vite'],
-    'Webpack': ['webpack'],
-    'Jest': ['jest'],
-    'Vitest': ['vitest'],
-    'Playwright': ['playwright', '@playwright/test'],
-};
 
 /**
  * Analyze a GitHub repository to extract metadata.
@@ -86,27 +57,9 @@ export async function analyzeGitHubRepo(repoUrl: string, token?: string, signal?
     if (pkgResult.status === 'fulfilled' && pkgResult.value.ok) {
         try {
             const pkg = await pkgResult.value.json();
-            const deps = { ...pkg.dependencies, ...pkg.devDependencies };
-
-            // Detect technologies & framework in a single pass
-            const frameworkOrder = ['next', 'nuxt', '@angular/core', 'vue', 'svelte', 'react', 'express'];
-            const frameworkNames: Record<string, string> = {
-                'next': 'Next.js', 'nuxt': 'Nuxt', '@angular/core': 'Angular',
-                'vue': 'Vue', 'svelte': 'Svelte', 'react': 'React', 'express': 'Express',
-            };
-
-            for (const [tech, patterns] of Object.entries(TECH_PATTERNS)) {
-                if (patterns.length && patterns.some((p) => deps[p])) {
-                    result.technologies.push(tech);
-                }
-            }
-
-            for (const key of frameworkOrder) {
-                if (deps[key]) {
-                    result.detectedFramework = frameworkNames[key] ?? null;
-                    break;
-                }
-            }
+            const detected = detectPackageTechnologies(pkg);
+            result.technologies = detected.technologies;
+            result.detectedFramework = detected.detectedFramework;
 
             if (pkg.description) result.description = pkg.description;
         } catch { /* Silent */ }
@@ -123,8 +76,7 @@ export async function analyzeGitHubRepo(repoUrl: string, token?: string, signal?
         } catch { /* Silent */ }
     }
 
-    // Limit technologies
-    result.technologies = result.technologies.slice(0, 6);
+    result.technologies = mergeDetectedTechnologies(['GitHub'], result.technologies);
 
     return result;
 }
