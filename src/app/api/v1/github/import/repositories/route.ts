@@ -1,6 +1,9 @@
 import { enforceRouteLimit, jsonError, jsonSuccess } from "@/app/api/v1/_shared";
 import { listGithubRepositories } from "@/app/actions/github";
 import { readGithubImportAccessCookie } from "@/lib/github/import-access-cookie";
+import { z } from "zod";
+
+const perPageSchema = z.coerce.number().int().positive();
 
 export async function GET(request: Request) {
   const limitResponse = await enforceRouteLimit(request, "api:v1:github:import:repositories", 60, 60);
@@ -8,9 +11,8 @@ export async function GET(request: Request) {
 
   const { searchParams } = new URL(request.url);
   const sealedImportToken = await readGithubImportAccessCookie();
-  const perPageParam = searchParams.get("perPage");
-  const parsedPerPage = perPageParam ? Number.parseInt(perPageParam, 10) : Number.NaN;
-  const perPage = Number.isFinite(parsedPerPage) && parsedPerPage > 0 ? parsedPerPage : null;
+  const parsedPerPage = perPageSchema.safeParse(searchParams.get("perPage"));
+  const perPage = parsedPerPage.success ? parsedPerPage.data : null;
 
   const result = await listGithubRepositories({
     cursor: searchParams.get("cursor"),
