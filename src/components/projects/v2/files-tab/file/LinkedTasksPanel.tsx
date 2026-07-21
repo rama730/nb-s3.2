@@ -21,6 +21,7 @@ import { Check, Loader2, Pencil, X } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { useTaskLinks, type LinkedTask } from "@/hooks/useTaskLinks";
+import { FileInspectorPanelHeader } from "./FileInspectorPanelHeader";
 
 // ─── Props ───────────────────────────────────────────────────────────
 
@@ -29,6 +30,7 @@ export interface LinkedTasksPanelProps {
   nodeId: string;
   canEdit: boolean;
   onOpenTask: (taskId: string) => void;
+  onClose: () => void;
 }
 
 // ─── Component ───────────────────────────────────────────────────────
@@ -38,6 +40,7 @@ export function LinkedTasksPanel({
   nodeId,
   canEdit,
   onOpenTask,
+  onClose,
 }: LinkedTasksPanelProps): React.JSX.Element {
   const { tasks, isLoading, error, updateAnnotation } = useTaskLinks(
     projectId,
@@ -63,12 +66,12 @@ export function LinkedTasksPanel({
         "dark:border-zinc-800 dark:bg-zinc-950",
       )}
     >
-      {/* Header */}
-      <div className="shrink-0 border-b border-zinc-200 px-3 py-2.5 dark:border-zinc-800">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-          Linked Tasks
-        </h3>
-      </div>
+      <FileInspectorPanelHeader
+        title="Linked Tasks"
+        onClose={onClose}
+        closeLabel="Close linked tasks"
+        closeTestId="files-tab-linked-tasks-close"
+      />
 
       {/* Content */}
       <div className="flex-1 min-h-0 overflow-y-auto">
@@ -213,7 +216,7 @@ function LinkedTaskRow({
               data-testid={`linked-task-annotation-input-${task.taskId}`}
               className={cn(
                 "h-6 flex-1 rounded border border-zinc-200 bg-zinc-50 px-1.5 text-xs outline-none",
-                "focus:border-indigo-400 focus:ring-1 focus:ring-indigo-300",
+                "focus:border-indigo-400  ",
                 "dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100",
               )}
               disabled={isSaving}
