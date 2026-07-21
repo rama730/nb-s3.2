@@ -1,9 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import React from "react";
+import type { ReactNode } from "react";
 import { Virtuoso } from "react-virtuoso";
-import { format, formatDistanceToNowStrict } from "date-fns";
 import {
   ArrowUpRight,
   CheckCircle2,
@@ -22,26 +21,13 @@ import { UserAvatar } from "@/components/ui/UserAvatar";
 import {
   SPRINT_TASK_STATUS_PRESENTATION,
   formatSprintDateRange,
+  formatSprintTimelineStamp,
   pluralizeSprintUnit,
   type SprintDrawerState,
   type SprintTimelineRow,
 } from "@/lib/projects/sprint-detail";
-import type {
-  SprintGroupedTimelineItem,
-  SprintTimelineViewModel,
-} from "@/lib/projects/sprint-presentation";
+import type { SprintTimelineViewModel } from "@/lib/projects/sprint-presentation";
 import { cn } from "@/lib/utils";
-
-function isValidDate(value: string | null | undefined) {
-  if (!value) return false;
-  return Number.isFinite(Date.parse(value));
-}
-
-function formatTimelineStamp(value: string | null | undefined) {
-  if (!isValidDate(value)) return "Date not set";
-  const date = new Date(value as string);
-  return `${format(date, "MMM d, yyyy")} · ${formatDistanceToNowStrict(date, { addSuffix: true })}`;
-}
 
 function toShortName(fullName: string | null | undefined) {
   return fullName?.trim().split(/\s+/)[0] ?? "User";
@@ -104,7 +90,7 @@ function TimelineTag({
   children,
 }: {
   className?: string;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
     <span
@@ -124,7 +110,7 @@ function TimelineNode({
   connectsToNext = false,
 }: {
   className?: string;
-  children: React.ReactNode;
+  children: ReactNode;
   connectsToNext?: boolean;
 }) {
   return (
@@ -190,7 +176,7 @@ function KickoffEntry({
             </span>
           </div>
           <span className="ml-auto text-xs text-zinc-400 dark:text-zinc-500 font-medium">
-            {formatTimelineStamp(row.occurredAt)}
+            {formatSprintTimelineStamp(row.occurredAt)}
           </span>
         </div>
 
@@ -222,6 +208,35 @@ function CloseoutEntry({
   const percentComplete = row.summary.totalTasks > 0
     ? Math.round((row.summary.completedTasks / row.summary.totalTasks) * 100)
     : 0;
+  const metrics = [
+    {
+      label: "Delivery",
+      value: row.summary.completedTasks,
+      total: row.summary.totalTasks,
+      caption: "Tasks done",
+      icon: <CheckCircle2 className="h-3.5 w-3.5" />,
+    },
+    {
+      label: "Velocity",
+      value: row.summary.completedStoryPoints,
+      total: row.summary.totalStoryPoints,
+      caption: "Points completed",
+      icon: <CircleDashed className="h-3.5 w-3.5" />,
+    },
+    {
+      label: "Blockers",
+      value: row.summary.blockedTasks,
+      caption: "Blocked tasks",
+      valueClassName: row.summary.blockedTasks > 0 ? "text-orange-600 dark:text-orange-400" : undefined,
+      icon: <Flag className={cn("h-3.5 w-3.5", row.summary.blockedTasks > 0 && "text-orange-500")} />,
+    },
+    {
+      label: "Assets",
+      value: row.summary.linkedFileCount,
+      caption: "Linked files",
+      icon: <Paperclip className="h-3.5 w-3.5" />,
+    },
+  ];
 
   return (
     <div className="relative pl-12">
@@ -234,7 +249,7 @@ function CloseoutEntry({
             Sprint Dashboard Summary
           </h3>
           <span className="ml-auto text-xs text-zinc-400 dark:text-zinc-500 font-medium">
-            {formatTimelineStamp(row.occurredAt)}
+            {formatSprintTimelineStamp(row.occurredAt)}
           </span>
         </div>
 
@@ -257,53 +272,21 @@ function CloseoutEntry({
           )}
 
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            {/* Delivery card */}
-            <div className="rounded-lg border border-zinc-105 border-zinc-100 bg-white p-3 dark:border-zinc-900 dark:bg-zinc-950/40">
-              <div className="flex items-center gap-1.5 text-zinc-400 dark:text-zinc-505 dark:text-zinc-500">
-                <CheckCircle2 className="h-3.5 w-3.5" />
-                <span className="text-[10px] font-semibold uppercase tracking-wider">Delivery</span>
+            {metrics.map((metric) => (
+              <div key={metric.label} className="rounded-lg border border-zinc-100 bg-white p-3 dark:border-zinc-900 dark:bg-zinc-950/40">
+                <div className="flex items-center gap-1.5 text-zinc-400 dark:text-zinc-500">
+                  {metric.icon}
+                  <span className="text-[10px] font-semibold uppercase tracking-wider">{metric.label}</span>
+                </div>
+                <p className={cn("mt-1 text-base font-bold text-zinc-800 dark:text-zinc-200", metric.valueClassName)}>
+                  {metric.value}
+                  {typeof metric.total === "number" ? (
+                    <span className="text-xs font-normal text-zinc-400"> / {metric.total}</span>
+                  ) : null}
+                </p>
+                <span className="text-[10px] text-zinc-500 dark:text-zinc-400">{metric.caption}</span>
               </div>
-              <p className="mt-1 text-base font-bold text-zinc-800 dark:text-zinc-200">
-                {row.summary.completedTasks} <span className="text-xs font-normal text-zinc-400">/ {row.summary.totalTasks}</span>
-              </p>
-              <span className="text-[10px] text-zinc-550 text-zinc-500 dark:text-zinc-400">Tasks done</span>
-            </div>
-
-            {/* Velocity card */}
-            <div className="rounded-lg border border-zinc-105 border-zinc-100 bg-white p-3 dark:border-zinc-900 dark:bg-zinc-950/40">
-              <div className="flex items-center gap-1.5 text-zinc-400 dark:text-zinc-505 dark:text-zinc-500">
-                <CircleDashed className="h-3.5 w-3.5" />
-                <span className="text-[10px] font-semibold uppercase tracking-wider">Velocity</span>
-              </div>
-              <p className="mt-1 text-base font-bold text-zinc-800 dark:text-zinc-200">
-                {row.summary.completedStoryPoints} <span className="text-xs font-normal text-zinc-400">/ {row.summary.totalStoryPoints}</span>
-              </p>
-              <span className="text-[10px] text-zinc-550 text-zinc-500 dark:text-zinc-400">Points completed</span>
-            </div>
-
-            {/* Blockers card */}
-            <div className="rounded-lg border border-zinc-105 border-zinc-100 bg-white p-3 dark:border-zinc-900 dark:bg-zinc-950/40">
-              <div className="flex items-center gap-1.5 text-zinc-400 dark:text-zinc-505 dark:text-zinc-500">
-                <Flag className={cn("h-3.5 w-3.5", row.summary.blockedTasks > 0 ? "text-orange-505 text-orange-500" : "")} />
-                <span className="text-[10px] font-semibold uppercase tracking-wider">Blockers</span>
-              </div>
-              <p className={cn("mt-1 text-base font-bold", row.summary.blockedTasks > 0 ? "text-orange-600 dark:text-orange-400" : "text-zinc-800 dark:text-zinc-200")}>
-                {row.summary.blockedTasks}
-              </p>
-              <span className="text-[10px] text-zinc-550 text-zinc-500 dark:text-zinc-400">Blocked tasks</span>
-            </div>
-
-            {/* Files card */}
-            <div className="rounded-lg border border-zinc-105 border-zinc-100 bg-white p-3 dark:border-zinc-900 dark:bg-zinc-950/40">
-              <div className="flex items-center gap-1.5 text-zinc-400 dark:text-zinc-505 dark:text-zinc-500">
-                <Paperclip className="h-3.5 w-3.5" />
-                <span className="text-[10px] font-semibold uppercase tracking-wider">Assets</span>
-              </div>
-              <p className="mt-1 text-base font-bold text-zinc-800 dark:text-zinc-200">
-                {row.summary.linkedFileCount}
-              </p>
-              <span className="text-[10px] text-zinc-550 text-zinc-500 dark:text-zinc-400">Linked files</span>
-            </div>
+            ))}
           </div>
         </div>
       </article>
@@ -315,12 +298,10 @@ function FileEntry({
   row,
   projectSlug,
   isLast,
-  nested = false,
 }: {
   row: Extract<SprintTimelineRow, { kind: "file" }>;
   projectSlug: string;
   isLast: boolean;
-  nested?: boolean;
 }) {
   const workspaceHref = buildFilesWorkspaceHref(
     projectSlug,
@@ -328,14 +309,7 @@ function FileEntry({
     row.file.nodePath,
   );
   return (
-    <div
-      className={cn(
-        "relative pl-12",
-        nested
-          ? "ml-3 border-l border-dashed border-zinc-200 pl-9 dark:border-zinc-800"
-          : "",
-      )}
-    >
+    <div className="relative pl-12">
       <TimelineNode
         connectsToNext={!isLast}
         className="border-zinc-200 text-zinc-500 dark:border-zinc-800 dark:text-zinc-300"
@@ -348,7 +322,7 @@ function FileEntry({
       </TimelineNode>
       <article className="space-y-2">
         <p className="text-xs font-medium tracking-wide text-zinc-500">
-          {formatTimelineStamp(row.occurredAt)}
+          {formatSprintTimelineStamp(row.occurredAt)}
         </p>
         <div className="space-y-1.5">
           <div className="flex flex-wrap items-center gap-2">
@@ -417,7 +391,7 @@ function FileVersionEntry({
       </TimelineNode>
       <article className="space-y-1.5">
         <p className="text-xs font-medium tracking-wide text-zinc-500 dark:text-zinc-400">
-          {formatTimelineStamp(row.occurredAt)}
+          {formatSprintTimelineStamp(row.occurredAt)}
         </p>
         <div className="space-y-1">
           <div className="flex flex-wrap items-center gap-2">
@@ -485,7 +459,7 @@ function TaskEntry({
       </TimelineNode>
       <article className="space-y-2">
         <p className="text-xs font-medium tracking-wide text-zinc-500">
-          {formatTimelineStamp(row.occurredAt)}
+          {formatSprintTimelineStamp(row.occurredAt)}
         </p>
         <div className="space-y-1.5">
           <div className="flex flex-wrap items-center gap-2">
@@ -574,18 +548,7 @@ function TaskEntry({
   );
 }
 
-function TimelineEmptyState({
-  mode,
-}: {
-  mode: SprintTimelineViewModel["mode"];
-}) {
-  const body =
-    mode === "files"
-      ? "Link sprint files from the files workspace or task attachments to create a file narrative here."
-      : mode === "grouped"
-        ? "Add work items to this sprint to build grouped task context."
-        : "Assign tasks from the Tasks tab to see sprint work unfold here.";
-
+function TimelineEmptyState() {
   return (
     <div className="rounded-2xl border border-dashed border-zinc-200 bg-zinc-50/60 px-6 py-8 dark:border-zinc-800 dark:bg-zinc-900/25">
       <div className="flex items-start gap-3">
@@ -597,7 +560,7 @@ function TimelineEmptyState({
             No sprint activity yet
           </h3>
           <p className="text-sm leading-6 text-zinc-500 dark:text-zinc-400">
-            {body}
+            Assign tasks from the Tasks tab to see sprint work unfold here.
           </p>
         </div>
       </div>
@@ -671,81 +634,6 @@ function ChronologicalTimeline({
   );
 }
 
-function GroupedTimeline({
-  groups,
-  kickoff,
-  closeout,
-  projectSlug,
-  onOpenDrawer,
-  onPrefetchDrawer,
-}: {
-  groups: SprintGroupedTimelineItem[];
-  kickoff: Extract<SprintTimelineRow, { kind: "kickoff" }> | null;
-  closeout: Extract<SprintTimelineRow, { kind: "closeout" }> | null;
-  projectSlug: string;
-  onOpenDrawer: (drawer: SprintDrawerState) => void;
-  onPrefetchDrawer: (drawer: SprintDrawerState) => void;
-}) {
-  return (
-    <div className="space-y-6">
-      {kickoff ? (
-        <KickoffEntry row={kickoff} isLast={groups.length === 0 && !closeout} />
-      ) : null}
-      {groups.map((group, index) => {
-        const isLastTask = index === groups.length - 1 && !closeout;
-        const hasFileContent =
-          group.fileRows.length > 0 || group.fileVersionRows.length > 0;
-        return (
-          <div key={group.taskRow.id} className="space-y-6">
-            <TaskEntry
-              row={group.taskRow}
-              onOpenDrawer={onOpenDrawer}
-              onPrefetchDrawer={onPrefetchDrawer}
-              isLast={isLastTask && !hasFileContent}
-            />
-            {hasFileContent ? (
-              <div className="space-y-6">
-                {group.fileRows.map((fileRow, fileIndex) => {
-                  // Find version sub-rows that belong to this file
-                  const fileVersionSubRows = group.fileVersionRows.filter(
-                    (vr) => vr.file.nodeId === fileRow.file.nodeId,
-                  );
-                  const isLastFile =
-                    index === groups.length - 1 &&
-                    fileIndex === group.fileRows.length - 1 &&
-                    !closeout;
-                  return (
-                    <React.Fragment key={fileRow.id}>
-                      <FileEntry
-                        row={fileRow}
-                        projectSlug={projectSlug}
-                        isLast={isLastFile && fileVersionSubRows.length === 0}
-                        nested
-                      />
-                      {fileVersionSubRows.map((versionRow, versionIndex) => (
-                        <FileVersionEntry
-                          key={versionRow.id}
-                          row={versionRow}
-                          projectSlug={projectSlug}
-                          isLast={
-                            isLastFile &&
-                            versionIndex === fileVersionSubRows.length - 1
-                          }
-                        />
-                      ))}
-                    </React.Fragment>
-                  );
-                })}
-              </div>
-            ) : null}
-          </div>
-        );
-      })}
-      {closeout ? <CloseoutEntry row={closeout} /> : null}
-    </div>
-  );
-}
-
 interface SprintTimelineContentProps {
   viewModel: SprintTimelineViewModel;
   projectSlug: string;
@@ -767,39 +655,25 @@ export function SprintTimelineContent({
   onOpenDrawer,
   onPrefetchDrawer,
 }: SprintTimelineContentProps) {
-  const hasContent =
-    viewModel.mode === "grouped"
-      ? viewModel.groups.length > 0
-      : viewModel.rows.some(
-          (row) =>
-            row.kind === "task" ||
-            row.kind === "file" ||
-            row.kind === "file_version",
-        );
+  const hasContent = viewModel.rows.some(
+    (row) =>
+      row.kind === "task" ||
+      row.kind === "file" ||
+      row.kind === "file_version",
+  );
 
   return (
     <div className="space-y-6 px-0 py-6">
       {hasContent ? (
-        viewModel.mode === "grouped" ? (
-          <GroupedTimeline
-            groups={viewModel.groups}
-            kickoff={viewModel.kickoff}
-            closeout={viewModel.closeout}
-            projectSlug={projectSlug}
-            onOpenDrawer={onOpenDrawer}
-            onPrefetchDrawer={onPrefetchDrawer}
-          />
-        ) : (
-          <ChronologicalTimeline
-            rows={viewModel.rows}
-            projectSlug={projectSlug}
-            onOpenDrawer={onOpenDrawer}
-            onPrefetchDrawer={onPrefetchDrawer}
-            shouldVirtualize={shouldVirtualize}
-          />
-        )
+        <ChronologicalTimeline
+          rows={viewModel.rows}
+          projectSlug={projectSlug}
+          onOpenDrawer={onOpenDrawer}
+          onPrefetchDrawer={onPrefetchDrawer}
+          shouldVirtualize={shouldVirtualize}
+        />
       ) : (
-        <TimelineEmptyState mode={viewModel.mode} />
+        <TimelineEmptyState />
       )}
 
       {hasMore ? (
