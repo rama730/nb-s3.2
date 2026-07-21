@@ -4,11 +4,7 @@ import { type ReactNode } from 'react'
 import TopNav from '@/components/layout/header/TopNav'
 import { useAuth } from '@/hooks/useAuth'
 import { isHardeningDomainEnabled } from '@/lib/features/hardening'
-import dynamic from 'next/dynamic'
-
-const WorkspaceDrawer = dynamic(() => import('@/components/workspace/WorkspaceDrawer'), {
-    ssr: false,
-})
+import { WorkspaceDrawerHost } from '@/components/workspace/WorkspaceDrawerHost'
 
 interface MainLayoutProps {
     children: ReactNode
@@ -27,7 +23,7 @@ export function MainLayout({ children }: MainLayoutProps) {
             <main className="flex-1 min-h-0 overflow-hidden">
                 {children}
             </main>
-            <WorkspaceDrawer />
+            <WorkspaceDrawerHost />
         </div>
     )
 }
