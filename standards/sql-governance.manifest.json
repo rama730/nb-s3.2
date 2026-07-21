@@ -101,7 +101,35 @@
     "drizzle/0094_lovely_toad.sql",
     "drizzle/0095_docs_hub_upgrade.sql",
     "drizzle/0098_onboarding_state_machine.sql",
-    "drizzle/0099_schema_lineage_and_fk_indexes.sql"
+    "drizzle/0099_schema_lineage_and_fk_indexes.sql",
+    "drizzle/0100_extension_recovery_drafts.sql",
+    "drizzle/0101_project_file_leases.sql",
+    "drizzle/0102_extension_recovery_sessions.sql",
+    "drizzle/0103_market_skill_catalog.sql",
+    "drizzle/0104_market_skill_seed.sql",
+    "drizzle/0105_market_skill_catalog_1_0_1.sql",
+    "drizzle/0106_role_skill_visibility_hardening.sql",
+    "drizzle/0107_market_skill_catalog_1_1_0.sql",
+    "drizzle/0108_market_skill_icons_1_2_0.sql",
+    "drizzle/0109_skill_catalog_fk_indexes.sql",
+    "drizzle/0110_market_skill_icons_1_2_1.sql",
+    "drizzle/0111_market_skill_catalog_1_3_0.sql",
+    "drizzle/0112_market_skill_catalog_1_3_1.sql",
+    "drizzle/0113_market_skill_catalog_1_3_2.sql",
+    "drizzle/0114_market_skill_catalog_1_3_3.sql",
+    "drizzle/0115_market_skill_catalog_1_3_4.sql",
+    "drizzle/0116_market_skill_catalog_1_3_5.sql",
+    "drizzle/0117_market_skill_catalog_1_3_6.sql",
+    "drizzle/0118_remove_profile_availability_status.sql",
+    "drizzle/0119_open_roles_ecosystem.sql",
+    "drizzle/0120_ponytail_message_system_cleanup.sql",
+    "drizzle/0121_ponytail_skill_catalog_table_cleanup.sql",
+    "drizzle/0122_ponytail_database_hardening.sql",
+    "drizzle/0123_ponytail_duplicate_index_completion.sql",
+    "drizzle/0124_ponytail_storage_bucket_contracts.sql",
+    "drizzle/0125_ponytail_realtime_publication_trim.sql",
+    "drizzle/0126_extension_session_disconnect_callback.sql",
+    "drizzle/0127_profile_contribution_authority.sql"
   ],
   "legacyDatabaseTags": [
     "0073_notification_snooze",
@@ -113,11 +141,7 @@
     "0079_job_heartbeats"
   ],
   "allowedUtilitySqlFiles": [
-    "checkpoints/005_task_subtasks.sql",
-    "rls-health-snippet.sql",
-    "scripts/setup-partitioning.sql",
-    "scripts/setup-project-files-rls.sql",
-    "supabase-setup.sql"
+    "scripts/setup-partitioning.sql"
   ],
   "breakGlassExceptions": []
 }
