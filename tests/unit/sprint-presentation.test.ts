@@ -6,7 +6,6 @@ import {
   buildSprintCompareSummary,
   buildSprintTimelineViewModel,
   findPreviousSprintBaseline,
-  resolveSprintViewState,
 } from "@/lib/projects/sprint-presentation";
 
 function buildRows(): SprintTimelineRow[] {
@@ -119,48 +118,6 @@ function buildRows(): SprintTimelineRow[] {
 }
 
 describe("sprint presentation", () => {
-  it("prefers explicit URL mode and filter over local preference", () => {
-    const resolved = resolveSprintViewState({
-      routeState: {
-        filter: "blocked",
-        mode: "grouped",
-        drawer: { type: "none", id: null },
-        hasExplicitFilter: true,
-        hasExplicitMode: true,
-      },
-      preference: {
-        mode: "files",
-        filter: "completed",
-      },
-    });
-
-    assert.deepEqual(resolved, {
-      mode: "grouped",
-      filter: "blocked",
-    });
-  });
-
-  it("uses local preference for mode and normalizes the filter when URL state is absent", () => {
-    const resolved = resolveSprintViewState({
-      routeState: {
-        filter: "all",
-        mode: "chronological",
-        drawer: { type: "none", id: null },
-        hasExplicitFilter: false,
-        hasExplicitMode: false,
-      },
-      preference: {
-        mode: "files",
-        filter: "files",
-      },
-    });
-
-    assert.deepEqual(resolved, {
-      mode: "files",
-      filter: "all",
-    });
-  });
-
   it("builds compare summary against the previous sprint baseline", () => {
     const summary = buildSprintHealthSummary({
       totalTasks: 4,
@@ -261,33 +218,32 @@ describe("sprint presentation", () => {
     assert.equal(previousSprint?.id, "completed-older");
   });
 
-  it("projects grouped mode from the same canonical row set", () => {
+  it("projects one chronological view from the canonical row set", () => {
     const view = buildSprintTimelineViewModel({
       rows: buildRows(),
-      mode: "grouped",
       filter: "all",
     });
 
-    assert.equal(view.mode, "grouped");
-    assert.equal(view.groups.length, 2);
-    assert.equal(view.groups[0]?.taskRow.task.id, "task-a");
-    assert.equal(view.groups[0]?.fileRows.length, 1);
+    assert.equal(view.mode, "chronological");
+    assert.deepEqual(
+      view.rows.map((row) => row.kind),
+      ["kickoff", "task", "file", "task", "closeout"],
+    );
     assert.equal(view.visibleCounts.files, 1);
   });
 
-  it("projects file mode without duplicating work-item rows", () => {
+  it("filters chronological rows without reviving alternate modes", () => {
     const view = buildSprintTimelineViewModel({
       rows: buildRows(),
-      mode: "files",
-      filter: "all",
+      filter: "files",
     });
 
-    assert.equal(view.mode, "files");
+    assert.equal(view.mode, "chronological");
     assert.deepEqual(
       view.rows.map((row) => row.kind),
       ["kickoff", "file", "closeout"],
     );
     assert.equal(view.visibleCounts.blocked, 1);
-    assert.equal(view.visibleCounts.completed, 0);
+    assert.equal(view.visibleCounts.completed, 1);
   });
 });
