@@ -20,7 +20,6 @@ import {
 
 import { generateExtensionAuthCode } from '@/app/actions/extension-sessions'
 import { Button } from '@/components/ui/button'
-import { useAuth } from '@/lib/hooks/use-auth'
 import { cn } from '@/lib/utils'
 
 type ConnectionStatus = 'idle' | 'authorizing' | 'success' | 'error'
@@ -55,6 +54,9 @@ const FLOW_STEPS: FlowStep[] = [
     },
 ]
 
+const EXTENSION_URI_AUTHORITY = 'nb-workspace.nb-vscode-sync'
+const AUTH_CALLBACK_PATH = '/auth-callback'
+
 const STEP_STATE_LABEL: Record<StepState, string> = {
     complete: 'Done',
     active: 'Active',
@@ -62,8 +64,6 @@ const STEP_STATE_LABEL: Record<StepState, string> = {
     error: 'Needs retry',
     blocked: 'Blocked',
 }
-
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 function parseProtocol(url: string | null): string | null {
     if (!url) return null
@@ -99,39 +99,16 @@ function getCallbackEditorName(url: string | null): string {
 function validateCallback(url: string | null): boolean {
     if (!url) return false
 
-    const protocol = parseProtocol(url)
-    if (!protocol) return false
-
-    if (protocol === 'http') {
-        try {
-            const parsed = new URL(url)
-            return parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1' || parsed.hostname === '[::1]'
-        } catch {
-            const normalized = url.toLowerCase()
-            return normalized.startsWith('http://localhost') ||
-                normalized.startsWith('http://127.0.0.1') ||
-                normalized.startsWith('http://[::1]')
-        }
-    }
-
-    const blockedProtocols = [
-        'https',
-        'ftp',
-        'ftps',
-        'file',
-        'javascript',
-        'data',
-        'vbscript',
-        'about',
-        'mailto',
-        'tel',
-        'sms',
-    ]
-    if (blockedProtocols.includes(protocol)) {
+    try {
+        const parsed = new URL(url)
+        return (
+            /^[a-zA-Z][a-zA-Z0-9+.-]*:$/.test(parsed.protocol)
+            && parsed.hostname === EXTENSION_URI_AUTHORITY
+            && parsed.pathname === AUTH_CALLBACK_PATH
+        )
+    } catch {
         return false
     }
-
-    return /^[a-zA-Z][a-zA-Z0-9+.-]*$/.test(protocol)
 }
 
 function formatCallbackDestination(url: string | null): string {
@@ -234,8 +211,6 @@ function getStatusCopy({
 function AuthorizePageInner() {
     const router = useRouter()
     const searchParams = useSearchParams()
-    const { user, isLoading: authLoading } = useAuth()
-
     const callbackUrl = searchParams.get('callback')
     const callbackState = searchParams.get('state')
     const isValid = validateCallback(callbackUrl)
@@ -247,9 +222,10 @@ function AuthorizePageInner() {
     const [errorMsg, setErrorMsg] = useState<string | null>(null)
     const [debugDetails, setDebugDetails] = useState<string | null>(null)
     const [authCode, setAuthCode] = useState<string | null>(null)
+    const [needsSignIn, setNeedsSignIn] = useState(false)
 
     const isDev = process.env.NODE_ENV !== 'production'
-    const accountLabel = user?.email || 'Signed-in account'
+    const accountLabel = 'Browser session verified on approval'
 
     const statusCopy = useMemo(
         () => getStatusCopy({ status, isValid, editorName, errorMsg }),
@@ -280,14 +256,12 @@ function AuthorizePageInner() {
         setProgressText('Checking browser session')
 
         try {
-            await sleep(360)
-            setProgressText('Validating editor callback')
-            await sleep(420)
             setProgressText('Creating revocable device token')
 
             const res = await generateExtensionAuthCode(editorName, {
                 authMethod: 'web_login',
                 requestState: callbackState,
+                callbackUri: callbackUrl,
             })
 
             if (res.success) {
@@ -299,6 +273,11 @@ function AuthorizePageInner() {
             }
 
             const nextError = 'error' in res ? res.error : 'Failed to authorize extension.'
+            if (nextError === 'Not authenticated') {
+                setNeedsSignIn(true)
+                setStatus('idle')
+                return
+            }
             setStatus('error')
             setErrorMsg(nextError)
             setDebugDetails(JSON.stringify(res, null, 2))
@@ -339,47 +318,10 @@ function AuthorizePageInner() {
 
     const handleSignIn = () => {
         const nextPath = `${window.location.pathname}${window.location.search}`
-        router.push(`/login?redirect=${encodeURIComponent(nextPath)}`)
+        window.location.assign(`/login?redirect=${encodeURIComponent(nextPath)}`)
     }
 
-    if (authLoading) {
-        return (
-            <AuthorizationFrame
-                accountLabel="Checking session"
-                callbackDestination={callbackDestination}
-                editorName={editorName}
-                flowStatus="idle"
-                isValid={isValid}
-                primaryAction={{
-                    disabled: true,
-                    icon: Loader2,
-                    label: 'Authorize',
-                    loading: true,
-                    onClick: () => undefined,
-                }}
-                secondaryAction={{
-                    label: 'Cancel',
-                    onClick: handleCancel,
-                }}
-                statusCopy={{
-                    title: 'Checking authentication',
-                    description: 'Confirming your browser session before this editor request can continue.',
-                }}
-            >
-                <RightPanel
-                    debugDetails={null}
-                    editorName={editorName}
-                    errorMsg={null}
-                    isDev={isDev}
-                    isValid={isValid}
-                    progressText="Checking browser session"
-                    status="idle"
-                />
-            </AuthorizationFrame>
-        )
-    }
-
-    if (!user) {
+    if (needsSignIn) {
         return (
             <AuthorizationFrame
                 accountLabel="Not signed in"
@@ -389,7 +331,7 @@ function AuthorizePageInner() {
                 isValid={isValid}
                 primaryAction={{
                     icon: ShieldCheck,
-                    label: 'Authorize',
+                    label: 'Sign in',
                     onClick: handleSignIn,
                 }}
                 secondaryAction={{
@@ -401,7 +343,7 @@ function AuthorizePageInner() {
                     description: 'Sign in before authorizing this editor connection.',
                 }}
             >
-            <AuthRequiredPanel editorName={editorName} />
+                <AuthRequiredPanel editorName={editorName} />
             </AuthorizationFrame>
         )
     }
