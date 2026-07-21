@@ -7,11 +7,8 @@ import {
   requireAuthenticatedUser,
 } from "@/app/api/v1/_shared";
 import { logger } from "@/lib/logger";
-import { db } from "@/lib/db";
-import { profiles } from "@/lib/db/schema";
 import { listPrivacyActivity } from "@/lib/privacy/audit";
 import { getPrivacySettingsPayload, listBlockedAccounts } from "@/lib/privacy/settings";
-import { eq } from "drizzle-orm";
 
 function getVisibilitySummary(value: "public" | "connections" | "private") {
   if (value === "connections") return "connections only";
@@ -96,14 +93,6 @@ function formatPrivacyActivityEntry(entry: Awaited<ReturnType<typeof listPrivacy
         label: "Account unblocked",
         summary: "Removed a blocked account restriction.",
       };
-    default:
-      return {
-        id: entry.id,
-        eventType: entry.eventType,
-        createdAt: entry.createdAt,
-        label: "Unknown privacy event",
-        summary: "A privacy event was recorded.",
-      };
   }
 }
 
@@ -121,16 +110,10 @@ export async function GET(request: Request) {
   }
 
   try {
-    const [settings, blockedAccounts, privacyActivity, profileRow] = await Promise.all([
+    const [settings, blockedAccounts, privacyActivity] = await Promise.all([
       getPrivacySettingsPayload(auth.user.id),
       listBlockedAccounts(auth.user.id),
       listPrivacyActivity(auth.user.id, 10),
-      db
-        .select({ username: profiles.username })
-        .from(profiles)
-        .where(eq(profiles.id, auth.user.id))
-        .limit(1)
-        .then((rows) => rows[0] ?? null),
     ]);
     const overview = {
       profileVisibility: settings.profileVisibility,
@@ -156,7 +139,6 @@ export async function GET(request: Request) {
       previews: {
         profileVisibility: getProfilePreview(settings.profileVisibility),
         interactionPermissions: getInteractionPreview(settings.messagePrivacy, settings.connectionPrivacy),
-        visitorProfileHref: profileRow?.username ? `/u/${encodeURIComponent(profileRow.username)}?viewer=visitor` : null,
       },
     });
   } catch (error) {
