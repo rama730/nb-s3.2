@@ -1,28 +1,4 @@
-// Task 5.1 — `FolderListRow`.
-//
-// Renders a single row of `FolderListView`. Presentation-only: all data
-// (favorite state, git change, updater display name) is passed in via
-// props so the row stays stateless and easy to test.
-//
-// Responsibilities (per tasks.md § 5.1 + design.md § FolderListView):
-//   * Row height 40px, 4-column grid matching `FolderListHeader`.
-//   * Name cell: icon + name link + `VersionPill` (when `currentVersion > 1`)
-//     + favorite star toggle + git change badge (M / A / D).
-//   * Git change badge is rendered only when
-//     `filesFeatureFlags.wave4GitIntegration` is true AND the caller
-//     supplies a change status for the node (Req 12.1, 12.2, 12.5, 12.6).
-//   * Click anywhere except the favorite star → `onNavigate(node.id)`
-//     (Req 4.7 / 4.8 / 6.1).
-//   * Drag-to-move preserved via existing `useExplorerDragDrop` — the
-//     row owns the HTML5 drag source / drop target wiring and forwards
-//     the target/dragged ids to the parent's `onDropOnFolder` callback
-//     (Q4 keep).
-//   * Context menu preserved (Q5 keep) — the row forwards the
-//     `contextmenu` event to the parent which opens the shared
-//     `ExplorerContextMenu` portal.
-//   * `canEdit === false` disables drag + hides the star toggle from
-//     the tab order (Req 19.3 — viewer cannot activate mutation
-//     affordances).
+// Folder list row: four columns plus favorite, task badge, git badge, and folder drop.
 
 "use client";
 
@@ -75,10 +51,6 @@ export interface FolderListRowProps {
   onToggleFavorite: (nodeId: string) => void;
   /** Context-menu handler (preserves `ExplorerContextMenu` integration). */
   onContextMenu: (node: FolderListRowNode, event: React.MouseEvent) => void;
-  /** Drag-source hook. Called once drag starts. */
-  onDragStart: (nodeId: string) => void;
-  /** Drag cleanup hook. */
-  onDragEnd: () => void;
   /** Drop handler — only folder rows are valid drop targets. */
   onDropOnFolder: (targetFolderId: string, draggedNodeId: string) => void;
   /** Desktop file drop upload target. Only firing when `canEdit` is true. */
@@ -181,8 +153,6 @@ export const FolderListRow = React.memo(function FolderListRow({
   onNavigate,
   onToggleFavorite,
   onContextMenu,
-  onDragStart,
-  onDragEnd,
   onDropOnFolder,
   onDesktopFileDrop,
   className,
@@ -219,9 +189,8 @@ export const FolderListRow = React.memo(function FolderListRow({
       if (!canEdit) return;
       e.dataTransfer.setData(NODE_DRAG_MIME, node.id);
       e.dataTransfer.effectAllowed = "move";
-      onDragStart(node.id);
     },
-    [canEdit, node.id, onDragStart],
+    [canEdit, node.id],
   );
 
   const handleDragOver = React.useCallback(
@@ -287,15 +256,14 @@ export const FolderListRow = React.memo(function FolderListRow({
       onContextMenu={handleContextMenu}
       draggable={canEdit}
       onDragStart={handleDragStart}
-      onDragEnd={onDragEnd}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
       tabIndex={0}
       className={cn(
         "group grid cursor-pointer items-center gap-x-3 border-b border-zinc-100 px-4 text-sm outline-none transition-colors",
-        "hover:bg-zinc-50 focus-visible:bg-zinc-50 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-indigo-400",
-        "dark:border-zinc-800 dark:hover:bg-zinc-900/40 dark:focus-visible:bg-zinc-900/40 dark:focus-visible:ring-indigo-500",
+        "hover:bg-zinc-50 focus-visible:bg-zinc-50   ",
+        "dark:border-zinc-800 dark:hover:bg-zinc-900/40 dark:focus-visible:bg-zinc-900/40 dark:",
         dropHighlight &&
           "bg-indigo-50/70 ring-1 ring-inset ring-indigo-400 dark:bg-indigo-900/30",
         className,
@@ -337,7 +305,7 @@ export const FolderListRow = React.memo(function FolderListRow({
               isFavorite
                 ? "text-amber-400 hover:text-amber-500"
                 : "text-transparent group-hover:text-zinc-400 hover:text-amber-400 focus-visible:text-zinc-500",
-              "focus:outline-none focus-visible:ring-1 focus-visible:ring-indigo-400",
+              "focus:outline-none  ",
             )}
           >
             <Star
@@ -405,8 +373,6 @@ function arePropsEqual(
     prev.onNavigate === next.onNavigate &&
     prev.onToggleFavorite === next.onToggleFavorite &&
     prev.onContextMenu === next.onContextMenu &&
-    prev.onDragStart === next.onDragStart &&
-    prev.onDragEnd === next.onDragEnd &&
     prev.onDropOnFolder === next.onDropOnFolder &&
     prev.onDesktopFileDrop === next.onDesktopFileDrop &&
     prev.className === next.className
