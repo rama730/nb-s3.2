@@ -29,7 +29,6 @@ export {
     removeProjectMemberAction,
     retryGithubImportAction,
     updateProjectFileUploadDefaultsAction,
-    updateProjectManualFileAnalyticsVisibilityAction,
     updateProjectMemberFileUploadAction,
     updateProjectNotificationSettingsAction,
     updateProjectMemberNotificationSettingsAction,
@@ -44,31 +43,24 @@ export {
     toggleProjectFollowAction,
     getProjectMembersAction,
     getProjectLiveStatsAction,
+    getAdminProjectsAction,
 
     // Queries
     incrementProjectViewAction,
     readProjectDetailShell,
     readProjectDetailMetadata,
     fetchProjectTasksAction,
+    fetchProjectTaskPreviewsAction,
     fetchProjectSprintsAction,
     readProjectSprintDetail,
     fetchProjectSprintDetailAction,
     fetchProjectSprintTimelinePageAction,
-    fetchSprintTasksAction,
     getProjectTaskDetailAction,
     getProjectTaskActivityAction,
-    getProjectAnalyticsAction,
     readProjectAnalyticsOverviewAction,
     readProjectAnalyticsMembersAction,
     readProjectMemberAnalyticsAction,
-    readProjectAnalyticsWorkflowAction,
-    readProjectAnalyticsSprintsAction,
-    readProjectAnalyticsFilesAction,
-    readProjectAnalyticsRisksAction,
-    readProjectAnalyticsReportAction,
-    readProjectAnalyticsSnapshotAction,
     readProjectAnalyticsTimelineAction,
-    updateProjectAnalyticsRiskLifecycleAction,
     getProjectSyncStatus,
 
     // Task & Sprint CRUD
@@ -76,10 +68,9 @@ export {
     createSprintAction,
     updateSprintAction,
     deleteSprintAction,
-    startSprintAction,
     completeSprintAction,
-    moveTaskToSprintAction,
     deleteTaskAction,
+    getProfileProjectsWithOpenRolesAction,
 } from './_all';
 
 export { readProjectDocAction, readProjectDocDraftAction, saveProjectDocDraftAction, publishProjectDocAction, restoreProjectDocVersionAction, setProjectDocPublishedVersionAction, deleteProjectDocVersionAction, discardProjectDocDraftAction, listProjectDocVersionsAction, validateProjectDocAction, readProjectDocReferenceOptionsAction, readProjectDocSmartBlockPreviewsAction, readProjectDocImportCandidatesAction, importProjectDocFromFileAction, applyProjectDocCreationIntentAction, createProjectDocAssetUploadUrlAction, finalizeProjectDocAssetUploadAction, deleteProjectDocAssetAction, readProjectDocSettingsAction, updateProjectDocSettingsAction, createProjectMarkdownAction, listProjectMarkdownsAction, readProjectMarkdownSearchAction, unlinkProjectDocAction } from './doc';
