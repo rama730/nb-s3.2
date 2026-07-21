@@ -8,6 +8,7 @@ import { eq, and, inArray, isNull, sql } from 'drizzle-orm';
 import { IGNORED_DIRS, isTooLarge } from '@/lib/import/import-filters';
 import { buildProjectFileKey } from '@/lib/storage/project-file-key';
 import { appendSafePathSegment } from '@/lib/security/path-safety';
+import { runWithConcurrency } from '@/lib/utils/concurrency';
 
 export interface ScannedFile {
     relativePath: string;
@@ -308,23 +309,6 @@ export async function uploadToStorageAndDB(
 ) {
     const adminClient = await createAdminClient();
 
-    const runWithConcurrency = async <T, R>(
-        items: T[],
-        limit: number,
-        worker: (item: T) => Promise<R>
-    ): Promise<R[]> => {
-        const results: R[] = new Array(items.length);
-        let index = 0;
-        const runners = new Array(Math.min(limit, items.length)).fill(0).map(async () => {
-            while (index < items.length) {
-                const current = index++;
-                results[current] = await worker(items[current]!);
-            }
-        });
-        await Promise.all(runners);
-        return results;
-    };
-
     const upsertFileNodesBatch = async (batch: ScannedFile[]) => {
         const items = batch.map((file) => {
             const rel = normalizeRelativePath(file.relativePath);
@@ -473,23 +457,6 @@ export async function uploadRepoFiles(
 ): Promise<{ processed: number; uploaded: number; failed: number; touchedNodeIds: string[] }> {
     const adminClient = await createAdminClient();
     const touchedNodeIds = new Set<string>();
-
-    const runWithConcurrency = async <T, R>(
-        items: T[],
-        limit: number,
-        worker: (item: T) => Promise<R>
-    ): Promise<R[]> => {
-        const results: R[] = new Array(items.length);
-        let index = 0;
-        const runners = new Array(Math.min(limit, items.length)).fill(0).map(async () => {
-            while (index < items.length) {
-                const current = index++;
-                results[current] = await worker(items[current]!);
-            }
-        });
-        await Promise.all(runners);
-        return results;
-    };
 
     const upsertFileNodesBatch = async (batch: ScannedFile[]) => {
         const items = batch.map((file) => {
