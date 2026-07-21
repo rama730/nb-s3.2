@@ -8,9 +8,8 @@
  * considered online when their own client is connected to their own
  * `user:${id}` room (self-publish — see `usePublishOnlinePresence`).
  *
- * Authorization: the `/api/realtime/presence-token` route permits a viewer to
- * observe a user room only when the viewer shares at least one conversation
- * with the target — see `assertPresenceRoomAccess` in the route handler.
+ * Authorization relies on the Supabase Realtime presence channel policy. Keep
+ * callers scoped to known peers from already-authorized conversation data.
  *
  * Returns a stable `Record<string, boolean>` that only changes when the
  * online set actually changes, so consumers can compare by reference /
