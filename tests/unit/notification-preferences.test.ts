@@ -120,9 +120,9 @@ test("normalizeNotificationPreferences applies default delivery + honors explici
   assert.deepEqual(withDefaults.delivery, DEFAULT_NOTIFICATION_PREFERENCES.delivery);
 
   const withExplicit = normalizeNotificationPreferences({
-    delivery: { browser: true, push: true, emailDigest: false, somethingElse: "x" },
+    delivery: { browser: true, push: true, somethingElse: "x" },
   });
-  assert.deepEqual(withExplicit.delivery, { browser: true, push: true, emailDigest: false });
+  assert.deepEqual(withExplicit.delivery, { browser: true, push: true });
 
   const withBad = normalizeNotificationPreferences({ delivery: "not-an-object" });
   assert.deepEqual(withBad.delivery, DEFAULT_NOTIFICATION_PREFERENCES.delivery);
