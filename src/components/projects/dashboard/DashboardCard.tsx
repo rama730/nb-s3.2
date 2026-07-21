@@ -1,7 +1,6 @@
 "use client";
 
 import { cn } from "@/lib/utils";
-import { motion } from "framer-motion";
 import { LucideIcon } from "lucide-react";
 import { ReactNode } from "react";
 
@@ -27,9 +26,7 @@ export default function DashboardCard({
     noPadding
 }: DashboardCardProps) {
     return (
-        <motion.div
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
+        <div
             className={cn(
                 "rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-sm hover:shadow-xl transition-shadow duration-300",
                 className
@@ -55,6 +52,6 @@ export default function DashboardCard({
             <div className={cn(noPadding ? "" : compact ? "p-3" : "p-4")}>
                 {children}
             </div>
-        </motion.div>
+        </div>
     );
 }
