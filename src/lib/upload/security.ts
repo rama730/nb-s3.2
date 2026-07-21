@@ -1,3 +1,5 @@
+import { positiveIntegerOr } from "@/lib/utils/number";
+
 const MIME_PATTERN = /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/i;
 const SAFE_MIME_TOP_LEVEL = new Set(["application", "text", "image", "video", "audio", "font"]);
 const BLOCKED_MIME_TYPES = new Set([
@@ -62,18 +64,12 @@ const DEFAULT_ATTACHMENT_UPLOAD_MAX_FILE_BYTES = 50 * 1024 * 1024; // 50MB
 const MAX_UPLOAD_PATH_LENGTH = 1024;
 const MAX_PATH_SEGMENT_LENGTH = 255;
 
-function parsePositiveInt(value: string | undefined, fallback: number): number {
-  const parsed = Number.parseInt((value || "").trim(), 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
-  return parsed;
-}
-
-export const PROJECT_UPLOAD_MAX_FILE_BYTES = parsePositiveInt(
+export const PROJECT_UPLOAD_MAX_FILE_BYTES = positiveIntegerOr(
   process.env.PROJECT_UPLOAD_MAX_FILE_BYTES,
   DEFAULT_PROJECT_UPLOAD_MAX_FILE_BYTES,
 );
 
-export const ATTACHMENT_UPLOAD_MAX_FILE_BYTES = parsePositiveInt(
+export const ATTACHMENT_UPLOAD_MAX_FILE_BYTES = positiveIntegerOr(
   process.env.ATTACHMENT_UPLOAD_MAX_FILE_BYTES,
   DEFAULT_ATTACHMENT_UPLOAD_MAX_FILE_BYTES,
 );
