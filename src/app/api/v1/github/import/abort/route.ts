@@ -1,12 +1,12 @@
 import { NextRequest } from 'next/server';
-import { createClient, createAdminClient } from '@/lib/supabase/server';
+import { createAdminClient } from '@/lib/supabase/server';
 import { db } from '@/lib/db';
 import { importJobs, importJobFiles, uploadIntents } from '@/lib/db/schema';
 import { and, eq, inArray } from 'drizzle-orm';
 import { jsonError, jsonSuccess } from '@/app/api/v1/_envelope';
 import { validateCsrf } from '@/lib/security/csrf';
 import { assertProjectWriteAccess } from '@/lib/files/internal-helpers';
-import { enforceRouteLimit } from '@/app/api/v1/_shared';
+import { enforceRouteLimit, requireAuthenticatedUser } from '@/app/api/v1/_shared';
 import { z } from 'zod';
 
 const abortSchema = z.object({
@@ -25,13 +25,9 @@ export async function POST(request: NextRequest) {
         const limitResponse = await enforceRouteLimit(request, 'api:v1:github:import:abort', 100, 60);
         if (limitResponse) return limitResponse;
 
-        const supabase = await createClient();
-        const {
-            data: { user },
-        } = await supabase.auth.getUser();
-        if (!user) {
-            return jsonError('Unauthorized', 401, 'UNAUTHORIZED');
-        }
+        const auth = await requireAuthenticatedUser();
+        if (auth.response || !auth.user) return auth.response ?? jsonError('Unauthorized', 401, 'UNAUTHORIZED');
+        const user = auth.user;
 
         let body;
         try {
