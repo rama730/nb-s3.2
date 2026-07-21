@@ -1,31 +1,8 @@
-// Task 3.1 — `FilesTabSidebar`.
-//
-// A 280px collapsible sidebar that re-hosts the preserved virtualized
-// tree renderer (`ExplorerTree` + `FileTreeItem` + `FileTreeRow`) with a
-// trimmed context suitable for the Files tab v3 browse-first experience.
-//
-// Feature set (per design.md § FilesTabSidebar and tasks.md § 3.1):
-//   * Fixed 280px width when visible; 0px + no border when
-//     `ui.sidebarCollapsed === true` (Req 2.5–2.7, 15.14).
-//   * 32px header row with a collapse toggle (`PanelLeftClose` icon) and
-//     an inline `<input type="text">` whose value is debounced 200ms
-//     before feeding the ancestor-retention filter.
-//   * Inline search: case-insensitive substring match on node name; every
-//     ancestor of a matching node stays visible (Req 2.2).
-//   * Tree body reuses preserved modules: `ExplorerTree`,
-//     `useExplorerBoot`, `useExplorerMutations`, `useExplorerDragDrop`,
-//     `useTreeContext`, `ExplorerContextMenu` portal.
-//   * Row click → `useNavigateTo(projectId)` (single write path to
-//     `currentLocationId`). Tree highlight is driven by `currentLocationId`,
-//     NOT by the legacy `selectedNodeId` (Req 21.7 preserves that surface
-//     for the Tasks tab).
-//   * NO resize handle (Req 15.14). NO multi-select checkboxes (Q1
-//     dropped). NO saved-views / outline / source-control / insights /
-//     command-palette toggles (Req 15.15–15.18).
-//
-// Requirements: Req 1.1, Req 1.7, Req 2.1–2.10, Req 15.14–15.18.
+// Files sidebar: collapsible searchable tree plus create/upload context actions.
 
 "use client";
+
+import { toast } from "sonner";
 
 import React, {
   useCallback,
@@ -39,7 +16,6 @@ import { PanelLeftClose } from "lucide-react";
 
 import type { ProjectNode } from "@/lib/db/schema";
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
-import { useToast } from "@/components/ui-custom/Toast";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -57,7 +33,6 @@ import {
   Upload,
 } from "lucide-react";
 
-import { useExplorerBoot } from "../explorer/useExplorerBoot";
 import { useExplorerDragDrop } from "../explorer/useExplorerDragDrop";
 import { useExplorerMutations } from "../explorer/useExplorerMutations";
 import { useTreeContext } from "../explorer/ExplorerContextMenu";
@@ -73,7 +48,6 @@ import {
 import { useExplorerOperationLog } from "../explorer/useExplorerOperationLog";
 import { ExplorerDialogsHost } from "../explorer/ExplorerDialogsHost";
 
-import type { Role } from "./FilesTabRoleContext";
 import { useNavigateTo } from "./hooks/useNavigateTo";
 import { FilesTabBootContext } from "./hooks/useFolderContents";
 import {
@@ -90,34 +64,30 @@ export {
   computeVisibleIdsForSearch,
 } from "./sidebarSearch";
 
+function showFilesToast(message: string, type: "success" | "error" | "info" | "warning" = "info") {
+  if (type === "success") toast.success(message);
+  else if (type === "error") toast.error(message);
+  else if (type === "warning") toast.warning(message);
+  else toast.info(message);
+}
+
 // ─── Public API ──────────────────────────────────────────────────────
 
 export interface FilesTabSidebarProps {
   projectId: string;
-  /** Current user role; only used to gate mutation affordances inside the context menu. */
-  role: Role;
   /** Shortcut for `role !== "Role_Viewer"`. Mirrors the design.md prop shape. */
   canEdit: boolean;
   /** Optional project display name used by the empty-state row. */
   projectName?: string;
-  /** Mirrors the `syncStatus` prop piped through `FilesTabRoot` → boot hook. */
-  syncStatus?: string;
-  /** Honored by `useExplorerBoot` to gate data fetching; defaults to `true`. */
-  isActive?: boolean;
 }
 
 // ─── Component ───────────────────────────────────────────────────────
 
 export function FilesTabSidebar({
   projectId,
-  role,
   canEdit,
   projectName,
-  syncStatus,
-  isActive = true,
 }: FilesTabSidebarProps): React.JSX.Element {
-  const { showToast } = useToast();
-
   // ── Store selectors ───────────────────────────────────────────────
   const sidebarCollapsed = useFilesWorkspaceStore(
     (s) => s.byProjectId[projectId]?.ui?.sidebarCollapsed ?? false,
@@ -227,10 +197,7 @@ export function FilesTabSidebar({
   const { isBooting, accessError, loadFolderContent, handleToggleFolder, handleLoadMore } = bootContext;
 
   // ── Operations log (powers undo on rename/delete/move) ────────────
-  const { operations, recordOperation } = useExplorerOperationLog();
-  // `operations` is retained via the useExplorerMutations contract below;
-  // we intentionally do not render an operations panel in the v3 sidebar.
-  void operations;
+  const { recordOperation } = useExplorerOperationLog();
 
   // ── Derived selected node (coerced to the legacy explorer shape) ──
   const selectedNode = currentLocationId
@@ -250,7 +217,6 @@ export function FilesTabSidebar({
     openCreate,
     openCreateInFolder,
     confirmCreate,
-    openUpload,
     openFolderUpload,
     openRename,
     confirmRename,
@@ -280,14 +246,9 @@ export function FilesTabSidebar({
     setSelectedNodeIds,
     loadFolderContent,
     onOpenFile: (node) => navigateTo(node.id),
-    showToast,
+    showToast: showFilesToast,
     recordOperation,
   });
-
-  // `openUpload` comes from the sidebar-root toolbar which is intentionally
-  // absent in the v3 design — expose nothing to the UI but keep the binding
-  // so React reports no "unused import" churn in future task branches.
-  void openUpload;
 
   // ── Visible rows (delegates to buildVisibleRows with ancestor filter) ──
   const includeFilter = useMemo(() => {
@@ -418,7 +379,7 @@ export function FilesTabSidebar({
     upsertNodes,
     loadFolderContent,
     toggleExpanded,
-    showToast,
+    showToast: showFilesToast,
     recordOperation,
   });
 
@@ -476,7 +437,7 @@ export function FilesTabSidebar({
     taskLinkCounts: taskLinkCounts as Record<string, number>,
     locksByNodeId: locksByNodeId as Record<
       string,
-      { lockedBy: string; lockedByName?: string | null; expiresAt: number }
+      { lockedBy: string; lockedByName?: string | null; clientKind?: "web" | "vscode"; expiresAt: number }
     >,
     mode: "default",
     canEdit,
@@ -508,7 +469,7 @@ export function FilesTabSidebar({
     toggleFavorite,
     loadFolderContent,
     runUniqueMutation,
-    showToast,
+    showToast: showFilesToast,
     recordOperation,
     // Trash surface is removed from the v3 Files tab (Q3 resolved).
     setTrashNodesState: () => {},
@@ -567,7 +528,7 @@ export function FilesTabSidebar({
           placeholder="Search files"
           aria-label="Search files"
           data-testid="files-tab-sidebar-search"
-          className="flex-1 min-w-0 h-6 px-2 text-xs bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-md text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-300"
+          className="flex-1 min-w-0 h-6 px-2 text-xs bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-md text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 outline-none focus:border-indigo-400  "
         />
       </div>
 
@@ -738,24 +699,6 @@ export function FilesTabSidebar({
         confirmMove={async () => {
           await confirmMove();
         }}
-        // Quick Open is owned by FilesTabRoot (Task 7.1), not the sidebar.
-        quickOpen={{ open: false, query: "" }}
-        setQuickOpen={() => {}}
-        // Command palette is removed in v3 (Req 15.11).
-        commandPalette={{ open: false, query: "" }}
-        setCommandPalette={() => {}}
-        selectedNode={selectedNode}
-        storeSelectedNodeIds={storeSelectedNodeIds as string[]}
-        nodesById={nodesById as Record<string, ProjectNode>}
-        recents={recents as string[]}
-        handleSelect={(node) => handleSelect(node)}
-        openCreate={openCreate}
-        openRename={openRename}
-        openMove={openMove}
-        openDelete={openDelete}
-        toggleFavorite={toggleFavorite}
-        getNodePath={(node) => buildNodePath(nodesById as Record<string, ProjectNode>, node)}
-        mode="default"
       />
 
       {/* Dev-only guardrails: surface suspicious states as console warnings
@@ -765,11 +708,6 @@ export function FilesTabSidebar({
         <AccessErrorDevWarning error={accessError} />
       ) : null}
 
-      {/* Expose role via data-attribute for future a11y audits — trivial
-          no-op at runtime, but stable enough for the test suite. */}
-      <span className="sr-only" data-testid="files-tab-sidebar-role">
-        {role}
-      </span>
     </aside>
   );
 }
@@ -777,24 +715,6 @@ export function FilesTabSidebar({
 export default FilesTabSidebar;
 
 // ─── Internal helpers ────────────────────────────────────────────────
-
-function buildNodePath(
-  nodesById: Record<string, ProjectNode>,
-  node: ProjectNode | null | undefined,
-): string {
-  if (!node) return "";
-  const parts: string[] = [node.name];
-  let cursor = node.parentId;
-  let guard = 0;
-  while (cursor && guard < 256) {
-    const parent = nodesById[cursor];
-    if (!parent) break;
-    parts.unshift(parent.name);
-    cursor = parent.parentId;
-    guard += 1;
-  }
-  return parts.join("/");
-}
 
 function AccessErrorDevWarning({ error }: { error: string }): null {
   useEffect(() => {
