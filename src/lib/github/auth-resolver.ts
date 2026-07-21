@@ -1,6 +1,6 @@
 import crypto from "crypto";
 
-import { runInFlightDeduped } from "@/lib/async/inflight-dedupe";
+import { runInFlightDeduped } from "@/lib/utils/inflight-dedupe";
 import { logger } from "@/lib/logger";
 
 import { parseGithubRepo } from "@/lib/github/repo-preview";
