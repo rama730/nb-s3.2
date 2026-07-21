@@ -496,7 +496,7 @@ export function MentionComposer({
                     }, 120);
                 }}
                 className={cn(
-                    "mention-composer min-h-[96px] w-full resize-none rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm leading-6 text-zinc-900 outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-950/60 dark:text-zinc-100",
+                    "mention-composer min-h-[96px] w-full resize-none rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm leading-6 text-zinc-900 outline-none transition focus:border-indigo-500   disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-950/60 dark:text-zinc-100",
                     "whitespace-pre-wrap break-words",
                     disabled && "pointer-events-none opacity-60",
                 )}
