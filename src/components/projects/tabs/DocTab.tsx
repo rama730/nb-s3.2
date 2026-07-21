@@ -10,7 +10,6 @@ import { useSearchParams } from "next/navigation";
 import {
     deleteProjectDocVersionAction,
     discardProjectDocDraftAction,
-    importProjectDocFromFileAction,
     publishProjectDocAction,
     readProjectDocDraftAction,
     restoreProjectDocVersionAction,
@@ -26,6 +25,7 @@ import {
     PROJECT_DOC_VERSIONS_QUERY_KEY,
     useProjectDoc,
     useProjectDocDraft,
+    useProjectMarkdowns,
 } from "@/hooks/hub/useProjectDocData";
 import { normalizeProjectDocSlug, type ProjectDocDraftPayload, type ProjectDocQualityReport } from "@/lib/projects/doc";
 import type { Project } from "@/types/hub";
@@ -46,17 +46,24 @@ export default function DocTab({
     project: Project;
     currentUserId?: string | null;
     currentUserName?: string;
-    canEditProject?: boolean;
     onEditingChange?: (editing: boolean) => void;
 }) {
+    const markdownsQuery = useProjectMarkdowns(projectId);
+    const markdowns = markdownsQuery.data || [];
+    const defaultDocSlug = useMemo(() => {
+        if (markdowns.length === 0) return "readme";
+        const hasReadme = markdowns.some((m) => m.slug === "readme");
+        if (hasReadme) return "readme";
+        return markdowns[0]?.slug || "readme";
+    }, [markdowns]);
+
     const searchParams = useSearchParams();
-    const rawDocSlug = searchParams?.get("doc") || "readme";
+    const rawDocSlug = searchParams?.get("doc") || defaultDocSlug;
     const docSlug = useMemo(() => normalizeProjectDocSlug(rawDocSlug), [rawDocSlug]);
 
     const queryClient = useQueryClient();
     const [editing, setEditing] = useState(false);
     const [saving, setSaving] = useState(false);
-    const [importing, setImporting] = useState(false);
     const [publishing, setPublishing] = useState(false);
     const readmeQuery = useProjectDoc(projectId, docSlug);
     const canEdit = Boolean(readmeQuery.data?.canEdit);
@@ -79,16 +86,16 @@ export default function DocTab({
         window.history.replaceState(null, "", url.toString());
     }, [canEdit, projectId]);
 
-    const invalidatePublishedReadme = useCallback(() => {
-        void queryClient.invalidateQueries({ queryKey: PROJECT_DOC_QUERY_KEY(projectId, docSlug) });
-    }, [projectId, docSlug, queryClient]);
-
-    const invalidateDraftReadme = useCallback(() => {
-        void queryClient.invalidateQueries({ queryKey: PROJECT_DOC_DRAFT_QUERY_KEY(projectId, docSlug) });
-    }, [projectId, docSlug, queryClient]);
-
-    const invalidateReadmeVersions = useCallback(() => {
-        void queryClient.invalidateQueries({ queryKey: PROJECT_DOC_VERSIONS_QUERY_KEY(projectId, docSlug) });
+    const invalidateDoc = useCallback((kind: "published" | "draft" | "versions" | "all") => {
+        if (kind === "published" || kind === "all") {
+            void queryClient.invalidateQueries({ queryKey: PROJECT_DOC_QUERY_KEY(projectId, docSlug) });
+        }
+        if (kind === "draft" || kind === "all") {
+            void queryClient.invalidateQueries({ queryKey: PROJECT_DOC_DRAFT_QUERY_KEY(projectId, docSlug) });
+        }
+        if (kind === "versions" || kind === "all") {
+            void queryClient.invalidateQueries({ queryKey: PROJECT_DOC_VERSIONS_QUERY_KEY(projectId, docSlug) });
+        }
     }, [projectId, docSlug, queryClient]);
 
     const updateDraftCache = useCallback((patch: Partial<ProjectDocDraftPayload>) => {
@@ -134,10 +141,10 @@ export default function DocTab({
                         qualityReport: result.qualityReport,
                     });
                 }
-                invalidateDraftReadme();
+                invalidateDoc("draft");
             });
         }, 0);
-    }, [invalidateDraftReadme, project.title, projectId, docSlug, startEditing, updateDraftCache]);
+    }, [invalidateDoc, project.title, projectId, docSlug, startEditing, updateDraftCache]);
 
     const handleSave = useCallback(async (content: string, expectedDraftUpdatedAt: string | null): Promise<{
         qualityReport: ProjectDocQualityReport;
@@ -190,14 +197,12 @@ export default function DocTab({
             }
             toast.success("Document published");
             setEditing(false);
-            invalidatePublishedReadme();
-            invalidateDraftReadme();
-            invalidateReadmeVersions();
+            invalidateDoc("all");
             return true;
         } finally {
             setPublishing(false);
         }
-    }, [invalidateDraftReadme, invalidatePublishedReadme, invalidateReadmeVersions, projectId, docSlug]);
+    }, [invalidateDoc, projectId, docSlug]);
 
     const handleRestore = useCallback(async (versionId: string) => {
         const result = await restoreProjectDocVersionAction(projectId, versionId, docSlug);
@@ -211,13 +216,13 @@ export default function DocTab({
             qualityReport: result.qualityReport,
         });
         toast.success("Version restored to draft");
-        invalidateDraftReadme();
+        invalidateDoc("draft");
         return {
             qualityReport: result.qualityReport,
             draftUpdatedAt: result.draftUpdatedAt ?? null,
             serverDraftContent: result.draftContent,
         };
-    }, [invalidateDraftReadme, projectId, docSlug, updateDraftCache]);
+    }, [invalidateDoc, projectId, docSlug, updateDraftCache]);
 
     const handleSetCurrentVersion = useCallback(async (versionId: string) => {
         const result = await setProjectDocPublishedVersionAction(projectId, versionId, docSlug);
@@ -232,15 +237,13 @@ export default function DocTab({
             qualityReport: result.qualityReport,
         });
         toast.success("Current version updated");
-        invalidatePublishedReadme();
-        invalidateDraftReadme();
-        invalidateReadmeVersions();
+        invalidateDoc("all");
         return {
             qualityReport: result.qualityReport,
             draftUpdatedAt: result.draftUpdatedAt ?? null,
             serverDraftContent: result.draftContent,
         };
-    }, [invalidateDraftReadme, invalidatePublishedReadme, invalidateReadmeVersions, projectId, docSlug, updateDraftCache]);
+    }, [invalidateDoc, projectId, docSlug, updateDraftCache]);
 
     const handleDeleteVersion = useCallback(async (versionId: string) => {
         const result = await deleteProjectDocVersionAction(projectId, versionId, docSlug);
@@ -257,9 +260,7 @@ export default function DocTab({
             });
         }
         toast.success("Version deleted");
-        invalidateReadmeVersions();
-        invalidatePublishedReadme();
-        if (result.draftContent != null) invalidateDraftReadme();
+        invalidateDoc(result.draftContent != null ? "all" : "published");
         return result.draftContent != null
             ? {
                 qualityReport: result.qualityReport,
@@ -270,7 +271,7 @@ export default function DocTab({
                 qualityReport: draftQuery.data?.qualityReport ?? { score: 0, issues: [], sectionPresence: {}, contentBytes: 0 },
                 draftUpdatedAt: draftQuery.data?.draftUpdatedAt ?? null,
             };
-    }, [draftQuery.data?.draftUpdatedAt, draftQuery.data?.qualityReport, invalidateDraftReadme, invalidatePublishedReadme, invalidateReadmeVersions, projectId, docSlug, updateDraftCache]);
+    }, [draftQuery.data?.draftUpdatedAt, draftQuery.data?.qualityReport, invalidateDoc, projectId, docSlug, updateDraftCache]);
 
     const handleDiscardDraft = useCallback(async () => {
         const result = await discardProjectDocDraftAction(projectId, docSlug);
@@ -284,43 +285,13 @@ export default function DocTab({
             qualityReport: result.qualityReport,
         });
         toast.success("Draft discarded");
-        invalidateDraftReadme();
+        invalidateDoc("draft");
         return {
             qualityReport: result.qualityReport,
             draftUpdatedAt: result.draftUpdatedAt ?? null,
             serverDraftContent: result.draftContent,
         };
-    }, [invalidateDraftReadme, projectId, docSlug, updateDraftCache]);
-
-    const handleImport = useCallback(async (nodeId: string) => {
-        setImporting(true);
-        try {
-            const draft = queryClient.getQueryData<ProjectDocDraftPayload | undefined>(PROJECT_DOC_DRAFT_QUERY_KEY(projectId, docSlug));
-            const result: any = await importProjectDocFromFileAction(projectId, {
-                nodeId,
-                docSlug,
-                expectedDraftUpdatedAt: draft?.draftUpdatedAt ?? null,
-            });
-            if (!result.success) {
-                if (result.code === "CONFLICT") {
-                    toast.error("Draft changed elsewhere. Open the editor and review before importing.");
-                } else {
-                    toast.error(result.error);
-                }
-                return;
-            }
-            updateDraftCache({
-                draftContent: result.draftContent,
-                draftUpdatedAt: result.draftUpdatedAt ?? null,
-                qualityReport: result.qualityReport,
-            });
-            toast.success(`Imported ${result.sourceFileName}`);
-            startEditing();
-            invalidateDraftReadme();
-        } finally {
-            setImporting(false);
-        }
-    }, [invalidateDraftReadme, projectId, docSlug, queryClient, startEditing, updateDraftCache]);
+    }, [invalidateDoc, projectId, docSlug, updateDraftCache]);
 
     if (readmeQuery.isLoading) return <SkeletonDoc />;
     if (editing && draftQuery.isLoading && readmeQuery.data?.version) {
@@ -375,9 +346,7 @@ export default function DocTab({
             <ProjectDocEmptyState
                 canEdit={canEdit}
                 projectId={projectId}
-                importing={importing}
                 onCreate={handleCreate}
-                onImport={handleImport}
             />
         );
     }
@@ -386,12 +355,10 @@ export default function DocTab({
         <div className="mx-auto max-w-3xl rounded-[2rem] border border-zinc-200 bg-white p-8 text-center shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
             <BookOpenText className="mx-auto h-8 w-8 text-zinc-400" />
             <p className="mt-4 text-lg font-semibold text-zinc-950 dark:text-zinc-50">
-                {docSlug === "readme" ? "Document unavailable" : "Document unavailable"}
+                Document unavailable
             </p>
             <p className="mt-2 text-sm leading-6 text-zinc-500">
-                {docSlug === "readme"
-                    ? "This project has not published a document that is visible to you."
-                    : "This project has not published a document that is visible to you."}
+                This project has not published a document that is visible to you.
             </p>
             {draftQuery.isLoading ? (
                 <p className="mt-4 inline-flex items-center gap-2 text-xs text-zinc-400">
