@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
 import { FormProvider } from 'react-hook-form';
 import { X, AlertCircle, Save } from 'lucide-react';
 import dynamic from 'next/dynamic';
@@ -14,7 +13,6 @@ import { useCreateProjectWizard } from './useCreateProjectWizard';
 // Shared Components
 import WizardHeader from './WizardHeader';
 import WizardFooter from './WizardFooter';
-import { useReducedMotionPreference } from '@/components/providers/theme-provider';
 
 // Dynamic Phase Imports with Consistent Loading States
 const PhaseLoadingPlaceholder = () => (
@@ -41,7 +39,6 @@ interface Props {
 }
 
 export default function CreateProjectWizard({ onClose, onSuccess, draftId, initialSource = null, onSourceChange }: Props) {
-    const reduceMotion = useReducedMotionPreference();
     const {
         phase, methods, wizardContext, isSubmitting, isSavingDraft,
         uploadFiles, setUploadFiles, uploadProgress,
@@ -133,24 +130,13 @@ export default function CreateProjectWizard({ onClose, onSuccess, draftId, initi
     }, [handleCloseAttempt, setShowExitConfirm, showExitConfirm]);
 
     return (
-        <AnimatePresence initial={!reduceMotion}>
-            <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 sm:p-6" role="dialog" aria-modal="true">
-                <motion.div
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    transition={reduceMotion ? { duration: 0 } : undefined}
-                    className="fixed inset-0 bg-black/40 backdrop-blur-sm"
-                />
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 sm:p-6" role="dialog" aria-modal="true">
+            <div className="fixed inset-0 bg-black/40 backdrop-blur-sm" />
 
-                <motion.div
-                    initial={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.95, y: 20 }}
-                    animate={reduceMotion ? { opacity: 1 } : { opacity: 1, scale: 1, y: 0 }}
-                    exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.95, y: 20 }}
-                    transition={reduceMotion ? { duration: 0 } : undefined}
-                    className="relative w-full max-w-5xl bg-white dark:bg-zinc-900 rounded-2xl shadow-xl overflow-hidden flex flex-col max-h-[90vh]"
-                    onClick={(e) => e.stopPropagation()}
-                >
+            <div
+                className="relative w-full max-w-5xl bg-white dark:bg-zinc-900 rounded-2xl shadow-xl overflow-hidden flex flex-col max-h-[90vh]"
+                onClick={(e) => e.stopPropagation()}
+            >
                     <FormProvider {...methods}>
                         {/* Header */}
                         <div className="relative flex-shrink-0 border-b border-zinc-100 dark:border-zinc-800">
@@ -200,14 +186,7 @@ export default function CreateProjectWizard({ onClose, onSuccess, draftId, initi
                                 }}
                                 className="space-y-8"
                             >
-                                <AnimatePresence mode="wait" initial={!reduceMotion}>
-                                    <motion.div
-                                        key={phase}
-                                        initial={reduceMotion ? { opacity: 0 } : { opacity: 0, x: 20 }}
-                                        animate={reduceMotion ? { opacity: 1 } : { opacity: 1, x: 0 }}
-                                        exit={reduceMotion ? { opacity: 0 } : { opacity: 0, x: -20 }}
-                                        transition={reduceMotion ? { duration: 0 } : { duration: 0.2 }}
-                                    >
+                                <div key={phase}>
                                         {phase === 1 && (
                                             <Phase1SourceSelection
                                                 uploadFiles={uploadFiles}
@@ -225,8 +204,7 @@ export default function CreateProjectWizard({ onClose, onSuccess, draftId, initi
                                         {phase === 3 && <Phase3TeamRoles wizardContext={wizardContext} />}
                                         {phase === 4 && <Phase4Settings />}
                                         {phase === 5 && <Phase5Review wizardContext={wizardContext} goToPhase={goToPhase} />}
-                                    </motion.div>
-                                </AnimatePresence>
+                                </div>
                             </form>
                         </div>
 
@@ -286,17 +264,12 @@ export default function CreateProjectWizard({ onClose, onSuccess, draftId, initi
                     </FormProvider>
 
                     {/* Exit Confirmation Dialog */}
-                    <AnimatePresence initial={!reduceMotion}>
-                        {showExitConfirm && (
-                            <div className="absolute inset-0 z-[60] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-                                <motion.div
-                                    initial={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.95 }}
-                                    animate={reduceMotion ? { opacity: 1 } : { opacity: 1, scale: 1 }}
-                                    exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.95 }}
-                                    transition={reduceMotion ? { duration: 0 } : undefined}
-                                    className="w-full max-w-sm bg-white dark:bg-zinc-900 rounded-xl shadow-2xl overflow-hidden border border-zinc-200 dark:border-zinc-700 p-6"
-                                    onClick={(e) => e.stopPropagation()}
-                                >
+                    {showExitConfirm && (
+                        <div className="absolute inset-0 z-[60] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+                            <div
+                                className="w-full max-w-sm bg-white dark:bg-zinc-900 rounded-xl shadow-2xl overflow-hidden border border-zinc-200 dark:border-zinc-700 p-6"
+                                onClick={(e) => e.stopPropagation()}
+                            >
                                     <div className="flex flex-col items-center text-center">
                                         <div className="w-12 h-12 rounded-full bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center mb-4">
                                             <AlertCircle className="w-6 h-6 text-amber-600 dark:text-amber-400" />
@@ -327,12 +300,10 @@ export default function CreateProjectWizard({ onClose, onSuccess, draftId, initi
                                             </button>
                                         </div>
                                     </div>
-                                </motion.div>
                             </div>
-                        )}
-                    </AnimatePresence>
-                </motion.div>
+                        </div>
+                    )}
+                </div>
             </div>
-        </AnimatePresence>
     );
 }
