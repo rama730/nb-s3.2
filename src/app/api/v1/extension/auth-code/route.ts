@@ -95,6 +95,20 @@ export async function POST(request: Request) {
         throw new Error("Authorization code expired. Start the connection again.");
       }
 
+      const requestStateHash = typeof issuedMetadata.requestStateHash === "string"
+        ? issuedMetadata.requestStateHash
+        : "";
+      const receivedStateHash = parsed.data.state
+        ? crypto.createHash("sha256").update(parsed.data.state).digest("hex")
+        : "";
+      if (
+        requestStateHash.length !== receivedStateHash.length
+        || !requestStateHash
+        || !crypto.timingSafeEqual(Buffer.from(requestStateHash), Buffer.from(receivedStateHash))
+      ) {
+        throw new Error("Authorization state did not match this editor request.");
+      }
+
       const alreadyConsumed = events.some((event) => {
         const metadata = readMetadata(event);
         return event.eventType === EXTENSION_DEVICE_SESSION_EVENTS.authCodeConsumed
@@ -112,7 +126,7 @@ export async function POST(request: Request) {
         metadata: {
           codeHash: verified.codeHash,
           codeId: verified.codeId,
-          statePresent: Boolean(parsed.data.state),
+          requestStateHash,
         },
         createdAt: now,
       });
