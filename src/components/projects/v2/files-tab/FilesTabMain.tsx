@@ -1,43 +1,4 @@
-// Task 8.2 — `FilesTabMain` for the Files tab v3.
-//
-// Contract (see design.md § FilesTabMain and § Metadata Bug Fix):
-//
-//   * Subscribes to `useCurrentLocation(projectId)` — the single read path
-//     fed by `currentLocationId` on the workspace store (Req 6.1).
-//
-//   * Conditional render (Req 1.2, 1.3, 1.5, 1.6):
-//       - `location === null || location.type === "root" | "folder"`
-//         → `<FolderListView ...>` with `folderId` set to the current
-//           folder id (or `null` for root).
-//       - `location.type === "file"`
-//         → `<FileView key={location.id} ...>`. The React key forces a
-//           full subtree remount on every id change, which is the
-//           structural fix for the Req 17 metadata-stale-on-close bug.
-//
-//   * Req 1.8 — unresolved location:
-//     `useCurrentLocation` returns `{ type: "root" }` when
-//     `currentLocationId` is set but cannot be resolved in `nodesById`
-//     (transient race during deep-link arrival, or cache eviction). We
-//     independently detect this case by reading both keys off the store
-//     and, if the id is non-null but has no node, render an inline error
-//     indicator in the main area in place of the folder list. The
-//     Sidebar_Tree is preserved in its current expanded/collapsed state
-//     because it lives in `FilesTabRoot` above us.
-//
-//   * Req 6.4 — dev-only surface-disagreement assertion:
-//     In development, compare the terminal id of `ancestorChain(nodesById,
-//     currentLocationId)` to the tree highlight id (also `currentLocationId`,
-//     since the sidebar is keyed by the same value). If they disagree for
-//     any single render, log a `console.warn`. The assertion is omitted
-//     from production bundles via the `process.env.NODE_ENV !==
-//     "production"` guard (dead-code-eliminated by bundlers). Hooks are
-//     still called unconditionally at the top level so no Rules-of-Hooks
-//     violations can occur: we call the hook and then no-op inside its
-//     effect in production builds.
-//
-// Requirements: Req 1.2, Req 1.3, Req 1.5–1.8, Req 6.4, Req 17.1–17.4.
-// Design references: § FilesTabMain, § Metadata Bug Fix, § Four-Surface
-// Synchronization.
+// Files main: folder/root renders the list; file renders FileView keyed by id.
 
 "use client";
 
@@ -50,7 +11,6 @@ import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 import { useFilesTabRole } from "./FilesTabRoleContext";
 import { useCurrentLocation } from "./hooks/useCurrentLocation";
 import { FilesTabBootContext } from "./hooks/useFolderContents";
-import { ancestorChain } from "./navigation";
 import { BreadcrumbBar } from "./breadcrumb/BreadcrumbBar";
 import { FolderListView } from "./folder/FolderListView";
 import { FileView } from "./file/FileView";
@@ -61,19 +21,6 @@ import { FileView } from "./file/FileView";
 
 export interface FilesTabMainProps {
   projectId: string;
-  /**
-   * Display name for the project, forwarded to `FolderListView` so the
-   * explorer-dialog host can surface the project title in titles/labels.
-   */
-  projectName?: string;
-  /**
-   * Whether the Files tab is currently the active project tab. Gates
-   * fetches inside `useExplorerBoot` via `FolderListView`. Defaults to
-   * `true` so standalone mounts (including tests) fetch.
-   */
-  isActive?: boolean;
-  /** Sync status surfaced to `useExplorerBoot` through `FolderListView`. */
-  syncStatus?: string;
   onToggleGitHubSync?: () => void;
 }
 
@@ -89,9 +36,6 @@ const EMPTY_NODES = Object.freeze({}) as Record<string, ProjectNode>;
 
 export function FilesTabMain({
   projectId,
-  projectName,
-  isActive = true,
-  syncStatus,
   onToggleGitHubSync,
 }: FilesTabMainProps): React.JSX.Element {
   const { canEdit } = useFilesTabRole();
@@ -120,31 +64,6 @@ export function FilesTabMain({
 
   const unresolved =
     currentLocationId !== null && nodesById[currentLocationId] === undefined;
-
-  // ── Req 6.4: dev-only surface-disagreement assertion ──────────────
-  //
-  // Four observable surfaces (tree highlight, breadcrumb, main, URL) all
-  // derive from `currentLocationId`. The tree highlight id is literally
-  // `currentLocationId`, so we compare it to the terminal id of the
-  // breadcrumb chain. When the id is unresolved, `ancestorChain` returns
-  // `[]` — that is expected and handled by the Req 1.8 branch above, so
-  // we skip the assertion in that case to avoid spamming the console for
-  // a condition we already surface to the user.
-  React.useEffect(() => {
-    if (process.env.NODE_ENV === "production") return;
-    if (currentLocationId === null) return; // root state: chain is [], expected
-    if (unresolved) return; // Req 1.8 branch handles this
-    const chain = ancestorChain(nodesById, currentLocationId);
-    const breadcrumbTerminalId = chain.at(-1)?.id ?? null;
-    const treeHighlightId = currentLocationId;
-    if (breadcrumbTerminalId !== treeHighlightId) {
-      console.warn("[files-tab] tree ⇄ breadcrumb disagreement", {
-        breadcrumbTerminalId,
-        treeHighlightId,
-        currentLocationId,
-      });
-    }
-  }, [currentLocationId, nodesById, unresolved]);
 
   return (
     <div
@@ -188,9 +107,6 @@ export function FilesTabMain({
             location && location.type === "folder" ? location.id : null
           }
           canEdit={canEdit}
-          projectName={projectName}
-          isActive={isActive}
-          syncStatus={syncStatus}
         />
       ) : (
         <FileView
