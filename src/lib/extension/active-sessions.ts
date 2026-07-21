@@ -7,7 +7,7 @@ import { db } from "@/lib/db";
 import {
   extensionDeviceSessionEvents,
   extensionDeviceSessions,
-} from "@/lib/db/schema/domains/extension";
+} from "@/lib/db/schema";
 import { EXTENSION_DEVICE_SESSION_EVENTS } from "@/lib/extension/session-events";
 import type { ExtensionSessionAuthMethod } from "@/lib/types/settingsTypes";
 
