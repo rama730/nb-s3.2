@@ -64,7 +64,7 @@ export default function ChipSelector({
               className={cn(
                 'inline-flex items-center rounded-full transition-[background-color,border-color] duration-150 ease-in-out',
                 'text-[13px] font-[450] leading-none select-none',
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
+                'focus-visible:outline-none   ',
                 'min-h-[44px] sm:min-h-0',
                 // Size variants
                 size === 'sm' && 'px-[14px] py-[6px]',
@@ -105,7 +105,7 @@ export default function ChipSelector({
         <button
           type="button"
           onClick={() => setExpanded(!expanded)}
-          className="inline-flex items-center gap-1 text-[13px] text-muted-foreground hover:text-foreground transition-colors duration-150 self-start min-h-[44px] sm:min-h-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 rounded"
+          className="inline-flex items-center gap-1 text-[13px] text-muted-foreground hover:text-foreground transition-colors duration-150 self-start min-h-[44px] sm:min-h-0 focus-visible:outline-none    rounded"
         >
           {expanded ? (
             <>
