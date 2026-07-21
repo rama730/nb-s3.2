@@ -8,7 +8,7 @@ import {
 } from "@/lib/projects/sprint-detail";
 
 describe("sprint route state", () => {
-  it("drops legacy file drawer state while preserving sprint filters", () => {
+  it("drops legacy file drawer and mode state while preserving sprint filters", () => {
     const params = new URLSearchParams({
       filter: "files",
       mode: "grouped",
@@ -19,7 +19,6 @@ describe("sprint route state", () => {
     const state = parseSprintRouteState(params);
 
     assert.equal(state.filter, "files");
-    assert.equal(state.mode, "grouped");
     assert.deepEqual(state.drawer, { type: "none", id: null });
   });
 
@@ -39,18 +38,16 @@ describe("sprint route state", () => {
     assert.equal(
       buildProjectSprintTabHref("network-for-builders", {
         filter: "blocked",
-        mode: "grouped",
         drawer: { type: "task", id: "task-1" },
       }),
-      "/projects/network-for-builders?tab=sprints&filter=blocked&mode=grouped&drawerType=task&drawerId=task-1",
+      "/projects/network-for-builders?tab=sprints&filter=blocked&drawerType=task&drawerId=task-1",
     );
     assert.equal(
       buildProjectSprintDetailHref("network-for-builders", "sprint-1", {
         filter: "files",
-        mode: "files",
         drawer: { type: "task", id: "task-2" },
       }),
-      "/projects/network-for-builders/sprints/sprint-1?filter=files&mode=files&drawerType=task&drawerId=task-2",
+      "/projects/network-for-builders?filter=files&drawerType=task&drawerId=task-2&tab=sprints&sprintId=sprint-1",
     );
     assert.equal(
       buildProjectSprintTabHref("network/builders & co"),
@@ -58,7 +55,7 @@ describe("sprint route state", () => {
     );
     assert.equal(
       buildProjectSprintDetailHref("network/builders & co", "sprint/1?draft=true"),
-      "/projects/network%2Fbuilders%20%26%20co/sprints/sprint%2F1%3Fdraft%3Dtrue",
+      "/projects/network%2Fbuilders%20%26%20co?tab=sprints&sprintId=sprint%2F1%3Fdraft%3Dtrue",
     );
   });
 });
