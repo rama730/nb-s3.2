@@ -1,17 +1,17 @@
 'use client';
 
+import { toast } from "sonner";
 import { useState, useMemo, memo, useEffect, useCallback, useRef } from 'react';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { useRouteWarmPrefetch } from '@/hooks/useRouteWarmPrefetch';
 import { motion } from 'framer-motion';
 import { Search, Sparkles, Filter, CheckSquare, X } from 'lucide-react';
-import { useToast } from '@/components/ui-custom/Toast';
 import { VirtuosoGrid } from 'react-virtuoso';
 import { useQueryClient } from '@tanstack/react-query';
 
 // Hooks
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useSearchParams } from 'next/navigation';
 import { useHubProjectsSimple } from '@/hooks/hub/useHubProjectsSimple';
 import { useAuth } from '@/hooks/useAuth';
 import { useHubSessionSeen } from '@/hooks/hub/useHubSessionSeen';
@@ -100,9 +100,7 @@ interface SimpleHubClientProps {
 
 const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialProjectsPage }: SimpleHubClientProps) {
     const queryClient = useQueryClient();
-    const { showToast } = useToast();
     const { user } = useAuth();
-    const router = useRouter();
     const prefetch = useRouteWarmPrefetch();
     const searchParams = useSearchParams();
     const reduceMotion = useReducedMotionPreference();
@@ -287,16 +285,14 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
     }, [scrollContainer]);
 
     // Creating Project
-    const handleProjectCreated = useCallback((projectId?: string) => {
+    const handleProjectCreated = useCallback(() => {
         persistCreateProjectModalState(null);
         setShowCreateModal(false);
         setCreateModalInitialSource(null);
         queryClient.invalidateQueries({ queryKey: queryKeys.hub.projectsSimpleRoot() });
-        showToast('Project created successfully!', 'success');
-        if (projectId) {
-            router.push(`/projects/${projectId}`);
-        }
-    }, [queryClient, router, showToast]);
+        queryClient.invalidateQueries({ queryKey: queryKeys.globalSearch.hubRoot() });
+        toast.success('Project created successfully!');
+    }, [queryClient]);
 
     // Clear Filters
     const handleClearFilters = useCallback(() => {
