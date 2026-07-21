@@ -20,6 +20,7 @@ import {
     acceptApplicationAction,
 } from "@/app/actions/applications";
 import { sendStructuredMessageActionV2 } from "@/app/actions/messaging";
+import { getProfileToRoleAlignmentAction, type AttributeAlignment } from "@/app/actions/matchmaking/resolver";
 
 interface ConnectionOption {
     id: string;
@@ -62,6 +63,8 @@ export default function InviteCollaboratorModal({
     const [selectedConnection, setSelectedConnection] = useState<ConnectionOption | null>(null);
     const [selectedRoleId, setSelectedRoleId] = useState<string>("");
     const [note, setNote] = useState("");
+    const [alignment, setAlignment] = useState<AttributeAlignment | null>(null);
+    const [loadingAlignment, setLoadingAlignment] = useState(false);
 
     // Load options when modal is opened
     useEffect(() => {
@@ -93,7 +96,30 @@ export default function InviteCollaboratorModal({
         // Reset selections
         setSelectedConnection(null);
         setNote("");
+        setAlignment(null);
     }, [isOpen, projectId]);
+
+    // Fetch alignment when connection + role are selected
+    useEffect(() => {
+        if (!selectedConnection || !selectedRoleId) {
+            setAlignment(null);
+            return;
+        }
+        let cancelled = false;
+        (async () => {
+            setLoadingAlignment(true);
+            try {
+                const result = await getProfileToRoleAlignmentAction(selectedConnection.id, selectedRoleId);
+                if (!cancelled) setAlignment(result);
+            } catch (err) {
+                console.error("Failed to load alignment:", err);
+                if (!cancelled) setAlignment(null);
+            } finally {
+                if (!cancelled) setLoadingAlignment(false);
+            }
+        })();
+        return () => { cancelled = true; };
+    }, [selectedConnection?.id, selectedRoleId]);
 
     // Handle connection selection to prepopulate note
     const handleSelectConnection = (conn: ConnectionOption) => {
@@ -351,6 +377,50 @@ export default function InviteCollaboratorModal({
                                         <div className="text-xs space-y-1">
                                             <p className="font-semibold">Invitation already pending</p>
                                             <p className="text-amber-600/80 dark:text-amber-400/80">An invitation for this role is already active.</p>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Matchmaking Alignment Checklist */}
+                                {alignment && (
+                                    <div className="border border-zinc-200 dark:border-zinc-800 rounded-xl p-3 bg-zinc-50/50 dark:bg-zinc-900/30 space-y-2 animate-in fade-in duration-200">
+                                        <p className="text-[11px] font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">Alignment Checklist</p>
+                                        <div className="grid grid-cols-2 gap-1.5 text-xs">
+                                            <div className="flex items-center gap-1.5">
+                                                {alignment.commitmentMatch.aligns ? (
+                                                    <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                                                ) : (
+                                                    <span className="w-3.5 h-3.5 text-zinc-400 text-center">•</span>
+                                                )}
+                                                <span className="text-zinc-600 dark:text-zinc-300">Commitment</span>
+                                            </div>
+                                            <div className="flex items-center gap-1.5">
+                                                {alignment.capacityMatch.aligns ? (
+                                                    <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                                                ) : (
+                                                    <span className="w-3.5 h-3.5 text-zinc-400 text-center">•</span>
+                                                )}
+                                                <span className="text-zinc-600 dark:text-zinc-300">Capacity</span>
+                                            </div>
+                                            <div className="flex items-center gap-1.5">
+                                                {alignment.experienceMatch.aligns ? (
+                                                    <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                                                ) : (
+                                                    <span className="w-3.5 h-3.5 text-zinc-400 text-center">•</span>
+                                                )}
+                                                <span className="text-zinc-600 dark:text-zinc-300">Experience</span>
+                                            </div>
+                                            {alignment.skillsMatch.matched.length > 0 && (
+                                                <div className="flex items-center gap-1.5">
+                                                    <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                                                    <span className="text-zinc-600 dark:text-zinc-300">{alignment.skillsMatch.matched.length} skill{alignment.skillsMatch.matched.length !== 1 ? 's' : ''} matched</span>
+                                                </div>
+                                            )}
+                                            {alignment.skillsMatch.missing.length > 0 && (
+                                                <div className="col-span-2 text-[11px] text-zinc-500 dark:text-zinc-400">
+                                                    Missing: <span className="font-medium text-amber-600 dark:text-amber-400">{alignment.skillsMatch.missing.join(', ')}</span>
+                                                </div>
+                                            )}
                                         </div>
                                     </div>
                                 )}
