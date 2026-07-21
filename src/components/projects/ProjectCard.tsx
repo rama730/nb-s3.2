@@ -17,7 +17,10 @@ import { ProjectCardViewModel } from '@/lib/view-models/project-card';
 import { useRouteWarmPrefetch } from '@/hooks/useRouteWarmPrefetch';
 import { UserAvatar } from '@/components/ui/UserAvatar';
 import { buildIdentityPresentation } from '@/lib/ui/identity';
+import { SkillIcon } from '@/components/skills/SkillIcon';
+import { resolveClientSkill } from '@/lib/skills/client';
 
+const MAX_PROJECT_CARD_SKILL_ICONS = 10;
 
 interface ProjectCardProps {
     project: Project;
@@ -74,6 +77,8 @@ export default memo(function ProjectCard({
         openRoles 
     } = viewModel;
     const rankingReasons = project.rankingReasons || [];
+    const visibleTechStack = techStack.slice(0, MAX_PROJECT_CARD_SKILL_ICONS);
+    const hiddenTechStackCount = Math.max(0, techStack.length - visibleTechStack.length);
 
     async function toggleFollow(e: React.MouseEvent) {
         e.preventDefault();
@@ -115,6 +120,7 @@ export default memo(function ProjectCard({
             >
                 <Link
                     href={projectHref}
+                    prefetch={false}
                     className="absolute inset-0 z-10"
                     aria-label={`View project ${project.title}`}
                     onClick={() => onOpenProject?.(project.id)}
@@ -177,6 +183,7 @@ export default memo(function ProjectCard({
                     {!previewMode && (
                         <Link
                             href={projectHref}
+                            prefetch={false}
                             className="absolute inset-0 z-10"
                             onClick={() => onOpenProject?.(project.id)}
                             onPointerEnter={() => warmPrefetchRoute(projectHref)}
@@ -225,13 +232,35 @@ export default memo(function ProjectCard({
                             </div>
                         )}
 
-                        {/* Micro Tech Stack */}
+                        {/* Micro tech stack */}
                         {techStack.length > 0 && (
-                            <div className="mt-auto">
-                                <p className="text-[11px] font-medium text-zinc-400 dark:text-zinc-500 truncate" title={techStack.join(', ')}>
-                                    {techStack.slice(0, 4).join(' • ')}
-                                    {techStack.length > 4 && ` • +${techStack.length - 4}`}
-                                </p>
+                            <div
+                                className="mt-auto flex flex-nowrap items-center gap-1 overflow-hidden"
+                                title={techStack.join(', ')}
+                                aria-label={`Skills: ${techStack.join(', ')}`}
+                            >
+                                {visibleTechStack.map((techName) => {
+                                    const skill = resolveClientSkill(techName);
+                                    return (
+                                        <span
+                                            key={skill.canonicalKey}
+                                            className="inline-flex h-5 w-5 shrink-0 items-center justify-center text-zinc-700 dark:text-zinc-200"
+                                            title={skill.name}
+                                            role="img"
+                                            aria-label={skill.name}
+                                        >
+                                            <SkillIcon skill={skill} size={16} />
+                                        </span>
+                                    );
+                                })}
+                                {hiddenTechStackCount > 0 && (
+                                    <span
+                                        className="inline-flex h-5 shrink-0 items-center px-1 text-[10px] font-semibold text-zinc-600 dark:text-zinc-300"
+                                        aria-label={`${hiddenTechStackCount} more skills`}
+                                    >
+                                        +{hiddenTechStackCount}
+                                    </span>
+                                )}
                             </div>
                         )}
                     </div>
