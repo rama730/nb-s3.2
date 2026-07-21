@@ -13,6 +13,7 @@ import assert from "node:assert/strict";
 
 import type { ProjectNode } from "@/lib/db/schema";
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
+import { hasNodeCacheDifference } from "@/stores/files/explorerSlice";
 import { defaultWorkspace } from "@/stores/files/types";
 
 // ─── Fixture builders ────────────────────────────────────────────────
@@ -145,6 +146,24 @@ describe("patchNodeVersion — patches currentVersion in place (Req 3.5)", () =>
     const stateAfter = useFilesWorkspaceStore.getState();
 
     assert.equal(stateBefore, stateAfter, "state reference should not change for unknown node");
+  });
+});
+
+describe("upsertNodes — keeps active-version attribution coherent", () => {
+  it("detects authoritative attribution changes even when the node timestamp is unchanged", () => {
+    const file = Object.assign(makeFile("file-1", "readme.md", null, 11), {
+      updatedByName: "Old editor",
+      versionUpdatedAt: new Date("2026-06-22T00:00:00Z"),
+    });
+
+    const enriched = Object.assign({ ...file }, {
+      updatedById: "user-rama",
+      updatedByName: "Rama",
+      versionUpdatedAt: new Date("2026-07-02T09:30:15Z"),
+    });
+
+    assert.equal(hasNodeCacheDifference(file, enriched), true);
+    assert.equal(hasNodeCacheDifference(enriched, { ...enriched }), false);
   });
 });
 
