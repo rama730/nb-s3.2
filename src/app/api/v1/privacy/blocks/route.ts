@@ -1,4 +1,3 @@
-import { eq } from "drizzle-orm";
 import { z } from "zod";
 import {
   enforceRouteLimit,
@@ -8,11 +7,8 @@ import {
   logApiRoute,
   requireAuthenticatedUser,
 } from "@/app/api/v1/_shared";
-import { db } from "@/lib/db";
-import { profiles } from "@/lib/db/schema";
 import { logger } from "@/lib/logger";
-import { recordPrivacyEvent } from "@/lib/privacy/audit";
-import { blockUser } from "@/lib/privacy/blocks";
+import { setUserBlocked } from "@/lib/privacy/blocks";
 import { validateCsrf } from "@/lib/security/csrf";
 
 export async function POST(request: Request) {
@@ -41,20 +37,8 @@ export async function POST(request: Request) {
     const targetUserId = parseResult.data.userId;
     if (targetUserId === auth.user.id) return jsonError("Cannot block yourself", 400, "BAD_REQUEST");
 
-    const [target] = await db
-      .select({ id: profiles.id, username: profiles.username })
-      .from(profiles)
-      .where(eq(profiles.id, targetUserId))
-      .limit(1);
+    const target = await setUserBlocked({ blockerId: auth.user.id, targetUserId, blocked: true, request });
     if (!target) return jsonError("User not found", 404, "NOT_FOUND");
-
-    await blockUser(auth.user.id, targetUserId);
-    await recordPrivacyEvent({
-      userId: auth.user.id,
-      eventType: "account_blocked",
-      request,
-      metadata: { targetUserId, targetUsername: target.username ?? null },
-    });
     logger.metric("privacy.block.result", {
       viewerId: auth.user.id,
       targetUserId,
