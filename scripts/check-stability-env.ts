@@ -100,21 +100,6 @@ function main() {
         if (!isHttpsUrl(publicAppUrl)) errors.push('NEXT_PUBLIC_APP_URL must be https outside local development')
     }
 
-    const presenceTokenSecret = process.env.PRESENCE_TOKEN_SECRET?.trim() || ''
-    if (target !== 'local' && !presenceTokenSecret) {
-        errors.push('PRESENCE_TOKEN_SECRET is required outside local development')
-    } else if (!presenceTokenSecret) {
-        warnings.push('PRESENCE_TOKEN_SECRET is unset; realtime presence token issuance will fail until the secret is configured')
-    }
-
-    const presenceWsUrl =
-        process.env.NEXT_PUBLIC_PRESENCE_WS_URL?.trim()
-        || process.env.PRESENCE_WS_URL?.trim()
-        || ''
-    if (target !== 'local' && !presenceWsUrl) {
-        errors.push('NEXT_PUBLIC_PRESENCE_WS_URL or PRESENCE_WS_URL is required outside local development')
-    }
-
     const inngestExecutionRole = process.env.INNGEST_EXECUTION_ROLE?.trim() || ''
     if (inngestExecutionRole && inngestExecutionRole !== 'web' && inngestExecutionRole !== 'worker') {
         errors.push('INNGEST_EXECUTION_ROLE must be either web or worker')
@@ -198,7 +183,6 @@ function main() {
             hasRedis: Boolean(redisUrl && redisToken),
             hasTurnstile: Boolean(turnstileSiteKey),
             hasOtlp: Boolean(otlpEndpoint),
-            hasPresenceWsUrl: Boolean(presenceWsUrl),
             rateLimitMode: rateLimitMode || null,
             inngestExecutionRole: inngestExecutionRole || null,
         },
