@@ -93,8 +93,6 @@ function makeNode(overrides: NodeOverrides = {}): MetadataStripNode {
 interface RenderMetadataOptions {
   node: MetadataStripNode;
   role?: Role;
-  canEdit?: boolean;
-  signedUrl?: string | null;
 }
 
 /**
@@ -104,7 +102,7 @@ interface RenderMetadataOptions {
  */
 function renderMetadataStrip(options: RenderMetadataOptions): string {
   const role: Role = options.role ?? "Role_Owner";
-  const canEdit = options.canEdit ?? role !== "Role_Viewer";
+  const canEdit = role !== "Role_Viewer";
   return renderToStaticMarkup(
     React.createElement(
       QueryClientProvider,
@@ -114,13 +112,10 @@ function renderMetadataStrip(options: RenderMetadataOptions): string {
         { role, canEdit },
         React.createElement(MetadataStrip, {
           node: options.node,
-          canEdit,
-          signedUrl: options.signedUrl ?? null,
           mode: "view",
           onView: () => {},
           onRaw: () => {},
           onEdit: () => {},
-          onDownload: () => {},
         }),
       ),
     )
@@ -141,7 +136,6 @@ function renderFileActionsBar(role: Role): string {
           onView: () => {},
           onRaw: () => {},
           onEdit: () => {},
-          onDownload: () => {},
         }),
       ),
     )
@@ -211,6 +205,28 @@ describe("MetadataStrip — all fields rendered (Req 5.1)", () => {
       }),
     });
     assert.match(fieldText(html, "updated-at") ?? "", /^Last updated .+ by alex$/);
+  });
+
+  it("resolves the active uploader id through the project-member cache", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(
+        QueryClientProvider,
+        { client: testQueryClient },
+        React.createElement(
+          FilesTabRoleProvider,
+          { role: "Role_Owner", canEdit: true },
+          React.createElement(MetadataStrip, {
+            node: makeNode({ updatedById: "user-rama", updatedByName: null, updatedByUsername: null }),
+            uploaderNames: { "user-rama": "Rama", "creator-user": "Creator" },
+            mode: "view",
+            onView: () => {},
+            onRaw: () => {},
+            onEdit: () => {},
+          }),
+        ),
+      ),
+    );
+    assert.match(fieldText(html, "updated-at") ?? "", /^Last updated .+ by Rama$/);
   });
 
   it("uses the latest file-version timestamp when it is present", () => {
@@ -576,7 +592,6 @@ function renderFileActionsBarWithNode(role: Role): string {
           onView: () => {},
           onRaw: () => {},
           onEdit: () => {},
-          onDownload: () => {},
           projectId: "proj-test-123",
           nodeId: "node-test-456",
         }),
@@ -669,12 +684,14 @@ describe("FileActionsBar — Replace… source-level contracts (Req 11.4–11.6,
     "utf8",
   );
 
-  it("calls saveFileAsNewVersion on file selection (Req 11.4)", () => {
+  it("routes file selection through the canonical revision utility (Req 11.4)", () => {
     assert.match(
       FILE_ACTIONS_BAR_SRC,
-      /saveFileAsNewVersion\(\{\s*projectId,\s*nodeId,\s*file,/,
-      "Must call saveFileAsNewVersion with the selected file (Req 11.4)",
+      /saveFileRevision\(\{\s*projectId,\s*nodeId,\s*file,/,
+      "Must call saveFileRevision with the selected file (Req 11.4)",
     );
+    assert.match(FILE_ACTIONS_BAR_SRC, /new_revision/);
+    assert.match(FILE_ACTIONS_BAR_SRC, /active_revision/);
   });
 
   it("handles lock conflict by setting lockConflict state (Req 11.5, 5.2)", () => {
