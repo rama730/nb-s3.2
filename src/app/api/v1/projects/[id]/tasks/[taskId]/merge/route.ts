@@ -11,11 +11,10 @@ import { mergeSandboxTask } from "@/lib/projects/merge-sandbox";
 import { validateCsrf } from "@/lib/security/csrf";
 import { z } from "zod";
 import { logger } from "@/lib/logger";
+import { isLooseUuid } from "@/lib/validations/uuid";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const mergeBodySchema = z.object({
     sessionId: z.string().uuid(),
@@ -36,7 +35,7 @@ export async function POST(
 
         const { id: projectId, taskId } = await context.params;
 
-        if (!UUID_RE.test(projectId) || !UUID_RE.test(taskId)) {
+        if (!isLooseUuid(projectId) || !isLooseUuid(taskId)) {
             return jsonError("Invalid parameters", 400, "BAD_REQUEST");
         }
 
