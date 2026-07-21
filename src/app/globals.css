@@ -51,6 +51,7 @@
 }
 
 :root {
+  --header-height: var(--ui-topnav-height);
   --radius: 0.625rem;
   color-scheme: light dark;
   --theme-action-solid-light: oklch(0.61 0.2 262);
@@ -324,7 +325,11 @@
 
 @layer base {
   * {
-    @apply border-border outline-ring/50;
+    @apply border-border;
+  }
+
+  *:focus, *:focus-visible {
+    outline: none !important;
   }
 
   body {
