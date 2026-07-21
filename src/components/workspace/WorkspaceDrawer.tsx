@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useState, useRef } from "react";
-import { useSearchParams, usePathname, useRouter } from "next/navigation";
+import { useSearchParams, usePathname } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { X, Briefcase, Loader2 } from "lucide-react";
 import { useUIStore } from "@/lib/stores/ui-store";
@@ -12,6 +12,8 @@ import dynamic from "next/dynamic";
 
 // Consolidated Unified Overview Tab
 import WorkspaceOverviewTab from "./WorkspaceOverviewTab";
+
+type WorkspaceTask = Extract<Awaited<ReturnType<typeof getWorkspaceTaskInfoAction>>, { success: true }>['task'];
 
 // Dynamic loading of Workspace Task Details View to keep initial bundle size minimal
 const WorkspaceTaskDetailView = dynamic(() => import("./WorkspaceTaskDetailView"), {
@@ -35,7 +37,7 @@ export default function WorkspaceDrawer() {
     const setWorkspaceOpen = useUIStore((s) => s.setWorkspaceOpen);
     const setWorkspaceTaskId = useUIStore((s) => s.setWorkspaceTaskId);
 
-    const [selectedTask, setSelectedTask] = useState<any | null>(null);
+    const [selectedTask, setSelectedTask] = useState<WorkspaceTask | null>(null);
     const [loadingTask, setLoadingTask] = useState(false);
     const firstRenderRef = useRef(true);
 
@@ -118,7 +120,7 @@ export default function WorkspaceDrawer() {
                     setWorkspaceTaskId(null);
                 }
                 setLoadingTask(false);
-            }).catch((e) => {
+            }).catch(() => {
                 toast.error("Failed to retrieve task details");
                 setWorkspaceTaskId(null);
                 setLoadingTask(false);
@@ -155,6 +157,7 @@ export default function WorkspaceDrawer() {
                             exit={{ x: "100%" }}
                             transition={{ type: "spring", damping: 26, stiffness: 220 }}
                             className="fixed right-0 top-[var(--ui-topnav-height,56px)] z-[201] flex h-[calc(100vh-var(--ui-topnav-height,56px))] w-full max-w-[92%] sm:max-w-xl md:max-w-2xl flex-col border-l border-zinc-200 bg-white shadow-[-20px_0_50px_-10px_rgba(0,0,0,0.15)] dark:border-zinc-800 dark:bg-zinc-950 dark:shadow-[-20px_0_50px_-10px_rgba(0,0,0,0.5)]"
+                            id="workspace-drawer"
                             role="dialog"
                             aria-modal="true"
                             aria-labelledby="workspace-drawer-title"
