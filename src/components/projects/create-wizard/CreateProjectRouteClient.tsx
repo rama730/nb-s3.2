@@ -25,7 +25,7 @@ export function CreateProjectRouteClient({
     }, [router])
 
     const handleSuccess = useCallback((projectId: string) => {
-        router.push(`/projects/${encodeURIComponent(projectId)}`)
+        router.push('/hub')
     }, [router])
 
     return (
