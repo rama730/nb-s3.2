@@ -1,13 +1,12 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Calendar, Check, CheckSquare, Clock, ExternalLink, Flag, MessageSquareQuote, Paperclip, TriangleAlert, User, Zap } from "lucide-react";
+import { Calendar, CheckSquare, Clock, ExternalLink, Flag, MessageSquareQuote, Paperclip, TriangleAlert, User, Zap } from "lucide-react";
 import { format } from "date-fns";
 import { useQuery } from "@tanstack/react-query";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { readTaskSourceMessageLinksAction } from "@/app/actions/messaging/linked-work";
-import type { ProjectNode } from "@/lib/db/schema";
 import type { TaskFileReadinessWarning } from "@/lib/projects/task-file-intelligence";
 import { normalizeTaskTitleDraft } from "@/lib/projects/task-file-intelligence";
 import {
@@ -21,8 +20,7 @@ import {
   getTaskPriorityPresentation,
   getTaskStatusPresentation,
 } from "@/lib/projects/task-workflow";
-import { cn } from "@/lib/utils";
-import type { TaskPanelSubtask } from "@/hooks/useTaskPanelResource";
+import type { TaskPanelTab } from "@/hooks/useTaskPanelResource";
 import { buildProjectPersonReference } from "@/lib/projects/settings-policies";
 
 interface DetailsTabProps {
@@ -32,8 +30,9 @@ interface DetailsTabProps {
   mutationError: string | null;
   members?: any[];
   sprints?: any[];
-  subtasks: TaskPanelSubtask[];
-  attachments: ProjectNode[];
+  subtaskCount: number;
+  completedSubtaskCount: number;
+  attachmentCount: number;
   fileWarnings?: TaskFileReadinessWarning[];
   fileWarningSummary?: string | null;
   onUpdateField: (
@@ -42,8 +41,7 @@ interface DetailsTabProps {
   ) => Promise<{ success: boolean; error?: string }>;
   onUpdateStatus: (status: string) => Promise<{ success: boolean; error?: string }>;
   onUpdateAssignee: (assigneeId: string | null) => Promise<{ success: boolean; error?: string }>;
-  onToggleSubtask: (subtaskId: string, completed: boolean) => Promise<{ success: boolean; error?: string }>;
-  onDownloadAttachment: (node: ProjectNode) => Promise<void> | void;
+  onOpenTab: (tab: TaskPanelTab) => void;
 }
 
 function autosizeTextarea(element: HTMLTextAreaElement | null) {
@@ -59,15 +57,15 @@ export default function DetailsTab({
   mutationError,
   members = [],
   sprints = [],
-  subtasks,
-  attachments,
+  subtaskCount,
+  completedSubtaskCount,
+  attachmentCount,
   fileWarnings = [],
   fileWarningSummary = null,
   onUpdateField,
   onUpdateStatus,
   onUpdateAssignee,
-  onToggleSubtask,
-  onDownloadAttachment,
+  onOpenTab,
 }: DetailsTabProps) {
   const [titleDraft, setTitleDraft] = useState(task.title);
   const [descriptionDraft, setDescriptionDraft] = useState(task.description || "");
@@ -123,7 +121,6 @@ export default function DetailsTab({
       : "Unknown";
   const creatorName = task.creator?.fullName || "Unknown";
   const creatorAvatar = task.creator?.avatarUrl || null;
-  const completedSubtasks = subtasks.filter((subtask) => subtask.completed).length;
   const showDoneWarnings = task.status === "done" && fileWarnings.length > 0;
   const sourceLinksQuery = useQuery({
     queryKey: ["task-source-message-links", task.projectId, task.id],
@@ -257,7 +254,7 @@ export default function DetailsTab({
             <button
               type="button"
               onClick={enterTitleEditMode}
-              className="w-full rounded-lg text-left outline-none transition focus-visible:ring-2 focus-visible:ring-indigo-500/40"
+              className="w-full rounded-lg text-left outline-none transition  "
               aria-label="Edit task title"
             >
               <h1 className="whitespace-pre-wrap break-words text-2xl font-bold leading-tight text-zinc-900 dark:text-zinc-100">
@@ -329,85 +326,37 @@ export default function DetailsTab({
             }}
             disabled={!canEdit || isMutating}
             placeholder="Add a description..."
-            className="w-full resize-none rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm text-zinc-900 outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-50 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-100"
+            className="w-full resize-none rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm text-zinc-900 outline-none transition focus:border-indigo-500   disabled:opacity-50 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-100"
           />
         </div>
 
-        {attachments.length > 0 ? (
-          <div className="space-y-3">
-            <label className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-zinc-500">
-              <Paperclip className="h-3.5 w-3.5" />
-              Attachments ({attachments.length})
-            </label>
-            <div className="flex flex-wrap gap-3">
-              {attachments.map((attachment) => (
-                <button
-                  key={attachment.id}
-                  onClick={() => void onDownloadAttachment(attachment)}
-                  className="group relative flex h-24 w-28 flex-col items-center justify-center rounded-lg border border-zinc-200 bg-zinc-50 transition-all hover:border-indigo-500 hover:shadow-sm dark:border-zinc-800 dark:bg-zinc-900"
-                >
-                  <Paperclip className="mb-2 h-6 w-6 text-zinc-400 transition-colors group-hover:text-indigo-500" />
-                  <span className="w-full truncate px-2 text-center text-[10px] text-zinc-600 dark:text-zinc-400">
-                    {attachment.name}
-                  </span>
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : null}
-
-        <div className="space-y-3">
-          <div className="flex items-center justify-between gap-3">
-            <label className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <button
+            type="button"
+            onClick={() => onOpenTab("subtasks")}
+            className="rounded-xl border border-zinc-200 bg-zinc-50 p-4 text-left transition hover:border-indigo-300 dark:border-zinc-800 dark:bg-zinc-900"
+          >
+            <span className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-zinc-500">
               <CheckSquare className="h-3.5 w-3.5" />
-              Subtasks ({completedSubtasks}/{subtasks.length})
-            </label>
-            {subtasks.length > 0 ? (
-              <div className="h-1.5 w-24 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
-                <div
-                  className="h-full bg-indigo-500 transition-all"
-                  style={{ width: `${(completedSubtasks / Math.max(1, subtasks.length)) * 100}%` }}
-                />
-              </div>
-            ) : null}
-          </div>
-
-          {subtasks.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-zinc-200 px-4 py-6 text-center text-sm text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
-              No subtasks yet. Use the Subtasks tab to add them.
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {subtasks.map((subtask) => (
-                <div
-                  key={subtask.id}
-                  className="group flex items-start gap-3 rounded-lg p-2 transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-900/50"
-                >
-                  <button
-                    onClick={() => void onToggleSubtask(subtask.id, subtask.completed)}
-                    disabled={!canEdit}
-                    className={cn(
-                      "mt-0.5 flex h-4 w-4 flex-shrink-0 items-center justify-center rounded border transition-colors",
-                      subtask.completed
-                        ? "border-indigo-600 bg-indigo-600 text-white"
-                        : "border-zinc-300 text-zinc-400 hover:border-indigo-500 dark:border-zinc-700",
-                      !canEdit && "cursor-not-allowed opacity-50",
-                    )}
-                  >
-                    {subtask.completed ? <Check className="h-3 w-3" /> : null}
-                  </button>
-                  <span
-                    className={cn(
-                      "text-sm leading-tight",
-                      subtask.completed ? "text-zinc-400 line-through" : "text-zinc-700 dark:text-zinc-300",
-                    )}
-                  >
-                    {subtask.title}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
+              Subtasks
+            </span>
+            <span className="mt-2 block text-sm font-medium text-zinc-800 dark:text-zinc-200">
+              {completedSubtaskCount}/{subtaskCount} complete
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => onOpenTab("files")}
+            className="rounded-xl border border-zinc-200 bg-zinc-50 p-4 text-left transition hover:border-indigo-300 dark:border-zinc-800 dark:bg-zinc-900"
+          >
+            <span className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+              <Paperclip className="h-3.5 w-3.5" />
+              Files
+            </span>
+            <span className="mt-2 block text-sm font-medium text-zinc-800 dark:text-zinc-200">
+              {attachmentCount} attached
+            </span>
+          </button>
         </div>
       </div>
 
@@ -428,7 +377,7 @@ export default function DetailsTab({
               value={task.status}
               onChange={(event) => void onUpdateStatus(event.target.value)}
               disabled={!canEdit || isMutating}
-              className="w-full rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800/50 dark:text-zinc-100"
+              className="w-full rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 outline-none transition focus:border-indigo-500   disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800/50 dark:text-zinc-100"
             >
               {TASK_WORKFLOW_STATUSES.map((status) => (
                 <option key={status} value={status}>
@@ -444,7 +393,7 @@ export default function DetailsTab({
               value={task.priority}
               onChange={(event) => void onUpdateField("priority", event.target.value)}
               disabled={!canEdit || isMutating}
-              className="w-full rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800/50 dark:text-zinc-100"
+              className="w-full rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 outline-none transition focus:border-indigo-500   disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800/50 dark:text-zinc-100"
             >
               {TASK_PRIORITY_VALUES.map((priority) => (
                 <option key={priority} value={priority}>
@@ -463,7 +412,7 @@ export default function DetailsTab({
               value={task.assigneeId || ""}
               onChange={(event) => void onUpdateAssignee(event.target.value || null)}
               disabled={!canEdit || isMutating}
-              className="w-full rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800/50 dark:text-zinc-100"
+              className="w-full rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 outline-none transition focus:border-indigo-500   disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800/50 dark:text-zinc-100"
             >
               <option value="">Unassigned</option>
               {currentAssigneeUnavailable && task.assigneeId ? (
@@ -493,7 +442,7 @@ export default function DetailsTab({
               value={task.sprintId || ""}
               onChange={(event) => void onUpdateField("sprintId", event.target.value || null)}
               disabled={!canEdit || isMutating}
-              className="w-full rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800/50 dark:text-zinc-100"
+              className="w-full rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 outline-none transition focus:border-indigo-500   disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800/50 dark:text-zinc-100"
             >
               <option value="">Backlog</option>
               {availableSprints.map((sprint) => (
@@ -514,7 +463,7 @@ export default function DetailsTab({
               value={task.dueDate ? task.dueDate.slice(0, 10) : ""}
               onChange={(event) => void onUpdateField("dueDate", event.target.value || null)}
               disabled={!canEdit || isMutating}
-              className="w-full rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800/50 dark:text-zinc-100"
+              className="w-full rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 outline-none transition focus:border-indigo-500   disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800/50 dark:text-zinc-100"
             />
           </div>
         </div>
