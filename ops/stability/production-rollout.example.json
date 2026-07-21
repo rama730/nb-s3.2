@@ -55,6 +55,6 @@
   ],
   "notes": [
     "Keep this file environment-specific and update statuses as the rollout advances.",
-    "Track presence service and worker-plane health explicitly during each canary stage."
+    "Track Supabase Realtime and worker-plane health explicitly during each canary stage."
   ]
 }
