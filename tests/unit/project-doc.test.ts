@@ -750,7 +750,7 @@ test("Doc edit view source implements the fourteen editor standards", () => {
     assert.match(projectLayout, /data-project-content-root=\{isContainedWorkspaceTab \? "workspace" : "page"\}/, "ProjectLayout should expose whether content is a workspace or normal page");
     assert.match(projectLayout, /data-project-readme-edit-workspace=\{isDocEditWorkspaceTab \? "true" : undefined\}/, "ProjectLayout should expose Doc edit workspace state");
     assert.match(projectLayout, /--project-tabs-height/, "ProjectLayout should publish measured tab height as a CSS variable");
-    assert.match(projectLayout, /--project-content-height/, "ProjectLayout should publish measured content height as a CSS variable");
+    assert.doesNotMatch(projectLayout, /--project-content-height/, "ProjectLayout should not publish unused content height metrics");
     assert.match(editor, /data-readme-fixed-overlay-safe="true"/, "Doc edit shell should avoid transforms so fixed insert panels anchor to the viewport");
     assert.match(editor, /data-readme-edit-sticky-toolbar="true"/, "Doc edit toolbar should stay sticky while the route scrolls");
     assert.match(editor, /data-readme-toolbar-aligned-to-project-tabs="true"/, "Doc edit toolbar should align below the measured project tab header");
@@ -822,7 +822,7 @@ test("Doc edit view source implements the fourteen editor standards", () => {
     assert.match(commandBlock, /data-readme-copy-button="true"/, "command copy buttons should remain copy controls inside the editable preview");
     assert.doesNotMatch(editor, /onScrollActivity=\{handleEditorScrollActivity\}/, "independent panes should not continuously mirror editor scroll");
     assert.doesNotMatch(editor, /onScroll=\{handlePreviewScroll\}/, "independent panes should not continuously mirror preview scroll");
-    assert.match(editor, /PreviewRevealTarget/, "selection-driven preview reveal should be tokenized separately from passive content rerenders");
+    assert.match(editor, /setPreviewRevealTarget/, "selection-driven preview reveal should be tokenized separately from passive content rerenders");
     assert.match(editor, /selectionTokenRef/, "editor selection targets should use monotonic tokens instead of Date.now collisions");
     assert.doesNotMatch(editor, /token: Date\.now\(\)/, "editor selection tokens should not depend on wall-clock time");
     assert.match(editor, /initialCursorActivityHandledRef/, "initial CodeMirror cursor dispatch should not jump the preview to the top");
@@ -1229,4 +1229,3 @@ test("Doc editor reference atomic deletion keymap logic is present", () => {
         "Doc editor reference plugin should configure EditorView.atomicRanges.of"
     );
 });
-
