@@ -17,6 +17,15 @@ function extractExportedFunction(source: string, functionName: string) {
     return source.slice(start, nextFunction === -1 ? undefined : nextFunction);
 }
 
+test('applications barrel delegates the server boundary to its async implementation module', () => {
+    const barrel = readProjectFile('src/app/actions/applications/index.ts');
+    const internal = readProjectFile('src/app/actions/applications/internal.ts');
+
+    assert.doesNotMatch(barrel, /^['"]use server['"];?/m);
+    assert.match(internal, /^['"]use server['"];?/m);
+    assert.doesNotMatch(internal, /^export (?!async function|type |interface )/m);
+});
+
 test('acceptProposedRoleAction uses pessimistic lock preventing double-booking', () => {
     const source = readProjectFile('src/app/actions/applications/internal.ts');
     const acceptProposed = extractExportedFunction(source, 'acceptProposedRoleAction');
