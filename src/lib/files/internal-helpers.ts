@@ -1,69 +1,18 @@
 import { db } from "@/lib/db";
 import { projectMembers, projectNodeEvents, projectNodeLocks, projectNodes, projects, tasks } from "@/lib/db/schema";
-import { computeProjectReadAccess } from "@/lib/data/project-access";
+import { getProjectAccessById, type ProjectAccess } from "@/lib/data/project-access";
 import { eq, and, isNull, sql, ne, gt, type SQL } from "drizzle-orm";
 import { isWithParent } from "@/app/actions/files/_constants";
 import { requireProjectCapability } from "@/lib/projects/collaborator-lifecycle";
 import { canProjectMemberUploadFiles, isProjectTabVisibleToViewer, projectMemberCan } from "@/lib/projects/settings-policies";
 
 type DbTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
+type ExistingProjectAccess = ProjectAccess & { project: NonNullable<ProjectAccess["project"]> };
 
-async function getProjectAccess(projectId: string, userId: string | null) {
-    const rows = await db
-        .select({
-            id: projects.id,
-            ownerId: projects.ownerId,
-            visibility: projects.visibility,
-            status: projects.status,
-            publicTabVisibility: projects.publicTabVisibility,
-            importSource: projects.importSource,
-            syncStatus: projects.syncStatus,
-        })
-        .from(projects)
-        .where(and(eq(projects.id, projectId), isNull(projects.deletedAt)))
-        .limit(1);
-
-    const project = rows[0];
-    if (!project) throw new Error("Project not found");
-
-    if (!userId) {
-        return {
-            project,
-            canRead: computeProjectReadAccess(project.visibility, project.status, false, false),
-            canWrite: false,
-        };
-    }
-
-    if (project.ownerId === userId) {
-        return {
-            project,
-            canRead: computeProjectReadAccess(project.visibility, project.status, true, false),
-            canWrite: true,
-        };
-    }
-
-    const member = await db
-        .select({ id: projectMembers.id, role: projectMembers.role, fileUploadEnabled: projectMembers.fileUploadEnabled })
-        .from(projectMembers)
-        .where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, userId)))
-        .limit(1);
-
-    if (member.length > 0) {
-        const role = member[0]?.role;
-        const canWrite = role !== 'viewer';
-        return {
-            project,
-            canRead: computeProjectReadAccess(project.visibility, project.status, false, true),
-            canWrite,
-            member: member[0],
-        };
-    }
-
-    return {
-        project,
-        canRead: computeProjectReadAccess(project.visibility, project.status, false, false),
-        canWrite: false,
-    };
+async function getProjectAccess(projectId: string, userId: string | null): Promise<ExistingProjectAccess> {
+    const access = await getProjectAccessById(projectId, userId);
+    if (!access.project) throw new Error("Project not found");
+    return access as ExistingProjectAccess;
 }
 
 export async function assertProjectAccess(projectId: string, userId: string) {
@@ -78,7 +27,7 @@ export async function assertProjectReadAccess(projectId: string, userId: string 
 
 export async function assertProjectFileReadAccess(projectId: string, userId: string | null) {
     const access = await assertProjectReadAccess(projectId, userId);
-    const isOwnerOrMember = access.project.ownerId === userId || ("member" in access && !!access.member);
+    const isOwnerOrMember = access.isOwner || access.isMember;
     if (!isProjectTabVisibleToViewer({
         tabId: "files",
         isOwnerOrMember,
@@ -91,17 +40,22 @@ export async function assertProjectFileReadAccess(projectId: string, userId: str
 
 export async function assertProjectWriteAccess(projectId: string, userId: string) {
     const access = await getProjectAccess(projectId, userId);
-    if (!access.project) throw new Error("Forbidden");
+    if (!access.canWrite) throw new Error("Forbidden");
     await requireProjectCapability(projectId, userId, "upload_files");
     return { ...access, canWrite: true };
 }
 
 export async function assertProjectUploadAccess(projectId: string, userId: string) {
     const access = await getProjectAccess(projectId, userId);
-    if (!access.project) throw new Error("Forbidden");
-    if (access.project.ownerId === userId) return { ...access, canUpload: true };
-    const member = "member" in access ? access.member : null;
-    if (!member || !canProjectMemberUploadFiles({ role: member.role, fileUploadEnabled: member.fileUploadEnabled })) {
+    if (access.isOwner) return { ...access, canUpload: true };
+    const [member] = access.isMember
+        ? await db
+            .select({ fileUploadEnabled: projectMembers.fileUploadEnabled })
+            .from(projectMembers)
+            .where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, userId)))
+            .limit(1)
+        : [];
+    if (!canProjectMemberUploadFiles({ role: access.memberRole, fileUploadEnabled: member?.fileUploadEnabled ?? null })) {
         throw new Error("File uploads are disabled for this project member.");
     }
     return { ...access, canUpload: true };
@@ -254,6 +208,7 @@ export async function assertNodeNotLockedByAnotherUser(
     userId: string,
     tx: { query: typeof db.query } = db
 ) {
+    void userId;
     const now = new Date();
     const lock = await tx.query.projectNodeLocks.findFirst({
         where: and(
@@ -264,8 +219,8 @@ export async function assertNodeNotLockedByAnotherUser(
         columns: { lockedBy: true, expiresAt: true },
     });
 
-    if (lock && lock.lockedBy !== userId) {
-        throw new Error("File is locked by another collaborator");
+    if (lock) {
+        throw new Error("File has an active editing lease");
     }
 }
 
