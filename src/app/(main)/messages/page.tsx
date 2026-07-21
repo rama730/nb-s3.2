@@ -1,4 +1,4 @@
-import MessagesClientV2 from '@/components/chat/v2/MessagesClientV2';
+import { MessagesWorkspaceV2 } from '@/components/chat/v2/MessagesWorkspaceV2';
 import { buildRouteMetadata } from '@/lib/metadata/route-metadata';
 
 export function generateMetadata() {
@@ -30,7 +30,8 @@ export default async function MessagesPage({ searchParams }: { searchParams: Pro
             data-hardening-messages="v2"
             className="h-full min-h-0 overflow-hidden app-scroll app-scroll-y app-scroll-gutter bg-white dark:bg-zinc-950"
         >
-            <MessagesClientV2
+            <MessagesWorkspaceV2
+                mode="page"
                 targetUserId={targetUserId}
                 initialConversationId={initialConversationId}
                 initialMessageId={initialMessageId}
