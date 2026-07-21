@@ -5,7 +5,7 @@ import { attachPageMonitoring } from "./_helpers/monitoring";
 test.describe("Settings matrix @critical", () => {
   test.skip(!hasE2ECredentials, "E2E_USER_EMAIL and E2E_USER_PASSWORD are required.");
 
-  test("settings landing and all sub-pages load with stable controls", async ({ browser }) => {
+  test("settings landing and all tabs load with stable controls", async ({ browser }) => {
     const context = await browser.newContext();
     const page = await context.newPage();
     const monitor = attachPageMonitoring(page);
@@ -13,23 +13,7 @@ test.describe("Settings matrix @critical", () => {
     await login(page);
 
     await page.goto("/settings");
-    await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
-
-    const cards = [
-      "settings-card-account",
-      "settings-card-security",
-      "settings-card-privacy",
-      "settings-card-notifications",
-      "settings-card-appearance",
-      "settings-card-integrations",
-    ];
-
     const main = page.getByRole("main");
-    for (const card of cards) {
-      await expect(main.getByTestId(card).first()).toBeVisible();
-    }
-
-    await page.goto("/settings/account");
     await expect(page.getByRole("heading", { name: "Account" })).toBeVisible();
     await expect(main.getByText("Account Details").first()).toBeVisible();
     await expect(main.getByText("Cache Management").first()).toBeVisible();
@@ -71,7 +55,7 @@ test.describe("Settings matrix @critical", () => {
     // Cancel the wizard
     await page.getByRole("button", { name: "Cancel" }).click();
 
-    await page.goto("/settings/security");
+    await page.goto("/settings?tab=security");
     await expect(page.getByRole("heading", { name: "Security" })).toBeVisible();
     await expect(main.getByText("Security Overview").first()).toBeVisible();
     await expect(page.getByTestId("security-authenticator-section")).toBeVisible();
@@ -80,11 +64,11 @@ test.describe("Settings matrix @critical", () => {
     await expect(page.getByTestId("security-login-activity-section")).toBeVisible();
     await expect(page.getByTestId("security-activity-section")).toBeVisible();
 
-    await page.goto("/settings/privacy");
+    await page.goto("/settings?tab=privacy");
     await expect(page.getByRole("heading", { name: "Privacy" })).toBeVisible();
     await expect(page.getByText(/Account visibility|Connection Request Privacy|Messaging Privacy/i).first()).toBeVisible();
 
-    await page.goto("/settings/notifications");
+    await page.goto("/settings?tab=notifications");
     await expect(page.getByRole("heading", { name: "Notifications" })).toBeVisible();
     const notificationToggle = page.locator("label[for='email']").first();
     if (await notificationToggle.count()) {
@@ -92,7 +76,7 @@ test.describe("Settings matrix @critical", () => {
       await expect(page.getByText(/Saving\.\.\.|Preferences saved/i).first()).toBeVisible({ timeout: 15000 });
     }
 
-    await page.goto("/settings/appearance");
+    await page.goto("/settings?tab=appearance");
     await expect(page.getByRole("heading", { name: "Appearance" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Reset to defaults" })).toBeVisible();
     await expect(page.getByText(/Saved on this device|Syncing to your account|Saved to your account|Couldn’t sync account preference/i)).toBeVisible();
@@ -109,7 +93,7 @@ test.describe("Settings matrix @critical", () => {
     await expect(htmlRoot).toHaveAttribute("data-reduce-motion", "true");
     await page.getByTestId("appearance-theme-system").click();
 
-    await page.goto("/settings/integrations");
+    await page.goto("/settings?tab=integrations");
     await expect(page.getByRole("heading", { name: "Integrations", level: 1 })).toBeVisible();
     await expect(main.getByText("Account Connections").first()).toBeVisible();
     await expect(main.getByText("External Services").first()).toBeVisible();
