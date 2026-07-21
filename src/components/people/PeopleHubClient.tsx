@@ -1,67 +1,55 @@
 "use client";
 
-import { useMemo, useState, useEffect } from "react";
+import { useMemo } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Sparkles, Share2, SendHorizontal } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { motion } from "framer-motion";
-import { useReducedMotionPreference } from "@/components/providers/theme-provider";
+import { normalizeSearchQuery } from "@/lib/search/query";
 
 import PeopleClient from "@/components/people/PeopleClient";
 import ConnectionsClient from "@/components/people/ConnectionsClient";
 import RequestsTab from "@/components/people/RequestsTab";
 import { ComponentErrorBoundary } from "@/components/ui/ComponentErrorBoundary";
-import { useConnectionStats } from "@/hooks/useConnections";
 import type { IncomingApplication, MyApplication } from "@/components/people/ProjectApplicationsSection";
 
 type TabKey = "discover" | "network" | "requests";
-const VALID_TABS: TabKey[] = ["discover", "network", "requests"];
 
 interface PeopleHubClientProps {
     initialUser: { id?: string | null } | null;
-    activeTabOverride?: TabKey;
     initialApplications?: { my: MyApplication[]; incoming: IncomingApplication[] };
 }
 
 const TAB_CONFIG: Array<{
     key: TabKey;
     label: string;
-    hint: string;
     icon: typeof Sparkles;
     requiresAuth: boolean;
 }> = [
-        { key: "discover", label: "Discover", hint: "Find new people", icon: Sparkles, requiresAuth: false },
-        { key: "network", label: "Network", hint: "Your connections", icon: Share2, requiresAuth: true },
-        { key: "requests", label: "Requests", hint: "Pending actions", icon: SendHorizontal, requiresAuth: true },
+        { key: "discover", label: "Discover", icon: Sparkles, requiresAuth: false },
+        { key: "network", label: "Network", icon: Share2, requiresAuth: true },
+        { key: "requests", label: "Requests", icon: SendHorizontal, requiresAuth: true },
     ];
 
 export default function PeopleHubClient({
     initialUser,
-    activeTabOverride,
     initialApplications,
 }: PeopleHubClientProps) {
     const router = useRouter();
     const searchParams = useSearchParams();
-    const reduceMotion = useReducedMotionPreference();
 
     const isAuthed = !!initialUser?.id;
     const tabParam = (searchParams?.get("tab") || "").toLowerCase();
+    const routeQuery = normalizeSearchQuery(searchParams?.get("q"));
     const defaultTab: TabKey = "discover";
 
     const getInitialTab = (): TabKey => {
-        if (activeTabOverride && VALID_TABS.includes(activeTabOverride)) {
-            return activeTabOverride;
-        }
-        if (VALID_TABS.includes(tabParam as TabKey)) {
+        if (TAB_CONFIG.some((tab) => tab.key === tabParam)) {
             return tabParam as TabKey;
         }
         return defaultTab;
     };
 
     const activeTab = getInitialTab();
-
-    const { data: connectionStats } = useConnectionStats();
-    const totalPending = Number(connectionStats?.pendingIncoming || 0);
 
     const visibleTabs = useMemo(
         () => TAB_CONFIG.filter((t) => (t.requiresAuth ? isAuthed : true)),
@@ -72,6 +60,9 @@ export default function PeopleHubClient({
         if (next === activeTab) return;
         const params = new URLSearchParams(searchParams?.toString() || "");
         params.set("tab", next);
+        if (next === "requests") {
+            params.delete("q");
+        }
         router.push(`/people?${params.toString()}`);
     }
 
@@ -84,7 +75,6 @@ export default function PeopleHubClient({
                         {visibleTabs.map((t) => {
                             const Icon = t.icon;
                             const selected = activeTab === t.key;
-                            const badgeCount = t.key === "requests" && totalPending > 0 ? totalPending : null;
 
                             return (
                                 <button
@@ -102,23 +92,11 @@ export default function PeopleHubClient({
                                     aria-current={selected ? "page" : undefined}
                                 >
                                     {selected && (
-                                        <motion.div
-                                            layoutId="activePeopleTab"
-                                            className="absolute inset-0 bg-white dark:bg-zinc-700 rounded-xl shadow-sm ring-1 ring-zinc-200/60 dark:ring-zinc-600/40"
-                                            transition={reduceMotion ? { duration: 0 } : { type: "spring", bounce: 0.2, duration: 0.6 }}
-                                        />
+                                        <span className="absolute inset-0 rounded-xl bg-white shadow-sm ring-1 ring-zinc-200/60 transition-colors dark:bg-zinc-700 dark:ring-zinc-600/40" />
                                     )}
                                     <span className="relative z-10 flex items-center gap-2">
                                         <Icon className={cn("w-4 h-4", selected && "text-primary")} />
                                         <span>{t.label}</span>
-                                        {badgeCount && (
-                                            <span className="relative ml-1 flex h-5 items-center">
-                                                <span className="absolute inline-flex h-full w-full motion-safe:animate-ping motion-reduce:animate-none rounded-full bg-red-400 opacity-40" />
-                                                <span className="relative inline-flex items-center justify-center px-1.5 py-0.5 text-[10px] font-bold bg-red-500 text-white rounded-full min-w-[20px]">
-                                                    {badgeCount > 9 ? "9+" : badgeCount}
-                                                </span>
-                                            </span>
-                                        )}
                                     </span>
                                 </button>
                             );
@@ -131,13 +109,18 @@ export default function PeopleHubClient({
             <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
                 {activeTab === "discover" && (
                     <ComponentErrorBoundary fallbackMessage="Failed to load discover tab.">
-                        <PeopleClient initialUser={initialUser} />
+                        <PeopleClient
+                            initialUser={initialUser}
+                            searchQuery={routeQuery}
+                        />
                     </ComponentErrorBoundary>
                 )}
 
                 {activeTab === "network" && (
                     <ComponentErrorBoundary fallbackMessage="Failed to load network tab.">
-                        <ConnectionsClient initialUser={initialUser} />
+                        <ConnectionsClient
+                            searchQuery={routeQuery}
+                        />
                     </ComponentErrorBoundary>
                 )}
 
