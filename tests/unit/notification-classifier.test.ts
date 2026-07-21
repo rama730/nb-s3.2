@@ -28,13 +28,17 @@ const ALL_KINDS: readonly NotificationKind[] = [
   "project_role_changed",
   "project_member_removed",
   "project_ownership_transferred",
+  "project_file_permission_changed",
+  "project_security_alert",
 ];
 
 test("J1 kind list is exactly the action-required collaborator/task kinds", () => {
   assert.deepEqual([...J1_NOTIFICATION_KINDS].sort(), [
     "connection_request_received",
+    "project_file_permission_changed",
     "project_member_removed",
     "project_ownership_transferred",
+    "project_security_alert",
     "task_assigned",
     "task_comment_mention",
     "task_file_needs_review",
