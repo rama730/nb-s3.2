@@ -19,7 +19,6 @@ import { cn } from "@/lib/utils";
 // ─── Loading ─────────────────────────────────────────────────────────
 
 export interface FolderListLoadingProps {
-  projectId: string;
   className?: string;
 }
 
@@ -54,7 +53,6 @@ export function FolderListLoading({
 // ─── Empty ───────────────────────────────────────────────────────────
 
 export interface FolderListEmptyProps {
-  projectId: string;
   className?: string;
 }
 
@@ -82,7 +80,6 @@ export function FolderListEmpty({
 // ─── Error ───────────────────────────────────────────────────────────
 
 export interface FolderListErrorProps {
-  projectId: string;
   onRetry: () => void;
   className?: string;
 }
