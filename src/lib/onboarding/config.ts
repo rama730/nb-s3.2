@@ -4,7 +4,6 @@ export const ONBOARDING_VARIANT = 'default' as const
 
 export const ONBOARDING_FEATURE_FLAGS = {
     enableStep2Sections: true,
-    enableCustomOpenTo: true,
     enableProfileStrengthChecklist: true,
 } as const
 
@@ -24,7 +23,7 @@ export const ONBOARDING_STEP2_SECTIONS = [
     {
         id: 'work',
         label: 'Work prefs',
-        description: 'Experience, time, open-to, and availability',
+        description: 'Experience, weekly capacity, and role preferences',
     },
     {
         id: 'profile',
