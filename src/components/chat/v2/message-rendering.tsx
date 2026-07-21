@@ -164,7 +164,7 @@ export function CodeSegmentV2({
                 <button
                     type="button"
                     onClick={handleCopy}
-                    className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 transition-colors hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30"
+                    className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 transition-colors hover:bg-white/10 focus-visible:outline-none  "
                 >
                     {copied ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
                     <span>{copied ? 'Copied' : 'Copy'}</span>
