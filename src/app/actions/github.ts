@@ -2,15 +2,15 @@
 
 import { createClient } from '@/lib/supabase/server';
 import { fetchContents, fetchRepoMeta, GithubApiError, parseGithubRepo } from '@/lib/github/repo-preview';
-import { openGithubImportToken, sealGithubImportToken } from '@/lib/github/repo-security';
+import { openGithubImportToken } from '@/lib/github/repo-security';
 import { isTooLarge, shouldIgnorePath } from '@/lib/import/import-filters';
 import { normalizeGithubBranch, normalizeGithubRepoUrl } from '@/lib/github/repo-validation';
 import { consumeRateLimit } from '@/lib/security/rate-limit';
 import { resolveGithubRepoAccess } from '@/lib/github/auth-resolver';
-import { runInFlightDeduped } from '@/lib/async/inflight-dedupe';
+import { runInFlightDeduped } from '@/lib/utils/inflight-dedupe';
 import { logger } from '@/lib/logger';
-import { getGithubImportAccessState } from '@/lib/github/import-access-state';
 import { safeFetch } from '@/lib/security/ssrf-guard';
+import { detectPackageTechnologies, mergeDetectedTechnologies } from '@/lib/skills/repository-detection';
 
 type PreviewEntry = {
   name: string;
@@ -36,35 +36,6 @@ type GithubRepoPickerItem = {
   defaultBranch: string | null;
   description: string | null;
   updatedAt: string | null;
-};
-
-const TECH_PATTERNS: Record<string, string[]> = {
-  'React': ['react', 'react-dom'],
-  'Next.js': ['next'],
-  'Vue': ['vue'],
-  'Nuxt': ['nuxt'],
-  'Angular': ['@angular/core'],
-  'Svelte': ['svelte'],
-  'Express': ['express'],
-  'Fastify': ['fastify'],
-  'NestJS': ['@nestjs/core'],
-  'TypeScript': ['typescript'],
-  'Tailwind CSS': ['tailwindcss'],
-  'Prisma': ['prisma', '@prisma/client'],
-  'Drizzle': ['drizzle-orm'],
-  'PostgreSQL': ['pg', 'postgres'],
-  'MongoDB': ['mongodb', 'mongoose'],
-  'Redis': ['redis', 'ioredis'],
-  'GraphQL': ['graphql', '@apollo/server'],
-  'tRPC': ['@trpc/server'],
-  'Supabase': ['@supabase/supabase-js'],
-  'Firebase': ['firebase'],
-  'AWS SDK': ['aws-sdk', '@aws-sdk/client-s3'],
-  'Vite': ['vite'],
-  'Webpack': ['webpack'],
-  'Jest': ['jest'],
-  'Vitest': ['vitest'],
-  'Playwright': ['playwright', '@playwright/test'],
 };
 
 const RATE_LIMIT_WINDOW_SECONDS = 60;
@@ -738,29 +709,9 @@ export async function analyzeGithubRepoAction(
       if (pkgResult.status === 'fulfilled' && pkgResult.value.ok) {
         try {
           const pkg = JSON.parse(await pkgResult.value.text());
-          const deps = { ...pkg.dependencies, ...pkg.devDependencies };
-
-          for (const [tech, patterns] of Object.entries(TECH_PATTERNS)) {
-            if (patterns.length && patterns.some((p) => deps[p])) technologies.push(tech);
-          }
-
-          const frameworkOrder = ['next', 'nuxt', '@angular/core', 'vue', 'svelte', 'react', 'express'];
-          const frameworkNames: Record<string, string> = {
-            next: 'Next.js',
-            nuxt: 'Nuxt',
-            '@angular/core': 'Angular',
-            vue: 'Vue',
-            svelte: 'Svelte',
-            react: 'React',
-            express: 'Express',
-          };
-
-          for (const key of frameworkOrder) {
-            if (deps[key]) {
-              detectedFramework = frameworkNames[key] ?? null;
-              break;
-            }
-          }
+          const detected = detectPackageTechnologies(pkg);
+          technologies.push(...detected.technologies);
+          detectedFramework = detected.detectedFramework;
 
           if (pkg.description) description = pkg.description;
         } catch {
@@ -785,7 +736,7 @@ export async function analyzeGithubRepoAction(
         result: {
           title,
           description,
-          technologies: technologies.slice(0, 6),
+          technologies: mergeDetectedTechnologies(['GitHub'], technologies),
           detectedFramework,
           authSource: access.source,
         },
@@ -798,30 +749,4 @@ export async function analyzeGithubRepoAction(
       };
     }
   });
-}
-
-export async function sealGithubProviderTokenAction(providerToken: string) {
-  const token = (providerToken || '').trim();
-  if (!token) {
-    return { success: false as const, error: 'GitHub provider token is missing.' };
-  }
-
-  const authResult = await getAuthorizedGithubSession();
-  if (!authResult.ok) {
-    return { success: false as const, error: authResult.error };
-  }
-
-  const sealed = sealGithubImportToken(token);
-  if (!sealed) {
-    return { success: false as const, error: 'GitHub import token encryption is not configured.' };
-  }
-
-  return {
-    success: true as const,
-    sealed,
-  };
-}
-
-export async function getGithubImportAccessStateAction() {
-  return getGithubImportAccessState();
 }
