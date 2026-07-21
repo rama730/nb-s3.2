@@ -81,6 +81,7 @@ export default function WizardFooter({
 
                 {isLastPhase ? (
                     <button
+                        key="btn-submit"
                         type="submit"
                         form="create-project-form"
                         disabled={isSubmitting}
@@ -100,6 +101,7 @@ export default function WizardFooter({
                     </button>
                 ) : (
                     <button
+                        key="btn-next"
                         type="button"
                         onClick={onNext}
                         disabled={!!nextDisabled}
