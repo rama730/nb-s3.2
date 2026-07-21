@@ -114,7 +114,7 @@ export function NotificationRow(props: {
                 type="button"
                 onClick={() => void handleOpen()}
                 aria-label={`${isUnread ? "Unread" : "Read"} ${reasonLabel}: ${item.title}${relativeTime ? `, ${relativeTime}` : ""}`}
-                className="flex min-w-0 flex-1 items-start gap-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                className="flex min-w-0 flex-1 items-start gap-3 text-left focus-visible:outline-none  "
             >
                 <div className="relative mt-0.5 shrink-0">
                     {preview?.actorAvatarUrl ? (
