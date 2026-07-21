@@ -41,6 +41,11 @@ export interface ProjectFollower {
     userId: string;
 }
 
+export interface ProjectConnectedFriend {
+    name: string;
+    role: string;
+}
+
 // Main Project type - adapted to match schema + extended fields for UI
 export interface Project {
     id: string;
@@ -76,6 +81,8 @@ export interface Project {
     followersCount?: number;
     savesCount?: number;
     rankingReasons?: string[];
+    connectedFriends?: ProjectConnectedFriend[];
+    additionalConnectedFriendsCount?: number;
 
     // Relations
     ownerId?: string;
