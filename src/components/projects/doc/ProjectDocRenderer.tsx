@@ -239,7 +239,7 @@ function ProjectDocInlineReferenceChip({
         </>
     );
     const className = cn(
-        "mx-0.5 inline-flex max-w-full cursor-pointer items-baseline gap-1 rounded-sm align-baseline text-sm leading-[inherit] no-underline outline-none transition-[background-color,box-shadow,color] hover:text-blue-500 focus-visible:ring-2 focus-visible:ring-blue-500/40",
+        "mx-0.5 inline-flex max-w-full cursor-pointer items-baseline gap-1 rounded-sm align-baseline text-sm leading-[inherit] no-underline outline-none transition-[background-color,box-shadow,color] hover:text-blue-500  ",
         highlighted && "bg-blue-100/80 shadow-[0_0_0_4px_rgba(59,130,246,0.22)] dark:bg-blue-500/20",
     );
     const title = [label, detail].filter(Boolean).join(" · ");
@@ -265,7 +265,7 @@ function ProjectDocInlineReferenceChip({
                 if (kind === "tasks") {
                     href = `/projects/${projectSlug}?tab=tasks&drawerType=task&drawerId=${reference.id}`;
                 } else if (kind === "sprints") {
-                    href = `/projects/${projectSlug}/sprints/${reference.id}`;
+                    href = `/projects/${projectSlug}?tab=sprints&sprintId=${reference.id}`;
                 } else if (kind === "files") {
                     href = `/projects/${projectSlug}?tab=files&fileId=${reference.id}`;
                 }
@@ -613,7 +613,7 @@ export const ProjectDocRenderer = React.memo(function ProjectDocRenderer({
                 className={cn(
                     className,
                     "rounded-md outline-none transition-[background-color,box-shadow,color]",
-                    "focus-visible:ring-2 focus-visible:ring-blue-500/40",
+                    " ",
                     highlighted && "-mx-2 px-2 border-blue-400 bg-blue-100/90 ring-2 ring-blue-400/45 shadow-[0_0_0_5px_rgba(59,130,246,0.24)] dark:border-blue-400 dark:bg-blue-500/30 dark:ring-blue-400/45",
                 )}
                 {...props}
