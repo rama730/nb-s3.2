@@ -32,19 +32,6 @@
 //
 //   Transitively via `V3AttachmentPicker` (navigate-only tree), reached from
 //   MultiAttachmentPicker:
-//     src/components/projects/v2/explorer/ExplorerShell.tsx
-//       state reads:  nodesById, childrenByParentId, loadedChildren,
-//                     expandedFolderIds, folderMeta, treeVersion,
-//                     explorerMode, searchQuery, favorites, recents,
-//                     savedViews, sort, foldersFirst, selectedNodeId,
-//                     selectedNodeIds, selectedFolderId, taskLinkCounts,
-//                     locksByNodeId
-//       actions:      upsertNodes, setChildren, setSelectedNode,
-//                     setSelectedNodeIds, toggleExpanded, setSearchQuery,
-//                     setSort, addRecent, toggleFavorite, saveCurrentView,
-//                     applySavedView, deleteSavedView, setExplorerMode,
-//                     setViewMode
-//
 //     src/components/projects/v2/explorer/useExplorerBoot.ts
 //       state reads:  expandedFolderIds, loadedChildren
 //       actions:      upsertNodes, setChildren, setNodesAndChildren,
