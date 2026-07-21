@@ -1,14 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import {
-    buildProjectAnalyticsFiles,
     buildProjectAnalyticsMemberDetail,
     buildProjectAnalyticsMemberSummaries,
     buildProjectAnalyticsOverview,
-    buildProjectAnalyticsReport,
-    buildProjectAnalyticsRisks,
-    buildProjectAnalyticsSnapshot,
     buildProjectAnalyticsTimeline,
     filterProjectAnalyticsDatasetByContext,
     resolveProjectAnalyticsAccess,
@@ -169,27 +165,6 @@ test("member detail separates responsibility buckets and contribution contexts",
     assert.ok(detail.collaborationActivity.length > 0);
 });
 
-test("risk builder emits severity, reason, action link, and affected item", () => {
-    const risks = buildProjectAnalyticsRisks(baseInput());
-    assert.ok(risks.some((risk) => risk.id === "blocked-tasks" && risk.severity === "high"));
-    assert.ok(risks.every((risk) => risk.reason && risk.affectedItem && risk.suggestedAction && risk.actionLink.href));
-    assert.ok(risks.every((risk) => risk.signal && risk.affectedSurface));
-    assert.ok(risks.every((risk) => risk.lifecycleStatus === "active"));
-});
-
-test("risk lifecycle uses latest project analytics event state", () => {
-    const input = baseInput();
-    input.events.push({
-        id: "risk-event-1",
-        type: "project_analytics.risk_lifecycle_changed",
-        actorId: "owner-1",
-        metadata: { riskId: "blocked-tasks", status: "acknowledged" },
-        createdAt: "2026-05-16T13:00:00.000Z",
-    });
-    const risk = buildProjectAnalyticsRisks(input).find((entry) => entry.id === "blocked-tasks");
-    assert.equal(risk?.lifecycleStatus, "acknowledged");
-});
-
 test("context filtering narrows analytics data before builders run", () => {
     const scoped = filterProjectAnalyticsDatasetByContext(baseInput(), {
         memberId: "member-1",
@@ -271,25 +246,7 @@ test("member file contribution returns the four most recent files with the full 
     assert.equal(detail.fileContribution[0]?.fileName, "member-5.md");
 });
 
-test("snapshot and report provide one project intelligence payload", () => {
-    const snapshot = buildProjectAnalyticsSnapshot(baseInput(), { source: "all", dateRange: "30d", memberId: null });
-    assert.ok(snapshot.overview);
-    assert.ok(snapshot.members.length > 0);
-    assert.ok(snapshot.timeline.items.length > 0);
-    const report = buildProjectAnalyticsReport(snapshot);
-    assert.ok(report.includes("# Project Intelligence Report"));
-    assert.ok(report.includes("## Compare"));
-});
-
-test("file analytics builds activity batches for high-volume workspace movement", () => {
-    const input = baseInput();
-    const files = buildProjectAnalyticsFiles(input);
-    assert.equal(files.activityBatches.length, 1);
-    assert.equal(files.activityBatches[0]?.count, 1);
-    assert.equal(files.activityBatches[0]?.contributor?.id, "member-1");
-});
-
-test("file analytics attributes file movement to the latest version uploader", () => {
+test("timeline attributes file movement to the latest version uploader", () => {
     const input = baseInput();
     input.files[0] = {
         ...input.files[0]!,
@@ -300,12 +257,6 @@ test("file analytics attributes file movement to the latest version uploader", (
         { id: "version-old", nodeId: "file-1", uploadedBy: "owner-1", uploadedAt: "2026-05-15T00:00:00.000Z" },
         { id: "version-latest", nodeId: "file-1", uploadedBy: "member-1", uploadedAt: "2026-05-16T08:30:00.000Z" },
     ];
-
-    const files = buildProjectAnalyticsFiles(input);
-    assert.equal(files.active[0]?.contributorId, "member-1");
-    assert.equal(files.active[0]?.updatedAt, "2026-05-16T08:30:00.000Z");
-    assert.equal(files.activityBatches[0]?.contributor?.id, "member-1");
-    assert.equal(files.activityBatches[0]?.occurredAt, "2026-05-16T08:30:00.000Z");
 
     const timeline = buildProjectAnalyticsTimeline(input, { source: "files", limit: 10 });
     const fileEvent = timeline.items.find((event) => event.id === "file:file-1");
@@ -353,21 +304,28 @@ test("removed-member data renders as historical context only", () => {
     assert.equal(detail.currentResponsibilities.length, 1);
 });
 
-test("analytics UI source contracts expose all tabs, filters, pagination, and accessible skeleton", () => {
+test("analytics UI source contracts expose live tabs, pagination, and accessible skeleton", () => {
     const root = process.cwd();
     const analyticsTab = readFileSync(`${root}/src/components/projects/tabs/AnalyticsTab.tsx`, "utf8");
     const overview = readFileSync(`${root}/src/components/projects/analytics/AnalyticsOverview.tsx`, "utf8");
-    const files = readFileSync(`${root}/src/components/projects/analytics/AnalyticsFiles.tsx`, "utf8");
-    const risks = readFileSync(`${root}/src/components/projects/analytics/AnalyticsRisks.tsx`, "utf8");
     const timeline = readFileSync(`${root}/src/components/projects/analytics/AnalyticsTimeline.tsx`, "utf8");
     const skeleton = readFileSync(`${root}/src/components/projects/skeletons/SkeletonAnalytics.tsx`, "utf8");
 
-    for (const tab of ["overview", "members", "workflow", "sprints", "files", "risks", "timeline"]) {
-    assert.ok(analyticsTab.includes(`"${tab}"`), `Analytics tab is missing ${tab}`);
+    const tabBlock = analyticsTab.match(/const ANALYTICS_TABS:[\s\S]*?\];/)?.[0] ?? "";
+    for (const tab of ["overview", "members", "timeline"]) {
+        assert.ok(tabBlock.includes(`"${tab}"`), `Analytics tab is missing ${tab}`);
+    }
+    for (const deletedTab of ["workflow", "sprints", "files", "risks"]) {
+        assert.equal(tabBlock.includes(`"${deletedTab}"`), false, `Analytics tab still exposes ${deletedTab}`);
+    }
+    for (const deletedPane of ["AnalyticsFiles.tsx", "AnalyticsSprints.tsx", "AnalyticsRisks.tsx", "AnalyticsWorkflow.tsx"]) {
+        assert.equal(existsSync(`${root}/src/components/projects/analytics/${deletedPane}`), false, `${deletedPane} should stay deleted`);
     }
     assert.equal(analyticsTab.includes("Export report"), false);
     assert.ok(analyticsTab.includes("analyticsWindow"));
-    assert.ok(timeline.includes("Source surface"));
+    assert.equal(timeline.includes("SOURCE_SURFACES"), false);
+    assert.equal(timeline.includes("onContextChange"), false);
+    assert.equal(timeline.includes("useProjectAnalyticsMembers"), false);
     assert.ok(timeline.includes("groupTimelineByDay"));
     assert.ok(timeline.includes("file-summary"));
     assert.ok(timeline.includes("Load more movement"));
@@ -376,10 +334,6 @@ test("analytics UI source contracts expose all tabs, filters, pagination, and ac
     assert.equal(overview.includes("Chronological project trail"), false);
     assert.ok(overview.includes("Compare mode"));
     assert.ok(overview.includes("AnalyticsCoverageNote"));
-    assert.ok(files.includes("File activity batches"));
-    assert.ok(risks.includes("Recommended next step"));
-    assert.ok(risks.includes("Lifecycle controls"));
-    assert.ok(risks.includes("risk_lifecycle_update_failed"));
     assert.ok(skeleton.includes('role="status"'));
     assert.ok(skeleton.includes('aria-hidden="true"'));
 });
