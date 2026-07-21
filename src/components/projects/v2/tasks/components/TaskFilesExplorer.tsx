@@ -1,5 +1,6 @@
 "use client";
 
+import { toast } from "sonner";
 /**
  * Task panel — Files tab list.
  *
@@ -25,7 +26,6 @@ import {
   DropdownMenuItem,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
-import { useToast } from "@/components/ui-custom/Toast";
 import type { ProjectNode } from "@/lib/db/schema";
 import { getProjectNodes } from "@/app/actions/files/nodes";
 import { useFilesWorkspaceStore, filesParentKey } from "@/stores/filesWorkspaceStore";
@@ -175,8 +175,6 @@ export function TaskFilesExplorer({
   currentDeliverableId = null,
   linkCounts = EMPTY_OBJ,
 }: TaskFilesExplorerProps) {
-  const { showToast } = useToast();
-
   // Local optimistic mirror to avoid jank during reorder / annotation edits.
   const [localNodes, setLocalNodes] = useState(linkedNodes);
   const [annotationDrafts, setAnnotationDrafts] = useState<Record<string, string>>({});
@@ -373,13 +371,13 @@ export function TaskFilesExplorer({
         setLocalNodes((prev) =>
           prev.map((n) => (n.id === nodeId ? { ...n, annotation: previousAnnotation } : n)),
         );
-        showToast(message, "error");
+        toast.error(message);
       } finally {
         pendingOptimisticRef.current = Math.max(0, pendingOptimisticRef.current - 1);
         syncLocalNodesFromProps();
       }
     },
-    [localNodes, showToast, syncLocalNodesFromProps, taskId],
+    [localNodes,syncLocalNodesFromProps, taskId],
   );
 
   const openNoteEditor = useCallback((nodeId: string, currentAnnotation: string | null) => {
@@ -438,13 +436,13 @@ export function TaskFilesExplorer({
       } catch {
         setLocalNodes(previousNodes);
         onReorder?.(previousNodes.map((n) => n.id));
-        showToast("Failed to preserve file order", "error");
+        toast.error("Failed to preserve file order");
       } finally {
         pendingOptimisticRef.current = Math.max(0, pendingOptimisticRef.current - 1);
         syncLocalNodesFromProps();
       }
     },
-    [localNodes, onReorder, showToast, syncLocalNodesFromProps, taskId],
+    [localNodes, onReorder,syncLocalNodesFromProps, taskId],
   );
 
   const sensors = useSensors(
@@ -557,7 +555,7 @@ export function TaskFilesExplorer({
                       }
                     }}
                     disabled={!canEdit}
-                    className="min-h-[88px] w-full resize-y rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-700 outline-none transition-colors focus:border-indigo-300 focus:ring-2 focus:ring-indigo-200 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-200 dark:focus:border-indigo-500/60 dark:focus:ring-indigo-500/20"
+                    className="min-h-[88px] w-full resize-y rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-700 outline-none transition-colors focus:border-indigo-300   dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-200 dark:focus:border-indigo-500/60 dark:"
                   />
                   <div className="mt-2 flex items-center justify-between gap-3">
                     <span className="text-[11px] text-zinc-500">
