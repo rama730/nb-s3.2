@@ -13,14 +13,17 @@ import {
     profileUpdateSchema,
     type ProfileUpdateInput,
 } from '@/lib/validations/profile'
-import { clearProfileCache } from '@/lib/services/profile-service'
-import { markProfileCollaborationSummaryStale } from '@/lib/profile/collaboration'
-import { runInFlightDeduped } from '@/lib/async/inflight-dedupe'
+import {
+    markProfileCollaborationSummaryStale,
+} from '@/lib/profile/collaboration'
+import { runInFlightDeduped } from '@/lib/utils/inflight-dedupe'
+import { positiveIntegerOr } from '@/lib/utils/number'
 import { normalizeAndValidateFileSize, normalizeAndValidateMimeType } from '@/lib/upload/security'
-import { cleanupExpiredUploadIntents, createUploadIntent, finalizeUploadIntent } from '@/lib/upload/upload-intents'
+import { createUploadIntent, finalizeUploadIntent } from '@/lib/upload/upload-intents'
 import { resolvePrivacyRelationship } from '@/lib/privacy/resolver'
 import { logger } from '@/lib/logger'
 import { UsernamePersistenceError, getUsernameAvailability, mapUsernamePersistenceError } from '@/lib/usernames/service'
+import { syncProfileSkills } from '@/lib/skills/service'
 
 export type UpdateProfileInput = ProfileUpdateInput
 export type ProfileUpdateErrorCode =
@@ -50,9 +53,9 @@ const USERNAME_CHANGE_WINDOW_SECONDS = 24 * 60 * 60
 // rapid handle-squatting and impersonation cycles while still allowing one
 // legitimate rename per month for users who mistype or rebrand.
 const USERNAME_CHANGE_COOLDOWN_MS = 30 * 24 * 60 * 60 * 1000
-const PROFILE_IMAGE_UPLOAD_MAX_FILE_BYTES = Number.parseInt(
-    process.env.PROFILE_IMAGE_UPLOAD_MAX_FILE_BYTES || `${2 * 1024 * 1024}`,
-    10,
+const PROFILE_IMAGE_UPLOAD_MAX_FILE_BYTES = positiveIntegerOr(
+    process.env.PROFILE_IMAGE_UPLOAD_MAX_FILE_BYTES,
+    2 * 1024 * 1024,
 )
 const ALLOWED_PROFILE_IMAGE_MIME_TYPES = new Set([
     'image/jpeg',
@@ -244,29 +247,6 @@ export async function finalizeProfileImageUploadAction(input: {
     }
 }
 
-export async function cleanupExpiredProfileImageUploadIntentsAction(): Promise<
-    | { success: true; removedObjects: number; expiredIntents: number }
-    | { success: false; error: string }
-> {
-    const supabase = await createClient()
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) {
-        return { success: false, error: 'Unauthorized' }
-    }
-
-    try {
-        const result = await cleanupExpiredUploadIntents()
-        return { success: true, ...result }
-    } catch (error) {
-        logger.error('profile.image.cleanup_failed', {
-            module: 'profile',
-            userId: user.id,
-            error: error instanceof Error ? error.message : String(error),
-        })
-        return { success: false, error: 'Failed to clean expired uploads' }
-    }
-}
-
 function toNullableString(value: string | undefined): string | null | undefined {
     if (value === undefined) return undefined
     const trimmed = value.trim()
@@ -313,14 +293,14 @@ export async function updateProfileAction(data: UpdateProfileInput): Promise<Upd
                 interests: true,
                 socialLinks: true,
                 visibility: true,
-                availabilityStatus: true,
                 messagePrivacy: true,
                 openTo: true,
+                openToCustomRoles: true,
+                preferredCategories: true,
                 experienceLevel: true,
                 hoursPerWeek: true,
                 genderIdentity: true,
                 pronouns: true,
-                experience: true,
                 education: true,
                 updatedAt: true,
             },
@@ -343,14 +323,14 @@ export async function updateProfileAction(data: UpdateProfileInput): Promise<Upd
                 interests: current.interests || [],
                 socialLinks: current.socialLinks || {},
                 visibility: current.visibility || undefined,
-                availabilityStatus: current.availabilityStatus || undefined,
                 messagePrivacy: current.messagePrivacy || undefined,
                 openTo: current.openTo || [],
+                openToCustomRoles: current.openToCustomRoles || [],
+                preferredCategories: current.preferredCategories || [],
                 experienceLevel: current.experienceLevel || null,
                 hoursPerWeek: current.hoursPerWeek || null,
                 genderIdentity: current.genderIdentity || null,
                 pronouns: current.pronouns || null,
-                experience: current.experience || [],
                 education: current.education || [],
             },
             validData
@@ -434,14 +414,12 @@ export async function updateProfileAction(data: UpdateProfileInput): Promise<Upd
         if (patch.interests !== undefined) updateData.interests = patch.interests
         if (patch.socialLinks !== undefined) updateData.socialLinks = patch.socialLinks
         if (patch.visibility !== undefined) updateData.visibility = patch.visibility
-        if (patch.availabilityStatus !== undefined) updateData.availabilityStatus = patch.availabilityStatus
         if (patch.messagePrivacy !== undefined) updateData.messagePrivacy = patch.messagePrivacy
         if (patch.openTo !== undefined) updateData.openTo = patch.openTo
         if (patch.experienceLevel !== undefined) updateData.experienceLevel = patch.experienceLevel
         if (patch.hoursPerWeek !== undefined) updateData.hoursPerWeek = patch.hoursPerWeek
         if (patch.genderIdentity !== undefined) updateData.genderIdentity = patch.genderIdentity
         if (patch.pronouns !== undefined) updateData.pronouns = patch.pronouns
-        if (patch.experience !== undefined) updateData.experience = patch.experience
 
         const expectedUpdatedAt = validData.expectedUpdatedAt
             ? new Date(validData.expectedUpdatedAt)
@@ -466,7 +444,6 @@ export async function updateProfileAction(data: UpdateProfileInput): Promise<Upd
             { key: 'username', eventType: 'username_changed' },
             { key: 'visibility', eventType: 'visibility_changed' },
             { key: 'website', eventType: 'website_changed' },
-            { key: 'availabilityStatus', eventType: 'availability_status_changed' },
         ]
         const auditRows = sensitiveFields
             .filter((item) => patch[item.key] !== undefined)
@@ -489,6 +466,15 @@ export async function updateProfileAction(data: UpdateProfileInput): Promise<Upd
 
                 if (rows.length === 0) {
                     return rows
+                }
+
+                if (patch.skills !== undefined) {
+                    const resolvedSkills = await syncProfileSkills(tx, user.id, patch.skills)
+                    const canonicalLabels = resolvedSkills.map((skill) => skill.name)
+                    await tx
+                        .update(profiles)
+                        .set({ skills: canonicalLabels })
+                        .where(eq(profiles.id, user.id))
                 }
 
                 if (patch.username && patch.username !== current.username) {
@@ -604,12 +590,11 @@ export async function updateProfileAction(data: UpdateProfileInput): Promise<Upd
             }
         }
 
-        clearProfileCache(user.id)
         if (
-            patch.experience !== undefined ||
             patch.skills !== undefined ||
             patch.openTo !== undefined ||
-            patch.availabilityStatus !== undefined
+            patch.experienceLevel !== undefined ||
+            patch.hoursPerWeek !== undefined
         ) {
             await markProfileCollaborationSummaryStale(user.id).catch((staleError) => {
                 logger.warn('profile.collaboration_summary_stale_failed', {
@@ -650,10 +635,6 @@ export async function updateProfileAction(data: UpdateProfileInput): Promise<Upd
         console.error('Error updating profile:', error)
         return { success: false, error: 'Failed to update profile', errorCode: 'PROFILE_UPDATE_FAILED' }
     }
-}
-
-export async function updateBioAction(bio: string) {
-    return updateProfileAction({ bio });
 }
 
 export async function getProfileBasic(userId: string) {
@@ -697,19 +678,6 @@ export async function getProfileViewerOverlayAction(profileId: string) {
             return { success: false as const, error: 'Profile not found' };
         }
 
-        let mutualCount = 0;
-        if (user.id !== profileId && privacyRelationship.canViewProfile) {
-            try {
-                const res = await supabase.rpc('get_mutual_connections', {
-                    p_viewer_id: user.id,
-                    p_profile_id: profileId,
-                });
-                mutualCount = (res.data as { count?: number } | null)?.count || 0;
-            } catch {
-                mutualCount = 0;
-            }
-        }
-
         return {
             success: true as const,
             privacyRelationship: {
@@ -722,7 +690,7 @@ export async function getProfileViewerOverlayAction(profileId: string) {
                 connectionState: privacyRelationship.connectionState,
             },
             lockedShell: !privacyRelationship.canViewProfile,
-            mutualCount,
+            mutualCount: 0,
         };
     } catch (error) {
         return {
