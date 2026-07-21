@@ -1,8 +1,23 @@
-import { requireAuthenticatedUser, jsonSuccess, jsonError } from "@/app/api/v1/_shared";
+import {
+  requireAuthenticatedUser,
+  jsonSuccess,
+  jsonError,
+} from "@/app/api/v1/_shared";
 import { db } from "@/lib/db";
-import { projects, projectMembers, tasks, projectNodes, taskNodeLinks } from "@/lib/db/schema";
-import { desc, eq, and, inArray, isNull, sql } from "drizzle-orm";
+import {
+  projects,
+  projectMembers,
+  tasks,
+  projectNodes,
+  taskNodeLinks,
+} from "@/lib/db/schema";
+import { desc, eq, and, inArray, isNull, sql, or } from "drizzle-orm";
 import { logger } from "@/lib/logger";
+import {
+  getProjectTaskCountMap,
+  getProjectTaskFileCountMap,
+  taskFileCountKey,
+} from "@/app/api/v1/extension/_project-counts";
 
 export async function GET(request: Request) {
   try {
@@ -27,110 +42,128 @@ export async function GET(request: Request) {
       .from(projects)
       .innerJoin(projectMembers, eq(projects.id, projectMembers.projectId))
       .where(
-        and(
-          eq(projectMembers.userId, user.id),
-          isNull(projects.deletedAt)
-        )
+        and(eq(projectMembers.userId, user.id), isNull(projects.deletedAt)),
       );
 
     const projectIds = userProjects.map((project) => project.id);
     if (projectIds.length === 0) {
       return jsonSuccess({
-        user: { email: user.email },
+        user: { id: user.id, email: user.email },
         projects: [],
       });
     }
 
-    const [taskRows, rootNodeRows, taskCountRows] = await Promise.all([
-      db
-        .select({
-          id: tasks.id,
-          projectId: tasks.projectId,
-          title: tasks.title,
-          description: tasks.description,
-          status: tasks.status,
-          priority: tasks.priority,
-          taskNumber: tasks.taskNumber,
-          updatedAt: tasks.updatedAt,
-        })
-        .from(tasks)
-        .where(and(inArray(tasks.projectId, projectIds), isNull(tasks.deletedAt)))
-        .orderBy(desc(tasks.updatedAt))
-        .limit(Math.max(50, projectIds.length * 50)),
-      db
-        .select()
-        .from(projectNodes)
-        .where(
-          and(
-            inArray(projectNodes.projectId, projectIds),
-            isNull(projectNodes.parentId),
-            isNull(projectNodes.deletedAt),
-          ),
-        )
-        .orderBy(projectNodes.projectId, projectNodes.type, projectNodes.name)
-        .limit(Math.max(100, projectIds.length * 100)),
-      db
-        .select({
-          projectId: projectNodes.projectId,
-          taskId: taskNodeLinks.taskId,
-          count: sql<number>`count(*)`,
-        })
-        .from(taskNodeLinks)
-        .innerJoin(projectNodes, eq(taskNodeLinks.nodeId, projectNodes.id))
-        .where(and(inArray(projectNodes.projectId, projectIds), isNull(projectNodes.deletedAt)))
-        .groupBy(projectNodes.projectId, taskNodeLinks.taskId),
-    ]);
+    const [taskRowsResult, rootNodeRows, taskFileCountMap, projectTaskCountMap] =
+      await Promise.all([
+        db.execute(sql`
+          SELECT * FROM (
+            SELECT ${tasks.id} as id, ${tasks.projectId} as "projectId", ${tasks.title} as title, 
+                   ${tasks.description} as description, ${tasks.status} as status, 
+                   ${tasks.priority} as priority, ${tasks.taskNumber} as "taskNumber", 
+                   ${tasks.updatedAt} as "updatedAt",
+                   row_number() OVER (PARTITION BY ${tasks.projectId} ORDER BY ${tasks.updatedAt} DESC) as rn
+            FROM ${tasks}
+            WHERE ${tasks.projectId} IN (${sql.join(projectIds.map(id => sql`${id}`), sql`, `)}) AND ${tasks.deletedAt} IS NULL
+          ) t WHERE t.rn <= 50
+        `),
+        db
+          .select({
+            node: projectNodes,
+            linkedTaskId: tasks.id,
+            linkedTaskTitle: tasks.title,
+            linkedTaskNumber: tasks.taskNumber,
+          })
+          .from(projectNodes)
+          .leftJoin(taskNodeLinks, eq(projectNodes.id, taskNodeLinks.nodeId))
+          .leftJoin(tasks, eq(taskNodeLinks.taskId, tasks.id))
+          .where(
+            and(
+              inArray(projectNodes.projectId, projectIds),
+              isNull(projectNodes.parentId),
+              isNull(projectNodes.deletedAt),
+              or(isNull(tasks.id), isNull(tasks.deletedAt))
+            ),
+          )
+          .orderBy(projectNodes.projectId, projectNodes.type, projectNodes.name)
+          .limit(Math.max(100, projectIds.length * 100)),
+        getProjectTaskFileCountMap(projectIds),
+        getProjectTaskCountMap(projectIds),
+      ]);
+
+    const taskRows = taskRowsResult as unknown as Array<{
+      id: string;
+      projectId: string;
+      title: string;
+      description: string | null;
+      status: string;
+      priority: string;
+      taskNumber: number;
+      updatedAt: string | Date;
+    }>;
 
     const tasksByProject = new Map<string, typeof taskRows>();
     for (const task of taskRows) {
       const list = tasksByProject.get(task.projectId) ?? [];
-      if (list.length < 50) {
-        list.push(task);
-        tasksByProject.set(task.projectId, list);
+      list.push(task);
+      tasksByProject.set(task.projectId, list);
+    }
+
+    const rootNodesByProject = new Map<string, Map<string, any>>();
+    for (const row of rootNodeRows) {
+      const node = row.node;
+      const projectMap = rootNodesByProject.get(node.projectId) ?? new Map<string, any>();
+      
+      let nodeObj = projectMap.get(node.id);
+      if (!nodeObj) {
+        nodeObj = {
+          id: node.id,
+          nodeId: node.id,
+          name: node.name,
+          type: node.type,
+          path: node.path,
+          s3Key: node.s3Key,
+          size: node.size,
+          mimeType: node.mimeType,
+          currentVersion: node.currentVersion,
+          syncStatus: node.syncStatus,
+          linkedTasks: [],
+          updatedAt: node.updatedAt?.toISOString?.() ?? node.updatedAt,
+        };
+        projectMap.set(node.id, nodeObj);
       }
-    }
-
-    const rootNodesByProject = new Map<string, typeof rootNodeRows>();
-    for (const node of rootNodeRows) {
-      const list = rootNodesByProject.get(node.projectId) ?? [];
-      if (list.length < 100) {
-        list.push(node);
-        rootNodesByProject.set(node.projectId, list);
+      if (row.linkedTaskId) {
+        nodeObj.linkedTasks.push({
+          id: row.linkedTaskId,
+          title: row.linkedTaskTitle,
+          taskNumber: row.linkedTaskNumber
+        });
       }
-    }
-
-    const countMap = new Map<string, number>();
-    for (const row of taskCountRows) {
-      countMap.set(`${row.projectId}:${row.taskId}`, Number(row.count) || 0);
-    }
-
-    const rootFileIds = rootNodeRows.map((node) => node.id);
-    const linkedTaskRows = rootFileIds.length
-      ? await db
-          .select({
-            nodeId: taskNodeLinks.nodeId,
-            taskId: taskNodeLinks.taskId,
-            title: tasks.title,
-            taskNumber: tasks.taskNumber,
-          })
-          .from(taskNodeLinks)
-          .innerJoin(tasks, eq(taskNodeLinks.taskId, tasks.id))
-          .where(and(inArray(taskNodeLinks.nodeId, rootFileIds), isNull(tasks.deletedAt)))
-      : [];
-
-    const linkedTaskMap = new Map<string, Array<{ id: string; title: string | null; taskNumber: number | null }>>();
-    for (const row of linkedTaskRows) {
-      const existing = linkedTaskMap.get(row.nodeId) ?? [];
-      existing.push({ id: row.taskId, title: row.title, taskNumber: row.taskNumber });
-      linkedTaskMap.set(row.nodeId, existing);
+      rootNodesByProject.set(node.projectId, projectMap);
     }
 
     const projectsWithDetails = userProjects.map((project) => {
       const projectTasks = tasksByProject.get(project.id) ?? [];
-      const projectFiles = rootNodesByProject.get(project.id) ?? [];
+      const projectFilesMap = rootNodesByProject.get(project.id);
+      const projectFiles = projectFilesMap ? Array.from(projectFilesMap.values()) : [];
+      const taskCount = projectTaskCountMap.get(project.id) ?? 0;
+      const singletonTask = taskCount === 1 ? (projectTasks[0] ?? null) : null;
       return {
         ...project,
         syncSequence: project.currentSequenceNumber,
+        taskCount,
+        associatedTaskPreview: singletonTask
+          ? {
+              id: singletonTask.id,
+              title: singletonTask.title,
+              description: singletonTask.description,
+              status: singletonTask.status,
+              priority: singletonTask.priority,
+              taskNumber: singletonTask.taskNumber,
+              filesCount:
+                taskFileCountMap.get(taskFileCountKey(project.id, singletonTask.id)) || 0,
+            }
+          : null,
+        tasksTruncated: projectTasks.length < taskCount,
         tasks: projectTasks.map((task) => ({
           id: task.id,
           title: task.title,
@@ -138,35 +171,30 @@ export async function GET(request: Request) {
           status: task.status,
           priority: task.priority,
           taskNumber: task.taskNumber,
-          filesCount: countMap.get(`${project.id}:${task.id}`) || 0,
+          filesCount: taskFileCountMap.get(taskFileCountKey(project.id, task.id)) || 0,
         })),
-        files: projectFiles.map((file) => ({
-          id: file.id,
-          nodeId: file.id,
-          name: file.name,
-          type: file.type,
-          path: file.path,
-          s3Key: file.s3Key,
-          size: file.size,
-          mimeType: file.mimeType,
-          currentVersion: file.currentVersion,
-          syncStatus: file.syncStatus,
-          linkedTasks: linkedTaskMap.get(file.id) ?? [],
-          updatedAt: file.updatedAt?.toISOString?.() ?? file.updatedAt,
-        })),
+        files: projectFiles,
       };
     });
 
     return jsonSuccess({
       user: {
+        id: user.id,
         email: user.email,
       },
       projects: projectsWithDetails,
     });
   } catch (error) {
-    logger.error("[api/v1/extension/workspace] Failed to fetch workspace details", {
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return jsonError("Failed to fetch workspace details", 500, "INTERNAL_ERROR");
+    logger.error(
+      "[api/v1/extension/workspace] Failed to fetch workspace details",
+      {
+        error: error instanceof Error ? error.message : String(error),
+      },
+    );
+    return jsonError(
+      "Failed to fetch workspace details",
+      500,
+      "INTERNAL_ERROR",
+    );
   }
 }
