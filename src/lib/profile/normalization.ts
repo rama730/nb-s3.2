@@ -6,6 +6,34 @@
 
 import { isSafeHttpUrl } from '@/lib/security/urls';
 
+export const SOCIAL_LINK_PLATFORMS = [
+    'github', 'x', 'twitter', 'linkedin', 'website', 'portfolio', 'dribbble',
+    'instagram', 'bluesky', 'mastodon', 'youtube', 'twitch', 'threads',
+    'facebook', 'other',
+] as const;
+export type SocialLinkPlatform = (typeof SOCIAL_LINK_PLATFORMS)[number];
+const SOCIAL_LINK_PLATFORM_SET = new Set<string>(SOCIAL_LINK_PLATFORMS);
+
+export function normalizeOptionalProfileUrl(value: string | undefined): string | undefined {
+    if (value === undefined) return undefined;
+    const trimmed = value.trim();
+    if (!trimmed) return '';
+    const candidate = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+    return isSafeHttpUrl(candidate) ? candidate : '';
+}
+
+export function normalizeSocialLinkRecord(links: Record<string, string> | undefined): Record<string, string> | undefined {
+    if (!links) return undefined;
+    const out: Record<string, string> = {};
+    for (const [key, raw] of Object.entries(links)) {
+        const platform = key.trim().toLowerCase().slice(0, 32);
+        if (!SOCIAL_LINK_PLATFORM_SET.has(platform)) continue;
+        const url = normalizeOptionalProfileUrl(String(raw || ''));
+        if (url) out[platform] = url;
+    }
+    return out;
+}
+
 // ── Form State (used by EditProfileModal) ───────────────────────────
 
 export type ProfileFormState = {
@@ -17,12 +45,15 @@ export type ProfileFormState = {
     website: string;
     avatarUrl: string;
     bannerUrl: string;
-    availabilityStatus: string;
     openTo: string[];
+    experienceLevel: string;
+    hoursPerWeek: string;
     skills: string[];
     socialLinks: Record<string, string>;
     experience: unknown[];
     education: unknown[];
+    openToCustomRoles: string[];
+    preferredCategories: string[];
 };
 
 /**
@@ -39,12 +70,15 @@ export function toFormState(profile: Record<string, unknown> | null | undefined)
         website: str(s.website),
         avatarUrl: str(s.avatarUrl ?? s.avatar_url),
         bannerUrl: str(s.bannerUrl ?? s.banner_url),
-        availabilityStatus: str(s.availabilityStatus ?? s.availability_status) || "available",
         openTo: arr(s.openTo ?? s.open_to),
+        experienceLevel: str(s.experienceLevel ?? s.experience_level),
+        hoursPerWeek: str(s.hoursPerWeek ?? s.hours_per_week),
         skills: arr(s.skills),
         socialLinks: obj(s.socialLinks ?? s.social_links),
         experience: arr(s.experience),
         education: arr(s.education),
+        openToCustomRoles: arr(s.openToCustomRoles ?? s.open_to_custom_roles),
+        preferredCategories: arr(s.preferredCategories ?? s.preferred_categories),
     };
 }
 
@@ -61,10 +95,12 @@ export type ProfileServerPayload = {
     bannerUrl: string;
     skills: string[];
     socialLinks: Record<string, string>;
-    availabilityStatus: string;
     openTo: string[];
-    experience: unknown[];
+    experienceLevel: string | null;
+    hoursPerWeek: string | null;
     education: unknown[];
+    openToCustomRoles: string[];
+    preferredCategories: string[];
     expectedUpdatedAt?: string;
 };
 
@@ -93,10 +129,12 @@ export function toServerPayload(
         bannerUrl: formState.bannerUrl,
         skills: formState.skills,
         socialLinks: formState.socialLinks,
-        availabilityStatus: formState.availabilityStatus,
         openTo: formState.openTo,
-        experience: formState.experience,
+        experienceLevel: formState.experienceLevel || null,
+        hoursPerWeek: formState.hoursPerWeek || null,
         education: formState.education,
+        openToCustomRoles: formState.openToCustomRoles || [],
+        preferredCategories: formState.preferredCategories || [],
         ...(normalizedExpectedUpdatedAt ? { expectedUpdatedAt: normalizedExpectedUpdatedAt } : {}),
     };
 }
@@ -106,7 +144,8 @@ export function toServerPayload(
 const OPTIMISTIC_KEYS = [
     "fullName", "username", "headline", "bio", "location", "website",
     "avatarUrl", "bannerUrl", "skills", "socialLinks",
-    "availabilityStatus", "openTo", "experience", "education",
+    "openTo", "experienceLevel", "hoursPerWeek", "education",
+    "openToCustomRoles", "preferredCategories",
 ] as const;
 
 /**
@@ -134,23 +173,13 @@ export function applyPayloadToFormBase(
     base: ProfileFormState,
     payload: Record<string, unknown>,
 ): ProfileFormState {
-    return {
-        ...base,
-        fullName: payload.fullName !== undefined ? str(payload.fullName) : base.fullName,
-        username: payload.username !== undefined ? str(payload.username) : base.username,
-        headline: payload.headline !== undefined ? str(payload.headline) : base.headline,
-        bio: payload.bio !== undefined ? str(payload.bio) : base.bio,
-        location: payload.location !== undefined ? str(payload.location) : base.location,
-        website: payload.website !== undefined ? str(payload.website) : base.website,
-        avatarUrl: payload.avatarUrl !== undefined ? str(payload.avatarUrl) : base.avatarUrl,
-        bannerUrl: payload.bannerUrl !== undefined ? str(payload.bannerUrl) : base.bannerUrl,
-        availabilityStatus: payload.availabilityStatus !== undefined ? str(payload.availabilityStatus) : base.availabilityStatus,
-        openTo: payload.openTo !== undefined ? arr(payload.openTo) : base.openTo,
-        skills: payload.skills !== undefined ? arr(payload.skills) : base.skills,
-        socialLinks: payload.socialLinks !== undefined ? obj(payload.socialLinks) : base.socialLinks,
-        experience: payload.experience !== undefined ? arr(payload.experience) : base.experience,
-        education: payload.education !== undefined ? arr(payload.education) : base.education,
-    };
+    const next = { ...base };
+    for (const [k, v] of Object.entries(payload)) {
+        if (v !== undefined && k in next) {
+            (next as any)[k] = Array.isArray(v) ? arr(v) : (v && typeof v === "object" ? obj(v) : str(v));
+        }
+    }
+    return next;
 }
 
 // ── Social Links Normalization (used by ProfileRightRail) ───────────
