@@ -13,10 +13,10 @@ export function formatLastActive(dateValue: string | Date | null | undefined): s
   return null;
 }
 
-/**
- * Safely parse a date value, returning null for invalid dates.
- */
-export function toValidDate(value: unknown): Date | null {
-  const date = new Date(value as string | number | Date);
-  return Number.isNaN(date.getTime()) ? null : date;
+export function formatCalendarDate(dateValue: string | Date): string {
+  return new Date(dateValue).toLocaleDateString();
+}
+
+export function formatDateTime(dateValue: string | Date): string {
+  return new Date(dateValue).toLocaleString();
 }
