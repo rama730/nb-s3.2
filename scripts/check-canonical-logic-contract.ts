@@ -11,7 +11,6 @@ const REQUIRED_CANONICAL_MODULES = [
   "src/lib/ui/identity.ts",
   "src/lib/ui/status-config.ts",
   "src/lib/profile/display.ts",
-  "src/components/people/person-card-model.ts",
   "src/lib/import/import-filters.ts",
 ] as const;
 
@@ -20,7 +19,6 @@ const CANONICAL_AVATAR_SURFACES = [
   "src/components/profile/ProfileHeader.tsx",
   "src/components/profile/v2/ProfileHeader.tsx",
   "src/components/people/PersonCard.tsx",
-  "src/components/people/ProfilePreviewDrawer.tsx",
   "src/components/projects/ProjectCard.tsx",
   "src/components/settings/PrivacySettings.tsx",
 ] as const;
