@@ -7,11 +7,10 @@ import {
 } from "@/app/api/v1/_shared";
 import { getProjectAccessById } from "@/lib/data/project-access";
 import { projectMemberCan } from "@/lib/projects/settings-policies";
+import { isLooseUuid } from "@/lib/validations/uuid";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * GET /api/v1/projects/[id]/capabilities
@@ -34,7 +33,7 @@ export async function GET(
     if (!user) return jsonError("Not authenticated", 401, "UNAUTHORIZED");
 
     const { id: projectId } = await context.params;
-    if (!UUID_RE.test(projectId)) {
+    if (!isLooseUuid(projectId)) {
         return jsonError("Invalid project id", 400, "BAD_REQUEST");
     }
 
