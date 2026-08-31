@@ -1,5 +1,7 @@
 # Ponytail Global Search Architecture and Implementation Report
 
+> Historical snapshot from 2026-07-13. Do not use its verification status as current database, migration, capacity, or Supabase evidence; use the 2026-08-13 complete SQL/Supabase audit and a fresh verification run.
+
 Date: 2026-07-13  
 Status: Implemented, hardened, and validated  
 Scope: Main top-navigation search across Hub, Connections, Messages, Settings, project detail, and all other authenticated routes
