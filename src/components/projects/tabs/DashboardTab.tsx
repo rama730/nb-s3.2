@@ -11,6 +11,7 @@ interface DashboardTabProps {
     project: any;
     isCreator: boolean;
     isCollaborator: boolean;
+    canManageTeam?: boolean;
     members: any[];
     rolesWithFilled: any[];
     onEdit: () => void;
@@ -31,6 +32,7 @@ export function DashboardTab({
     project,
     isCreator,
     isCollaborator,
+    canManageTeam,
     members,
     rolesWithFilled,
     onEdit,
@@ -54,6 +56,7 @@ export function DashboardTab({
                     members={members}
                     loadingMembers={loadingMembers}
                     isCreator={isCreator}
+                    canInvite={canManageTeam}
                     onInvite={onManageTeam}
                 />
             </TabErrorBoundary>
