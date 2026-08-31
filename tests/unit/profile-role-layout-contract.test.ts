@@ -8,6 +8,7 @@ test('profile layout keeps skills and roles in one responsive composition', () =
   const client = read('src/components/profile/v2/ProfileV2Client.tsx')
   const shell = read('src/components/profile/v2/ProfileShell.tsx')
   const rail = read('src/components/profile/v2/ProfileRightRail.tsx')
+  const tabs = read('src/components/profile/v2/ProfileTabs.tsx')
 
   const skillsPosition = client.indexOf('<SkillsCard')
   const rolesPosition = client.indexOf('<OpenToRolesCard')
@@ -16,6 +17,9 @@ test('profile layout keeps skills and roles in one responsive composition', () =
   assert.match(shell, /className="order-3 space-y-6"/)
   assert.match(shell, /className="order-4"/)
   assert.match(shell, /className="order-5 space-y-6"/)
+  assert.match(shell, /data-testid="profile-tabs-shell"/)
+  assert.match(shell, /style=\{\{ top: "12px" \}\}/)
+  assert.doesNotMatch(tabs, /sticky z-/)
   assert.doesNotMatch(shell, /hidden lg:block/)
   assert.doesNotMatch(rail, /title="Collaboration"/)
 })
