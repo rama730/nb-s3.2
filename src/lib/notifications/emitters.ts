@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { createNotification } from "@/lib/notifications/service";
 import { importanceForKind } from "@/lib/notifications/classifier";
 import { emitNotificationWrite, emitNotificationWrites } from "@/lib/notifications/fanout";
+import { buildMessageSourceHref } from "@/lib/messages/linked-work-server";
 
 type EmitExecutor = Parameters<typeof createNotification>[1];
 
@@ -58,7 +59,7 @@ export async function emitMessageBurstNotifications(params: {
     actorName: string | null;
     actorAvatarUrl?: string | null;
     conversationId: string;
-    previewText: string | null;
+    sourceMessageId: string;
     secondaryText?: string | null;
 }, executor?: EmitExecutor) {
     const writes = params.recipients
@@ -72,10 +73,11 @@ export async function emitMessageBurstNotifications(params: {
                 kind: "message_burst" as const,
                 importance: importanceForKind("message_burst"),
                 title: params.actorName ? `New message from ${params.actorName}` : "New message",
-                body: params.previewText,
-                href: `/messages?conversationId=${encodeURIComponent(params.conversationId)}`,
+                body: null,
+                href: buildMessageSourceHref(params.conversationId, params.sourceMessageId),
                 entityRefs: {
                     conversationId: params.conversationId,
+                    sourceMessageId: params.sourceMessageId,
                 },
                 preview: buildPreview({
                     actorName: params.actorName,
@@ -91,6 +93,53 @@ export async function emitMessageBurstNotifications(params: {
     return emitNotificationWrites(writes, executor ?? db);
 }
 
+/**
+ * Reaction activity is intentionally a separate notification from a message
+ * burst: it must not alter unread-message state or pretend to be new chat
+ * content. The per-actor/message/emoji key keeps retries idempotent while
+ * still preserving a changed reaction as a distinct activity event.
+ */
+export async function emitMessageReactionNotification(params: {
+    recipientUserId: string | null | undefined;
+    recipientMuted?: boolean | null;
+    actorUserId: string;
+    actorName: string | null;
+    actorAvatarUrl?: string | null;
+    conversationId: string;
+    sourceMessageId: string;
+    emoji: string;
+    secondaryText?: string | null;
+}, executor?: EmitExecutor) {
+    if (!params.recipientUserId || params.recipientUserId === params.actorUserId || params.recipientMuted) {
+        return;
+    }
+
+    const actorName = params.actorName || 'Someone';
+    await writeCreate({
+        recipientUserId: params.recipientUserId,
+        actorUserId: params.actorUserId,
+        category: 'messages',
+        kind: 'message_reaction',
+        importance: importanceForKind('message_reaction'),
+        title: `${actorName} reacted ${params.emoji} to your message`,
+        body: null,
+        href: buildMessageSourceHref(params.conversationId, params.sourceMessageId),
+        entityRefs: {
+            conversationId: params.conversationId,
+            sourceMessageId: params.sourceMessageId,
+            reactionEmoji: params.emoji,
+        },
+        preview: buildPreview({
+            actorName: params.actorName,
+            actorAvatarUrl: params.actorAvatarUrl,
+            contextLabel: 'Conversation',
+            contextKind: 'conversation',
+            secondaryText: params.secondaryText ?? null,
+        }),
+        dedupeKey: `message-reaction:${params.sourceMessageId}:${params.actorUserId}:${params.emoji}`,
+    }, executor);
+}
+
 export async function emitWorkflowAssignedNotification(params: {
     recipientUserId: string | null | undefined;
     actorUserId: string;
@@ -99,6 +148,7 @@ export async function emitWorkflowAssignedNotification(params: {
     workflowItemId: string;
     workflowKind: string;
     conversationId: string;
+    sourceMessageId: string;
     projectId?: string | null;
     projectSlug?: string | null;
     projectTitle?: string | null;
@@ -116,10 +166,11 @@ export async function emitWorkflowAssignedNotification(params: {
             ? `${params.actorName || "Someone"} invited you to ${projectLabel}`
             : `${params.actorName || "Someone"} assigned you a ${humanWorkflowLabel(params.workflowKind)}`,
         body: params.projectTitle ? `Project: ${params.projectTitle}` : null,
-        href: `/messages?conversationId=${encodeURIComponent(params.conversationId)}`,
+        href: buildMessageSourceHref(params.conversationId, params.sourceMessageId),
         entityRefs: {
             workflowItemId: params.workflowItemId,
             conversationId: params.conversationId,
+            sourceMessageId: params.sourceMessageId,
             projectId: params.projectId ?? null,
             projectSlug: params.projectSlug ?? null,
             taskId: params.taskId ?? null,
@@ -144,6 +195,7 @@ export async function emitWorkflowResolvedNotification(params: {
     workflowKind: string;
     resolutionLabel: string;
     conversationId: string;
+    sourceMessageId: string;
     projectId?: string | null;
     projectSlug?: string | null;
     projectTitle?: string | null;
@@ -158,10 +210,11 @@ export async function emitWorkflowResolvedNotification(params: {
         importance: importanceForKind("workflow_resolved"),
         title: `${params.actorName || "Someone"} ${params.resolutionLabel.toLowerCase()} your ${humanWorkflowLabel(params.workflowKind)}`,
         body: params.projectTitle ? `Project: ${params.projectTitle}` : null,
-        href: `/messages?conversationId=${encodeURIComponent(params.conversationId)}`,
+        href: buildMessageSourceHref(params.conversationId, params.sourceMessageId),
         entityRefs: {
             workflowItemId: params.workflowItemId,
             conversationId: params.conversationId,
+            sourceMessageId: params.sourceMessageId,
             projectId: params.projectId ?? null,
             projectSlug: params.projectSlug ?? null,
             taskId: params.taskId ?? null,
@@ -371,7 +424,7 @@ export async function emitTaskStatusAttentionNotification(params: {
         category: "tasks",
         kind: "task_status_attention",
         importance: importanceForKind("task_status_attention"),
-        title: `${params.actorName || "Someone"} marked a task ${params.status === "blocked" ? "blocked" : "done"}`,
+        title: `${params.actorName || "Someone"} marked a task ${params.status === "blocked" ? "as an issue" : "done"}`,
         body: params.taskTitle,
         href: `/projects/${encodeURIComponent(params.projectSlug || params.projectId)}?tab=tasks&drawerType=task&drawerId=${encodeURIComponent(params.taskId)}`,
         entityRefs: {
@@ -385,7 +438,7 @@ export async function emitTaskStatusAttentionNotification(params: {
             actorAvatarUrl: params.actorAvatarUrl,
             contextLabel: params.projectKey && params.taskNumber ? `${params.projectKey}-${params.taskNumber}` : "Task",
             contextKind: "task",
-            secondaryText: params.status,
+            secondaryText: params.status === "blocked" ? "issue" : params.status,
         }),
         dedupeKey: `task:${params.taskId}:status:${params.status}:${params.recipientUserId}`,
     }, executor);
@@ -451,7 +504,7 @@ export async function emitTaskCommentReplyNotification(params: {
     await writeCreate({
         recipientUserId: params.recipientUserId,
         actorUserId: params.actorUserId,
-        category: "tasks",
+        category: "mentions",
         kind: "task_comment_reply",
         importance: importanceForKind("task_comment_reply"),
         title: `${params.actorName || "Someone"} replied to your task comment`,
