@@ -42,7 +42,11 @@ function createCapability(): ConversationCapabilityV2 {
     };
 }
 
-function createConversation(lastMessageId: string, createdAt: Date): InboxConversationV2 {
+function createConversation(
+    lastMessageId: string,
+    createdAt: Date,
+    reactionPreview: InboxConversationV2['reactionPreview'] = null,
+): InboxConversationV2 {
     return {
         id: 'conversation-1',
         type: 'dm',
@@ -67,6 +71,7 @@ function createConversation(lastMessageId: string, createdAt: Date): InboxConver
         unreadCount: 0,
         lastReadAt: null,
         lastReadMessageId: null,
+        reactionPreview,
         capability: createCapability(),
     };
 }
@@ -477,6 +482,35 @@ test('upsertInboxConversation does not regress a newer last-message preview', ()
     );
 
     assert.equal(inboxData?.pages[0]?.conversations[0]?.lastMessage?.id, 'newer-message');
+});
+
+test('upsertInboxConversation does not regress a newer reaction preview', () => {
+    const queryClient = new QueryClient();
+    const messageAt = new Date('2026-04-30T11:00:00.000Z');
+    const newerReaction = {
+        messageId: 'message-1',
+        actorUserId: 'user-2',
+        emoji: '👍',
+        createdAt: new Date('2026-04-30T11:06:00.000Z'),
+    };
+    const staleReaction = {
+        ...newerReaction,
+        emoji: '😂',
+        createdAt: new Date('2026-04-30T11:05:00.000Z'),
+    };
+
+    queryClient.setQueryData(queryKeys.messages.v2.inbox(20), {
+        pages: [{ conversations: [createConversation('message-1', messageAt, newerReaction)], hasMore: false, nextCursor: null }],
+        pageParams: [undefined],
+    });
+
+    upsertInboxConversation(queryClient, createConversation('message-1', messageAt, staleReaction));
+
+    const inboxData = queryClient.getQueryData<{ pages: Array<{ conversations: InboxConversationV2[] }> }>(
+        queryKeys.messages.v2.inbox(20),
+    );
+
+    assert.equal(inboxData?.pages[0]?.conversations[0]?.reactionPreview?.emoji, '👍');
 });
 
 test('upsertInboxConversation preserves a local unread clear against stale summaries', () => {
