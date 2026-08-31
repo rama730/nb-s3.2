@@ -4,9 +4,6 @@ import { getTaskLinkCounts } from "@/app/actions/files/links";
 import {
   getProjectNodesWithCounts,
   getProjectNodes,
-  getProjectBatchNodes,
-  
-  getProjectTreeFlat,
   initializeProjectWorkspaceRoot,
 } from "@/app/actions/files/nodes";
 import { filesParentKey, useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
@@ -39,13 +36,9 @@ export function useExplorerBoot(options: {
   );
 
   const upsertNodes = useFilesWorkspaceStore((s) => s.upsertNodes);
-  const setChildren = useFilesWorkspaceStore((s) => s.setChildren);
   const setNodesAndChildren = useFilesWorkspaceStore((s) => s.setNodesAndChildren);
-  const markChildrenLoaded = useFilesWorkspaceStore((s) => s.markChildrenLoaded);
-  const setFolderMeta = useFilesWorkspaceStore((s) => s.setFolderMeta);
   const setTaskLinkCounts = useFilesWorkspaceStore((s) => s.setTaskLinkCounts);
   const toggleExpanded = useFilesWorkspaceStore((s) => s.toggleExpanded);
-  const batchUpdateStore = useFilesWorkspaceStore((s) => s.batchUpdateStore);
 
   const bootedRef = useRef(false);
   const batchLoadedRef = useRef(false);
@@ -71,14 +64,16 @@ export function useExplorerBoot(options: {
         await inFlight;
         return;
       }
-      if (
+      while (
         folderLoadInFlightRef.current.size >=
         FILES_RUNTIME_BUDGETS.maxInFlightFolderRequests
       ) {
-        if (mode === "append") {
-          showToast("Folder loading is busy. Please try again.", "info");
-        }
-        return;
+        // Queue behind active reads; a saturated prefetch queue is not a
+        // successful empty response. Recheck after every released slot.
+        await Promise.race(folderLoadInFlightRef.current.values()).catch(() => {});
+        if (!isActiveRef.current) return;
+        const queued = folderLoadInFlightRef.current.get(requestKey);
+        if (queued) return await queued;
       }
 
       const task = (async () => {
@@ -127,8 +122,8 @@ export function useExplorerBoot(options: {
               nodes: ProjectNode[];
               nextCursor: string | null;
             };
-            newNodes = Array.isArray(res) ? res : res.nodes;
-            nextCursor = !Array.isArray(res) ? res.nextCursor : null;
+            newNodes = res.nodes;
+            nextCursor = res.nextCursor;
             if (newNodes.length > 0) {
               upsertNodes(projectId, newNodes);
             }
@@ -155,19 +150,13 @@ export function useExplorerBoot(options: {
               prefetchedFolderKeysRef.current.add(prefetchKey);
               queueMicrotask(() => {
                 if (!isActiveRef.current) return;
-                void loadFolderContent(parentId, "append");
+                void loadFolderContent(parentId, "append").catch(() => {});
               });
             }
           }
 
           if (taskCounts) {
             setTaskLinkCounts(projectId, taskCounts);
-          } else {
-            const fileIds = newNodes.filter((n) => n.type === "file").map((n) => n.id);
-            if (fileIds.length > 0) {
-              const counts = await getTaskLinkCounts(projectId, fileIds);
-              setTaskLinkCounts(projectId, counts);
-            }
           }
         } catch (e: unknown) {
           console.error("Load folder failed", e);
@@ -176,6 +165,7 @@ export function useExplorerBoot(options: {
           } else {
             showToast("Failed to load more files", "error");
           }
+          throw e;
         } finally {
           const elapsedMs = Math.round(performance.now() - startedAt);
           recordFilesMetric("files.folder.load.latency_ms", {
@@ -218,119 +208,14 @@ export function useExplorerBoot(options: {
     if (!bootedRef.current && !alreadyLoaded) {
       bootedRef.current = true;
 
-      try {
-        // Fetch flat tree and root directory content concurrently to minimize roundtrips
-        const [flatTreeResult, rootFolderResult] = await Promise.all([
-          getProjectTreeFlat(projectId, {
-            maxNodes: FILES_RUNTIME_BUDGETS.maxFlatTreeBootNodes,
-          }).catch((err) => {
-            console.error("Flat tree boot pre-fetch failed, falling back", err);
-            return { nodes: [], isComplete: false };
-          }),
-          (filesFeatureFlags.storeBatching || filesFeatureFlags.wave2StoreBatching)
-            ? getProjectNodesWithCounts(projectId, null, undefined, 100).catch((err) => {
-                console.error("Root directory boot pre-fetch failed", err);
-                return { success: false as const, message: String(err) };
-              })
-            : getProjectNodes(projectId, null, undefined, 100).catch((err) => {
-                console.error("Root directory boot pre-fetch failed", err);
-                return { nodes: [], nextCursor: null };
-              })
-        ]);
+      await loadFolderContent(null, "refresh");
+      if (!isActiveRef.current) return;
 
-        if (!isActiveRef.current) return;
-
-        const { nodes: allNodes, isComplete } = flatTreeResult;
-
-        if (isComplete && allNodes && allNodes.length > 0) {
-          const grouped: Record<string, string[]> = {};
-          allNodes.forEach(n => {
-            const parentKey = filesParentKey(n.parentId);
-            if (!grouped[parentKey]) grouped[parentKey] = [];
-            grouped[parentKey].push(n.id);
-          });
-
-          const payloads = Object.entries(grouped).map(([parentKey, childIds]) => {
-            const pid = parentKey === "__root__" ? null : parentKey;
-            const dedupedChildIds = Array.from(new Set(childIds));
-            return {
-              parentId: pid,
-              childIds: dedupedChildIds,
-              nextCursor: null,
-              hasMore: false,
-              loaded: true
-            };
-          });
-
-          // Also mark root as loaded if it was empty
-          if (!grouped["__root__"]) {
-            payloads.push({
-              parentId: null,
-              childIds: [],
-              nextCursor: null,
-              hasMore: false,
-              loaded: true
-            });
-          }
-
-          batchUpdateStore(projectId, payloads, allNodes);
-
-          // Fetch task link counts for all loaded files (Req 7.1)
-          const fileIds = allNodes.filter((n) => n.type === "file").map((n) => n.id);
-          if (fileIds.length > 0) {
-            const counts = await getTaskLinkCounts(projectId, fileIds);
-            setTaskLinkCounts(projectId, counts);
-          }
-        } else {
-          // Provisioning is an explicit command so directory reads remain side-effect free.
-          // Only initialize the workspace root if the project is small and actually empty (isComplete is true).
-          // If isComplete is false, it means the project has > maxFlatTreeBootNodes files, so it's definitely not empty!
-          if (isComplete && canEdit) {
-            await initializeProjectWorkspaceRoot(projectId);
-            await loadFolderContent(null, "refresh");
-          } else {
-            // Apply pre-fetched root folder results directly to save a request
-            if ('success' in rootFolderResult) {
-              if (rootFolderResult.success && rootFolderResult.data) {
-                const { nodes: newNodes, nextCursor, taskLinkCounts } = rootFolderResult.data;
-                const mergedChildIds = newNodes.map((n) => n.id);
-                setNodesAndChildren(projectId, newNodes, null, mergedChildIds, {
-                  nextCursor,
-                  hasMore: !!nextCursor,
-                  loaded: true,
-                });
-                if (taskLinkCounts) {
-                  setTaskLinkCounts(projectId, taskLinkCounts);
-                }
-              } else {
-                await loadFolderContent(null, "refresh");
-              }
-            } else {
-              const res = rootFolderResult as { nodes: ProjectNode[]; nextCursor: string | null } | ProjectNode[];
-              const newNodes = Array.isArray(res) ? res : res.nodes;
-              const nextCursor = !Array.isArray(res) ? res.nextCursor : null;
-
-              if (newNodes.length > 0) {
-                upsertNodes(projectId, newNodes);
-              }
-              const mergedChildIds = newNodes.map((n) => n.id);
-              setNodesAndChildren(projectId, newNodes, null, mergedChildIds, {
-                nextCursor,
-                hasMore: !!nextCursor,
-                loaded: true,
-              });
-              const fileIds = newNodes.filter((n) => n.type === "file").map((n) => n.id);
-              if (fileIds.length > 0) {
-                const counts = await getTaskLinkCounts(projectId, fileIds);
-                setTaskLinkCounts(projectId, counts);
-              }
-            }
-          }
-        }
-      } catch (e) {
-        console.error("Flat tree load failed, falling back to paginated loader", e);
-        if (!isActiveRef.current) return;
-        await loadFolderContent(null, "refresh");
+      const rootAfterLoad = useFilesWorkspaceStore.getState()
+        .byProjectId[projectId]?.childrenByParentId[filesParentKey(null)] ?? [];
+      if (rootAfterLoad.length === 0 && canEdit) {
+        const createdRoot = await initializeProjectWorkspaceRoot(projectId);
+        if (createdRoot) await loadFolderContent(null, "refresh");
       }
 
       if (!isActiveRef.current) return;
@@ -355,11 +240,11 @@ export function useExplorerBoot(options: {
     } else {
       setIsBooting(false);
     }
-  }, [canEdit, projectId, loadFolderContent, toggleExpanded, setNodesAndChildren, setTaskLinkCounts, upsertNodes, batchUpdateStore]);
+  }, [canEdit, projectId, loadFolderContent, toggleExpanded]);
 
   useEffect(() => {
     if (!isActive) return;
-    void boot();
+    void boot().catch(() => setIsBooting(false));
   }, [boot, isActive]);
 
   // Auto-refresh when sync finishes (GitHub import)
@@ -372,66 +257,26 @@ export function useExplorerBoot(options: {
       prevSyncStatus.current === "indexing";
     if (!isBooting && wasSyncing && syncStatus === "ready") {
       console.log("Sync finished, refreshing file explorer...");
-      void loadFolderContent(null, "refresh");
+      void loadFolderContent(null, "refresh").catch(() => {});
     }
     prevSyncStatus.current = syncStatus;
   }, [isActive, isBooting, syncStatus, loadFolderContent]);
 
-  // 2. Batch Hydration (Session Restore)
+  // ponytail: restore through the same paginated loader as interactive navigation.
+  // Four requests at a time keeps restore below the global in-flight budget.
   useEffect(() => {
-    if (!isActive) return;
-    if (batchLoadedRef.current) return;
-    const currentExpanded =
-      useFilesWorkspaceStore.getState().byProjectId[projectId]?.expandedFolderIds || {};
-    const foldersToLoad = Object.keys(currentExpanded).filter((id) => !!currentExpanded[id]);
-
-    if (foldersToLoad.length === 0) {
-      batchLoadedRef.current = true;
-      return;
-    }
-
+    if (!isActive || batchLoadedRef.current) return;
     batchLoadedRef.current = true;
-
+    const expanded = useFilesWorkspaceStore.getState().byProjectId[projectId]?.expandedFolderIds ?? {};
+    const ids = Object.keys(expanded).filter(id => expanded[id]);
+    let cancelled = false;
     void (async () => {
-      try {
-        const parents = foldersToLoad.map((id) => (id === "root" ? null : id));
-
-        const allNodes = (await getProjectBatchNodes(projectId, parents)) as ProjectNode[];
-        if (!isActiveRef.current) return;
-
-        const grouped: Record<string, ProjectNode[]> = {};
-        parents.forEach((p) => (grouped[filesParentKey(p)] = []));
-
-        allNodes.forEach((node) => {
-          const key = filesParentKey(node.parentId);
-          if (grouped[key]) grouped[key].push(node);
-        });
-
-        upsertNodes(projectId, allNodes);
-
-        Object.entries(grouped).forEach(([key, children]) => {
-          const pid = key === "__root__" ? null : key;
-          const uniqueChildIds = Array.from(new Set(children.map((n) => n.id)));
-          setChildren(
-            projectId,
-            pid,
-            uniqueChildIds
-          );
-          markChildrenLoaded(projectId, pid);
-          setFolderMeta(projectId, pid, { nextCursor: null, hasMore: false });
-        });
-
-        // Fetch task link counts for all loaded files (Req 7.1)
-        const fileIds = allNodes.filter((n) => n.type === "file").map((n) => n.id);
-        if (fileIds.length > 0) {
-          const counts = await getTaskLinkCounts(projectId, fileIds);
-          setTaskLinkCounts(projectId, counts);
-        }
-      } catch (e) {
-        console.error("Batch hydration failed", e);
+      for (let offset = 0; offset < ids.length && !cancelled; offset += 4) {
+        await Promise.allSettled(ids.slice(offset, offset + 4).map(id => loadFolderContent(id === "root" ? null : id, "refresh")));
       }
     })();
-  }, [isActive, projectId, upsertNodes, setChildren, markChildrenLoaded, setFolderMeta, setTaskLinkCounts]);
+    return () => { cancelled = true; batchLoadedRef.current = false; };
+  }, [isActive, projectId, loadFolderContent]);
 
   // 3. User Interaction Expansion (Lazy Load)
   const handleToggleFolder = useCallback(
@@ -444,7 +289,7 @@ export function useExplorerBoot(options: {
         const key = filesParentKey(node.id);
         const loaded = loadedChildren[key];
         if (!loaded) {
-          await loadFolderContent(node.id, "refresh");
+          await loadFolderContent(node.id, "refresh").catch(() => {});
         }
       }
     },
@@ -453,7 +298,7 @@ export function useExplorerBoot(options: {
 
   const handleLoadMore = useCallback(
     (folderId: string | null) => {
-      void loadFolderContent(folderId, "append");
+      void loadFolderContent(folderId, "append").catch(() => {});
     },
     [loadFolderContent]
   );
