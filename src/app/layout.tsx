@@ -57,6 +57,8 @@ export const viewport: import("next").Viewport = {
   viewportFit: "cover",
 };
 
+import { TooltipProvider } from "@/components/ui/tooltip";
+
 async function I18nAndThemeProviders({
   children,
   nonce,
@@ -70,10 +72,12 @@ async function I18nAndThemeProviders({
     <NextIntlClientProvider messages={messages}>
       <ThemeProvider nonce={nonce}>
         <QueryProvider>
-          <RoutePerformanceObserver />
-          {children}
-          <Toaster position="top-right" />
-          {SHOULD_RENDER_VERCEL_ANALYTICS ? <Analytics /> : null}
+          <TooltipProvider>
+            <RoutePerformanceObserver />
+            {children}
+            <Toaster position="top-right" />
+            {SHOULD_RENDER_VERCEL_ANALYTICS ? <Analytics /> : null}
+          </TooltipProvider>
         </QueryProvider>
       </ThemeProvider>
     </NextIntlClientProvider>
