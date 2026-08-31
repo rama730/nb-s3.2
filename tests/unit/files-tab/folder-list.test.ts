@@ -70,6 +70,19 @@ function file(id: string, name: string): FolderListSortableNode {
 // ─── Sort — example/edge cases (Req 4.2) ─────────────────────────────
 
 describe("sortFolderListNodes / compareFolderListNodes — Req 4.2", () => {
+  it("sorts recent files by the canonical version timestamp and handles invalid dates", () => {
+    const nodes = [
+      { ...file("old", "A"), updatedAt: "2026-01-01" },
+      { ...file("recent", "Z"), updatedAt: "2025-01-01", versionUpdatedAt: "2026-08-30" },
+      { ...file("unknown", "B"), updatedAt: "invalid" }, folder("folder", "Z"),
+    ];
+    assert.deepEqual(sortFolderListNodes(nodes, "updated").map(node => node.id), ["folder", "recent", "old", "unknown"]);
+    assert.equal(nodes[0]?.id, "old");
+  });
+  it("sorts file types deterministically with name and id tie breakers", () => {
+    const nodes = [{ ...file("z", "b"), mimeType: "text/plain" }, { ...file("a", "a"), mimeType: "text/plain" }, { ...file("pdf", "z"), mimeType: "application/pdf" }];
+    assert.deepEqual(sortFolderListNodes(nodes, "type").map(node => node.id), ["pdf", "a", "z"]);
+  });
   it("places every folder before every file regardless of name", () => {
     // Even an alphabetically late folder ("z-folder") must still precede
     // an alphabetically early file ("a-file") — Req 4.2 "folders first".
@@ -146,7 +159,6 @@ describe("sortFolderListNodes — property suite (Req 4.2)", () => {
     .string({ minLength: 1, maxLength: 12 })
     // Strip slashes and control characters per Req 7.9 — the file-list
     // sort is only ever fed inputs that pass node-name validation.
-    // eslint-disable-next-line no-control-regex
     .map((s) => s.replace(/[\u0000-\u001f\u007f/]+/g, ""))
     .filter((s) => s.length > 0);
 
@@ -341,6 +353,14 @@ const VIEW_SOURCE = readFileSync(
 );
 
 describe("FolderListView — Retry re-invokes loadFolderContent (Req 4.10)", () => {
+  it("uses a stable folder-page fallback for the external-store selector", () => {
+    assert.match(VIEW_SOURCE, /const EMPTY_FOLDER_PAGE = Object\.freeze\(/);
+    assert.match(
+      VIEW_SOURCE,
+      /folderMeta\?\.\[folderId \?\? "__root__"\] \?\?\s*EMPTY_FOLDER_PAGE/,
+    );
+  });
+
   it("wires `<FolderListError onRetry={folder.retry}>` verbatim", () => {
     assert.match(
       VIEW_SOURCE,
@@ -418,6 +438,31 @@ describe("FolderListView — Retry re-invokes loadFolderContent (Req 4.10)", () 
       retry: () => {},
     });
     assert.equal(readyState.status, "ready");
+  });
+});
+
+describe("Files context menus — viewport-safe placement", () => {
+  it("anchors list and tree context menus so Radix can flip them above a bottom-edge row", () => {
+    const sidebarSource = readFileSync(
+      path.resolve(
+        __dirname,
+        "../../../src/components/projects/v2/files-tab/FilesTabSidebar.tsx",
+      ),
+      "utf8",
+    );
+
+    for (const source of [VIEW_SOURCE, sidebarSource]) {
+      assert.match(source, /<DropdownMenuTrigger asChild>/);
+      assert.doesNotMatch(source, /DropdownMenuAnchor/);
+      assert.match(source, /side="bottom"/);
+      assert.match(source, /collisionPadding=\{12\}/);
+      assert.match(source, /sticky="always"/);
+      assert.doesNotMatch(
+        source,
+        /<DropdownMenuContent[\s\S]{0,240}style=\{\{ left: contextMenuState\.x, top: contextMenuState\.y \}\}/,
+        "menu content must not be manually pinned below the pointer",
+      );
+    }
   });
 });
 
