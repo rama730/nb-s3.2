@@ -24,6 +24,9 @@ export interface FolderListSortableNode {
   id: string;
   name: string;
   type: "file" | "folder";
+  updatedAt?: Date | string | null;
+  versionUpdatedAt?: Date | string | null;
+  mimeType?: string | null;
 }
 
 /**
@@ -34,10 +37,24 @@ export interface FolderListSortableNode {
 export function compareFolderListNodes(
   a: FolderListSortableNode,
   b: FolderListSortableNode,
+  sort: "name" | "updated" | "type" = "name",
+  foldersFirst = true,
 ): number {
   // Folders first.
-  if (a.type !== b.type) {
+  if (foldersFirst && a.type !== b.type) {
     return a.type === "folder" ? -1 : 1;
+  }
+  if (sort === "updated") {
+    const time = (node: FolderListSortableNode) => {
+      const value = new Date(node.versionUpdatedAt ?? node.updatedAt ?? 0).getTime();
+      return Number.isFinite(value) ? value : 0;
+    };
+    const difference = time(b) - time(a);
+    if (difference) return difference;
+  }
+  if (sort === "type") {
+    const difference = (a.mimeType || "").localeCompare(b.mimeType || "");
+    if (difference) return difference;
   }
 
   // Case-insensitive name compare with accent-insensitive sensitivity.
@@ -59,8 +76,9 @@ export function compareFolderListNodes(
  */
 export function sortFolderListNodes<T extends FolderListSortableNode>(
   nodes: readonly T[],
+  sort: "name" | "updated" | "type" = "name",
 ): T[] {
-  return [...nodes].sort(compareFolderListNodes);
+  return [...nodes].sort((a, b) => compareFolderListNodes(a, b, sort));
 }
 
 export type { ProjectNode };
