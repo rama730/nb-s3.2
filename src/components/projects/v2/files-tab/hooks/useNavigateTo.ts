@@ -111,6 +111,11 @@ export function useNavigateTo(projectId: string): NavigateTo {
   return useCallback<NavigateTo>(
     (nodeId) => {
       const state = useFilesWorkspaceStore.getState();
+      const dirtyFileId = state.byProjectId[projectId]?.dirtyFileId ?? null;
+      if (dirtyFileId && dirtyFileId !== nodeId) {
+        state.setPendingNavigation(projectId, { nodeId });
+        return;
+      }
       runNavigateTo(
         {
           setCurrentLocation: state.setCurrentLocation,
