@@ -1,4 +1,6 @@
 import type { ProjectAnalyticsContextFilters, ProjectAnalyticsMemberDetail as ProjectAnalyticsMemberDetailData } from "@/lib/projects/analytics";
+import { getTaskTitlePresentation } from "@/lib/projects/task-presentation";
+import { cn } from "@/lib/utils";
 import {
     AnalyticsContextNote,
     AnalyticsEmptyState,
@@ -15,19 +17,27 @@ const taskList = (items: ProjectAnalyticsMemberDetailData["currentResponsibiliti
     <div className="space-y-2">
         {items.length ? (
             <>
-            {items.slice(0, max).map((task) => (
+            {items.slice(0, max).map((task) => {
+                const titlePresentation = getTaskTitlePresentation(task);
+                return (
                 <a
                     key={task.id}
                     className="block rounded-xl border border-zinc-200 bg-white p-2.5 transition hover:border-blue-300 dark:border-zinc-800 dark:bg-zinc-950 dark:hover:border-blue-500"
                     href={task.actionLink.href}
                 >
                     <div className="flex items-center justify-between gap-3">
-                        <p className="truncate text-sm font-medium text-zinc-950 dark:text-zinc-50">{task.title}</p>
+                        <p
+                            className={cn("truncate text-sm font-medium text-zinc-950 dark:text-zinc-50", titlePresentation.className)}
+                            aria-label={titlePresentation.ariaLabel}
+                        >
+                            {task.title}
+                        </p>
                         <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-semibold text-zinc-500 dark:bg-zinc-900 dark:text-zinc-400">{task.status}</span>
                     </div>
                     <p className="mt-1 text-xs text-zinc-500">{task.ageDays} days in this state</p>
                 </a>
-            ))}
+                );
+            })}
             {items.length > max ? (
                 <p className="rounded-xl border border-zinc-200 px-3 py-2 text-[11px] text-zinc-500 dark:border-zinc-800">
                     Showing {max} of {items.length}. Use Tasks or Timeline for the full detailed list.
@@ -113,7 +123,7 @@ export function AnalyticsMemberDetail({
                 </div>
             </AnalyticsShellCard>
 
-            <div className="grid gap-3 xl:grid-cols-2">
+            <div className="grid gap-3 xl:grid-cols-3">
                 <AnalyticsShellCard>
                     <AnalyticsSectionHeader title="Current responsibilities" description="Active tasks currently connected to this member." />
                     <div className="mt-3">{taskList(currentResponsibilities, "No active responsibilities matched this context.")}</div>
@@ -121,6 +131,10 @@ export function AnalyticsMemberDetail({
                 <AnalyticsShellCard>
                     <AnalyticsSectionHeader title="Blocked or waiting" description="Work that may need help, review, or a decision." />
                     <div className="mt-3">{taskList(blockedWork, "No blocked work matched this context.")}</div>
+                </AnalyticsShellCard>
+                <AnalyticsShellCard>
+                    <AnalyticsSectionHeader title="Completed work" description="Finished tasks connected to this member." />
+                    <div className="mt-3">{taskList(completedWork, "No completed work matched this context.")}</div>
                 </AnalyticsShellCard>
             </div>
 
