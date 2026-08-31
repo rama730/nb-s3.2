@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import type { ProjectNode } from "../../src/lib/db/schema";
-import { enforceNodesBudget } from "../../src/stores/files/explorerSlice";
+import { enforceNodesBudget, reconcileLoadedFolders } from "../../src/stores/files/explorerSlice";
 
 function makeNode(id: string, updatedAtMs: number): ProjectNode {
   return {
@@ -27,6 +27,14 @@ function makeNode(id: string, updatedAtMs: number): ProjectNode {
 }
 
 describe("enforceNodesBudget", () => {
+  it("protects the newly visited page and invalidates pruned folder readiness", () => {
+    const children = { old: ["newer"], current: ["older"] };
+    const result = enforceNodesBudget({ newer: makeNode("newer", 9000), older: makeNode("older", 1) }, children, 1, ["older"]);
+    assert.deepEqual(Object.keys(result.nodesById), ["older"]);
+    const loaded = { old: true, current: true, empty: true };
+    assert.deepEqual(reconcileLoadedFolders(children, result.childrenByParentId, loaded), { old: false, current: true, empty: true });
+    assert.equal(loaded.old, true);
+  });
   it("keeps the most recent nodes and prunes stale child references", () => {
     const nodesById = {
       a: makeNode("a", 1000),
