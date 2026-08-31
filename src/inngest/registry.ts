@@ -7,9 +7,9 @@ function getWorkerOnlyFunctions() {
   const { flushProjectViews } = loadModule("./functions/flush-views");
   const { flushUpdateLikes } = loadModule("./functions/flush-likes");
   const { cleanupProjectUpdate } = loadModule("./functions/cleanup-update");
-  const { cleanupProjectDocs } = loadModule("./functions/cleanup-docs");
   const { gitPull, gitPush, lockCleanup, uploadIntentCleanup } = loadModule("./functions/git-sync");
   const { migrateProjectFileLegacyKeys } = loadModule("./functions/project-files-key-migration");
+  const { finishPendingFileDeletions } = loadModule("./functions/project-files-permanent-delete");
   const { reconcileProjectFiles } = loadModule("./functions/project-files-reconciliation");
   const { onboardingClaimsRepair } = loadModule("./functions/onboarding-claims-repair");
   const { projectImport } = loadModule("./functions/project-import");
@@ -23,7 +23,14 @@ function getWorkerOnlyFunctions() {
   const { notificationsRetention } = loadModule("./functions/notifications-retention");
   const { notificationsRetentionWatchdog } = loadModule("./functions/notifications-retention-watchdog");
   const { notificationFanout } = loadModule("./functions/notification-fanout");
+  const { notificationPushDelivery } = loadModule("./functions/notification-push-delivery");
   const { extensionRecoveryRetention } = loadModule("./functions/extension-recovery-retention");
+  const { messageAttachmentRetention } = loadModule("./functions/message-attachment-retention");
+  const { messageDataIntegrityAudit } = loadModule("./functions/message-data-integrity-audit");
+  const { reconcileSprintSchedule } = loadModule("./functions/sprint-schedule");
+  const { cleanupSupersededProfileImage } = loadModule("./functions/profile-image-cleanup");
+  const { databasePartitionMaintenance } = loadModule("./functions/database-partition-maintenance");
+  const { dataLifecycleRetention } = loadModule("./functions/data-lifecycle-retention");
 
   return [
     projectImport,
@@ -36,8 +43,8 @@ function getWorkerOnlyFunctions() {
     flushProjectViews,
     flushUpdateLikes,
     cleanupProjectUpdate,
-    cleanupProjectDocs,
     reconcileProjectFiles,
+    finishPendingFileDeletions,
     migrateProjectFileLegacyKeys,
     projectImportStaleReconcile,
     reconcileWorkspaceProfileCounters,
@@ -48,7 +55,14 @@ function getWorkerOnlyFunctions() {
     notificationsRetention,
     notificationsRetentionWatchdog,
     notificationFanout,
+    notificationPushDelivery,
     extensionRecoveryRetention,
+    messageAttachmentRetention,
+    messageDataIntegrityAudit,
+    reconcileSprintSchedule,
+    cleanupSupersededProfileImage,
+    databasePartitionMaintenance,
+    dataLifecycleRetention,
   ] as const;
 }
 
