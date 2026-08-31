@@ -59,9 +59,3 @@ export function getReplyPreviewText(reply: ReplyPreviewLike): string {
             return 'Original message';
     }
 }
-
-export function getReplyFocusLabel(source: 'reply' | 'pin' | 'external'): string {
-    if (source === 'reply') return 'Original reply';
-    if (source === 'pin') return 'Pinned message';
-    return 'Referenced message';
-}
