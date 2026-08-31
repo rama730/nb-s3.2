@@ -25,7 +25,7 @@ export default function Phase2Information() {
     };
 
     return (
-        <div className="space-y-6">
+        <div className="min-w-0 space-y-6">
             {/* Project Category / Type */}
             <div>
                 <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">
@@ -135,10 +135,10 @@ export default function Phase2Information() {
                 <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">
                     Tags
                 </label>
-                <div className="flex flex-wrap gap-2 mb-3">
+                <div className="flex min-w-0 flex-wrap gap-2 mb-3">
                     {tags.map((tag) => (
-                        <span key={tag} className="inline-flex items-center gap-1 px-3 py-1 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400 rounded-full text-sm">
-                            {tag}
+                        <span key={tag} className="inline-flex min-w-0 max-w-full items-center gap-1 px-3 py-1 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400 rounded-full text-sm">
+                            <span className="truncate">{tag}</span>
                             <button type="button" onClick={() => removeTag(tag)} className="hover:text-indigo-800">
                                 <X className="w-3 h-3" />
                             </button>
