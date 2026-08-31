@@ -1,9 +1,3 @@
-import AccountSettings from "@/components/settings/AccountSettings";
-import AppearanceSettings from "@/components/settings/AppearanceSettings";
-import IntegrationsSettings from "@/components/settings/IntegrationsSettings";
-import NotificationsSettings from "@/components/settings/NotificationsSettings";
-import PrivacySettings from "@/components/settings/PrivacySettings";
-import SecuritySettings from "@/components/settings/SecuritySettings";
 import { SETTINGS_TABS, type SettingsTab } from "@/constants/routes";
 
 function resolveSettingsTab(value: string | string[] | undefined): SettingsTab {
@@ -19,17 +13,29 @@ export default async function SettingsRoute({
   const tab = resolveSettingsTab((await searchParams)?.tab);
 
   switch (tab) {
-    case "security":
+    case "security": {
+      const { default: SecuritySettings } = await import("@/components/settings/SecuritySettings");
       return <SecuritySettings />;
-    case "privacy":
+    }
+    case "privacy": {
+      const { default: PrivacySettings } = await import("@/components/settings/PrivacySettings");
       return <PrivacySettings />;
-    case "notifications":
+    }
+    case "notifications": {
+      const { default: NotificationsSettings } = await import("@/components/settings/NotificationsSettings");
       return <NotificationsSettings />;
-    case "appearance":
+    }
+    case "appearance": {
+      const { default: AppearanceSettings } = await import("@/components/settings/AppearanceSettings");
       return <AppearanceSettings />;
-    case "integrations":
+    }
+    case "integrations": {
+      const { default: IntegrationsSettings } = await import("@/components/settings/IntegrationsSettings");
       return <IntegrationsSettings />;
-    default:
+    }
+    default: {
+      const { default: AccountSettings } = await import("@/components/settings/AccountSettings");
       return <AccountSettings />;
+    }
   }
 }
