@@ -1,0 +1,134 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - banner [ref=e3]:
+      - generic [ref=e4]:
+        - link "Navigate to home" [ref=e7] [cursor=pointer]:
+          - /url: /
+          - generic [ref=e14]: NB
+        - navigation "Main navigation" [ref=e16]:
+          - link "Hub" [ref=e17] [cursor=pointer]:
+            - /url: /hub
+          - link "Connections" [ref=e24] [cursor=pointer]:
+            - /url: /people
+          - link "Messages" [ref=e31] [cursor=pointer]:
+            - /url: /messages
+          - link "Settings" [ref=e35] [cursor=pointer]:
+            - /url: /settings
+        - generic [ref=e40]:
+          - button "Toggle theme" [ref=e41] [cursor=pointer]
+          - link "Sign in" [ref=e45] [cursor=pointer]:
+            - /url: /login
+    - main [ref=e46]:
+      - generic [ref=e59]:
+        - generic:
+          - generic:
+            - generic:
+              - generic:
+                - link "Hub":
+                  - /url: /hub
+                - generic:
+                  - heading "DeepScope AI" [level=1]
+                  - generic "Project links":
+                    - link "Open Behance · pavankumard732 · Design & prototype":
+                      - /url: /go/project/0adb0049-a58e-44d3-bcb3-db2ee4abdfc6/link-mteqhhtu
+                    - link "Open Google Scholar · Dr. Yesudasu Vasimalla · Research & publication":
+                      - /url: /go/project/0adb0049-a58e-44d3-bcb3-db2ee4abdfc6/link-ece8db52-bf75-483d-a6ef-21fc128fce61
+                    - 'link "Open Recent progress in surface plasmon resonance based sensors: A comprehensive revi · cell.com · Documentation"':
+                      - /url: /go/project/0adb0049-a58e-44d3-bcb3-db2ee4abdfc6/link-75581e55-1ef0-4597-b14c-7206291191e2
+                    - 'link "Open GitHub · rama730/Frontend: Design of patient details · Source code"':
+                      - /url: /go/project/0adb0049-a58e-44d3-bcb3-db2ee4abdfc6/link-8848f0e4-be54-4be6-acd9-593553f03553
+                    - button "Open 2 more project links": "+2"
+                  - generic:
+                    - generic: Created by
+                    - link "Ramanayudu CH":
+                      - /url: /u/ramanayudu_ch
+                - generic:
+                  - generic:
+                    - generic "Total Views": "810"
+                    - generic "Followers": "0"
+              - generic:
+                - button "Follow"
+                - button "Share Project"
+        - tablist "Project sections" [ref=e62]:
+          - tab "Dashboard" [ref=e63] [cursor=pointer]
+          - tab "Docs" [ref=e69] [cursor=pointer]
+          - tab "Updates" [ref=e72] [cursor=pointer]
+          - tab "Files" [selected] [ref=e76] [cursor=pointer]
+        - tabpanel "Files" [ref=e80]:
+          - generic [ref=e83]:
+            - complementary "File sidebar" [ref=e84]:
+              - generic [ref=e85]:
+                - button "Hide sidebar" [ref=e86] [cursor=pointer]
+                - textbox "Search files" [ref=e90]
+              - generic [ref=e94]:
+                - treeitem ".github" [level=1] [ref=e661] [cursor=pointer]
+                - treeitem ".rohkun" [level=1] [ref=e671] [cursor=pointer]
+                - treeitem ".vscode" [level=1] [ref=e681] [cursor=pointer]
+                - treeitem "codeql-db" [level=1] [ref=e126] [cursor=pointer]
+                - treeitem "docs" [level=1] [ref=e136] [cursor=pointer]
+                - treeitem "nb" [level=1] [ref=e146] [cursor=pointer]
+                - treeitem "scripts" [level=1] [ref=e156] [cursor=pointer]
+                - treeitem "sql" [level=1] [ref=e166] [cursor=pointer]
+                - treeitem "supabase" [level=1] [ref=e176] [cursor=pointer]
+                - treeitem ".gitignore v2" [level=1] [ref=e186] [cursor=pointer]:
+                  - generic [ref=e193]:
+                    - generic [ref=e194]: .gitignore
+                    - generic "Version 2" [ref=e195]: v2
+                - treeitem ".pre-commit-config.yaml" [level=1] [ref=e197] [cursor=pointer]
+                - treeitem "analyze_report.py v2" [level=1] [ref=e205] [cursor=pointer]:
+                  - generic [ref=e212]:
+                    - generic [ref=e213]: analyze_report.py
+                    - generic "Version 2" [ref=e214]: v2
+                - treeitem "CODE_QUALITY_IMPROVEMENTS.md" [level=1] [ref=e216] [cursor=pointer]
+                - treeitem "codeql-results.sarif" [level=1] [ref=e224] [cursor=pointer]
+                - treeitem "COMPREHENSIVE_IMPROVEMENTS_SUMMARY.md" [level=1] [ref=e232] [cursor=pointer]
+                - treeitem "CONTRIBUTING.md" [level=1] [ref=e240] [cursor=pointer]
+                - treeitem "CREATE_PROJECT_ENHANCEMENTS.md" [level=1] [ref=e248] [cursor=pointer]
+                - treeitem "hub" [level=1] [ref=e256] [cursor=pointer]
+                - treeitem "IMPLEMENTATION_SUMMARY.md" [level=1] [ref=e264] [cursor=pointer]
+                - treeitem "IMPROVEMENTS_AND_FIXES.md" [level=1] [ref=e272] [cursor=pointer]
+                - treeitem "LICENSE" [level=1] [ref=e280] [cursor=pointer]
+                - treeitem "QUALITY_ROADMAP.md" [level=1] [ref=e288] [cursor=pointer]
+                - treeitem "QUICK_START_QUALITY.md" [level=1] [ref=e296] [cursor=pointer]
+                - treeitem "README.md v11 1 linked task" [level=1] [selected] [ref=e691] [cursor=pointer]:
+                  - generic [ref=e695]:
+                    - generic [ref=e696]: README.md
+                    - generic "Version 11" [ref=e697]: v11
+                  - button "1 linked task" [ref=e700]: "1"
+                - treeitem "SECURITY_REMEDIATION.md" [level=1] [ref=e705] [cursor=pointer]
+                - treeitem "SECURITY.md" [level=1] [ref=e713] [cursor=pointer]
+              - button
+            - generic [ref=e303]:
+              - generic [ref=e304]:
+                - navigation "Breadcrumb" [ref=e305]:
+                  - button "root" [ref=e306] [cursor=pointer]
+                  - generic [ref=e1006]: /
+                  - generic "README.md" [ref=e1007]
+                - generic [ref=e311]:
+                  - button "Working Files and Reference for this Task" [ref=e312] [cursor=pointer]
+                  - button "Sync" [ref=e314] [cursor=pointer]
+              - generic [ref=e1008]:
+                - generic [ref=e1009]:
+                  - generic [ref=e1010]:
+                    - generic "README.md" [ref=e1011]
+                    - generic [ref=e1012]: •
+                    - generic [ref=e1013]: 1.1 KB
+                    - generic [ref=e1014]: •
+                    - generic "Version 11" [ref=e1016]: v11
+                    - generic [ref=e1017]: •
+                    - time [ref=e1018]: Last updated 1 month ago by Rama
+                    - generic [ref=e1019]: •
+                    - generic [ref=e1020]: text/plain
+                    - generic [ref=e1021]: •
+                    - button "1 linked task" [ref=e1023] [cursor=pointer]: "1"
+                  - button "Actions" [ref=e1028] [cursor=pointer]
+                - generic [ref=e1029]: Loading preview…
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=e1033] [cursor=pointer]:
+    - generic [ref=e1036]:
+      - text: Rendering
+      - generic [ref=e1037]:
+        - generic [ref=e1038]: .
+        - generic [ref=e1039]: .
+        - generic [ref=e1040]: .
+  - alert [ref=e58]: DeepScope AI
