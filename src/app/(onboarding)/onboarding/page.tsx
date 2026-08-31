@@ -26,8 +26,6 @@ import {
     commitOnboardingStep,
     completeOnboarding,
     repairOnboardingClaims,
-    saveOnboardingDraft,
-    trackOnboardingEvent,
 } from '@/app/actions/onboarding'
 import { createProfileImageUploadUrlAction, finalizeProfileImageUploadAction } from '@/app/actions/profile'
 import { useAuth } from '@/lib/hooks/use-auth'
@@ -55,7 +53,7 @@ import {
     ONBOARDING_STEP2_SECTIONS,
     type OnboardingStep2SectionId,
 } from '@/lib/onboarding/config'
-import { type OnboardingEventInput } from '@/lib/onboarding/events'
+import { ONBOARDING_TELEMETRY_BATCH_LIMIT, type OnboardingEventInput } from '@/lib/onboarding/events'
 import { compressAvatarOffMainThread } from '@/lib/services/avatar-worker-client'
 import {
     ONBOARDING_LOCAL_DRAFT_TTL_MS,
@@ -287,21 +285,6 @@ function normalizeDraftForSave(data: OnboardingData) {
     }
 }
 
-function buildDraftPatch(previous: OnboardingData, next: OnboardingData) {
-    const prev = normalizeDraftForSave(previous) as Record<string, unknown>
-    const current = normalizeDraftForSave(next) as Record<string, unknown>
-    const patch: Record<string, unknown> = {}
-
-    for (const key of Object.keys(current)) {
-        const prevValue = prev[key]
-        const nextValue = current[key]
-        if (JSON.stringify(prevValue) === JSON.stringify(nextValue)) continue
-        patch[key] = nextValue
-    }
-
-    return patch
-}
-
 function generateIdempotencyKey() {
     if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
         return `onboarding:${crypto.randomUUID()}`
@@ -337,14 +320,11 @@ export default function OnboardingPage() {
     const [isInitializing, setIsInitializing] = useState(false)
     const [isUploadingAvatar, setIsUploadingAvatar] = useState(false)
     const [isDetectingLocation, setIsDetectingLocation] = useState(false)
-    const draftHydratedRef = useRef(false)
     const bootstrapHydratedRef = useRef(false)
     const draftVersionRef = useRef<number>(bootstrap.draft.version)
-    const draftSaveInFlightRef = useRef<Promise<void> | null>(null)
+    const pendingTelemetryRef = useRef<OnboardingEventInput[]>([])
     const avatarPreviewUrlRef = useRef<string | null>(null)
     const lastSyncedDraftRef = useRef<OnboardingData>(initialData)
-    const lastSyncedStepRef = useRef<number>(bootstrap.draft.step)
-    const lastSyncedSectionRef = useRef<OnboardingStep2SectionId>(bootstrap.draft.activeSection)
     const renderStartedAtRef = useRef<number>(Date.now())
     const measuredInputStepsRef = useRef<Set<number>>(new Set())
     const lastRenderMetricAtRef = useRef<number>(0)
@@ -354,8 +334,6 @@ export default function OnboardingPage() {
     const stepEnteredAtRef = useRef<number>(Date.now())
     const lastStepViewRef = useRef<number | null>(null)
     const [error, setError] = useState<string | null>(null)
-    const [draftSaveDelayMs, setDraftSaveDelayMs] = useState(900)
-
     const [data, setData] = useState<OnboardingData>(initialData)
 
     const telemetrySnapshot = useMemo(() => ({
@@ -374,11 +352,10 @@ export default function OnboardingPage() {
     }, [telemetrySnapshot])
 
     const trackEvent = useCallback((payload: OnboardingEventInput) => {
-        void trackOnboardingEvent(payload)
-    }, [])
-
-    const markInteraction = useCallback((kind: InteractionKind) => {
-        setDraftSaveDelayMs(kind === 'toggle' ? 350 : 900)
+        pendingTelemetryRef.current.push(payload)
+        if (pendingTelemetryRef.current.length > ONBOARDING_TELEMETRY_BATCH_LIMIT) {
+            pendingTelemetryRef.current.shift()
+        }
     }, [])
 
     // Reconcile the server bootstrap with the same-user crash buffer.
@@ -408,7 +385,6 @@ export default function OnboardingPage() {
                     const { ensureUserProfile } = await import('@/app/actions/database')
                     await ensureUserProfile()
                 }
-                draftHydratedRef.current = true
                 const resumedStep = localDraft && localDraft.baseVersion >= bootstrap.draft.version
                     ? localDraft.step
                     : bootstrap.draft.step
@@ -456,80 +432,6 @@ export default function OnboardingPage() {
             console.warn('Unable to persist onboarding draft:', storageError)
         }
     }, [bootstrap.userId, completedThrough, data, isInitializing, step, step2Section, storageKeys.draft])
-
-    useEffect(() => {
-        if (isInitializing) return
-        if (!draftHydratedRef.current) return
-
-        const timer = window.setTimeout(() => {
-            const operation = (async () => {
-                try {
-                    const patch = buildDraftPatch(lastSyncedDraftRef.current, data)
-                    const stepChanged = lastSyncedStepRef.current !== step
-                    const sectionChanged = lastSyncedSectionRef.current !== step2Section
-                    if (Object.keys(patch).length === 0 && !stepChanged && !sectionChanged) return
-
-                    const startedAt = performance.now()
-                    const result = await saveOnboardingDraft({
-                        step,
-                        draft: patch,
-                        activeSection: step2Section,
-                        expectedVersion: draftVersionRef.current,
-                    })
-                    trackEvent({
-                        eventType: 'save_draft_latency',
-                        step,
-                        metadata: {
-                            durationMs: Math.round(performance.now() - startedAt),
-                            patchKeys: Object.keys(patch).length,
-                        },
-                    })
-                    if (result.success) {
-                        draftVersionRef.current = result.version ?? draftVersionRef.current
-                        lastSyncedDraftRef.current = data
-                        lastSyncedStepRef.current = step
-                        lastSyncedSectionRef.current = step2Section
-                        setCompletedThrough(result.completedThrough ?? completedThrough)
-                        return
-                    }
-
-                    if (result.errorDetails?.code === 'DRAFT_CONFLICT') {
-                        draftVersionRef.current = result.version ?? draftVersionRef.current
-                        const latestDraft = result.draft
-                        if (latestDraft) {
-                            setData(prev => mergeOnboardingData(prev, latestDraft))
-                            lastSyncedDraftRef.current = mergeOnboardingData(lastSyncedDraftRef.current, latestDraft)
-                        }
-                        if (typeof result.step === 'number') {
-                            setStep(result.step)
-                            lastSyncedStepRef.current = result.step
-                        }
-                        if (typeof result.completedThrough === 'number') {
-                            setCompletedThrough(result.completedThrough)
-                        }
-                        if (result.activeSection) {
-                            setStep2Section(result.activeSection)
-                            lastSyncedSectionRef.current = result.activeSection
-                        }
-                        setError('Your draft was updated in another tab. Latest version has been synced.')
-                    }
-                } catch (draftError) {
-                    console.error('Unable to save onboarding draft:', draftError)
-                    setError('Unable to save draft right now. Please try again.')
-                }
-            })()
-            draftSaveInFlightRef.current = operation
-            void operation.finally(() => {
-                if (draftSaveInFlightRef.current === operation) {
-                    draftSaveInFlightRef.current = null
-                }
-            })
-        }, draftSaveDelayMs)
-
-        return () => {
-            window.clearTimeout(timer)
-        }
-    }, [completedThrough, data, draftSaveDelayMs, isInitializing, step, step2Section, trackEvent])
 
     useEffect(() => {
         if (typeof window === 'undefined') return
@@ -588,7 +490,6 @@ export default function OnboardingPage() {
     }, [step, step2Section, isInitializing, trackEvent])
 
     const updateData = useCallback((updates: Partial<OnboardingData>, kind: InteractionKind = 'input') => {
-        markInteraction(kind)
         if (kind === 'input' && !measuredInputStepsRef.current.has(step)) {
             measuredInputStepsRef.current.add(step)
             const startedAt = performance.now()
@@ -603,7 +504,7 @@ export default function OnboardingPage() {
             })
         }
         setData(prev => mergeOnboardingData(prev, updates))
-    }, [markInteraction, step, trackEvent])
+    }, [step, trackEvent])
 
     // Handle avatar file selection - show preview immediately
     const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -643,7 +544,7 @@ export default function OnboardingPage() {
                     throw new Error(uploadSession.error || 'Failed to prepare avatar upload')
                 }
 
-                await uploadToSupabaseSignedUrl(uploadSession, compressedBlob)
+                await uploadToSupabaseSignedUrl(uploadSession, compressedBlob, { cacheProfile: 'immutable' })
 
                 const finalized = await finalizeProfileImageUploadAction({
                     uploadIntentId: uploadSession.uploadIntentId,
@@ -652,7 +553,7 @@ export default function OnboardingPage() {
                     throw new Error(finalized.error || 'Failed to finalize avatar upload')
                 }
 
-                updateData({ avatarUrl: `${finalized.publicUrl}?t=${Date.now()}` })
+                updateData({ avatarUrl: finalized.publicUrl })
                 URL.revokeObjectURL(previewUrl)
                 avatarPreviewUrlRef.current = null
             } catch (uploadError) {
@@ -692,14 +593,13 @@ export default function OnboardingPage() {
         const committingStep = step
         const durationMs = Date.now() - stepEnteredAtRef.current
         try {
-            if (draftSaveInFlightRef.current) {
-                await draftSaveInFlightRef.current
-            }
+            const telemetry = pendingTelemetryRef.current.slice()
             const result = await commitOnboardingStep({
                 step: committingStep,
                 draft: normalizeDraftForSave(data),
                 activeSection: step2Section,
                 expectedVersion: draftVersionRef.current,
+                telemetry,
             })
 
             if (!result.success) {
@@ -711,14 +611,12 @@ export default function OnboardingPage() {
                     }
                     if (typeof result.step === 'number') {
                         setStep(result.step)
-                        lastSyncedStepRef.current = result.step
                     }
                     if (typeof result.committedThrough === 'number') {
                         setCompletedThrough(result.committedThrough)
                     }
                     if (result.activeSection) {
                         setStep2Section(result.activeSection)
-                        lastSyncedSectionRef.current = result.activeSection
                     }
                     trackEvent({
                         eventType: 'draft_conflict',
@@ -736,9 +634,8 @@ export default function OnboardingPage() {
             }
 
             draftVersionRef.current = result.version ?? draftVersionRef.current
+            pendingTelemetryRef.current.splice(0, telemetry.length)
             lastSyncedDraftRef.current = data
-            lastSyncedStepRef.current = result.step ?? committingStep + 1
-            lastSyncedSectionRef.current = result.activeSection ?? step2Section
             setCompletedThrough(result.committedThrough ?? committingStep)
             setJustCompletedStep(committingStep)
             trackEvent({
@@ -810,37 +707,33 @@ export default function OnboardingPage() {
     }
 
     const toggleSkill = useCallback((skill: string) => {
-        markInteraction('toggle')
         setData(prev => ({
             ...prev,
             skills: prev.skills.includes(skill)
                 ? prev.skills.filter(s => s !== skill)
                 : [...prev.skills, skill]
         }))
-    }, [markInteraction])
+    }, [])
 
     const toggleInterest = useCallback((interest: string) => {
-        markInteraction('toggle')
         setData(prev => ({
             ...prev,
             interests: prev.interests.includes(interest)
                 ? prev.interests.filter(i => i !== interest)
                 : [...prev.interests, interest]
         }))
-    }, [markInteraction])
+    }, [])
 
     const toggleOpenTo = useCallback((option: string) => {
-        markInteraction('toggle')
         setData(prev => ({
             ...prev,
             openTo: prev.openTo.includes(option)
                 ? prev.openTo.filter((item) => item !== option)
                 : [...prev.openTo, option],
         }))
-    }, [markInteraction])
+    }, [])
 
     const updateSocialLink = useCallback((key: OnboardingSocialLinkKey, value: string) => {
-        markInteraction('input')
         setData(prev => ({
             ...prev,
             socialLinks: {
@@ -848,7 +741,7 @@ export default function OnboardingPage() {
                 [key]: value,
             },
         }))
-    }, [markInteraction])
+    }, [])
 
     const handleSubmit = async () => {
         if (submitInFlightRef.current) return
@@ -882,6 +775,7 @@ export default function OnboardingPage() {
         })
 
         try {
+            const telemetry = pendingTelemetryRef.current.slice()
             const result = await completeOnboarding({
                 username: data.username,
                 fullName: data.fullName,
@@ -901,6 +795,7 @@ export default function OnboardingPage() {
                 pronouns: data.pronouns,
                 visibility: data.visibility,
                 idempotencyKey,
+                telemetry,
             })
 
             if (!result.success) {
@@ -915,6 +810,8 @@ export default function OnboardingPage() {
                 })
                 return
             }
+
+            pendingTelemetryRef.current.splice(0, telemetry.length)
 
             if (result.needsMetadataSync) {
                 try {
@@ -1095,7 +992,6 @@ export default function OnboardingPage() {
                                 const nextSection = ONBOARDING_STEP2_SECTIONS.find((item) => item.id === sectionId)
                                 if (!nextSection) return
                                 renderStartedAtRef.current = performance.now()
-                                markInteraction('toggle')
                                 setTransitionDirection('section')
                                 setStep2Section(nextSection.id)
                             }}
