@@ -42,6 +42,8 @@ export default function OpenRolesCard({
     const isPending = applicationStatus.status === "pending";
     const isRejected = applicationStatus.status === "rejected";
     const isProposed = applicationStatus.status === "proposed";
+    const isGuidanceInvitation = isProposed && applicationStatus.invitationKind === "guidance_appointment";
+    const invitationTitle = applicationStatus.proposedRoleTitle || applicationStatus.roleTitle || "Guide";
     const isRoleFilled = applicationStatus.lifecycleStatus === "role_filled" || applicationStatus.decisionReason === "role_filled";
     const canReapply = applicationStatus.canReapply ?? true;
     const isBlocked = isPending || isProposed || (isRejected && !canReapply);
@@ -50,7 +52,7 @@ export default function OpenRolesCard({
     const blockedReason = isPending
         ? "You already have an application pending review."
         : isProposed
-            ? "You have a pending invitation. Review or decline it to apply for other roles."
+            ? `You have a pending ${invitationTitle} invitation. Review or decline it to apply for other roles.`
             : isRejected && !canReapply
                 ? isRoleFilled
                     ? "This role has been filled."
@@ -92,6 +94,45 @@ export default function OpenRolesCard({
                     <div className="flex items-center gap-2 px-1 py-1 text-xs font-medium text-rose-600 dark:text-rose-400">
                         <XCircle className="h-3.5 w-3.5" />
                         <span>{cannotReapplyLabel || "Cannot reapply"}</span>
+                    </div>
+                ) : null}
+
+                {isGuidanceInvitation ? (
+                    <div className="flex w-full items-start justify-between rounded-xl border border-amber-500/25 bg-amber-500/5 p-3.5 text-left dark:border-amber-500/35 dark:bg-amber-500/10">
+                        <div className="min-w-0 flex-grow">
+                            <div className="mb-1 flex items-center gap-2">
+                                <span className="truncate text-sm font-semibold text-zinc-850 dark:text-zinc-200">
+                                    {invitationTitle}
+                                </span>
+                                <span className="inline-flex items-center rounded border border-amber-500/30 bg-amber-500/20 px-1.5 py-0.5 text-[9px] font-bold text-amber-600 dark:text-amber-400">
+                                    Invited
+                                </span>
+                            </div>
+                            <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                                Leadership appointment for this project.
+                            </p>
+                        </div>
+                        {!isCreator && !isCollaborator ? (
+                            <div className="ml-3 flex shrink-0 items-center gap-1.5 self-center">
+                                <button
+                                    type="button"
+                                    disabled={invitationLoading}
+                                    onClick={() => onAcceptInvitation?.()}
+                                    className="inline-flex cursor-pointer items-center gap-1 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm shadow-emerald-900/10 transition-all duration-200 active:scale-95 disabled:pointer-events-none disabled:opacity-50 dark:bg-emerald-500"
+                                >
+                                    {invitationLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+                                    Accept
+                                </button>
+                                <button
+                                    type="button"
+                                    disabled={invitationLoading}
+                                    onClick={() => onDeclineInvitation?.()}
+                                    className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-zinc-200/60 bg-zinc-100 px-3 py-1.5 text-xs font-semibold text-zinc-850 transition-all duration-200 active:scale-95 disabled:pointer-events-none disabled:opacity-50 dark:border-zinc-700/60 dark:bg-zinc-800 dark:text-zinc-200"
+                                >
+                                    Decline
+                                </button>
+                            </div>
+                        ) : null}
                     </div>
                 ) : null}
 
@@ -232,11 +273,11 @@ export default function OpenRolesCard({
                             })}
                         </div>
                     </div>
-                ) : (
+                ) : !isGuidanceInvitation ? (
                     <div className="py-4 text-center text-xs italic text-zinc-400 dark:text-zinc-500">
                         No open positions listed
                     </div>
-                )}
+                ) : null}
 
                 {showMoreCount > 0 ? (
                     <div className="mt-1.5 flex justify-center border-t border-zinc-100 pt-1.5 dark:border-zinc-800/60">
