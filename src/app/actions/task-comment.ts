@@ -2,7 +2,6 @@
 
 import {
   and,
-  asc,
   desc,
   eq,
   inArray,
@@ -40,8 +39,14 @@ import { consumeRateLimit } from "@/lib/security/rate-limit";
 import { getViewerProfileContext } from "@/lib/server/viewer-context";
 import { logger } from "@/lib/logger";
 import { requireProjectCapability } from "@/lib/projects/collaborator-lifecycle";
+import {
+  TASK_COMMENT_MAX_MENTIONS,
+  taskCommentContentSchema,
+} from "@/lib/validations/task";
 
 const DISCUSSION_PAGE_SIZE = 20;
+const DISCUSSION_REPLY_PREVIEW_SIZE = 20;
+const DISCUSSION_REPLY_QUERY_CONCURRENCY = 6;
 
 type DiscussionRow = {
   id: string;
@@ -205,11 +210,32 @@ async function readDiscussionRows(params: {
   const hasMore = topLevelRows.length > pageSize;
   const limitedTopLevelRows = hasMore ? topLevelRows.slice(0, pageSize) : topLevelRows;
   const oldestLoaded = limitedTopLevelRows[limitedTopLevelRows.length - 1] ?? null;
-  const orderedTopLevelRows = [...limitedTopLevelRows].reverse() as DiscussionRow[];
+  // ponytail: parents are newest-first everywhere; replies remain chronological in their thread.
+  const orderedTopLevelRows = limitedTopLevelRows as DiscussionRow[];
   const parentIds = orderedTopLevelRows.map((row) => row.id);
 
-  const replyRows = parentIds.length > 0
+  const replyCountRows = parentIds.length > 0
     ? await db
+        .select({
+          parentCommentId: taskComments.parentCommentId,
+          count: sql<number>`count(*)::int`,
+        })
+        .from(taskComments)
+        .where(and(
+          eq(taskComments.taskId, params.taskId),
+          inArray(taskComments.parentCommentId, parentIds),
+        ))
+        .groupBy(taskComments.parentCommentId)
+    : [];
+  const replyCounts = new Map(
+    replyCountRows.flatMap((row) => row.parentCommentId ? [[row.parentCommentId, Number(row.count)]] as const : []),
+  );
+
+  const replyRows: DiscussionRow[] = [];
+  for (let index = 0; index < parentIds.length; index += DISCUSSION_REPLY_QUERY_CONCURRENCY) {
+    const batch = parentIds.slice(index, index + DISCUSSION_REPLY_QUERY_CONCURRENCY);
+    const rowsByParent = await Promise.all(batch.map(async (parentId) => {
+      const rows = await db
         .select({
           id: taskComments.id,
           taskId: taskComments.taskId,
@@ -227,14 +253,13 @@ async function readDiscussionRows(params: {
         })
         .from(taskComments)
         .leftJoin(profiles, eq(taskComments.userId, profiles.id))
-        .where(
-          and(
-            eq(taskComments.taskId, params.taskId),
-            inArray(taskComments.parentCommentId, parentIds),
-          ),
-        )
-        .orderBy(asc(taskComments.createdAt), asc(taskComments.id))
-    : [];
+        .where(and(eq(taskComments.taskId, params.taskId), eq(taskComments.parentCommentId, parentId)))
+        .orderBy(desc(taskComments.createdAt), desc(taskComments.id))
+        .limit(DISCUSSION_REPLY_PREVIEW_SIZE);
+      return rows.reverse() as DiscussionRow[];
+    }));
+    replyRows.push(...rowsByParent.flat());
+  }
 
   const allCommentIds = [...parentIds, ...replyRows.map((row) => row.id)];
   const likeCounts = new Map<string, number>();
@@ -248,6 +273,7 @@ async function readDiscussionRows(params: {
   return {
     orderedTopLevelRows,
     replyRows: replyRows as DiscussionRow[],
+    replyCounts,
     allCommentIds,
     likeCounts,
     nextCursor,
@@ -315,7 +341,7 @@ async function readTaskDiscussionInternal(params: {
     mode: "read",
   });
 
-  const { orderedTopLevelRows, replyRows, allCommentIds, nextCursor } = await readDiscussionRows({
+  const { orderedTopLevelRows, replyRows, replyCounts, allCommentIds, nextCursor } = await readDiscussionRows({
     taskId: params.taskId,
     cursor: params.cursor,
     limit: params.limit,
@@ -337,6 +363,8 @@ async function readTaskDiscussionInternal(params: {
     comments: orderedTopLevelRows.map((row) => ({
       ...normalizeTaskDiscussionEntry({ row, likeCounts, likedIds }),
       replies: repliesByParentId.get(row.id) ?? [],
+      replyCount: replyCounts.get(row.id) ?? 0,
+      repliesHaveMore: (replyCounts.get(row.id) ?? 0) > (repliesByParentId.get(row.id)?.length ?? 0),
     })),
     nextCursor,
     totalCount,
@@ -463,16 +491,21 @@ export async function createTaskCommentAction(
     if (!viewer.userId) {
       return { success: false as const, error: "Unauthorized" };
     }
+    const actorUserId = viewer.userId;
 
     const { allowed } = await consumeRateLimit(`task-comment:${viewer.userId}`, 60, 60);
     if (!allowed) {
       return { success: false as const, error: "Rate limit exceeded" };
     }
 
-    const trimmedContent = content.trim();
-    if (!trimmedContent) {
-      return { success: false as const, error: "Comment cannot be empty" };
+    const parsedContent = taskCommentContentSchema.safeParse(content);
+    if (!parsedContent.success) {
+      return {
+        success: false as const,
+        error: parsedContent.error.issues[0]?.message || "Invalid comment",
+      };
     }
+    const trimmedContent = parsedContent.data;
 
     await assertTaskAccess({
       taskId,
@@ -486,7 +519,7 @@ export async function createTaskCommentAction(
       const parent = await assertCommentAccess({
         commentId: parentCommentId,
         projectId,
-        userId: viewer.userId,
+        userId: actorUserId,
         mode: "read",
       });
       if (parent.taskId !== taskId) {
@@ -508,6 +541,12 @@ export async function createTaskCommentAction(
     // used by the inbox + notification fan-out.
     const parsedMentions = parseMentions(trimmedContent);
     const candidateMentionIds = parsedMentions.mentionIds;
+    if (candidateMentionIds.length > TASK_COMMENT_MAX_MENTIONS) {
+      return {
+        success: false as const,
+        error: `A comment can mention at most ${TASK_COMMENT_MAX_MENTIONS} people`,
+      };
+    }
     let validatedMentionIds: string[] = [];
     const [projectRow] = await db
       .select({
@@ -538,39 +577,62 @@ export async function createTaskCommentAction(
 
     const createdAt = new Date();
 
-    const [inserted] = await db
-      .insert(taskComments)
-      .values({
+    const inserted = await db.transaction(async (tx) => {
+      if (parentCommentId) {
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${parentCommentId}, 0))`);
+        const [lockedParent] = await tx
+          .select({
+            taskId: taskComments.taskId,
+            parentCommentId: taskComments.parentCommentId,
+            deletedAt: taskComments.deletedAt,
+          })
+          .from(taskComments)
+          .where(eq(taskComments.id, parentCommentId))
+          .limit(1);
+        if (!lockedParent || lockedParent.taskId !== taskId || lockedParent.parentCommentId || lockedParent.deletedAt) {
+          throw new Error("Reply target is no longer available");
+        }
+      }
+
+      const commentValues: typeof taskComments.$inferInsert = {
         taskId,
-        userId: viewer.userId,
-        parentCommentId: parentCommentId ?? null,
+        userId: actorUserId,
         content: trimmedContent,
         createdAt,
         updatedAt: createdAt,
-      })
-      .returning({ id: taskComments.id });
+      };
+      if (parentCommentId) commentValues.parentCommentId = parentCommentId;
+
+      const [createdComment] = await tx
+        .insert(taskComments)
+        .values(commentValues)
+        .returning({ id: taskComments.id });
+
+      if (!createdComment?.id) return null;
+
+      if (validatedMentionIds.length > 0) {
+        await tx
+          .insert(commentMentions)
+          .values(
+            validatedMentionIds.map((mentionedUserId) => ({
+              commentId: createdComment.id,
+              mentionedUserId,
+              createdAt,
+            })),
+          )
+          .onConflictDoNothing({
+            target: [commentMentions.commentId, commentMentions.mentionedUserId],
+          });
+      }
+
+      return createdComment;
+    });
 
     if (!inserted?.id) {
       return { success: false as const, error: "Failed to create comment" };
     }
 
     if (validatedMentionIds.length > 0) {
-      // ON CONFLICT DO NOTHING absorbs the UNIQUE(comment_id, mentioned_user_id)
-      // collision that would occur if the same user appears in two tokens
-      // inside one comment (e.g. "cc @Ada ... also tagging @Ada").
-      await db
-        .insert(commentMentions)
-        .values(
-          validatedMentionIds.map((mentionedUserId) => ({
-            commentId: inserted.id,
-            mentionedUserId,
-            createdAt,
-          })),
-        )
-        .onConflictDoNothing({
-          target: [commentMentions.commentId, commentMentions.mentionedUserId],
-        });
-
       // Fire-and-forget: a failed notification enqueue must not roll back the
       // comment. The helper itself is structured to never throw, but the
       // await is still wrapped so future implementations (HTTP-backed queue,
@@ -676,8 +738,9 @@ export async function toggleTaskCommentLikeAction(
     if (!viewer.userId) {
       return { success: false as const, error: "Unauthorized" };
     }
+    const viewerUserId = viewer.userId;
 
-    const { allowed } = await consumeRateLimit(`task-comment:${viewer.userId}`, 60, 60);
+    const { allowed } = await consumeRateLimit(`task-comment:${viewerUserId}`, 60, 60);
     if (!allowed) {
       return { success: false as const, error: "Rate limit exceeded" };
     }
@@ -685,38 +748,48 @@ export async function toggleTaskCommentLikeAction(
     const comment = await assertCommentAccess({
       commentId,
       projectId,
-      userId: viewer.userId,
+      userId: viewerUserId,
       mode: "write",
     });
     if (comment.deletedAt) {
       return { success: false as const, error: "Cannot like a deleted comment" };
     }
 
-    const [existingLike] = await db
-      .select({ id: taskCommentLikes.id })
-      .from(taskCommentLikes)
-      .where(
-        and(
-          eq(taskCommentLikes.commentId, commentId),
-          eq(taskCommentLikes.userId, viewer.userId),
-        ),
-      )
-      .limit(1);
+    const liked = await db.transaction(async (tx) => {
+      const [existingLike] = await tx
+        .select({ id: taskCommentLikes.id })
+        .from(taskCommentLikes)
+        .where(
+          and(
+            eq(taskCommentLikes.commentId, commentId),
+            eq(taskCommentLikes.userId, viewerUserId),
+          ),
+        )
+        .limit(1);
 
-    if (existingLike) {
-      await db
-        .delete(taskCommentLikes)
-        .where(eq(taskCommentLikes.id, existingLike.id));
-    } else {
-      await db.insert(taskCommentLikes).values({
-        commentId,
-        userId: viewer.userId,
-        createdAt: new Date(),
-      });
-    }
+      if (existingLike) {
+        await tx
+          .delete(taskCommentLikes)
+          .where(eq(taskCommentLikes.id, existingLike.id));
+      } else {
+        await tx.insert(taskCommentLikes).values({
+          commentId,
+          userId: viewerUserId,
+          createdAt: new Date(),
+        });
+      }
+
+      // Reuse the existing task-filtered comment channel as the invalidation
+      // owner instead of broadcasting every workspace like event.
+      await tx
+        .update(taskComments)
+        .set({ updatedAt: new Date() })
+        .where(eq(taskComments.id, commentId));
+      return !existingLike;
+    });
 
     revalidatePath(`/projects/${projectId}`);
-    return { success: true as const, liked: !existingLike };
+    return { success: true as const, liked };
   } catch (error: any) {
     console.error("Failed to toggle task discussion like:", error);
     return { success: false as const, error: error?.message || "Failed to update like" };
@@ -748,39 +821,50 @@ export async function deleteTaskCommentAction(
       return { success: false as const, error: "You can only delete your own comments" };
     }
 
-    let mode: TaskDiscussionDeleteMode = "hard_delete";
-    let entry: TaskDiscussionBaseEntry | null = null;
+    const lockId = comment.parentCommentId ?? commentId;
+    const mode = await db.transaction(async (tx): Promise<TaskDiscussionDeleteMode> => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${lockId}, 0))`);
+      const [current] = await tx
+        .select({ parentCommentId: taskComments.parentCommentId })
+        .from(taskComments)
+        .where(eq(taskComments.id, commentId))
+        .limit(1);
+      if (!current) throw new Error("Comment not found");
 
-    if (comment.parentCommentId) {
-      await db.delete(taskComments).where(eq(taskComments.id, commentId));
-    } else {
-      const [replyRow] = await db
+      if (current.parentCommentId) {
+        await tx.delete(taskComments).where(eq(taskComments.id, commentId));
+        return "hard_delete";
+      }
+
+      const [replyRow] = await tx
         .select({ id: taskComments.id })
         .from(taskComments)
         .where(eq(taskComments.parentCommentId, commentId))
         .limit(1);
+      if (!replyRow) {
+        await tx.delete(taskComments).where(eq(taskComments.id, commentId));
+        return "hard_delete";
+      }
 
-      if (replyRow) {
-        mode = "tombstone";
-        await db
-          .update(taskComments)
-          .set({
-            deletedAt: new Date(),
-            deletedBy: viewer.userId,
-            updatedAt: new Date(),
-          })
-          .where(eq(taskComments.id, commentId));
+      await tx
+        .update(taskComments)
+        .set({
+          deletedAt: new Date(),
+          deletedBy: viewer.userId,
+          updatedAt: new Date(),
+        })
+        .where(eq(taskComments.id, commentId));
+      return "tombstone";
+    });
 
-        entry = await readTaskDiscussionCommentInternal({
+    const entry = mode === "tombstone"
+      ? await readTaskDiscussionCommentInternal({
           projectId,
           taskId: comment.taskId,
           commentId,
           viewerId: viewer.userId,
-        });
-      } else {
-        await db.delete(taskComments).where(eq(taskComments.id, commentId));
-      }
-    }
+        })
+      : null;
 
     revalidatePath(`/projects/${projectId}`);
     return {
