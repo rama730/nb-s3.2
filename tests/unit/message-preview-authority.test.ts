@@ -6,6 +6,7 @@ import {
     buildConversationParticipantPreview,
     shouldReplaceConversationLastMessage,
 } from '@/lib/messages/preview-authority';
+import { formatConversationPreview, shouldShowConversationReactionPreview } from '@/lib/messages/preview';
 
 test('buildConversationParticipantPreview derives structured previews canonically', () => {
     const preview = buildConversationParticipantPreview({
@@ -88,4 +89,54 @@ test('shouldReplaceConversationLastMessage preserves chronological authority', (
         createdAt: '2026-04-07T10:03:00.000Z',
         metadata: null,
     }), true);
+});
+
+test('conversation previews describe media, replies, and deleted messages without retaining content', () => {
+    assert.equal(formatConversationPreview({ content: 'Photo', type: 'image', senderId: 'me' }, 'me'), 'You sent a photo');
+    assert.equal(formatConversationPreview({ content: '↩ Voice message', type: 'voice', senderId: 'them' }, 'me'), '↩ Replied with a voice message');
+    assert.equal(formatConversationPreview({
+        content: 'do not retain this',
+        type: 'text',
+        senderId: 'them',
+        deletedAt: '2026-04-07T10:04:00.000Z',
+    }, 'me'), 'This message was deleted');
+});
+
+test('conversation previews identify project invitations for both participants', () => {
+    const invitation = {
+        content: 'Invitation to join Gstack as Guide',
+        type: 'project_invite',
+        senderId: 'me',
+    };
+
+    assert.equal(
+        formatConversationPreview(invitation, 'me'),
+        'You sent a project invitation to Gstack',
+    );
+    assert.equal(
+        formatConversationPreview(invitation, 'them'),
+        'You received a project invitation to Gstack',
+    );
+});
+
+test('a newer reaction is a separate inbox activity preview without replacing message chronology', () => {
+    const lastMessage = {
+        content: 'The original message',
+        type: 'text',
+        senderId: 'me',
+        createdAt: '2026-04-07T10:00:00.000Z',
+    };
+    const reaction = {
+        messageId: 'message-1',
+        actorUserId: 'them',
+        emoji: '👍',
+        createdAt: '2026-04-07T10:01:00.000Z',
+    };
+
+    assert.equal(shouldShowConversationReactionPreview(lastMessage, reaction), true);
+    assert.equal(formatConversationPreview(lastMessage, 'me', reaction, 'Rama'), 'Rama reacted 👍 to your message');
+    assert.equal(shouldShowConversationReactionPreview(lastMessage, {
+        ...reaction,
+        createdAt: '2026-04-07T09:59:00.000Z',
+    }), false);
 });
