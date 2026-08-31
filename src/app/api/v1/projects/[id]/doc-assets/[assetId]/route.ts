@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { createHash } from "node:crypto";
 import { and, eq, isNull } from "drizzle-orm";
 
 import { db } from "@/lib/db";
@@ -78,9 +79,28 @@ export async function GET(
     }
 
     const isPublishedPublic = permission.accessLevel === "public";
+    const cacheControl = isPublishedPublic
+        ? "public, max-age=900, s-maxage=900, stale-while-revalidate=86400"
+        : "private, max-age=720, stale-while-revalidate=60";
+    const version = createHash("sha256").update(row.storageKey).digest("base64url").slice(0, 16);
+    if (request.nextUrl.searchParams.get("v") !== version) {
+        const canonicalUrl = request.nextUrl.clone();
+        canonicalUrl.searchParams.set("v", version);
+        const response = NextResponse.redirect(canonicalUrl, 307);
+        response.headers.set("Cache-Control", cacheControl);
+        response.headers.set("Vary", "Cookie, Authorization");
+        return response;
+    }
+    const etag = `"doc-asset-${assetId}-${version}"`;
+    if (request.headers.get("if-none-match") === etag) {
+        return new NextResponse(null, {
+            status: 304,
+            headers: { ETag: etag, "Cache-Control": cacheControl, Vary: "Cookie, Authorization" },
+        });
+    }
 
     const admin = await createAdminClient();
-    const signedUrlTtlSeconds = isPublishedPublic ? 60 * 60 : 60;
+    const signedUrlTtlSeconds = isPublishedPublic ? 60 * 60 : 15 * 60;
     const { data: signedData, error: signError } = await admin.storage
         .from(row.bucket)
         .createSignedUrl(row.storageKey, signedUrlTtlSeconds);
@@ -97,13 +117,10 @@ export async function GET(
     }
 
     const response = NextResponse.redirect(signedData.signedUrl, 302);
-    response.headers.set(
-        "Cache-Control",
-        isPublishedPublic
-            ? "public, max-age=900, s-maxage=900, stale-while-revalidate=86400"
-            : "private, no-store",
-    );
+    response.headers.set("Cache-Control", cacheControl);
     response.headers.set("CDN-Cache-Control", isPublishedPublic ? "public, max-age=900, stale-while-revalidate=86400" : "private, no-store");
+    response.headers.set("ETag", etag);
+    response.headers.set("Vary", "Cookie, Authorization");
     response.headers.set("X-Content-Type-Options", "nosniff");
     return response;
 }
