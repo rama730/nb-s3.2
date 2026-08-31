@@ -20,7 +20,7 @@ const manifest = parseSqlGovernanceManifest(
 );
 const journal = JSON.parse(
   fs.readFileSync(path.join(manifest.migrationDirectory, "meta", "_journal.json"), "utf8"),
-) as { entries: Array<{ tag: string }> };
+) as { entries: Array<{ idx: number; tag: string }> };
 
 const expectedTags = journal.entries.map((entry) => entry.tag);
 const expectedTagSet = new Set(expectedTags);
@@ -45,13 +45,13 @@ async function main() {
     const hasStatus = columnSet.has("status");
 
     const rows = hasChecksum && hasStatus
-      ? await sql<{ tag: string; checksum: string | null; status: string }[]>`
-          SELECT tag, checksum, status
+      ? await sql<{ tag: string; checksum: string | null; status: string; appliedAt: Date }[]>`
+          SELECT tag, checksum, status, applied_at AS "appliedAt"
           FROM public.app_migration_journal
           ORDER BY applied_at, tag
         `
-      : await sql<{ tag: string; checksum: string | null; status: string }[]>`
-          SELECT tag, NULL::text AS checksum, 'completed'::text AS status
+      : await sql<{ tag: string; checksum: string | null; status: string; appliedAt: Date }[]>`
+          SELECT tag, NULL::text AS checksum, 'completed'::text AS status, applied_at AS "appliedAt"
           FROM public.app_migration_journal
           ORDER BY applied_at, tag
         `;
@@ -69,6 +69,14 @@ async function main() {
       && row.checksum !== null
       && row.checksum !== migrationChecksum(row.tag)
     ));
+    const missingChecksums = rows.filter((row) => expectedTagSet.has(row.tag) && row.checksum === null);
+    const strictExpectedTags = journal.entries
+      .filter((entry) => entry.idx >= manifest.strictLineageFromIndex)
+      .sort((left, right) => left.idx - right.idx)
+      .map((entry) => entry.tag);
+    const strictLiveTags = rows
+      .filter((row) => strictExpectedTags.includes(row.tag))
+      .map((row) => row.tag);
 
     const duplicateForeignKeys = await sql<{ tableName: string; columns: string; count: number }[]>`
       SELECT
@@ -111,6 +119,12 @@ async function main() {
     }
     if (checksumMismatches.length > 0) {
       errors.push(`migration checksum mismatch: ${checksumMismatches.map((row) => row.tag).join(", ")}`);
+    }
+    if (missingChecksums.length > 0) {
+      errors.push(`migration checksum missing: ${missingChecksums.map((row) => row.tag).join(", ")}`);
+    }
+    if (strictLiveTags.some((tag, index) => tag !== strictExpectedTags[index])) {
+      errors.push(`strict migration order mismatch: expected=${strictExpectedTags.join(",")}; live=${strictLiveTags.join(",")}`);
     }
     if (duplicateForeignKeys.length > 0) {
       errors.push(
