@@ -30,7 +30,6 @@ export const SETTINGS_STALE_MS = 2 * 60_000;
 export const SETTINGS_SECURITY_STALE_MS = 60_000;
 export const SETTINGS_SECONDARY_STALE_MS = 60_000;
 export const SETTINGS_GC_MS = 10 * 60_000;
-export const EXTENSION_SESSION_POLL_MS = 3_000;
 
 export const DEFAULT_PRIVACY_SETTINGS: PrivacyData = {
   settings: {
@@ -203,6 +202,7 @@ export function useAccountDeletionStatus() {
     queryFn: fetchAccountDeletionStatus,
     staleTime: SETTINGS_SECONDARY_STALE_MS,
     gcTime: SETTINGS_GC_MS,
+    refetchOnWindowFocus: false,
   });
 }
 
@@ -225,6 +225,7 @@ export function useNotificationPreferences({ enabled = true }: { enabled?: boole
     },
     staleTime: SETTINGS_STALE_MS,
     gcTime: SETTINGS_GC_MS,
+    refetchOnWindowFocus: false,
   });
 }
 
@@ -285,6 +286,7 @@ export function useSecurityData(options?: { hardeningEnabled?: boolean }) {
       ? SETTINGS_SECURITY_STALE_MS
       : SETTINGS_STALE_MS,
     gcTime: SETTINGS_GC_MS,
+    refetchOnWindowFocus: false,
   });
 }
 
@@ -295,6 +297,7 @@ export function useIntegrationsData() {
     retry: 1,
     staleTime: SETTINGS_STALE_MS,
     gcTime: SETTINGS_GC_MS,
+    refetchOnWindowFocus: false,
   });
 }
 
@@ -304,10 +307,9 @@ export function useExtensionSessionsData() {
     queryFn: fetchExtensionSessionsData,
     staleTime: SETTINGS_SECONDARY_STALE_MS,
     gcTime: SETTINGS_GC_MS,
-    // This hook is mounted only by the Integrations tab. Reconcile IDE-side logout
-    // without publishing device-session metadata through public Realtime.
-    refetchInterval: EXTENSION_SESSION_POLL_MS,
-    refetchIntervalInBackground: false,
+    // Mutations invalidate this key. Focus reconciliation also catches IDE-side
+    // logout without generating an idle request every three seconds.
+    refetchOnWindowFocus: true,
   });
 }
 
@@ -349,5 +351,6 @@ export function usePrivacySettings() {
     queryFn: fetchPrivacyData,
     staleTime: SETTINGS_STALE_MS,
     gcTime: SETTINGS_GC_MS,
+    refetchOnWindowFocus: false,
   });
 }
