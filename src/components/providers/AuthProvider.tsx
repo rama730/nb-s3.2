@@ -12,6 +12,7 @@ import { continueBrowserOAuthRedirect } from '@/lib/auth/oauth';
 import { resetMonotonicEntity, runMonotonicUpdate } from '@/lib/state/monotonic';
 import { loadBrowserProfile, normalizeProfileRecord, profileNeedsHydration } from '@/lib/profile/browser-profile';
 import { cacheManager } from '@/lib/utils/cache-manager';
+import { unsubscribeWebPush } from '@/lib/notifications/web-push-client';
 
 const AUTH_SIGN_IN_TIMEOUT_MS = 8_000;
 const AUTH_UNREACHABLE_MESSAGE = 'Authentication service is unavailable. Check your Supabase connection and try again.';
@@ -526,7 +527,16 @@ export function AuthProvider({
 
     const signOut = useCallback(async () => {
         const supabase = createClient();
-        
+
+        // The authenticated delete must run before Auth cookies/session disappear.
+        const pushCleanup = await unsubscribeWebPush().catch(() => ({ ok: false as const, reason: 'cleanup_failed' }));
+        if (!pushCleanup.ok && pushCleanup.reason !== 'unsupported') {
+            logger.warn('auth.signout_push_cleanup_failed', {
+                module: 'auth',
+                reason: pushCleanup.reason,
+            });
+        }
+
         // 1. Await the server cookie deletion first
         await syncBrowserSessionToServer(null).catch(() => null);
         
