@@ -5,7 +5,7 @@
  * for legacy files would miss the "same bytes" case until this script runs.
  *
  * Strategy
- *   1. Select file_versions rows where content_hash IS NULL and s3_key != ''.
+ *   1. Keyset-page file_versions rows where content_hash IS NULL and s3_key != ''.
  *   2. For each, stream the blob from Supabase Storage (bucket `project-files`)
  *      via the admin client, compute SHA-256 with the runtime's crypto module.
  *   3. Write the lowercase hex digest back via a parameterized UPDATE.
@@ -14,7 +14,8 @@
  *   • Runs in batches of 25, with a short inter-batch pause, to avoid storage
  *     throttling on large projects.
  *   • Idempotent: re-running skips already-hashed rows.
- *   • On per-file error, logs and continues; a final summary reports counts.
+ *   • On per-file error, advances the run cursor so one bad object cannot
+ *     starve later rows; the next run retries it.
  *
  * Usage
  *   pnpm tsx scripts/backfill-file-hashes.ts
@@ -29,7 +30,7 @@ if (process.env.DATABASE_URL) {
 }
 
 import { createHash } from "node:crypto";
-import { and, eq, isNull, ne, sql } from "drizzle-orm";
+import { and, asc, eq, gt, isNull, ne, sql } from "drizzle-orm";
 import { db } from "../src/lib/db";
 import { fileVersions } from "../src/lib/db/schema";
 import { createAdminClient } from "../src/lib/supabase/server";
@@ -44,7 +45,7 @@ type Row = {
   s3Key: string;
 };
 
-async function fetchBatch(): Promise<Row[]> {
+async function fetchBatch(afterId: string | null): Promise<Row[]> {
   const rows = await db
     .select({
       id: fileVersions.id,
@@ -56,8 +57,10 @@ async function fetchBatch(): Promise<Row[]> {
       and(
         isNull(fileVersions.contentHash),
         ne(fileVersions.s3Key, ""),
+        afterId ? gt(fileVersions.id, afterId) : undefined,
       ),
     )
+    .orderBy(asc(fileVersions.id))
     .limit(BATCH_SIZE);
   return rows;
 }
@@ -78,10 +81,12 @@ async function main() {
   let processed = 0;
   let succeeded = 0;
   let failed = 0;
+  let cursor: string | null = null;
 
   for (let guard = 0; guard < 10_000; guard++) {
-    const batch = await fetchBatch();
+    const batch = await fetchBatch(cursor);
     if (batch.length === 0) break;
+    cursor = batch.at(-1)!.id;
 
     for (const row of batch) {
       processed++;
@@ -90,7 +95,7 @@ async function main() {
         await db
           .update(fileVersions)
           .set({ contentHash: digest })
-          .where(eq(fileVersions.id, row.id));
+          .where(and(eq(fileVersions.id, row.id), isNull(fileVersions.contentHash)));
         succeeded++;
       } catch (err) {
         failed++;
