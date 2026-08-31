@@ -108,7 +108,7 @@ export function AnalyticsOverview({
                     <AnalyticsSectionHeader
                         eyebrow="Recent Moments"
                         title="Newest meaningful movement"
-                        description="A four-item snapshot. Open Timeline when you need the full chronological trail."
+                    description="A compact preview of the same project trail used by Timeline."
                     />
                     <a
                         href="?tab=analytics&analyticsTab=timeline"
@@ -119,7 +119,7 @@ export function AnalyticsOverview({
                 </div>
                 <div className="mt-3 rounded-xl border border-zinc-200 bg-white/60 px-3 dark:border-zinc-800 dark:bg-zinc-950/40">
                     {focusedMovement.length ? (
-                        focusedMovement.slice(0, 4).map((event) => <TimelineEventRow key={event.id} event={event} />)
+                        focusedMovement.slice(0, 4).map((event) => <TimelineEventRow key={event.id} event={event} compact />)
                     ) : (
                         <AnalyticsEmptyState
                             title="No movement yet"
