@@ -106,3 +106,54 @@ export async function syncConnectionsToRedis(userId: string) {
         console.error('Failed to sync connections to Redis:', error);
     }
 }
+
+export async function applyConnectionPairsToRedis(
+    rows: Array<{ requesterId: string; addresseeId: string }>,
+    operation: 'add' | 'remove',
+) {
+    if (!redis || rows.length === 0) return;
+    const uniquePairs = new Map<string, { requesterId: string; addresseeId: string }>();
+    for (const row of rows) {
+        const key = row.requesterId < row.addresseeId
+            ? `${row.requesterId}:${row.addresseeId}`
+            : `${row.addresseeId}:${row.requesterId}`;
+        uniquePairs.set(key, row);
+    }
+
+    const peersByKey = new Map<string, Set<string>>();
+    for (const { requesterId, addresseeId } of uniquePairs.values()) {
+        const requesterKey = `user:${requesterId}:connections`;
+        const addresseeKey = `user:${addresseeId}:connections`;
+        const requesterPeers = peersByKey.get(requesterKey) ?? new Set<string>();
+        requesterPeers.add(addresseeId);
+        peersByKey.set(requesterKey, requesterPeers);
+        const addresseePeers = peersByKey.get(addresseeKey) ?? new Set<string>();
+        addresseePeers.add(requesterId);
+        peersByKey.set(addresseeKey, addresseePeers);
+    }
+
+    // A missing set means "unknown" and must stay missing so readers use the
+    // database fallback instead of mistaking one incremental pair for a full graph.
+    const keys = [...peersByKey.keys()];
+    const existencePipeline = redis.pipeline();
+    for (const key of keys) existencePipeline.exists(key);
+    const existence = await existencePipeline.exec() as unknown[];
+
+    const pipeline = redis.pipeline();
+    let mutationCount = 0;
+    for (let index = 0; index < keys.length; index += 1) {
+        const key = keys[index]!;
+        if (Number(existence[index] ?? 0) !== 1) continue;
+        const peers = [...(peersByKey.get(key) ?? [])];
+        if (peers.length === 0) continue;
+        if (operation === 'add') {
+            for (const peer of peers) pipeline.sadd(key, peer);
+            pipeline.expire(key, 86400);
+            mutationCount += peers.length + 1;
+        } else {
+            for (const peer of peers) pipeline.srem(key, peer);
+            mutationCount += peers.length;
+        }
+    }
+    if (mutationCount > 0) await pipeline.exec();
+}
