@@ -3,6 +3,23 @@ import { db } from "@/lib/db";
 import { profiles } from "@/lib/db/schema";
 import { recordPrivacyEvent } from "@/lib/privacy/audit";
 import { clearBlockedRelationshipState, replaceRelationshipWithBlockedState } from "@/lib/privacy/relationship-transition";
+import { addBlockedPair, removeBlockedPair } from "@/lib/privacy/bloom-filter";
+import { getRedisClient } from "@/lib/redis";
+import { invalidateDiscoverCacheForUsers } from "@/lib/connections/internal-helpers";
+
+async function invalidateRelationshipProjections(blockerId: string, targetUserId: string, blocked: boolean) {
+  if (blocked) await addBlockedPair(blockerId, targetUserId);
+  else await removeBlockedPair(blockerId, targetUserId);
+
+  const redis = getRedisClient();
+  if (redis) {
+    await Promise.allSettled([
+      redis.srem(`user:${blockerId}:connections`, targetUserId),
+      redis.srem(`user:${targetUserId}:connections`, blockerId),
+    ]);
+  }
+  await invalidateDiscoverCacheForUsers([blockerId, targetUserId]);
+}
 
 export async function setUserBlocked(input: {
   blockerId: string;
@@ -28,5 +45,10 @@ export async function setUserBlocked(input: {
       metadata: { targetUserId: input.targetUserId, targetUsername: target.username ?? null },
     });
   });
+  await invalidateRelationshipProjections(
+    input.blockerId,
+    input.targetUserId,
+    input.blocked,
+  );
   return target;
 }
