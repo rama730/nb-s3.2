@@ -5,8 +5,7 @@ import { mergeMessages } from '@/lib/messages/utils';
 export type MessageThreadItem =
     | { type: 'date'; id: string; dateKey: string; date: Date }
     | { type: 'message'; id: string; message: MessageWithSender }
-    | { type: 'unread-divider'; id: string; count: number }
-    | { type: 'bottom-sentinel'; id: string };
+    | { type: 'unread-divider'; id: string; count: number };
 
 export interface MessageThreadGroup {
     id: string;
@@ -115,7 +114,6 @@ export function buildMessageThreadModel({
         },
         ...group.items,
     ]);
-    items.push({ type: 'bottom-sentinel', id: `bottom-sentinel-${conversationId}` });
     const groupCounts = groups.map((group) => group.items.length);
     const groupIndexByDataIndex = groups.flatMap((group, groupIndex) =>
         group.items.map(() => groupIndex),
