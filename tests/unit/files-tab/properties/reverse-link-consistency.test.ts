@@ -48,7 +48,11 @@ const priorityArb: fc.Arbitrary<string> = fc.constantFrom(
 
 // Arbitrary for an ISO date string
 const isoDateArb: fc.Arbitrary<string> = fc
-  .date({ min: new Date("2020-01-01"), max: new Date("2030-01-01") })
+  .date({
+    min: new Date("2020-01-01"),
+    max: new Date("2030-01-01"),
+    noInvalidDate: true,
+  })
   .map((d) => d.toISOString());
 
 // Arbitrary for a LinkedTask object matching the interface from the server action
