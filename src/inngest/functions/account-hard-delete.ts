@@ -1,7 +1,7 @@
 import { inngest } from "../client";
 import { db } from "@/lib/db";
 import { accountDeletions } from "@/lib/db/schema";
-import { and, lte, isNull } from "drizzle-orm";
+import { and, asc, lte, isNull } from "drizzle-orm";
 import {
     ACCOUNT_HARD_DELETE_JOB_KIND,
     executeHardDelete,
@@ -26,7 +26,8 @@ export const accountHardDelete = inngest.createFunction(
     async ({ step }) => {
         const now = new Date();
 
-        // Find all eligible deletions
+        // Keep each run bounded and stable. Later rows remain eligible for the
+        // next daily run instead of creating an unbounded step fan-out.
         const eligibleDeletions = await step.run("find-eligible", async () => {
             return db
                 .select({
@@ -40,8 +41,10 @@ export const accountHardDelete = inngest.createFunction(
                         lte(accountDeletions.hardDeleteAt, now),
                         isNull(accountDeletions.cancelledAt),
                         isNull(accountDeletions.completedAt),
-                    )
-                );
+                    ),
+                )
+                .orderBy(asc(accountDeletions.hardDeleteAt), asc(accountDeletions.id))
+                .limit(100);
         });
 
         if (eligibleDeletions.length === 0) {
