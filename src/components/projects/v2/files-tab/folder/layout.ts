@@ -15,11 +15,11 @@ export const FOLDER_LIST_NAME_MIN_WIDTH_PX = 320;
 export const FOLDER_LIST_UPDATED_WIDTH_PX = 140;
 export const FOLDER_LIST_SIZE_WIDTH_PX = 96;
 export const FOLDER_LIST_BY_WIDTH_PX = 120;
-export const FOLDER_LIST_ROW_HEIGHT_PX = 40;
+export const FOLDER_LIST_ROW_HEIGHT_PX = 48;
 
 /**
  * CSS grid template used by both the header and each row. The Name column
  * uses `minmax(Npx, 1fr)` so it grows to fill remaining space while still
  * guaranteeing the 320px floor. The three trailing columns are fixed.
  */
-export const FOLDER_LIST_GRID_TEMPLATE = `minmax(${FOLDER_LIST_NAME_MIN_WIDTH_PX}px, 1fr) ${FOLDER_LIST_UPDATED_WIDTH_PX}px ${FOLDER_LIST_SIZE_WIDTH_PX}px ${FOLDER_LIST_BY_WIDTH_PX}px`;
+export const FOLDER_LIST_GRID_TEMPLATE = `var(--files-columns, minmax(0, 1fr) ${FOLDER_LIST_UPDATED_WIDTH_PX}px ${FOLDER_LIST_SIZE_WIDTH_PX}px ${FOLDER_LIST_BY_WIDTH_PX}px 40px)`;
