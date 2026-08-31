@@ -1,47 +1,20 @@
 "use client";
 
-/**
- * Single row inside the task panel's Files tab.
- *
- * Replaces the dense 22px `FileTreeRow` for task attachments — same data
- * model, but every Wave 1-3 capability gets a permanent, labelled surface
- * so users can find them without right-clicking or hovering:
- *
- *   ┌─ drag handle (hover)                 always-rendered slots ──────┐
- *   │ [≡] [📄]  design-spec.md      [v3]  [Reference]  [ Open ▾ ] [⋯] │
- *   │          245 KB · 2d ago · alice                                 │
- *   └──────────────────────────────────────────────────────────────────┘
- *
- *  • Version chip is rendered for v1 too (muted) so users learn that
- *    clicking it opens the history drawer.
- *  • Role chip is the auto-inferred Deliverable / Reference / Working tag
- *    promoted from the header summary onto each row.
- *  • Primary action is the existing `OpenInIdeMenu` rendered with the
- *    new `variant="default"` treatment so the "Open with" chooser is
- *    unmissable.
- *  • Overflow menu mirrors the right-click context menu so keyboard +
- *    touch users have parity with mouse users.
- *
- * Folder rows reuse the same shell with no version chip and a simple
- * "Open" button that calls `onOpen` (the parent navigates to the folder).
- *
- * The row is intentionally not memoized — its props are all stable
- * primitives or callbacks coming from the explorer, and React's default
- * reconciliation is fast enough for the typical attachment count (single
- * digits to low hundreds; Virtuoso virtualizes the rest).
- */
-
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useRef, useState, useEffect } from "react";
 import {
   ChevronRight,
   ChevronDown,
   Folder as FolderIcon,
-  GripVertical,
   History,
   Link2Off,
   MoreHorizontal,
   RefreshCcw,
-  TriangleAlert,
+  FolderUp,
+  FolderDown,
+  Pencil,
+  X,
+  FolderInput,
+  UploadCloud,
 } from "lucide-react";
 
 import {
@@ -53,161 +26,193 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { FileIcon } from "@/components/projects/v2/explorer/FileIcons";
-import { OpenInIdeMenu } from "@/components/projects/v2/tasks/components/OpenInIdeMenu";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import type { ProjectNode } from "@/lib/db/schema";
-import {
-  inferTaskFileRole,
-  type TaskFileRole,
-} from "@/lib/projects/task-file-intelligence";
+import { extractLabel } from "@/lib/projects/task-file-label";
+import type { TaskFileRole } from "@/lib/projects/task-file-intelligence";
+
+const byteNumberFormat = new Intl.NumberFormat(undefined, {
+  maximumFractionDigits: 1,
+});
 
 function formatBytes(bytes?: number | null): string {
   const b = bytes ?? 0;
-  if (b < 1024) return `${b} B`;
-  const kb = b / 1024;
-  if (kb < 1024) return `${kb.toFixed(1)} KB`;
-  const mb = kb / 1024;
-  if (mb < 1024) return `${mb.toFixed(1)} MB`;
-  return `${(mb / 1024).toFixed(2)} GB`;
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const unitIndex =
+    b > 0
+      ? Math.min(Math.floor(Math.log(b) / Math.log(1024)), units.length - 1)
+      : 0;
+  return `${byteNumberFormat.format(b / 1024 ** unitIndex)} ${units[unitIndex]}`;
 }
+
+const relativeTimeFormat = new Intl.RelativeTimeFormat(undefined, {
+  numeric: "auto",
+});
 
 function formatRelative(date: Date | string | null | undefined): string {
   if (!date) return "—";
   const value = date instanceof Date ? date : new Date(date);
   if (Number.isNaN(value.getTime())) return "—";
-  const diffMs = Date.now() - value.getTime();
-  const day = 24 * 60 * 60 * 1000;
-  if (diffMs < 60 * 1000) return "just now";
-  if (diffMs < 60 * 60 * 1000) {
-    const m = Math.round(diffMs / (60 * 1000));
-    return `${m}m ago`;
+  const diffMs = value.getTime() - Date.now();
+  const absoluteMs = Math.abs(diffMs);
+  const units: Array<[Intl.RelativeTimeFormatUnit, number]> = [
+    ["day", 86_400_000],
+    ["hour", 3_600_000],
+    ["minute", 60_000],
+  ];
+  for (const [unit, milliseconds] of units) {
+    if (absoluteMs >= milliseconds)
+      return relativeTimeFormat.format(Math.round(diffMs / milliseconds), unit);
   }
-  if (diffMs < day) {
-    const h = Math.round(diffMs / (60 * 60 * 1000));
-    return `${h}h ago`;
-  }
-  if (diffMs < 7 * day) {
-    const d = Math.round(diffMs / day);
-    return `${d}d ago`;
-  }
+  if (absoluteMs < 60_000) return "just now";
   return value.toLocaleDateString();
 }
 
-const ROLE_STYLES: Record<TaskFileRole, { label: string; cls: string }> = {
-  deliverable: {
-    label: "Deliverable",
-    cls: "bg-emerald-50 text-emerald-700 ring-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-200 dark:ring-emerald-500/30",
-  },
-  reference: {
-    label: "Reference",
-    cls: "bg-sky-50 text-sky-700 ring-sky-200 dark:bg-sky-500/10 dark:text-sky-200 dark:ring-sky-500/30",
-  },
-  working: {
-    label: "Working",
-    cls: "bg-zinc-100 text-zinc-700 ring-zinc-200 dark:bg-zinc-800 dark:text-zinc-200 dark:ring-zinc-700",
-  },
+function extensionOf(name: string) {
+  const dot = name.lastIndexOf(".");
+  return dot > 0 ? name.slice(dot + 1).toLowerCase() : "";
+}
+
+type TaskFileAttributionFields = {
+  updatedByName?: string | null;
+  updatedByUsername?: string | null;
+  createdByName?: string | null;
+  createdByUsername?: string | null;
+  versionUpdatedAt?: Date | string | null;
 };
 
+export function getTaskFileAttributionLabel(node: TaskFileAttributionFields): string {
+  return (
+    node.updatedByName?.trim() ||
+    node.updatedByUsername?.trim() ||
+    node.createdByName?.trim() ||
+    node.createdByUsername?.trim() ||
+    "Unknown"
+  );
+}
+
 export interface TaskFileRowProps {
-  /** Same node shape used by the rest of the task files surface. */
-  node: ProjectNode & { annotation?: string | null };
-  /** IDs needed to mint signed URLs / IDE paths inside the action menus. */
-  projectId: string;
-  projectSlug?: string;
-  taskId: string;
-  /** Viewer can mutate? Drives drag handle, replace, unlink visibility. */
+  node: ProjectNode & TaskFileAttributionFields & { annotation?: string | null };
   canEdit: boolean;
-
-  /** Folder rows only. Toggles expansion in the parent explorer. */
+  canManageFiles?: boolean;
   isExpanded?: boolean;
-  /** Folder rows only. Called when the chevron or row is clicked. */
   onToggleExpanded?: (node: ProjectNode) => void;
-
-  /** Drag handle bindings forwarded from the parent's dnd-kit `useSortable`. */
-  dragHandleProps?: {
-    attributes?: Record<string, unknown>;
-    listeners?: Record<string, unknown>;
-  };
-
-  /**
-   * Primary action callbacks. Kept granular so the row doesn't need to
-   * know about the parent's mutation pipeline.
-   */
   onOpen?: (node: ProjectNode) => void;
   onShowHistory?: (node: ProjectNode) => void;
   onUnlink?: (node: ProjectNode) => void;
-  /**
-   * Forwarded from `useTaskFileMutations.saveAsNewVersion`. Triggers a
-   * hidden file picker scoped to this row when the user clicks
-   * "Replace with new version" in the overflow menu.
-   */
   onReplaceWithNewVersion?: (
     node: ProjectNode,
     file: File,
   ) => Promise<{ success: boolean; error?: string }> | void;
-  onMarkNeedsReview?: (node: ProjectNode & { annotation?: string | null }) => void;
-
-  /** Pass-through to OpenInIdeMenu. */
-  onOpenInWorkspace?: (node: ProjectNode) => void;
-  /** Right-click handler — keep the existing context menu for muscle memory. */
   onContextMenu?: (event: React.MouseEvent) => void;
-  /** Mark the file row that represents the current likely task output. */
-  isCurrentDeliverable?: boolean;
-  /** Number of task links referencing the same node. */
-  sharedLinkCount?: number;
+
+  // Redesign props
+  isDeliverable?: boolean;
+  fileRole?: TaskFileRole;
+  onMoveToDeliverables?: (node: ProjectNode) => void;
+  onMoveToWorkingFiles?: (node: ProjectNode) => void;
+  onMoveToReferences?: (node: ProjectNode) => void;
+  onLabelChange?: (
+    node: ProjectNode & { annotation?: string | null },
+    newLabel: string | null,
+  ) => void;
+  onMoveInProjectFiles?: (node: ProjectNode) => void;
+  onPublishToProjectFiles?: (node: ProjectNode) => void;
+  isHighlighted?: boolean;
 }
 
 export function TaskFileRow({
   node,
-  projectId,
-  projectSlug,
-  taskId,
   canEdit,
+  canManageFiles = false,
   isExpanded,
   onToggleExpanded,
-  dragHandleProps,
   onOpen,
   onShowHistory,
   onUnlink,
   onReplaceWithNewVersion,
-  onMarkNeedsReview,
-  onOpenInWorkspace,
   onContextMenu,
-  isCurrentDeliverable = false,
-  sharedLinkCount = 0,
+  isDeliverable = false,
+  fileRole = isDeliverable ? "deliverable" : "working",
+  onMoveToDeliverables,
+  onMoveToWorkingFiles,
+  onMoveToReferences,
+  onLabelChange,
+  onMoveInProjectFiles,
+  onPublishToProjectFiles,
+  isHighlighted = false,
 }: TaskFileRowProps) {
   const isFolder = node.type === "folder";
   const replaceInputRef = useRef<HTMLInputElement>(null);
-
-  const role = useMemo<TaskFileRole>(
-    () =>
-      inferTaskFileRole({
-        name: node.name,
-        type: node.type,
-        path: node.path,
-        annotation: node.annotation ?? null,
-      }),
-    [node.name, node.type, node.path, node.annotation],
-  );
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const version =
     (node as { currentVersion?: number | null }).currentVersion ?? 1;
-  const hasMultipleVersions = !isFolder && version > 1;
+  const currentLabel = extractLabel(node.annotation);
+  const rolePresentation = {
+    reference: "Reference",
+    working: "Working",
+    deliverable: "Deliverable",
+  } satisfies Record<TaskFileRole, string>;
+
+  const [isEditingLabel, setIsEditingLabel] = useState(false);
+  const [editLabelValue, setEditLabelValue] = useState(currentLabel || "");
+
+  // Focus input when editing starts
+  useEffect(() => {
+    if (isEditingLabel && inputRef.current) {
+      inputRef.current.focus();
+    }
+  }, [isEditingLabel]);
+
+  // Sync state if external label changes while not editing
+  useEffect(() => {
+    if (!isEditingLabel) {
+      setEditLabelValue(currentLabel || "");
+    }
+  }, [currentLabel, isEditingLabel]);
+
+  const commitLabelEdit = useCallback(() => {
+    setIsEditingLabel(false);
+    if (editLabelValue.trim() !== (currentLabel || "")) {
+      onLabelChange?.(node, editLabelValue.trim());
+    }
+  }, [editLabelValue, currentLabel, onLabelChange, node]);
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        commitLabelEdit();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        setIsEditingLabel(false);
+        setEditLabelValue(currentLabel || "");
+      }
+    },
+    [commitLabelEdit, currentLabel],
+  );
 
   const handleRowActivate = useCallback(() => {
     if (isFolder) {
       onToggleExpanded?.(node);
+    } else {
+      onOpen?.(node);
     }
-  }, [isFolder, node, onToggleExpanded]);
+  }, [isFolder, node, onToggleExpanded, onOpen]);
 
   const handleReplacePicked: React.ChangeEventHandler<HTMLInputElement> =
     useCallback(
       async (event) => {
         const file = event.target.files?.[0];
-        // Reset right away so picking the same filename twice still fires.
         if (replaceInputRef.current) replaceInputRef.current.value = "";
         if (!file) return;
         if (!onReplaceWithNewVersion) return;
+        if (extensionOf(file.name) !== extensionOf(node.name)) {
+          toast.error("A new version must use the same file type.");
+          return;
+        }
         await onReplaceWithNewVersion(node, file);
       },
       [node, onReplaceWithNewVersion],
@@ -220,38 +225,27 @@ export function TaskFileRow({
       data-node-type={node.type}
       onContextMenu={onContextMenu}
       className={cn(
-        "group relative flex items-center gap-2 rounded-lg border border-transparent px-2 py-2 transition-colors",
-        "hover:border-zinc-200 hover:bg-zinc-50/80 focus-within:border-indigo-300 focus-within:bg-indigo-50/40",
-        "dark:hover:border-zinc-800 dark:hover:bg-zinc-800/40 dark:focus-within:border-indigo-500/40 dark:focus-within:bg-indigo-500/5",
+        "group relative flex items-center gap-3 rounded-xl border px-3 py-2.5 transition-all duration-200 shadow-sm",
+        "bg-white border-zinc-200 hover:border-indigo-300 hover:shadow-md dark:bg-zinc-900/50 dark:border-zinc-800/80 dark:hover:border-indigo-500/50 dark:hover:bg-zinc-900",
+        isHighlighted &&
+          "border-indigo-400 ring-2 ring-indigo-200 dark:border-indigo-500 dark:ring-indigo-900/60",
       )}
     >
-      {/* Slot 1 — drag handle (hover/focus reveal) */}
-      <button
-        type="button"
-        aria-label="Reorder file"
-        disabled={!canEdit}
-        {...(dragHandleProps?.attributes ?? {})}
-        {...(dragHandleProps?.listeners ?? {})}
-        className={cn(
-          "flex h-7 w-5 flex-shrink-0 cursor-grab items-center justify-center rounded text-zinc-300 opacity-0 transition-opacity active:cursor-grabbing",
-          "group-hover:opacity-100 group-focus-within:opacity-100",
-          "hover:text-zinc-500 disabled:cursor-not-allowed disabled:opacity-0 dark:text-zinc-700 dark:hover:text-zinc-400",
-        )}
-      >
-        <GripVertical className="h-3.5 w-3.5" />
-      </button>
-
-      {/* Slot 2 — icon + name + meta. Clicking the slot activates the row. */}
-      <button
-        type="button"
+      {/* Name and icon */}
+      <div
         onClick={handleRowActivate}
-        className={cn(
-          "flex min-w-0 flex-1 items-center gap-2 text-left focus:outline-none",
-          !isFolder && "cursor-default",
-        )}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            handleRowActivate();
+          }
+        }}
+        role="button"
+        tabIndex={0}
+        aria-label={`${isFolder ? "Open folder" : "Open file"} ${node.name}`}
+        className="flex min-w-0 flex-1 items-center gap-3 text-left cursor-pointer"
       >
-        {/* Folder chevron (only folders) so users can tell at a glance */}
-        {isFolder ? (
+        {isFolder && (
           <span className="flex h-5 w-4 flex-shrink-0 items-center justify-center text-zinc-400">
             {isExpanded ? (
               <ChevronDown className="h-3.5 w-3.5" />
@@ -259,129 +253,103 @@ export function TaskFileRow({
               <ChevronRight className="h-3.5 w-3.5" />
             )}
           </span>
-        ) : null}
-
-        <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-300">
+        )}
+        <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md text-zinc-500">
           {isFolder ? (
-            <FolderIcon className="h-4 w-4 text-amber-500" />
+            <FolderIcon className="h-5 w-5 text-zinc-400" fill="currentColor" />
           ) : (
-            <FileIcon
-              name={node.name}
-              isFolder={false}
-              className="h-4 w-4"
-            />
+            <FileIcon name={node.name} isFolder={false} className="h-5 w-5" />
           )}
         </span>
 
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">
+        <span className="min-w-0 flex-1 flex items-center gap-3">
+          <span className="truncate text-sm font-medium text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
             {node.name}
+            <span
+              className={cn(
+                "rounded border px-1.5 py-0.5 text-[9px] font-bold",
+                fileRole === "reference" && "border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-900/50 dark:bg-sky-950/30 dark:text-sky-300",
+                fileRole === "working" && "border-indigo-200 bg-indigo-50 text-indigo-600 dark:border-indigo-900/50 dark:bg-indigo-950/30 dark:text-indigo-300",
+                fileRole === "deliverable" && "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/50 dark:bg-emerald-950/30 dark:text-emerald-300",
+              )}
+            >
+              {rolePresentation[fileRole]}
+            </span>
           </span>
-          <span className="mt-0.5 block truncate text-[11px] text-zinc-500 dark:text-zinc-400">
+          {!isDeliverable &&
+            (isEditingLabel ? (
+              <span
+                className="inline-flex items-center gap-1 rounded-md border border-indigo-200 bg-indigo-50 pl-1.5 pr-1 py-0.5 dark:border-indigo-500/30 dark:bg-indigo-500/10"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <input
+                  ref={inputRef}
+                  data-testid="task-file-row-label-editor"
+                  type="text"
+                  value={editLabelValue}
+                  onChange={(e) => setEditLabelValue(e.target.value)}
+                  onBlur={commitLabelEdit}
+                  onKeyDown={handleKeyDown}
+                  placeholder="Label..."
+                  className="w-24 bg-transparent text-[10px] font-medium text-indigo-700 outline-none placeholder:text-indigo-300 dark:text-indigo-300 dark:placeholder:text-indigo-700"
+                />
+                <button
+                  type="button"
+                  aria-label={`Clear label for ${node.name}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setEditLabelValue("");
+                    setIsEditingLabel(false);
+                    onLabelChange?.(node, null);
+                  }}
+                  className="rounded hover:bg-indigo-200/50 text-indigo-400 hover:text-indigo-700 dark:text-indigo-500 dark:hover:bg-indigo-500/20 dark:hover:text-indigo-300"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            ) : currentLabel ? (
+              <button
+                type="button"
+                aria-label={`Edit label for ${node.name}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (canEdit) setIsEditingLabel(true);
+                }}
+                className={cn(
+                  "inline-flex flex-shrink-0 items-center rounded-md bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400",
+                  canEdit &&
+                    "cursor-text hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-colors",
+                )}
+              >
+                {currentLabel}
+              </button>
+            ) : null)}
+          {version > 1 && (
+            <span className="inline-flex flex-shrink-0 items-center rounded-md bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-600 dark:bg-indigo-500/10 dark:text-indigo-400">
+              v{version}
+            </span>
+          )}
+          <span className="truncate text-xs text-zinc-400 dark:text-zinc-500">
             {isFolder
               ? "Folder"
-              : `${formatBytes(node.size)} · Updated ${formatRelative(node.updatedAt)}${sharedLinkCount > 1 ? ` · Shared with ${sharedLinkCount} tasks` : ""}`}
+              : `${formatBytes(node.size)} · by ${getTaskFileAttributionLabel(node)} · ${formatRelative(node.versionUpdatedAt || node.updatedAt)}`}
           </span>
         </span>
-      </button>
-
-      {isCurrentDeliverable && !isFolder ? (
-        <span className="hidden h-6 flex-shrink-0 items-center rounded-full bg-emerald-50 px-2 text-[10px] font-semibold uppercase tracking-wide text-emerald-700 ring-1 ring-emerald-200 sm:inline-flex dark:bg-emerald-500/10 dark:text-emerald-200 dark:ring-emerald-500/30">
-          Current output
-        </span>
-      ) : null}
-
-      {/* Slot 3 — version chip. ALWAYS rendered for files (even v1) so the
-          affordance is discoverable. Folders skip this slot. */}
-      {!isFolder ? (
-        <button
-          type="button"
-          data-testid="task-file-row-version"
-          onClick={(event) => {
-            event.stopPropagation();
-            onShowHistory?.(node);
-          }}
-          title={
-            hasMultipleVersions
-              ? `Version history — currently v${version}`
-              : "Open version history"
-          }
-          className={cn(
-            "inline-flex h-6 flex-shrink-0 items-center gap-1 rounded-full px-2 text-[10px] font-semibold uppercase tracking-wide transition-colors",
-            hasMultipleVersions
-              ? "bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200 hover:bg-indigo-100 dark:bg-indigo-500/15 dark:text-indigo-200 dark:ring-indigo-500/30 dark:hover:bg-indigo-500/25"
-              : "bg-zinc-100 text-zinc-500 ring-1 ring-zinc-200 hover:bg-zinc-200 hover:text-zinc-700 dark:bg-zinc-800 dark:text-zinc-400 dark:ring-zinc-700 dark:hover:bg-zinc-700 dark:hover:text-zinc-200",
-          )}
-        >
-          <History className="h-2.5 w-2.5" />v{version}
-        </button>
-      ) : null}
-
-      {/* Slot 4 — role chip (Deliverable / Reference / Working). Auto-inferred. */}
-      <span
-        className={cn(
-          "hidden h-6 flex-shrink-0 items-center rounded-full px-2 text-[10px] font-semibold uppercase tracking-wide ring-1 sm:inline-flex",
-          ROLE_STYLES[role].cls,
-        )}
-        title={`Auto-classified as ${ROLE_STYLES[role].label}`}
-      >
-        {ROLE_STYLES[role].label}
-      </span>
-
-      {/* Slot 5 — primary action. Files use the IDE chooser (variant=primary).
-          Folders get a simple solid Open button that toggles expansion. */}
-      <div
-        className="flex-shrink-0"
-        onClick={(event) => event.stopPropagation()}
-        onPointerDown={(event) => event.stopPropagation()}
-      >
-        {isFolder ? (
-          <button
-            type="button"
-            onClick={() => onToggleExpanded?.(node)}
-            className="inline-flex h-8 items-center gap-1.5 rounded-md bg-indigo-600 px-3 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-indigo-700 focus-visible:outline-none   dark:bg-indigo-500 dark:hover:bg-indigo-400"
-            data-testid="task-file-row-folder-open"
-          >
-            <FolderIcon className="h-3.5 w-3.5" />
-            {isExpanded ? "Hide" : "Browse"}
-          </button>
-        ) : (
-          <OpenInIdeMenu
-            projectId={projectId}
-            projectSlug={projectSlug}
-            taskId={taskId}
-            node={node}
-            variant="primary"
-            onOpenInWorkspace={onOpenInWorkspace}
-            onAfterDownload={() => onOpen?.(node)}
-          />
-        )}
       </div>
 
-      {/* Slot 6 — overflow menu. Mirrors the legacy right-click menu so
-          keyboard / touch users have parity. */}
-      <div
-        className="flex-shrink-0"
-        onClick={(event) => event.stopPropagation()}
-        onPointerDown={(event) => event.stopPropagation()}
-      >
+      {/* Hover actions */}
+      <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
               type="button"
               data-testid="task-file-row-overflow"
-              aria-label={`More actions for ${node.name}`}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-transparent text-zinc-500 transition-colors hover:border-zinc-200 hover:bg-zinc-50 hover:text-zinc-900 focus-visible:outline-none   dark:text-zinc-400 dark:hover:border-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+              aria-label={`Options for ${node.name}`}
+              className="flex h-8 w-8 items-center justify-center rounded-md text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-700 dark:hover:text-zinc-200"
             >
               <MoreHorizontal className="h-4 w-4" />
             </button>
           </DropdownMenuTrigger>
-          {/*
-            z-[300] keeps the menu above the task detail panel (z-[201]).
-            The Radix portal renders into document.body, so it's a
-            sibling of the panel — without this override the dropdown
-            opens behind the panel and looks like nothing happened.
-          */}
           <DropdownMenuContent
             align="end"
             className="z-[300] w-56"
@@ -391,57 +359,103 @@ export function TaskFileRow({
               {node.name}
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
-            {!isFolder ? (
+
+            {canEdit && !isDeliverable ? (
               <DropdownMenuItem
                 onSelect={(event) => {
                   event.preventDefault();
-                  onShowHistory?.(node);
+                  setIsEditingLabel(true);
                 }}
-                data-testid="task-file-row-history"
               >
-                <History className="mr-2 h-4 w-4" />
-                <div className="flex flex-col">
-                  <span>View version history</span>
-                  <span className="text-[10px] text-zinc-500">
-                    Active task version is v{version}
-                  </span>
-                </div>
+                <Pencil className="mr-2 h-4 w-4" />
+                Edit Label
               </DropdownMenuItem>
             ) : null}
+
+            {canEdit && !isDeliverable && onMoveToDeliverables ? (
+              <DropdownMenuItem
+                onSelect={(event) => {
+                  event.preventDefault();
+                  onMoveToDeliverables(node);
+                }}
+              >
+                <FolderUp className="mr-2 h-4 w-4" />
+                Move to Deliverables
+              </DropdownMenuItem>
+            ) : null}
+
+            {canEdit && fileRole !== "reference" && onMoveToReferences ? (
+              <DropdownMenuItem
+                onSelect={(event) => {
+                  event.preventDefault();
+                  onMoveToReferences(node);
+                }}
+              >
+                <FolderDown className="mr-2 h-4 w-4" />
+                Move to Task References
+              </DropdownMenuItem>
+            ) : null}
+
+            {canEdit && fileRole !== "working" && onMoveToWorkingFiles ? (
+              <DropdownMenuItem
+                onSelect={(event) => {
+                  event.preventDefault();
+                  onMoveToWorkingFiles(node);
+                }}
+              >
+                <FolderDown className="mr-2 h-4 w-4" />
+                Move to Working Files
+              </DropdownMenuItem>
+            ) : null}
+
+            {canManageFiles && !node.taskId && onMoveInProjectFiles ? (
+              <DropdownMenuItem
+                onSelect={(event) => {
+                  event.preventDefault();
+                  onMoveInProjectFiles(node);
+                }}
+              >
+                <FolderInput className="mr-2 h-4 w-4" />
+                Move in Project Files
+              </DropdownMenuItem>
+            ) : null}
+
+            {canManageFiles && node.taskId && onPublishToProjectFiles ? (
+              <DropdownMenuItem
+                onSelect={(event) => {
+                  event.preventDefault();
+                  onPublishToProjectFiles(node);
+                }}
+              >
+                <UploadCloud className="mr-2 h-4 w-4" />
+                Publish to Project Files
+              </DropdownMenuItem>
+            ) : null}
+
             {!isFolder && canEdit && onReplaceWithNewVersion ? (
               <DropdownMenuItem
                 onSelect={(event) => {
                   event.preventDefault();
                   replaceInputRef.current?.click();
                 }}
-                data-testid="task-file-row-replace"
               >
                 <RefreshCcw className="mr-2 h-4 w-4" />
-                <div className="flex flex-col">
-                  <span>Replace with new version</span>
-                  <span className="text-[10px] text-zinc-500">
-                    Pick a file from disk to bump to v{version + 1}
-                  </span>
-                </div>
+                Upload new version
               </DropdownMenuItem>
             ) : null}
-            {!isFolder && canEdit && onMarkNeedsReview ? (
+
+            {!isFolder ? (
               <DropdownMenuItem
                 onSelect={(event) => {
                   event.preventDefault();
-                  onMarkNeedsReview(node);
+                  onShowHistory?.(node);
                 }}
-                data-testid="task-file-row-needs-review"
               >
-                <TriangleAlert className="mr-2 h-4 w-4" />
-                <div className="flex flex-col">
-                  <span>Mark needs review</span>
-                  <span className="text-[10px] text-zinc-500">
-                    Adds a task note and notifies participants
-                  </span>
-                </div>
+                <History className="mr-2 h-4 w-4" />
+                Version history (v{version})
               </DropdownMenuItem>
             ) : null}
+
             {canEdit && onUnlink ? (
               <>
                 <DropdownMenuSeparator />
@@ -451,10 +465,9 @@ export function TaskFileRow({
                     onUnlink(node);
                   }}
                   className="text-rose-600 focus:text-rose-600 dark:text-rose-300 dark:focus:text-rose-300"
-                  data-testid="task-file-row-unlink"
                 >
                   <Link2Off className="mr-2 h-4 w-4" />
-                  Unlink from task
+                  Remove from task
                 </DropdownMenuItem>
               </>
             ) : null}
@@ -462,8 +475,6 @@ export function TaskFileRow({
         </DropdownMenu>
       </div>
 
-      {/* Hidden file picker for "Replace with new version". Scoped to this
-          row — the parent never sees the input. */}
       {!isFolder && onReplaceWithNewVersion ? (
         <input
           ref={replaceInputRef}
@@ -474,6 +485,7 @@ export function TaskFileRow({
           tabIndex={-1}
         />
       ) : null}
+
     </div>
   );
 }
