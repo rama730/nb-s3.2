@@ -1,0 +1,262 @@
+- generic [ref=e1]:
+  - generic [ref=e2]:
+    - banner [ref=e3]:
+      - generic [ref=e4]:
+        - link "Navigate to home" [ref=e7] [cursor=pointer]:
+          - /url: /
+          - generic [ref=e14]: NB
+        - navigation "Main navigation" [ref=e16]:
+          - link "Hub" [ref=e17] [cursor=pointer]:
+            - /url: /hub
+          - link "Connections" [ref=e24] [cursor=pointer]:
+            - /url: /people
+          - link "Messages" [ref=e31] [cursor=pointer]:
+            - /url: /messages
+          - link "Settings" [ref=e35] [cursor=pointer]:
+            - /url: /settings
+        - generic [ref=e40]:
+          - button "Toggle theme" [ref=e41] [cursor=pointer]
+          - link "Sign in" [ref=e45] [cursor=pointer]:
+            - /url: /login
+    - main [ref=e46]:
+      - generic [ref=e59]:
+        - generic:
+          - generic:
+            - generic:
+              - generic:
+                - link "Hub":
+                  - /url: /hub
+                - generic:
+                  - heading "DeepScope AI" [level=1]
+                  - generic "Project links":
+                    - link "Open Behance · pavankumard732 · Design & prototype":
+                      - /url: /go/project/0adb0049-a58e-44d3-bcb3-db2ee4abdfc6/link-mteqhhtu
+                    - link "Open Google Scholar · Dr. Yesudasu Vasimalla · Research & publication":
+                      - /url: /go/project/0adb0049-a58e-44d3-bcb3-db2ee4abdfc6/link-ece8db52-bf75-483d-a6ef-21fc128fce61
+                    - 'link "Open Recent progress in surface plasmon resonance based sensors: A comprehensive revi · cell.com · Documentation"':
+                      - /url: /go/project/0adb0049-a58e-44d3-bcb3-db2ee4abdfc6/link-75581e55-1ef0-4597-b14c-7206291191e2
+                    - 'link "Open GitHub · rama730/Frontend: Design of patient details · Source code"':
+                      - /url: /go/project/0adb0049-a58e-44d3-bcb3-db2ee4abdfc6/link-8848f0e4-be54-4be6-acd9-593553f03553
+                    - button "Open 2 more project links": "+2"
+                  - generic:
+                    - generic: Created by
+                    - link "Ramanayudu CH":
+                      - /url: /u/ramanayudu_ch
+                - generic:
+                  - generic:
+                    - generic "Total Views": "810"
+                    - generic "Followers": "0"
+              - generic:
+                - button "Follow"
+                - button "Share Project"
+        - tablist "Project sections" [ref=e62]:
+          - tab "Dashboard" [ref=e63] [cursor=pointer]
+          - tab "Docs" [ref=e69] [cursor=pointer]
+          - tab "Updates" [ref=e72] [cursor=pointer]
+          - tab "Files" [selected] [ref=e76] [cursor=pointer]
+        - tabpanel "Files" [ref=e80]:
+          - generic [ref=e83]:
+            - complementary "File sidebar" [ref=e84]:
+              - generic [ref=e85]:
+                - button "Hide sidebar" [ref=e86] [cursor=pointer]
+                - textbox "Search files" [ref=e90]
+              - generic [ref=e94]:
+                - treeitem ".github" [level=1] [ref=e661] [cursor=pointer]
+                - treeitem ".rohkun" [level=1] [ref=e671] [cursor=pointer]
+                - treeitem ".vscode" [level=1] [ref=e681] [cursor=pointer]
+                - treeitem "codeql-db" [level=1] [ref=e126] [cursor=pointer]
+                - treeitem "docs" [level=1] [ref=e136] [cursor=pointer]
+                - treeitem "nb" [level=1] [ref=e146] [cursor=pointer]
+                - treeitem "scripts" [level=1] [ref=e156] [cursor=pointer]
+                - treeitem "sql" [level=1] [ref=e166] [cursor=pointer]
+                - treeitem "supabase" [level=1] [ref=e176] [cursor=pointer]
+                - treeitem ".gitignore v2" [level=1] [ref=e186] [cursor=pointer]:
+                  - generic [ref=e193]:
+                    - generic [ref=e194]: .gitignore
+                    - generic "Version 2" [ref=e195]: v2
+                - treeitem ".pre-commit-config.yaml" [level=1] [ref=e197] [cursor=pointer]
+                - treeitem "analyze_report.py v2" [level=1] [ref=e205] [cursor=pointer]:
+                  - generic [ref=e212]:
+                    - generic [ref=e213]: analyze_report.py
+                    - generic "Version 2" [ref=e214]: v2
+                - treeitem "CODE_QUALITY_IMPROVEMENTS.md" [level=1] [ref=e216] [cursor=pointer]
+                - treeitem "codeql-results.sarif" [level=1] [ref=e224] [cursor=pointer]
+                - treeitem "COMPREHENSIVE_IMPROVEMENTS_SUMMARY.md" [level=1] [ref=e232] [cursor=pointer]
+                - treeitem "CONTRIBUTING.md" [level=1] [ref=e240] [cursor=pointer]
+                - treeitem "CREATE_PROJECT_ENHANCEMENTS.md" [level=1] [ref=e248] [cursor=pointer]
+                - treeitem "hub" [level=1] [ref=e256] [cursor=pointer]
+                - treeitem "IMPLEMENTATION_SUMMARY.md" [level=1] [ref=e264] [cursor=pointer]
+                - treeitem "IMPROVEMENTS_AND_FIXES.md" [level=1] [ref=e272] [cursor=pointer]
+                - treeitem "LICENSE" [level=1] [ref=e280] [cursor=pointer]
+                - treeitem "QUALITY_ROADMAP.md" [level=1] [ref=e288] [cursor=pointer]
+                - treeitem "QUICK_START_QUALITY.md" [level=1] [ref=e296] [cursor=pointer]
+                - treeitem "README.md v11 1 linked task" [level=1] [ref=e691] [cursor=pointer]:
+                  - generic [ref=e695]:
+                    - generic [ref=e696]: README.md
+                    - generic "Version 11" [ref=e697]: v11
+                  - button "1 linked task" [ref=e700]: "1"
+                - treeitem "SECURITY_REMEDIATION.md" [level=1] [ref=e705] [cursor=pointer]
+                - treeitem "SECURITY.md" [level=1] [ref=e713] [cursor=pointer]
+              - button
+            - generic [ref=e303]:
+              - generic [ref=e304]:
+                - navigation "Breadcrumb" [ref=e305]:
+                  - button "root" [ref=e306] [cursor=pointer]
+                - generic [ref=e311]:
+                  - button "Working Files and Reference for this Task" [ref=e312] [cursor=pointer]
+                  - button "Sync" [ref=e314] [cursor=pointer]
+              - table "Folder contents" [ref=e575]:
+                - row [ref=e576]:
+                  - columnheader "Name" [ref=e577]
+                  - columnheader "Last updated" [ref=e578]
+                  - columnheader "Size" [ref=e579]
+                  - columnheader "By" [ref=e580]
+                - rowgroup [ref=e582]:
+                  - row [ref=e760] [cursor=pointer]:
+                    - cell ".github" [ref=e761]
+                    - cell "6 months ago" [ref=e766]
+                    - cell
+                    - cell "—" [ref=e767]
+                  - row [ref=e768] [cursor=pointer]:
+                    - cell ".rohkun" [ref=e769]
+                    - cell "6 months ago" [ref=e774]
+                    - cell
+                    - cell "—" [ref=e775]
+                  - row [ref=e776] [cursor=pointer]:
+                    - cell ".vscode" [ref=e777]
+                    - cell "6 months ago" [ref=e782]
+                    - cell
+                    - cell "—" [ref=e783]
+                  - row [ref=e784] [cursor=pointer]:
+                    - cell "codeql-db" [ref=e785]
+                    - cell "6 months ago" [ref=e790]
+                    - cell
+                    - cell "—" [ref=e791]
+                  - row [ref=e792] [cursor=pointer]:
+                    - cell "docs" [ref=e793]
+                    - cell "6 months ago" [ref=e798]
+                    - cell
+                    - cell "—" [ref=e799]
+                  - row [ref=e800] [cursor=pointer]:
+                    - cell "nb" [ref=e801]
+                    - cell "6 months ago" [ref=e806]
+                    - cell
+                    - cell "—" [ref=e807]
+                  - row [ref=e808] [cursor=pointer]:
+                    - cell "scripts" [ref=e809]
+                    - cell "6 months ago" [ref=e814]
+                    - cell
+                    - cell "—" [ref=e815]
+                  - row [ref=e816] [cursor=pointer]:
+                    - cell "sql" [ref=e817]
+                    - cell "6 months ago" [ref=e822]
+                    - cell
+                    - cell "—" [ref=e823]
+                  - row [ref=e824] [cursor=pointer]:
+                    - cell "supabase" [ref=e825]
+                    - cell "6 months ago" [ref=e830]
+                    - cell
+                    - cell "—" [ref=e831]
+                  - row [ref=e832] [cursor=pointer]:
+                    - cell ".gitignore v2" [ref=e833]:
+                      - generic ".gitignore" [ref=e839]
+                      - generic "Version 2" [ref=e840]: v2
+                    - cell "2 months ago" [ref=e841]
+                    - cell "611 B" [ref=e842]
+                    - cell "Lakshmi CH" [ref=e843]
+                  - row [ref=e844] [cursor=pointer]:
+                    - cell ".pre-commit-config.yaml" [ref=e845]
+                    - cell "6 months ago" [ref=e850]
+                    - cell "1.4 KB" [ref=e851]
+                    - cell "Ramanayudu CH" [ref=e852]
+                  - row [ref=e853] [cursor=pointer]:
+                    - cell "analyze_report.py v2" [ref=e854]:
+                      - generic "analyze_report.py" [ref=e860]
+                      - generic "Version 2" [ref=e861]: v2
+                    - cell "1 month ago" [ref=e862]
+                    - cell "2.6 KB" [ref=e863]
+                    - cell "Rama" [ref=e864]
+                  - row [ref=e865] [cursor=pointer]:
+                    - cell "CODE_QUALITY_IMPROVEMENTS.md" [ref=e866]
+                    - cell "6 months ago" [ref=e871]
+                    - cell "5.5 KB" [ref=e872]
+                    - cell "Ramanayudu CH" [ref=e873]
+                  - row [ref=e874] [cursor=pointer]:
+                    - cell "codeql-results.sarif" [ref=e875]
+                    - cell "6 months ago" [ref=e880]
+                    - cell "1.3 MB" [ref=e881]
+                    - cell "Ramanayudu CH" [ref=e882]
+                  - row [ref=e883] [cursor=pointer]:
+                    - cell "COMPREHENSIVE_IMPROVEMENTS_SUMMARY.md" [ref=e884]
+                    - cell "6 months ago" [ref=e889]
+                    - cell "4.9 KB" [ref=e890]
+                    - cell "Ramanayudu CH" [ref=e891]
+                  - row [ref=e892] [cursor=pointer]:
+                    - cell "CONTRIBUTING.md" [ref=e893]
+                    - cell "6 months ago" [ref=e898]
+                    - cell "5.0 KB" [ref=e899]
+                    - cell "Ramanayudu CH" [ref=e900]
+                  - row [ref=e901] [cursor=pointer]:
+                    - cell "CREATE_PROJECT_ENHANCEMENTS.md" [ref=e902]
+                    - cell "6 months ago" [ref=e907]
+                    - cell "6.7 KB" [ref=e908]
+                    - cell "Ramanayudu CH" [ref=e909]
+                  - row [ref=e910] [cursor=pointer]:
+                    - cell "hub" [ref=e911]
+                    - cell "2 weeks ago" [ref=e916]
+                    - cell "21 B" [ref=e917]
+                    - cell "Ramanayudu CH" [ref=e918]
+                  - row [ref=e919] [cursor=pointer]:
+                    - cell "IMPLEMENTATION_SUMMARY.md" [ref=e920]
+                    - cell "6 months ago" [ref=e925]
+                    - cell "4.2 KB" [ref=e926]
+                    - cell "Ramanayudu CH" [ref=e927]
+                  - row [ref=e928] [cursor=pointer]:
+                    - cell "IMPROVEMENTS_AND_FIXES.md" [ref=e929]
+                    - cell "6 months ago" [ref=e934]
+                    - cell "6.9 KB" [ref=e935]
+                    - cell "Ramanayudu CH" [ref=e936]
+                  - row [ref=e937] [cursor=pointer]:
+                    - cell "LICENSE" [ref=e938]
+                    - cell "6 months ago" [ref=e943]
+                    - cell "1.1 KB" [ref=e944]
+                    - cell "Ramanayudu CH" [ref=e945]
+                  - row [ref=e946] [cursor=pointer]:
+                    - cell "QUALITY_ROADMAP.md" [ref=e947]
+                    - cell "6 months ago" [ref=e952]
+                    - cell "7.8 KB" [ref=e953]
+                    - cell "Ramanayudu CH" [ref=e954]
+                  - row [ref=e955] [cursor=pointer]:
+                    - cell "QUICK_START_QUALITY.md" [ref=e956]
+                    - cell "6 months ago" [ref=e961]
+                    - cell "2.7 KB" [ref=e962]
+                    - cell "Ramanayudu CH" [ref=e963]
+                  - row [ref=e964] [cursor=pointer]:
+                    - cell "README.md v11 1 linked task" [ref=e965]:
+                      - generic "README.md" [ref=e968]
+                      - generic "Version 11" [ref=e969]: v11
+                      - button "1 linked task" [active] [ref=e971]: "1"
+                    - cell "1 month ago" [ref=e975]
+                    - cell "1.1 KB" [ref=e976]
+                    - cell "Rama" [ref=e977]
+                  - row [ref=e978] [cursor=pointer]:
+                    - cell "SECURITY_REMEDIATION.md" [ref=e979]
+                    - cell "6 months ago" [ref=e984]
+                    - cell "4.1 KB" [ref=e985]
+                    - cell "Ramanayudu CH" [ref=e986]
+                  - row [ref=e987] [cursor=pointer]:
+                    - cell "SECURITY.md" [ref=e988]
+                    - cell "6 months ago" [ref=e993]
+                    - cell "4.0 KB" [ref=e994]
+                    - cell "Ramanayudu CH" [ref=e995]
+                - button
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=e54] [cursor=pointer]
+  - alert [ref=e58]: DeepScope AI
+  - dialog "Linked tasks" [ref=e996]:
+    - heading "Linked Tasks" [level=4] [ref=e998]
+    - list [ref=e1000]:
+      - listitem [ref=e1001]:
+        - generic [ref=e1003]:
+          - generic [ref=e1004]: Conduct end-to-end testing on each folder of the application.
+          - generic [ref=e1005]: todo
