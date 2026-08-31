@@ -19,15 +19,17 @@ import {
 import { useAuth } from "@/lib/hooks/use-auth";
 import {
     buildContributionMutations,
+    contributionEntryChanged,
     contributionToEditorEntry,
     type ContributionEditorEntry,
+    validateContributionEditorEntry,
 } from "@/lib/profile/contribution-editor";
 import type { ProfileCollaborationContribution } from "@/lib/profile/collaboration";
 import {
     loadProfileContributionsPage,
     loadProfileContributionWindow,
 } from "@/lib/profile/browser-profile";
-import { applyPayloadToFormBase, toFormState, toServerPayload } from "@/lib/profile/normalization";
+import { applyPayloadToFormBase, mergeSocialLinkCollections, toFormState, toServerPayload } from "@/lib/profile/normalization";
 import { queryKeys } from "@/lib/query-keys";
 import { calculateProfileCompletion } from "@/lib/validations/profile";
 import { EditProfileTabs, type EditProfileSection } from "./EditProfileTabs";
@@ -88,7 +90,6 @@ export function EditProfileModal({
     const [contributionHasMore, setContributionHasMore] = useState(false);
     const [contributionTotal, setContributionTotal] = useState(contributions.length);
     const [contributionsLoadingMore, setContributionsLoadingMore] = useState(false);
-    const [hasChanges, setHasChanges] = useState(false);
     const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
     const [activeSection, setActiveSection] = useState<EditProfileSection>(initialSection);
     const [pendingSection, setPendingSection] = useState<EditProfileSection | null>(null);
@@ -99,6 +100,23 @@ export function EditProfileModal({
     const lastKnownUpdatedAtRef = useRef(toIsoTimestamp(profile?.updatedAt));
     const baseProfileRef = useRef<any>(withContributionEntries(profile, contributions));
     const originalUsernameRef = useRef<string>(toFormState(profile).username || "");
+
+    // A navigation prompt must reflect the current draft, not the fact that a
+    // field was edited at some point. This keeps type-then-revert flows clean
+    // while retaining the contribution editor's semantic comparison rules.
+    const hasChanges = useMemo(() => {
+        if (!formState) return false;
+        const base = baseProfileRef.current as Record<string, unknown>;
+        const profilePayload = withoutLegacyContributionPayload(
+            formState,
+            lastKnownUpdatedAtRef.current,
+        );
+        const contributionChanges = buildContributionMutations(
+            (base.contributionBase ?? []) as ContributionEditorEntry[],
+            (formState.experience ?? []) as ContributionEditorEntry[],
+        );
+        return profilePayloadChanged(profilePayload, base) || contributionChanges.length > 0;
+    }, [formState]);
 
     const completion = useMemo(() => calculateProfileCompletion({
         avatarUrl: formState?.avatarUrl || "",
@@ -116,7 +134,6 @@ export function EditProfileModal({
         if (!profile?.id) {
             if (!open) {
                 setFormState(null);
-                setHasChanges(false);
             }
             return;
         }
@@ -132,7 +149,6 @@ export function EditProfileModal({
         originalUsernameRef.current = initial.username || "";
         lastKnownUpdatedAtRef.current = toIsoTimestamp(profile.updatedAt);
         setFormState(initial);
-        setHasChanges(false);
         setSaveState("idle");
         setSaveErrorMessage(null);
         setContributionErrors({});
@@ -204,19 +220,39 @@ export function EditProfileModal({
 
     const persistChanges = async (closeOnSuccess: boolean) => {
         if (!formState || inFlightRef.current) return;
+        const base = baseProfileRef.current as any;
+        const currentEntries = (formState.experience ?? []) as ContributionEditorEntry[];
+        const originalEntries = (base.contributionBase ?? []) as ContributionEditorEntry[];
+        const originalEntriesById = new Map(originalEntries.map((entry) => [entry.draftId, entry]));
+        const validationErrors = Object.fromEntries(
+            currentEntries.flatMap((entry) => {
+                if (!contributionEntryChanged(entry, originalEntriesById.get(entry.draftId))) return [];
+                const error = validateContributionEditorEntry(entry);
+                return error ? [[entry.draftId, error] as const] : [];
+            }),
+        );
+        if (Object.keys(validationErrors).length > 0) {
+            setContributionErrors(validationErrors);
+            setActiveSection("experience");
+            setSaveState("error");
+            setSaveErrorMessage("Fix the highlighted project contribution before saving.");
+            toast.error("Fix the highlighted project contribution before saving.");
+            return;
+        }
+
         inFlightRef.current = true;
         setSaveState("saving");
         setSaveErrorMessage(null);
         setContributionErrors({});
 
         const profilePayload = withoutLegacyContributionPayload(formState, lastKnownUpdatedAtRef.current);
-        const base = baseProfileRef.current as any;
         const mutations = buildContributionMutations(
-            (base.contributionBase ?? []) as ContributionEditorEntry[],
-            (formState.experience ?? []) as ContributionEditorEntry[],
+            originalEntries,
+            currentEntries,
         );
         const shouldSaveProfile = profilePayloadChanged(profilePayload, base);
         const rollbackPatch: Record<string, unknown> = {};
+        let profileSaved = false;
 
         try {
             if (shouldSaveProfile) {
@@ -228,6 +264,14 @@ export function EditProfileModal({
                 if (!response.success) {
                     applyOptimisticPatch(rollbackPatch);
                     const code = (response as any).errorCode || (response as any).code;
+                    const changedKeys = Object.keys(profilePayload).filter((key) => key !== 'expectedUpdatedAt' && JSON.stringify(profilePayload[key] ?? null) !== JSON.stringify(base[key] ?? null));
+                    if (code === 'PROFILE_CONFLICT' && changedKeys.length === 1 && changedKeys[0] === 'socialLinks' && (response as any).currentSocialLinks !== undefined) {
+                        const mergedLinks = mergeSocialLinkCollections(base.socialLinks, formState.socialLinks, (response as any).currentSocialLinks);
+                        baseProfileRef.current = { ...baseProfileRef.current, socialLinks: (response as any).currentSocialLinks };
+                        setFormState((current: any) => current ? { ...current, socialLinks: mergedLinks } : current);
+                        lastKnownUpdatedAtRef.current = typeof (response as any).updatedAt === 'string' ? (response as any).updatedAt : lastKnownUpdatedAtRef.current;
+                        throw new Error('Your latest saved links were merged with this draft. Review them and save again.');
+                    }
                     const message = code === "PROFILE_CONFLICT"
                         ? "Your profile changed in another session. Keep this editor open, refresh the profile, and review before saving again."
                         : ((response as any).error || "Could not update profile");
@@ -237,6 +281,7 @@ export function EditProfileModal({
                     ? (response as any).updatedAt
                     : lastKnownUpdatedAtRef.current;
                 baseProfileRef.current = applyPayloadToFormBase(baseProfileRef.current, profilePayload);
+                profileSaved = true;
             }
 
             if (mutations.length > 0) {
@@ -274,7 +319,6 @@ export function EditProfileModal({
             };
             baseProfileRef.current = nextBase;
             setFormState(nextBase);
-            setHasChanges(false);
             setContributionErrors({});
             setContributionTotal(freshWindow.total);
             setContributionHasMore(freshWindow.hasMore && freshEntries.length < 500);
@@ -286,7 +330,10 @@ export function EditProfileModal({
             toast.success("Profile updated successfully");
             if (closeOnSuccess) onOpenChange(false);
         } catch (error) {
-            const message = error instanceof Error ? error.message : "An unexpected error occurred while saving your profile.";
+            const errorMessage = error instanceof Error ? error.message : "An unexpected error occurred while saving your profile.";
+            const message = profileSaved && mutations.length > 0
+                ? `Profile details were saved, but project contributions were not: ${errorMessage}`
+                : errorMessage;
             setSaveState("error");
             setSaveErrorMessage(message);
             toast.error(message);
@@ -359,7 +406,6 @@ export function EditProfileModal({
 
     const handleDiscard = () => {
         setFormState(baseProfileRef.current);
-        setHasChanges(false);
         setContributionErrors({});
         draftTouchedRef.current = false;
         setShowDiscardConfirm(false);
@@ -401,7 +447,6 @@ export function EditProfileModal({
                             onChange={(updates) => {
                                 draftTouchedRef.current = true;
                                 setFormState(updates);
-                                setHasChanges(true);
                                 setContributionErrors({});
                                 if (saveState !== "saving") {
                                     setSaveState("idle");
