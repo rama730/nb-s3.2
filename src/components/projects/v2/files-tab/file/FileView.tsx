@@ -46,6 +46,7 @@
 import { toast } from "sonner";
 
 import * as React from "react";
+import { useQuery } from "@tanstack/react-query";
 import {
   AlertTriangle,
   FileQuestion,
@@ -82,6 +83,10 @@ import { LinkedTasksPanel } from "./LinkedTasksPanel";
 import { MetadataStrip, type MetadataStripNode } from "./MetadataStrip";
 import { TextViewer, type TextViewerMode } from "./TextViewer";
 import { isAssetKind, isEmptyMedia, isMarkdownNode } from "./previewPicker";
+import { useFilesWorkspaceView } from "../FilesWorkspaceViews";
+import { FileInspectorContainer } from "./FileInspectorContainer";
+import { FileInspectorPanelHeader } from "./FileInspectorPanelHeader";
+import { formatBytes, formatRelativeTime } from "../folder/format";
 import { RevisionControlModal } from "@/components/ui/RevisionControlModal";
 import { createClient } from "@/lib/supabase/client";
 import { useFileLease, type FileLeaseStatus } from "../hooks/useFileLease";
@@ -123,7 +128,7 @@ export interface FileViewProps {
 // it structurally.
 
 type FileViewMode = "view" | "raw" | "edit";
-type FileInspectorPanel = "linked_tasks" | "version_history" | null;
+type FileInspectorPanel = "details" | "linked_tasks" | "version_history" | "github" | null;
 
 // ---------------------------------------------------------------------------
 // Component
@@ -164,42 +169,34 @@ export function FileView({
   const [pendingDropFile, setPendingDropFile] = React.useState<File | null>(null);
   const [isDropModalOpen, setIsDropModalOpen] = React.useState(false);
 
-  React.useEffect(() => {
-    const handleVersionChanged = (e: Event) => {
-      const detail = (e as CustomEvent).detail;
-      if (detail && detail.nodeId === node.id) {
-        setRestoringActive(false);
-        setCompareVersion(null);
-      }
-    };
-    const handleVersionChangedStart = (e: Event) => {
-      const detail = (e as CustomEvent).detail;
-      if (detail && detail.nodeId === node.id) {
-        setRestoringActive(true);
-      }
-    };
-
-    window.addEventListener("file:version-changed", handleVersionChanged);
-    window.addEventListener("file:version-changed-start", handleVersionChangedStart);
-    return () => {
-      window.removeEventListener("file:version-changed", handleVersionChanged);
-      window.removeEventListener("file:version-changed-start", handleVersionChangedStart);
-    };
-  }, [node.id]);
-
   const [mode, setMode] = React.useState<FileViewMode>("view");
   const [editorDirty, setEditorDirty] = React.useState(false);
+  const [pendingMode, setPendingMode] = React.useState<FileViewMode | null>(
+    null,
+  );
+  const setDirtyFile = useFilesWorkspaceStore((state) => state.setDirtyFile);
+  React.useEffect(() => {
+    setDirtyFile(projectId, node.id, editorDirty);
+    return () => setDirtyFile(projectId, node.id, false);
+  }, [editorDirty, node.id, projectId, setDirtyFile]);
   const fileLease = useFileLease(projectId, node.id);
+
+  const leaveEditMode = React.useCallback(
+    (nextMode: FileViewMode) => {
+      if (mode === "edit") void fileLease.release();
+      setEditorDirty(false);
+      setMode(nextMode);
+    },
+    [fileLease, mode],
+  );
 
   const onView = React.useCallback(() => {
     if (mode === "edit" && editorDirty) {
-      const discard = window.confirm("Discard your unsaved changes and leave edit mode?");
-      if (!discard) return;
+      setPendingMode("view");
+      return;
     }
-    if (mode === "edit") void fileLease.release();
-    setEditorDirty(false);
-    setMode("view");
-  }, [editorDirty, fileLease, mode]);
+    leaveEditMode("view");
+  }, [editorDirty, leaveEditMode, mode]);
 
   const router = useRouter();
   const pathname = usePathname();
@@ -216,8 +213,10 @@ export function FileView({
   }, [router, projectSlug]);
 
   // ── LinkedTasksPanel toggle state (Req 8.1, 8.6) ───────────────────
-  const [activeInspectorPanel, setActiveInspectorPanel] =
-    React.useState<FileInspectorPanel>(null);
+  const workspace = useFilesWorkspaceView();
+  const [localPanel, setLocalPanel] = React.useState<FileInspectorPanel>(null);
+  const activeInspectorPanel = workspace?.inspector ?? localPanel;
+  const setActiveInspectorPanel = workspace?.setInspector ?? setLocalPanel;
   const actionsTriggerRef = React.useRef<HTMLButtonElement>(null);
   const isLinkedTasksPanelOpen = activeInspectorPanel === "linked_tasks";
   const isVersionHistoryPanelOpen = activeInspectorPanel === "version_history";
@@ -225,23 +224,25 @@ export function FileView({
     setActiveInspectorPanel((current) =>
       current === "linked_tasks" ? null : "linked_tasks",
     );
-  }, []);
+  }, [setActiveInspectorPanel]);
 
   // ── FileVersionHistoryPanel toggle state (Req 10.1, 10.2, 10.3) ────
   const onToggleVersionHistory = React.useCallback(() => {
     setActiveInspectorPanel((current) =>
       current === "version_history" ? null : "version_history",
     );
-  }, []);
+  }, [setActiveInspectorPanel]);
 
   const closeInspectorPanel = React.useCallback(() => {
     setActiveInspectorPanel(null);
+    const url = new URL(window.location.href); url.searchParams.delete("filesPanel"); window.history.replaceState(window.history.state, "", url);
     window.requestAnimationFrame(() => actionsTriggerRef.current?.focus());
-  }, []);
+  }, [setActiveInspectorPanel]);
 
   React.useEffect(() => {
-    setActiveInspectorPanel(null);
-  }, [node.id]);
+    const panel = new URLSearchParams(window.location.search).get("filesPanel");
+    setActiveInspectorPanel(panel === "details" || panel === "version_history" || panel === "linked_tasks" ? panel : null);
+  }, [node.id, setActiveInspectorPanel]);
 
   // ── Drop-zone state (Req 12.1–12.5, 24.4) ─────────────────────────
   const [isDragActive, setIsDragActive] = React.useState(false);
@@ -404,12 +405,6 @@ export function FileView({
     setIsDropModalOpen(true);
   }, [hashMatchPromptFile, node.name]);
 
-  // Signed URL for asset / markdown / binary previews and for the
-  // Download + Raw-on-binary actions. Fetched lazily and cached at the
-  // component level (a fresh mount on id change refetches — desired).
-  const [signedUrl, setSignedUrl] = React.useState<string | null>(null);
-  const [signedUrlError, setSignedUrlError] = React.useState<string | null>(null);
-
   // Markdown content for `MarkdownPreview`. Only fetched when the rendered
   // markdown view is active.
   const [mdContent, setMdContent] = React.useState<string | null>(null);
@@ -420,39 +415,32 @@ export function FileView({
   // `getProjectFileContent`). Asset / binary / markdown preview flows all
   // need one so the `<img>` / `<video>` / `<object>` elements can load
   // the blob directly.
-  const needsSignedUrl = !node.s3Key ? false : !(kind === "text" && !isMd);
+  // PDF previews fetch through the same-origin preview route in
+  // `AssetPreview`, so they do not need a browser-exposed storage URL.
+  const needsSignedUrl = !node.s3Key
+    ? false
+    : !(kind === "text" && !isMd) && kind !== "pdf";
 
-  React.useEffect(() => {
-    if (!needsSignedUrl) {
-      setSignedUrl(null);
-      setSignedUrlError(null);
-      return;
-    }
-    let cancelled = false;
-    setSignedUrl(null);
-    setSignedUrlError(null);
-
-    (async () => {
-      try {
-        const res = await getProjectFileSignedUrl(projectId, node.id, 300);
-        if (cancelled) return;
-        if (!res?.url) {
-          setSignedUrlError("Signed URL was empty");
-          return;
-        }
-        setSignedUrl(res.url);
-      } catch (err) {
-        if (cancelled) return;
-        const message =
-          err instanceof Error ? err.message : "Failed to prepare preview";
-        setSignedUrlError(message);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [projectId, node.id, needsSignedUrl]);
+  const signedUrlQuery = useQuery({
+    queryKey: ["project-file-signed-url", projectId, node.id, node.currentVersion],
+    enabled: needsSignedUrl,
+    queryFn: async () => {
+      const result = await getProjectFileSignedUrl(projectId, node.id, 1_800);
+      if (!result?.url) throw new Error("Signed URL was empty");
+      return result;
+    },
+    staleTime: 25 * 60_000,
+    gcTime: 30 * 60_000,
+    retry: 1,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+  });
+  const signedUrl = signedUrlQuery.data?.url ?? null;
+  const signedUrlError = signedUrlQuery.error instanceof Error
+    ? signedUrlQuery.error.message
+    : signedUrlQuery.error
+      ? "Failed to prepare preview"
+      : null;
 
   // ── Markdown content fetch ──────────────────────────────────────────
   // Only needed for the rendered view (`mode === "view"` + markdown
@@ -496,12 +484,10 @@ export function FileView({
   const onRaw = React.useCallback(() => {
     if (textLike) {
       if (mode === "edit" && editorDirty) {
-        const discard = window.confirm("Discard your unsaved changes and leave edit mode?");
-        if (!discard) return;
+        setPendingMode("raw");
+        return;
       }
-      if (mode === "edit") void fileLease.release();
-      setEditorDirty(false);
-      setMode("raw");
+      leaveEditMode("raw");
       return;
     }
     // Non-text/markdown: "Raw" opens the signed URL in a new tab, matching
@@ -509,10 +495,7 @@ export function FileView({
     (async () => {
       try {
         let url = signedUrl;
-        if (!url) {
-          const res = await getProjectFileSignedUrl(projectId, node.id, 300);
-          url = res?.url ?? null;
-        }
+        if (!url) url = (await signedUrlQuery.refetch()).data?.url ?? null;
         if (!url) {
           toast.error("Could not prepare raw file");
           return;
@@ -524,7 +507,7 @@ export function FileView({
         toast.error(message);
       }
     })();
-  }, [textLike, signedUrl, projectId, node.id,mode, editorDirty, fileLease]);
+  }, [textLike, signedUrl, signedUrlQuery, mode, editorDirty, leaveEditMode]);
 
   const onEdit = React.useCallback(() => {
     if (!canEdit) return;
@@ -582,6 +565,22 @@ export function FileView({
         confirmLabel="Re-upload"
         cancelLabel="Cancel"
         onConfirm={handleHashMatchConfirm}
+      />
+
+      <ConfirmDialog
+        open={pendingMode !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingMode(null);
+        }}
+        title="Discard unsaved changes?"
+        description="Your edits have not been saved. Discard them and leave edit mode?"
+        confirmLabel="Discard changes"
+        variant="destructive"
+        onConfirm={() => {
+          if (!pendingMode) return;
+          leaveEditMode(pendingMode);
+          setPendingMode(null);
+        }}
       />
 
       <MetadataStrip
@@ -646,33 +645,32 @@ export function FileView({
 
           {/* LinkedTasksPanel — collapsible right-side drawer (Req 8.1, 8.6) */}
           {isLinkedTasksPanelOpen && (
-            <div className="w-80 shrink-0 border-l border-zinc-200 bg-white shadow-xl dark:border-zinc-800 dark:bg-zinc-950 max-lg:absolute max-lg:inset-y-0 max-lg:right-0 max-lg:z-20 max-lg:w-[min(20rem,85vw)]">
+            <FileInspectorContainer title="Linked tasks" onClose={closeInspectorPanel}>
               <LinkedTasksPanel
                 projectId={projectId}
                 nodeId={node.id}
                 canEdit={canEdit}
                 onClose={closeInspectorPanel}
                 onOpenTask={(taskId) => {
-                  // Open task panel with initialTab="files" (Req 8.3).
-                  // The task panel opening mechanism is handled by the parent
-                  // context or router — for now we dispatch a custom event
-                  // that the task panel listens for.
-                  window.dispatchEvent(
-                    new CustomEvent("open-task-panel", {
-                      detail: { taskId, initialTab: "files" },
-                    }),
+                  router.push(
+                    `/projects/${encodeURIComponent(projectSlug)}?${new URLSearchParams({
+                      tab: "tasks",
+                      drawerType: "task",
+                      drawerId: taskId,
+                      panelTab: "files",
+                      fileId: node.id,
+                    }).toString()}`,
+                    { scroll: false },
                   );
                 }}
               />
-            </div>
+            </FileInspectorContainer>
           )}
 
+          {activeInspectorPanel === "details" && <FileInspectorContainer title="File details" onClose={closeInspectorPanel}><FileInspectorPanelHeader title="Details" closeLabel="Close file details" onClose={closeInspectorPanel} /><dl className="space-y-3 break-words p-4 text-sm">{[["Name", node.name], ["Location", node.path.startsWith("/.system/") ? "Task files" : node.path], ["Type", node.mimeType || "Not recorded"], ["Size", formatBytes(node.size, node.type)], ["Version", String(node.currentVersion)], ["Updated by", (node as MetadataStripNode).updatedByName || (node as MetadataStripNode).updatedByUsername || "Not recorded"], ["Modified", formatRelativeTime((node as MetadataStripNode).versionUpdatedAt ?? node.updatedAt)]].map(([label, value]) => <div key={label}><dt className="text-xs text-zinc-500">{label}</dt><dd>{value}</dd></div>)}</dl></FileInspectorContainer>}
           {/* FileVersionHistoryPanel — collapsible right-side drawer (Req 10.1, 10.2, 10.3) */}
           {isVersionHistoryPanelOpen && (
-            <div
-              className="w-80 shrink-0 border-l border-zinc-200 bg-white shadow-xl dark:border-zinc-800 dark:bg-zinc-950 max-lg:absolute max-lg:inset-y-0 max-lg:right-0 max-lg:z-20 max-lg:w-[min(20rem,85vw)]"
-              data-testid="files-tab-version-history-drawer"
-            >
+            <FileInspectorContainer title="Version history" onClose={closeInspectorPanel} testId="files-tab-version-history-drawer">
               <FileVersionHistoryPanel
                 projectId={projectId}
                 nodeId={node.id}
@@ -682,9 +680,14 @@ export function FileView({
                 isDeleted={node.deletedAt != null}
                 uploaderNames={uploaderNames}
                 onCompareClick={setCompareVersion}
+                onVersionChangeStart={() => setRestoringActive(true)}
+                onVersionChanged={() => {
+                  setRestoringActive(false);
+                  setCompareVersion(null);
+                }}
                 onClose={closeInspectorPanel}
               />
-            </div>
+            </FileInspectorContainer>
           )}
         </div>
       </div>
@@ -800,6 +803,14 @@ function renderPreviewRegion(p: PreviewRegionProps): React.JSX.Element {
   // Asset kinds: image / video / audio / pdf / doc (Req 13.1–13.4).
   // `AssetPreview` needs the signed URL; failure to mint one is a preview
   // load error per Req 13.6.
+  if (p.kind === "pdf") {
+    return (
+      <div className="flex-1 min-h-0">
+        <AssetPreview node={p.node} signedUrl={null} />
+      </div>
+    );
+  }
+
   if (isAssetKind(p.kind)) {
     if (p.signedUrlError) {
       return <PreviewError message={p.signedUrlError} />;
