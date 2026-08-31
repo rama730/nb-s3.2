@@ -27,7 +27,8 @@ test('message-to-task conversion creates the task and work link atomically', () 
     assert.match(convertToTask, /targetType:\s*'task'/);
     assert.match(convertToTask, /mapMessageWorkLinkToSummary\(taskResult\.link\)/);
     assert.match(convertToTask, /queueCounterRefreshBestEffort/);
-    assert.match(convertToTask, /emitTaskAssignedNotification/);
+    assert.match(convertToTask, /enqueueProjectNotificationEvent/);
+    assert.match(convertToTask, /eventKey:\s*["']tasks\.created_assigned["']/);
 });
 
 test('message follow-up due metadata is timezone-stable on the server', () => {
