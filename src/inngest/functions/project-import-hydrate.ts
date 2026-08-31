@@ -75,6 +75,7 @@ export const projectImportHydrate = inngest.createFunction(
                         .from('project-files')
                         .upload(s3Key, file.content, {
                             contentType: node.mimeType || 'application/octet-stream',
+                            cacheControl: '3600',
                             upsert: true
                         });
                     
@@ -123,7 +124,7 @@ export const projectImportHydrate = inngest.createFunction(
                 where: eq(projects.id, projectId),
                 columns: { importSource: true }
             });
-            let finalImportSource = finalProj?.importSource as any;
+            const finalImportSource = finalProj?.importSource as any;
             if (finalImportSource?.metadata?.hydration) {
                 finalImportSource.metadata.hydration.status = "done";
                 finalImportSource.metadata.hydration.completed = uploaded;
