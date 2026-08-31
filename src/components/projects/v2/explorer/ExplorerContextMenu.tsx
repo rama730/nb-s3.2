@@ -29,6 +29,7 @@ export function useTreeContext(options: {
   >;
   mode: "default" | "select";
   canEdit: boolean;
+  canMove: boolean;
   projectName: string;
   effectiveMode: string;
   // Inline rename
@@ -77,6 +78,7 @@ export function useTreeContext(options: {
     locksByNodeId,
     mode,
     canEdit,
+    canMove,
     projectName,
     effectiveMode,
     handleSelect,
@@ -124,13 +126,16 @@ export function useTreeContext(options: {
 
   const restoreNode = useCallback(
     async (id: string) => {
+      // Keep the original parent before refreshing Trash. A restored item is
+      // intentionally removed from the Trash result, so looking it up after
+      // that refresh loses the folder that needs to be invalidated.
+      const restoredParentId = nodesById[id]?.parentId ?? null;
       const mutationKey = `restore:${projectId}:${id}`;
       const result = await runUniqueMutation(mutationKey, async () => {
         await bulkRestoreNodes([id], projectId);
         const nodes = (await getTrashNodes(projectId)) as ProjectNode[];
         setTrashNodesState(nodes);
-        const node = nodesById[id];
-        if (node?.parentId) await loadFolderContent(node.parentId, "refresh");
+        await loadFolderContent(restoredParentId, "refresh");
         return true;
       });
       if (result === null) return;
@@ -171,6 +176,7 @@ export function useTreeContext(options: {
       locksByNodeId,
       mode: mode || "default",
       canEdit,
+      canMove,
       projectName: projectName || "Project",
       isTrashMode: effectiveMode === "trash",
 
@@ -220,6 +226,7 @@ export function useTreeContext(options: {
       locksByNodeId,
       mode,
       canEdit,
+      canMove,
       projectName,
       effectiveMode,
       projectId,
