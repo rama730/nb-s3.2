@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import { bulkMoveNodes } from "@/app/actions/files/mutations";
+import { moveProjectNodes } from "@/app/actions/files/mutations";
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 import type { ProjectNode } from "@/lib/db/schema";
 import { getErrorMessage, type ExplorerOperation } from "./explorerTypes";
@@ -7,6 +7,7 @@ import { getErrorMessage, type ExplorerOperation } from "./explorerTypes";
 export function useExplorerDragDrop(options: {
   projectId: string;
   canEdit: boolean;
+  canManageFiles?: boolean;
   nodesById: Record<string, ProjectNode>;
   storeSelectedNodeIds: string[];
   runUniqueMutation: <T>(key: string, fn: () => Promise<T>) => Promise<T | null>;
@@ -19,6 +20,7 @@ export function useExplorerDragDrop(options: {
   const {
     projectId,
     canEdit,
+    canManageFiles = canEdit,
     nodesById,
     storeSelectedNodeIds,
     runUniqueMutation,
@@ -31,7 +33,7 @@ export function useExplorerDragDrop(options: {
 
   const handleDropOnFolder = useCallback(
     async (folderId: string, draggedId: string) => {
-      if (!canEdit) return;
+      if (!canManageFiles) return;
       if (folderId === draggedId) return;
 
       let nodesToMove: string[] = [draggedId];
@@ -53,11 +55,11 @@ export function useExplorerDragDrop(options: {
             if (oldParentId !== folderId) staleParents.add(oldParentId);
           }
 
-          const updatedNodes = (await bulkMoveNodes(
+          const updatedNodes = (await moveProjectNodes(
             sortedIds,
             folderId,
-            projectId
-          )) as ProjectNode[];
+            projectId,
+          )).nodes;
           if (updatedNodes.length > 0) upsertNodes(projectId, updatedNodes);
 
           if (updatedNodes.length > 0) {
@@ -85,7 +87,7 @@ export function useExplorerDragDrop(options: {
       }
     },
     [
-      canEdit,
+      canManageFiles,
       storeSelectedNodeIds,
       nodesById,
       projectId,
