@@ -81,7 +81,13 @@ export async function enqueueTaskCommentMentionNotifications(
             },
             sourceEventId: params.commentId,
         });
-        return { enqueued: "enqueued" in result ? result.enqueued : 0 };
+        return {
+            enqueued: "delivered" in result && typeof result.delivered === "number"
+                ? result.delivered
+                : typeof result.enqueued === "number"
+                    ? result.enqueued
+                    : 0,
+        };
     } catch (error) {
         logger.warn("notifications.task_comment_mention_emit_failed", {
             module: "notifications",
