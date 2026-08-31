@@ -586,25 +586,6 @@ html[data-reduce-motion="true"] :is(
   }
 }
 
-@keyframes message-focus-pulse {
-  0% {
-    transform: translateY(4px) scale(0.992);
-    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0);
-  }
-  20% {
-    transform: translateY(0) scale(1);
-    box-shadow: 0 0 0 10px rgba(59, 130, 246, 0.08);
-  }
-  55% {
-    transform: translateY(0) scale(1);
-    box-shadow: 0 0 0 16px rgba(59, 130, 246, 0.04);
-  }
-  100% {
-    transform: translateY(0) scale(1);
-    box-shadow: 0 0 0 22px rgba(59, 130, 246, 0);
-  }
-}
-
 @keyframes delivery-pulse {
   0%, 100% { opacity: 0.5; }
   50% { opacity: 1; }
@@ -693,58 +674,18 @@ html[data-reduce-motion="true"] :is(
 }
 
 .msg-bubble-own {
-  background: var(--msg-own-bg);
-  color: var(--msg-own-fg);
-  border-bottom-right-radius: var(--msg-tail-radius);
+  /* ponytail: legacy styling overrides removed to allow new Shadcn primitives to style bubbles */
 }
 
 .msg-bubble-peer {
-  background: var(--msg-peer-bg);
-  color: var(--msg-peer-fg);
-  border: 1px solid color-mix(in oklch, var(--border) 70%, transparent);
-  border-bottom-left-radius: var(--msg-tail-radius);
+  /* ponytail: legacy styling overrides removed to allow new Shadcn primitives to style bubbles */
 }
 
 .msg-bubble-shell[data-pending="true"] {
   opacity: 0.72;
 }
 
-.msg-action-rail {
-  position: absolute !important;
-  bottom: 8px !important;
-  top: auto !important;
-  transform: none !important;
-  z-index: 10 !important;
-  display: flex !important;
-  align-items: center !important;
-  gap: 0.125rem !important;
-}
-
-.msg-action-rail-own {
-  right: 100% !important;
-  margin-right: 0.5rem !important;
-}
-
-.msg-action-rail-peer {
-  left: 100% !important;
-  margin-left: 0.5rem !important;
-}
-
-/* Peer message corner flattening */
-.msg-bubble-peer[data-consecutive-next="true"] {
-  border-bottom-left-radius: var(--msg-bubble-radius) !important;
-}
-.msg-bubble-peer[data-consecutive-prev="true"] {
-  border-top-left-radius: var(--msg-tail-radius) !important;
-}
-
-/* Own message corner flattening */
-.msg-bubble-own[data-consecutive-next="true"] {
-  border-bottom-right-radius: var(--msg-bubble-radius) !important;
-}
-.msg-bubble-own[data-consecutive-prev="true"] {
-  border-top-right-radius: var(--msg-tail-radius) !important;
-}
+/* ponytail: dead styles for msg-action-rail and bubble corner overrides removed */
 
 .msg-date-pill {
   background: var(--msg-date-pill-bg);
@@ -782,61 +723,48 @@ html[data-reduce-motion="true"] :is(
   --_blur-bottom: var(--msg-thread-composer-blur, 4.75rem);
   --_blur-strength: 5px;
   position: relative;
+  contain: content;
+  will-change: transform;
   transform: translate3d(0, 0, 0);
 }
 
-.msg-thread-mask::before,
-.msg-thread-mask::after {
-  content: '';
-  position: absolute;
-  left: 0;
-  right: 0;
-  z-index: 20;
-  pointer-events: none;
-  backdrop-filter: blur(var(--_blur-strength));
-  -webkit-backdrop-filter: blur(var(--_blur-strength));
-}
-
-.msg-thread-mask::before {
-  top: 0;
-  height: var(--_blur-top);
-  mask-image: linear-gradient(
-    to bottom,
-    black 0%,
-    rgba(0, 0, 0, 0.78) 38%,
-    rgba(0, 0, 0, 0.24) 78%,
-    rgba(0, 0, 0, 0.04) 94%,
-    transparent 100%
-  );
+/* Smooth fade edges via mask-image — no GPU white-line artifacts unlike backdrop-filter */
+.msg-thread-mask {
+  position: relative;
+  contain: content;
+  will-change: transform;
+  transform: translate3d(0, 0, 0);
+  --_blur-top: var(--msg-thread-header-blur, 3rem);
+  --_blur-bottom: var(--msg-thread-composer-blur, 4.25rem);
   -webkit-mask-image: linear-gradient(
     to bottom,
-    black 0%,
-    rgba(0, 0, 0, 0.78) 38%,
-    rgba(0, 0, 0, 0.24) 78%,
-    rgba(0, 0, 0, 0.04) 94%,
+    transparent 0,
+    black var(--_blur-top),
+    black calc(100% - var(--_blur-bottom)),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    black var(--_blur-top),
+    black calc(100% - var(--_blur-bottom)),
     transparent 100%
   );
 }
 
-.msg-thread-mask::after {
-  bottom: 0;
-  height: var(--_blur-bottom);
-  mask-image: linear-gradient(
-    to top,
-    black 0%,
-    rgba(0, 0, 0, 0.78) 38%,
-    rgba(0, 0, 0, 0.24) 78%,
-    rgba(0, 0, 0, 0.04) 94%,
-    transparent 100%
-  );
-  -webkit-mask-image: linear-gradient(
-    to top,
-    black 0%,
-    rgba(0, 0, 0, 0.78) 38%,
-    rgba(0, 0, 0, 0.24) 78%,
-    rgba(0, 0, 0, 0.04) 94%,
-    transparent 100%
-  );
+/* Row-level layout isolation for ultra-fast scrolling */
+.msg-message-row {
+  /* ponytail: removed content-visibility: auto as it fatally breaks React Virtuoso's ability to measure off-screen elements during overscan, causing severe scroll jitter */
+}
+
+/* Script element visibility override for debugging script payloads in chat */
+script.debug-script-view {
+  display: block;
+  white-space: pre;
+  font-family: var(--font-mono, monospace);
+  background: #f4f4f4;
+  padding: 0.5rem;
+  border-radius: 0.25rem;
 }
 
 /* Popup header and composer are shorter than the page surface. */
@@ -879,4 +807,51 @@ html[data-reduce-motion="true"] :is(
 .ProseMirror-yjs-selection,
 .tiptap .ProseMirror-yjs-selection {
   background-color: rgba(13, 109, 253, 0.3);
+}
+
+/* ── Message Attachment Bento Grid ── */
+.msg-bento-grid {
+  display: grid;
+  width: 100%;
+  max-width: 480px;
+  grid-auto-flow: dense;
+}
+
+/* 1 Item: Stretch (Default handled by inline styles) */
+.msg-bento-grid[data-count="1"] {
+  display: flex;
+}
+
+/* 2 Items: Side by side */
+.msg-bento-grid[data-count="2"] {
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: minmax(150px, 200px);
+}
+
+/* 3 Items: 1 Large Left, 2 Small Right */
+.msg-bento-grid[data-count="3"] {
+  grid-template-columns: 2fr 1fr;
+  grid-template-rows: 1fr 1fr;
+  grid-template-areas:
+    "a b"
+    "a c";
+  aspect-ratio: 16 / 9;
+}
+.msg-bento-grid[data-count="3"] > *:nth-child(1) { grid-area: a; }
+.msg-bento-grid[data-count="3"] > *:nth-child(2) { grid-area: b; }
+.msg-bento-grid[data-count="3"] > *:nth-child(3) { grid-area: c; }
+
+/* 4+ Items: 2x2 Grid */
+.msg-bento-grid[data-count="4"] {
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+  aspect-ratio: 1;
+}
+
+/* Override inline dimensions for grid layouts > 1 to stretch properly */
+.msg-bento-grid:not([data-count="1"]) .msg-media-frame {
+  width: 100% !important;
+  height: 100% !important;
+  max-height: none !important;
+  aspect-ratio: auto !important;
 }
