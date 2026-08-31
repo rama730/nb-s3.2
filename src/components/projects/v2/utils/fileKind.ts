@@ -103,9 +103,12 @@ export function fileKind(node: Pick<ProjectNode, "type" | "name" | "mimeType">):
   if (isTextLike(node)) return "text";
 
   const ext = extOf(node.name);
+  if (["png", "jpg", "jpeg", "gif", "webp", "svg", "avif", "bmp", "ico"].includes(ext)) return "image";
+  if (["mp4", "mov", "webm", "m4v", "ogv"].includes(ext)) return "video";
+  if (["mp3", "wav", "ogg", "m4a", "aac", "flac"].includes(ext)) return "audio";
+  if (ext === "pdf") return "pdf";
   if (DOC_MIMES.has(mime) || DOC_MIME_PREFIXES.some((p) => mime.startsWith(p))) return "doc";
   if (["doc", "docx", "xls", "xlsx", "ppt", "pptx"].includes(ext)) return "doc";
 
   return "binary";
 }
-
