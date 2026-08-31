@@ -1,4 +1,5 @@
 import type { NotificationItem } from "@/lib/notifications/types";
+import { buildNotificationHref } from "@/lib/notifications/presentation";
 
 export type BrowserNotificationPermissionState = "granted" | "denied" | "default" | "unsupported";
 
@@ -36,11 +37,12 @@ export function showBrowserNotification(options: ShowBrowserNotificationOptions)
     if (!enabled) return null;
     if (tabVisible) return null;
     if (item.importance !== "important") return null;
-    if (item.readAt || item.dismissedAt) return null;
+    if (item.seenAt || item.dismissedAt) return null;
     if (typeof window === "undefined" || typeof Notification === "undefined") return null;
     if (Notification.permission !== "granted") return null;
 
     try {
+        const href = buildNotificationHref(item);
         const body = item.body ?? item.preview?.secondaryText ?? "";
         const icon = item.preview?.actorAvatarUrl ?? "/favicon.ico";
         const notification = new Notification(item.title, {
@@ -48,7 +50,7 @@ export function showBrowserNotification(options: ShowBrowserNotificationOptions)
             icon,
             tag: item.dedupeKey,
             silent: false,
-            data: { href: item.href, id: item.id },
+            data: { href, id: item.id },
         });
         notification.onclick = () => {
             try {
@@ -56,8 +58,8 @@ export function showBrowserNotification(options: ShowBrowserNotificationOptions)
             } catch {
                 // best effort
             }
-            if (item.href && onClickHref) {
-                onClickHref(item.href);
+            if (href && onClickHref) {
+                onClickHref(href);
             }
             notification.close();
         };
