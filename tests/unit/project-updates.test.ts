@@ -148,7 +148,7 @@ test("project update media route caches immutable signed redirects", () => {
     const accessSource = readFileSync(path.join(process.cwd(), "src/lib/data/project-access.ts"), "utf8");
 
     assert.match(routeSource, /SIGNED_URL_TTL_SECONDS = 15 \* 60/);
-    assert.match(routeSource, /PRIVATE_REDIRECT_MAX_AGE_SECONDS = 120/);
+    assert.match(routeSource, /PRIVATE_REDIRECT_MAX_AGE_SECONDS = 12 \* 60/);
     assert.match(routeSource, /createSignedUrl\(storageKey, SIGNED_URL_TTL_SECONDS\)/);
     assert.match(routeSource, /publicTabVisibility: access\.project\.publicTabVisibility/);
     assert.match(routeSource, /"Vary", "Cookie, Authorization"/);
@@ -156,13 +156,9 @@ test("project update media route caches immutable signed redirects", () => {
     assert.match(accessSource, /publicTabVisibility\?: unknown/);
     assert.match(accessSource, /publicTabVisibility: projects\.publicTabVisibility/);
 
-    const cacheHeaderStart = routeSource.indexOf('response.headers.set(\n        "Cache-Control"');
-    const cacheHeaderEnd = routeSource.indexOf(');\n    response.headers.set(\n        "CDN-Cache-Control"', cacheHeaderStart);
-    assert.notEqual(cacheHeaderStart, -1);
-    assert.notEqual(cacheHeaderEnd, -1);
-    const cacheHeaderBlock = routeSource.slice(cacheHeaderStart, cacheHeaderEnd);
-    assert.match(cacheHeaderBlock, /private, max-age=\$\{PRIVATE_REDIRECT_MAX_AGE_SECONDS\}/);
-    assert.equal(cacheHeaderBlock.includes("no-store"), false);
+    assert.match(routeSource, /: `private, max-age=\$\{PRIVATE_REDIRECT_MAX_AGE_SECONDS\}`/);
+    assert.match(routeSource, /response\.headers\.set\("Cache-Control", cacheControl\)/);
+    assert.match(routeSource, /if-none-match/);
 });
 
 test("project update references and image upload contracts stay bounded", () => {
@@ -208,7 +204,7 @@ test("project update comment threading schema is present in baseline and repair 
     const repairMigration = readFileSync(path.join(process.cwd(), "drizzle/0090_project_update_comment_threads.sql"), "utf8");
     const journal = readFileSync(path.join(process.cwd(), "drizzle/meta/_journal.json"), "utf8");
 
-    assert.match(schemaSource, /parentId:\s*uuid\('parent_id'\)/);
+    assert.match(schemaSource, /parentId:\s*uuid\(["']parent_id["']\)/);
     assert.match(schemaSource, /project_update_comments_parent_idx/);
     assert.match(baselineMigration, /"parent_id"\s+uuid\s+REFERENCES\s+"project_update_comments"\("id"\)\s+ON DELETE set null/i);
     assert.match(baselineMigration, /project_update_comments_parent_idx/);
@@ -258,14 +254,15 @@ test("project update draft hydration does not immediately autosave an unchanged 
     assert.match(composerSource, /media: initialMedia/);
 });
 
-test("project update comments subscribe with one wildcard postgres binding", () => {
+test("project update comments share one project-scoped wildcard postgres binding", () => {
     const tabSource = readFileSync(path.join(process.cwd(), "src/components/projects/tabs/UpdatesTab.tsx"), "utf8");
     const subscriptionsSource = readFileSync(path.join(process.cwd(), "src/lib/realtime/subscriptions.ts"), "utf8");
 
     assert.equal(tabSource.includes('(["INSERT", "UPDATE", "DELETE"] as const).map'), false);
     assert.match(tabSource, /event: "\*"/);
     assert.match(tabSource, /table: "project_update_comments"/);
-    assert.match(tabSource, /filter: `update_id=eq\.\$\{update\.id\}`/);
+    assert.match(tabSource, /filter: `project_id=eq\.\$\{projectId\}`/);
+    assert.match(tabSource, /resourceId: `updates:\$\{projectId\}`/);
     assert.match(subscriptionsSource, /const groupedBindings = new Map<string, ActiveResourceBinding\[\]>\(\)/);
     assert.match(subscriptionsSource, /const event = grouped\.length === 1 \? firstBinding\.event : "\*"/);
 });
@@ -608,8 +605,8 @@ test("project update task mentions keep retrying until the task panel opens", ()
 
     assert.match(tasksTabSource, /const loadingInitialOpenTaskRef = useRef<string \| null>\(null\)/);
     assert.match(tasksTabSource, /if \(loadingInitialOpenTaskRef\.current === initialOpenTaskId\) return/);
-    assert.match(tasksTabSource, /handledInitialOpenTaskRef\.current = initialOpenTaskId;\s*\n\s*openTask\(localTask, initialPanelTab\)/);
-    assert.match(tasksTabSource, /handledInitialOpenTaskRef\.current = initialOpenTaskId;\s*\n\s*openTask\(normalizedTask, initialPanelTab\)/);
+    assert.match(tasksTabSource, /handledInitialOpenTaskRef\.current = initialOpenTaskId;\s*\n\s*openTask\(localTask, initialPanelTab(?:, true)?\);\s*\n\s*onInitialTaskOpened\?\.\(\)/);
+    assert.match(tasksTabSource, /handledInitialOpenTaskRef\.current = initialOpenTaskId;\s*\n\s*openTask\(normalizedTask, initialPanelTab(?:, true)?\);\s*\n\s*onInitialTaskOpened\?\.\(\)/);
     assert.equal(
         /handledInitialOpenTaskRef\.current = initialOpenTaskId;\s*\n\s*const localTask/.test(tasksTabSource),
         false,
