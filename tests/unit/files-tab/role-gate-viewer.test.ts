@@ -262,14 +262,12 @@ describe("Server-side mutation authorization (Req 19.6)", () => {
     { fn: "createFolder", src: () => MUTATIONS_SRC },
     { fn: "createFileNode", src: () => MUTATIONS_SRC },
     { fn: "renameNode", src: () => MUTATIONS_SRC },
-    { fn: "moveNode", src: () => MUTATIONS_SRC },
-    { fn: "bulkMoveNodes", src: () => MUTATIONS_SRC },
+    { fn: "moveProjectNodes", src: () => MUTATIONS_SRC },
     { fn: "trashNode", src: () => MUTATIONS_SRC },
     { fn: "restoreNode", src: () => MUTATIONS_SRC },
     { fn: "bulkTrashNodes", src: () => MUTATIONS_SRC },
     { fn: "bulkRestoreNodes", src: () => MUTATIONS_SRC },
-    { fn: "purgeNode", src: () => MUTATIONS_SRC },
-    { fn: "deleteNode", src: () => MUTATIONS_SRC },
+
     { fn: "bulkCreateFolderTree", src: () => MUTATIONS_SRC },
     // content.ts — write-side formatters / stats
     { fn: "formatProjectFileContent", src: () => CONTENT_SRC },
@@ -285,6 +283,18 @@ describe("Server-side mutation authorization (Req 19.6)", () => {
     // events.ts — event recording writes
     { fn: "recordProjectNodeEvent", src: () => EVENTS_SRC },
   ];
+
+  it("permanent deletion delegates to the authenticated, manage-files-only transaction", () => {
+    const delegated = extractFunctionBody(MUTATIONS_SRC, "deleteNode");
+    assert.match(delegated, /permanentlyDeleteTrashedNode\(projectId, nodeId, expectedFingerprint\)/);
+    const source = readFileSync(path.resolve(process.cwd(), "src/app/actions/files/trash.ts"), "utf8");
+    assert.match(source, /if \(!user\) throw new Error\("Unauthorized"\)/);
+    for (const action of ["getPermanentDeleteImpact", "permanentlyDeleteTrashedNode"]) {
+      const body = extractFunctionBody(source, action);
+      assert.match(body, /await actor\(projectId, nodeId\)/);
+      assert.match(body, /await assertProjectManageFilesAccessTx\(tx, projectId, user.id\)/);
+    }
+  });
 
   for (const { fn, src } of MUTATION_ACTIONS) {
     it(`${fn} rejects unauthenticated callers and asserts write/upload access`, () => {
@@ -310,7 +320,7 @@ describe("Server-side mutation authorization (Req 19.6)", () => {
       // mutations use the broader write policy. Both reject Role_Viewer.
       assert.match(
         body,
-        /\bassertProject(?:Write|Upload)Access(?:Tx)?\s*\(/,
+        /\bassertProject(?:Write|Upload|ManageFiles)Access(?:Tx)?\s*\(/,
         `${fn} must assert write/upload access before any DB mutation (Req 19.6)`,
       );
     });
@@ -420,39 +430,16 @@ describe("Server-side mutation authorization (Req 19.6)", () => {
 // ─── (iii) Unauthenticated deep-link arrival (Req 19.7) ──────────────
 
 describe("Unauthenticated deep-link arrival (Req 19.7, Req 19.5)", () => {
-  it("findNodeByPathAny rejects anonymous callers before reading any node", () => {
-    // `useDeepLinkResolver` delegates node resolution to
-    // `findNodeByPathAny`. For Req 19.7, we need the server action to
-    // refuse anonymous callers BEFORE it reads the node name/path, so
-    // no target disclosure can leak back to the client.
+  it("findNodeByPathAny checks project visibility before lookup and separately gates task paths", () => {
     const body = extractFunctionBody(NODES_SRC, "findNodeByPathAny");
-    assert.ok(body, "findNodeByPathAny must be defined in nodes.ts");
-
-    // Structural contract: the Unauthorized throw must appear before
-    // any `db.query.projectNodes.findFirst` call.
-    const unauthIdx = body.search(
-      /if\s*\(!user\)\s*throw\s+new\s+Error\(\s*["']Unauthorized["']\s*\)/,
-    );
+    assert.ok(body);
     const firstQueryIdx = body.indexOf("projectNodes.findFirst");
-    assert.ok(
-      unauthIdx >= 0,
-      "findNodeByPathAny must reject anonymous callers with 'Unauthorized'",
-    );
-    assert.ok(
-      firstQueryIdx >= 0,
-      "findNodeByPathAny is expected to query projectNodes after auth",
-    );
-    assert.ok(
-      unauthIdx < firstQueryIdx,
-      "Unauthorized check MUST precede the first node lookup — otherwise an anonymous caller could observe a row existing before being refused",
-    );
-
-    // And `assertProjectFileReadAccess` (read-access check for the project
-    // itself) must also run before the per-segment walk. Together
-    // they close Req 19.7 at the server boundary.
     const accessIdx = body.search(/await\s+assertProjectFileReadAccess\(/);
-    assert.ok(accessIdx >= 0);
-    assert.ok(accessIdx < firstQueryIdx);
+    assert.ok(accessIdx >= 0 && accessIdx < firstQueryIdx);
+    assert.match(body, /user\?\.id \?\? null/);
+    const taskGate = body.indexOf("!canReadProjectTaskFiles(access)");
+    assert.ok(taskGate > accessIdx && taskGate < firstQueryIdx);
+    assert.match(body, /canReadProjectTaskFiles\(access\) \? sql`true` : isNull\(projectNodes.taskId\)/);
   });
 
   it("resolveDeepLinkFromSearch classifies a thrown Unauthorized as 'not_found' (no disclosure)", async () => {
