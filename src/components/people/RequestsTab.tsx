@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState, useCallback, type ReactNode } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
+import dynamic from "next/dynamic";
 import {
     Loader2, UserPlus, X, Clock, CheckCheck, Briefcase,
     ChevronDown, ChevronRight, Inbox, History, UserMinus,
@@ -26,37 +27,17 @@ import {
     DropdownMenuItem,
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { UserAvatar } from "@/components/ui/UserAvatar";
-import ProjectApplicationsSection from "./ProjectApplicationsSection";
+import { RequestProfileRow, type RequestProfile } from "@/components/people/RequestProfileRow";
 import type { IncomingApplication, MyApplication } from "./ProjectApplicationsSection";
+
+const ProjectApplicationsSection = dynamic(() => import("./ProjectApplicationsSection"), {
+    loading: () => <div className="h-40 animate-pulse rounded-2xl bg-zinc-100 dark:bg-zinc-900" />,
+});
 
 interface RequestsTabProps {
     initialUser: { id?: string | null } | null;
     initialRequests?: { incoming: PendingIncomingRequest[]; sent: PendingSentRequest[] };
     initialApplications?: { my: MyApplication[]; incoming: IncomingApplication[] };
-}
-
-type RequestProfile = {
-    id: string;
-    username: string | null;
-    fullName: string | null;
-    avatarUrl: string | null;
-    headline: string | null;
-    location: string | null;
-};
-
-function RequestProfileRow({ profile, requestedAt, actions }: { profile: RequestProfile; requestedAt: Date | string; actions: ReactNode }) {
-    const name = profile.fullName || profile.username || "User";
-    return <div className="flex items-center gap-4 rounded-2xl border border-zinc-200/60 bg-white/80 p-4 backdrop-blur-xl transition-colors hover:border-zinc-300 dark:border-white/5 dark:bg-zinc-900/80 dark:hover:border-zinc-700">
-        <Link href={profileHref(profile)} className="shrink-0"><UserAvatar identity={profile} size={40} /></Link>
-        <Link href={profileHref(profile)} className="min-w-0 flex-1">
-            <h3 className="truncate text-sm font-semibold text-zinc-900 hover:text-primary dark:text-zinc-100">{name}</h3>
-            {profile.headline ? <p className="mt-0.5 truncate text-xs text-zinc-500 dark:text-zinc-400">{profile.headline}</p> : null}
-            {profile.location ? <p className="mt-0.5 truncate text-[11px] text-zinc-400">{profile.location}</p> : null}
-        </Link>
-        <p className="hidden shrink-0 text-xs text-zinc-400 sm:block">{formatDistanceToNow(new Date(requestedAt), { addSuffix: true })}</p>
-        <div className="flex shrink-0 items-center gap-2">{actions}</div>
-    </div>;
 }
 
 // ── Status configuration ────────────────────────────────────────────
@@ -344,13 +325,32 @@ function CollapsibleSection({
 
 // ── Main component ──────────────────────────────────────────────────
 
+import { useQuery } from "@tanstack/react-query";
+import { getPeopleApplications } from "@/app/actions/people-applications";
+
+const APPLICATIONS_QUERY_KEY = ["people", "project-applications"] as const;
+
 export default function RequestsTab({ initialUser, initialRequests, initialApplications }: RequestsTabProps) {
+    const { data: appsData } = useQuery({
+        queryKey: APPLICATIONS_QUERY_KEY,
+        enabled: Boolean(initialUser?.id),
+        initialData: initialApplications,
+        staleTime: 60_000,
+        queryFn: async () => {
+            const result = await getPeopleApplications();
+            if (!result.success) throw new Error(result.error);
+            return { my: result.my as MyApplication[], incoming: result.incoming as IncomingApplication[] };
+        },
+    });
+
+    const totalApps = (appsData?.my?.length || 0) + (appsData?.incoming?.length || 0);
+
+    const [timelineOpen, setTimelineOpen] = useState(false);
+    const [appsOpen, setAppsOpen] = useState(totalApps > 0);
     const { data: requestData, isLoading: requestsLoading } = usePendingRequests();
-    const { data: requestHistoryData, isLoading: historyLoading, fetchNextPage: fetchMoreHistory, hasNextPage: hasMoreHistory, isFetchingNextPage: isFetchingMoreHistory } = useRequestHistory(HISTORY_INITIAL_BATCH);
+    const { data: requestHistoryData, isLoading: historyLoading, fetchNextPage: fetchMoreHistory, hasNextPage: hasMoreHistory, isFetchingNextPage: isFetchingMoreHistory } = useRequestHistory(HISTORY_INITIAL_BATCH, undefined, timelineOpen);
     const { acceptRequest, rejectRequest, undoRejectRequest, cancelRequest, acceptAllIncoming, rejectAllIncoming, blockProfile, withdrawAllSent } = useConnectionMutations();
 
-    const [timelineOpen, setTimelineOpen] = useState(true);
-    const [appsOpen, setAppsOpen] = useState(true);
     const appsPanelId = "project-apps-panel";
     const timelinePanelId = "activity-timeline-panel";
 
@@ -725,6 +725,7 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
                 icon={<Briefcase className="w-4 h-4 text-violet-500" />}
                 open={appsOpen}
                 onToggle={() => setAppsOpen(!appsOpen)}
+                count={totalApps}
                 panelId={appsPanelId}
             >
                 <ProjectApplicationsSection initialUser={initialUser} initialApplications={initialApplications} />
