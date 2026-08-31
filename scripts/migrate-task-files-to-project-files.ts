@@ -20,7 +20,6 @@ import { createClient } from "@supabase/supabase-js";
 import * as dotenv from "dotenv";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
-import crypto from "crypto";
 import { extname } from "path";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -76,6 +75,14 @@ async function ensureBucket(name: string) {
     fileSizeLimit: 10485760, // 10MB (matches legacy)
   });
   if (createError) throw createError;
+}
+
+async function assertBucketExists(name: string) {
+  const { data, error } = await supabase.storage.listBuckets();
+  if (error) throw error;
+  if (!(data || []).some((bucket) => bucket.name === name)) {
+    throw new Error(`Required source bucket ${name} does not exist`);
+  }
 }
 
 async function ensureAttachmentsRootFolder(projectId: string, actorId: string | null) {
@@ -148,8 +155,7 @@ async function alreadyMigrated(projectId: string, legacyId: string) {
 
 function newStoragePath(projectId: string, legacy: LegacyRow) {
   const ext = extname(legacy.file_name || "") || (legacy.file_type ? `.${legacy.file_type.split("/").pop()}` : "");
-  const id = crypto.randomBytes(12).toString("hex");
-  return `projects/${projectId}/${id}${ext || ""}`;
+  return `projects/${projectId}/legacy-task-files/${legacy.id}${ext || ""}`;
 }
 
 async function copyObject(fromPath: string, toPath: string, contentType?: string | null) {
@@ -157,7 +163,7 @@ async function copyObject(fromPath: string, toPath: string, contentType?: string
   if (error) throw error;
   const blob = data; // Blob
   const { error: uploadError } = await supabase.storage.from("project-files").upload(toPath, blob, {
-    upsert: false,
+    upsert: true,
     contentType: contentType || undefined,
   });
   if (uploadError) throw uploadError;
@@ -166,8 +172,7 @@ async function copyObject(fromPath: string, toPath: string, contentType?: string
 async function main() {
   console.log("🚀 Migrating legacy task_files -> project_nodes + task_node_links");
   await ensureBucket("project-files");
-  // task-files bucket must exist already for legacy data; if it doesn't, migration is impossible.
-  await ensureBucket("task-files");
+  await assertBucketExists("task-files");
 
   const files = await sql<LegacyRow[]>`
     SELECT
@@ -203,6 +208,7 @@ async function main() {
     const f = files[i];
     if (!f) continue;
     const idx = `${i + 1}/${files.length}`;
+    let copiedPath: string | null = null;
     try {
       const existingNodeId = await alreadyMigrated(f.project_id, f.id);
       if (existingNodeId) {
@@ -234,6 +240,7 @@ async function main() {
       // Copy storage object to new bucket
       const dstPath = newStoragePath(f.project_id, f);
       await copyObject(f.file_path, dstPath, f.file_type);
+      copiedPath = dstPath;
 
       // Insert new project node
       const displayName = f.custom_name || f.file_name;
@@ -247,46 +254,63 @@ async function main() {
         tags: f.tags ?? [],
       };
 
-      const [createdNode] = await sql<[{ id: string }]>`
-        INSERT INTO project_nodes (
-          project_id,
-          parent_id,
-          type,
-          name,
-          s3_key,
-          size,
-          mime_type,
-          metadata,
-          created_by,
-          created_at,
-          updated_at
-        )
-        VALUES (
-          ${f.project_id},
-          ${folderId},
-          'file',
-          ${displayName},
-          ${dstPath},
-          ${f.file_size},
-          ${f.file_type},
-          ${JSON.stringify(metadata)}::jsonb,
-          ${f.uploaded_by},
-          ${f.created_at},
-          now()
-        )
-        RETURNING id
-      `;
+      const created = await sql.begin(async (tx) => {
+        const transaction = tx as unknown as typeof sql;
+        await transaction`SELECT pg_advisory_xact_lock(hashtext(${`legacy-task-file:${f.id}`}))`;
+        const [existing] = await transaction<[{ id: string }?]>`
+          SELECT id
+          FROM project_nodes
+          WHERE project_id = ${f.project_id}
+            AND metadata->>'legacy_task_file_id' = ${f.id}
+          LIMIT 1
+        `;
 
-      // Link to task
-      await sql`
-        INSERT INTO task_node_links (task_id, node_id, linked_at, created_by)
-        VALUES (${f.task_id}, ${createdNode.id}, ${f.created_at}, ${f.uploaded_by})
-        ON CONFLICT (task_id, node_id) DO NOTHING
-      `;
+        let nodeId = existing?.id;
+        if (!nodeId) {
+          const [createdNode] = await transaction<[{ id: string }]>`
+            INSERT INTO project_nodes (
+              project_id, parent_id, type, name, s3_key, size, mime_type,
+              metadata, created_by, created_at, updated_at
+            )
+            VALUES (
+              ${f.project_id}, ${folderId}, 'file', ${displayName}, ${dstPath},
+              ${f.file_size}, ${f.file_type}, ${JSON.stringify(metadata)}::jsonb,
+              ${f.uploaded_by}, ${f.created_at}, now()
+            )
+            RETURNING id
+          `;
+          nodeId = createdNode.id;
+        }
 
-      migrated++;
+        await transaction`
+          INSERT INTO task_node_links (task_id, node_id, linked_at, created_by)
+          VALUES (${f.task_id}, ${nodeId}, ${f.created_at}, ${f.uploaded_by})
+          ON CONFLICT (task_id, node_id) DO NOTHING
+        `;
+        return !existing;
+      });
+
+      if (created) migrated++;
+      else skipped++;
       if ((i + 1) % 20 === 0) console.log(`… ${idx} (migrated=${migrated}, skipped=${skipped}, failed=${failed})`);
     } catch (e: any) {
+      if (copiedPath) {
+        try {
+          const [referenced] = await sql<[{ id: string }?]>`
+            SELECT id FROM project_nodes WHERE s3_key = ${copiedPath} LIMIT 1
+          `;
+          if (!referenced) {
+            const { error: cleanupError } = await supabase.storage.from("project-files").remove([copiedPath]);
+            if (cleanupError) throw cleanupError;
+          }
+        } catch (cleanupError) {
+          console.error("Failed to verify or remove copied object after metadata failure", {
+            legacyId: f.id,
+            copiedPath,
+            error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+          });
+        }
+      }
       failed++;
       console.error("Migration row failed", {
         index: idx,
@@ -301,6 +325,7 @@ async function main() {
   console.log(`Migrated: ${migrated}`);
   console.log(`Skipped:  ${skipped}`);
   console.log(`Failed:   ${failed}`);
+  if (failed > 0) process.exitCode = 1;
 }
 
 main()
