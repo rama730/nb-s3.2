@@ -21,6 +21,7 @@ export interface FileTreeItemContext {
     locksByNodeId: Record<string, { lockedBy: string; lockedByName?: string | null; clientKind?: "web" | "vscode"; expiresAt: number }>;
     mode: "default" | "select";
     canEdit: boolean;
+    canMove: boolean;
     projectName?: string; // For empty state
 
     // Inline rename
@@ -136,7 +137,9 @@ export function FileTreeItem({
 
     // Node Row
     const node = context.nodesById[row.nodeId];
-    if (!node) return null;
+    // ponytail: a virtualized row must always have measurable height. A node
+    // can disappear between the row calculation and the next context update.
+    if (!node) return <div aria-hidden="true" className="h-[22px]" />;
 
     const expanded = !!context.expandedFolderIds[node.id];
     // Multi-select check + Single select check
@@ -157,6 +160,7 @@ export function FileTreeItem({
             isSelected={isSelected}
             isExpanded={expanded}
             canEdit={context.canEdit}
+            canMove={context.canMove}
             isInSelectionMode={context.mode === "select"}
             isSelectedInMode={context.mode === "select" ? context.selectedNodeIds.includes(node.id) : false}
             
