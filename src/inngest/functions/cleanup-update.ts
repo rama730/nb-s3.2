@@ -36,7 +36,7 @@ export const cleanupProjectUpdate = inngest.createFunction(
             for (const [bucket, keys] of Object.entries(byBucket)) {
                 const { data, error } = await adminClient.storage.from(bucket).remove(keys);
                 if (error) {
-                    console.error(`cleanup-update: failed to delete from bucket ${bucket}`, error);
+                    throw new Error(`Update-media cleanup failed for ${bucket}: ${error.message}`);
                 } else if (data) {
                     deletedCount += data.length;
                 }
