@@ -26,6 +26,7 @@ export type TaskFileChoicePreview = {
 
 type TaskFileRoleSummaryInput = Pick<ProjectNode, "name" | "type" | "path"> & {
   annotation?: string | null;
+  tags?: string[] | null;
 };
 
 type TaskFileOutcomeInput = (Pick<
@@ -33,6 +34,7 @@ type TaskFileOutcomeInput = (Pick<
   "id" | "name" | "type" | "path" | "updatedAt"
 > & {
   annotation?: string | null;
+  tags?: string[] | null;
   currentVersion?: number | null;
 })[];
 
@@ -62,19 +64,10 @@ function normalizeHintToken(value: string | null | undefined) {
 export function summarizeTaskFileRoles(
   attachments: TaskFileRoleSummaryInput[],
 ): TaskFileRoleSummaryItem[] {
-  const counts = attachments.reduce(
-    (acc, attachment) => {
-      const role = inferTaskFileRole({
-        name: attachment.name,
-        type: attachment.type,
-        path: attachment.path,
-        annotation: attachment.annotation ?? null,
-      });
-      acc[role] += 1;
-      return acc;
-    },
-    { deliverable: 0, reference: 0, working: 0 },
-  );
+  const counts = { deliverable: 0, reference: 0, working: 0 };
+  for (const a of attachments) {
+    counts[inferTaskFileRole({ id: "", name: a.name, type: a.type, path: a.path, annotation: a.annotation ?? null, tags: a.tags ?? [] })]++;
+  }
 
   return [
     counts.deliverable > 0 ? { label: "Deliverables", count: counts.deliverable } : null,
