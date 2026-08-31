@@ -22,10 +22,9 @@ export function ProfileTabs({
     return (
         <div
             className={cn(
-                'sticky z-30 -mx-4 sm:mx-0 px-4 sm:px-0 transition-all duration-200',
+                'transition-all duration-200',
                 className
             )}
-            style={{ top: "12px" }}
         >
             <div className="transition-all duration-200 py-0">
                 <div
