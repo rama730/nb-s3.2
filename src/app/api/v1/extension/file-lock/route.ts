@@ -12,6 +12,7 @@ import {
 import { db } from "@/lib/db";
 import { projectNodes } from "@/lib/db/schema";
 import { getProjectAccessById } from "@/lib/data/project-access";
+import { validateCsrf } from "@/lib/security/csrf";
 import {
   acquireFileLease,
   releaseFileLease,
@@ -55,6 +56,8 @@ async function resolveEditableNode(projectId: string, path: string, userId: stri
 }
 
 export async function POST(request: Request) {
+  const csrfError = validateCsrf(request);
+  if (csrfError) return csrfError;
   try {
     const auth = await requireFileLeaseUser(request, { extensionSession: true });
     if (auth.response) return auth.response;
