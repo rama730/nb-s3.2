@@ -20,6 +20,8 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { formatTaskId } from "@/lib/project-key";
+import { getTaskTitlePresentation } from "@/lib/projects/task-presentation";
+import { cn } from "@/lib/utils";
 
 // ─── Constants ───────────────────────────────────────────────────────
 
@@ -247,6 +249,7 @@ export function TaskSearchPicker({
               )}
               {results.map((task, idx) => {
                 const isActive = idx === activeIndex;
+                const titlePresentation = getTaskTitlePresentation(task);
                 const taskLabel = task.taskNumber && task.projectKey
                   ? formatTaskId(task.projectKey, task.taskNumber)
                   : null;
@@ -271,7 +274,10 @@ export function TaskSearchPicker({
                   >
                     <CheckSquare className="mt-0.5 h-4 w-4 flex-shrink-0 text-zinc-400" />
                     <div className="min-w-0 flex-1">
-                      <div className="truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                      <div
+                        className={cn("truncate text-sm font-medium text-zinc-900 dark:text-zinc-100", titlePresentation.className)}
+                        aria-label={titlePresentation.ariaLabel}
+                      >
                         {task.title}
                       </div>
                       <div className="mt-0.5 flex items-center gap-2 text-xs text-zinc-500">
