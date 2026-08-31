@@ -32,7 +32,6 @@ export type SettingsSearchItem = {
     featured?: boolean;
 };
 
-export const OPEN_MESSAGES_SEARCH_EVENT = "open-messages-local-search";
 const RECENT_GLOBAL_SEARCH_STORAGE_PREFIX = "nb:global-search:recent:v1";
 export const MAX_RECENT_GLOBAL_SEARCHES = 5;
 
