@@ -3,8 +3,10 @@ import { NextResponse } from "next/server";
 
 import { updateSession } from "@/lib/supabase/middleware";
 import { CSRF_COOKIE_NAME, DEV_CSRF_SECRET_FALLBACK, MINIMUM_CSRF_SECRET_LENGTH } from "@/lib/security/csrf-constants";
+import { toPrivacySafeRouteMetric } from "@/lib/routing/route-metric";
 
 const CSP_NONCE_HEADER = "x-nonce";
+const ROUTE_METRIC_HEADER = "x-route-metric";
 const CSRF_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 12;
 const AUTH_PROTECTED_PREFIXES = ["/hub", "/settings", "/messages", "/profile", "/people", "/workspace", "/monitor", "/u/", "/onboarding", "/projects", "/admin", "/authorize"];
 const AUTH_PROTECTED_EXACT = new Set(["/", "/login", "/signup", "/verify-email"]);
@@ -120,7 +122,7 @@ function buildCsp(nonce: string, request: NextRequest) {
     "img-src 'self' data: blob: https:",
     "font-src 'self' data: https://fonts.gstatic.com",
     `connect-src ${connectDirectives.join(" ")}`,
-    "frame-src 'self' https://challenges.cloudflare.com",
+    "frame-src 'self' https://challenges.cloudflare.com blob:",
     "worker-src 'self' blob:",
     "object-src 'none'",
     "base-uri 'self'",
@@ -141,11 +143,17 @@ function buildCsp(nonce: string, request: NextRequest) {
 }
 
 export async function middleware(request: NextRequest) {
+  const requestHeaders = new Headers(request.headers);
+  requestHeaders.set(ROUTE_METRIC_HEADER, toPrivacySafeRouteMetric(request.nextUrl.pathname));
+
   if (request.nextUrl.pathname.startsWith("/api/")) {
-    return NextResponse.next();
+    return NextResponse.next({
+      request: {
+        headers: requestHeaders,
+      },
+    });
   }
 
-  const requestHeaders = new Headers(request.headers);
   const nonce = toBase64Url(crypto.getRandomValues(new Uint8Array(24)).buffer);
   requestHeaders.set(CSP_NONCE_HEADER, nonce);
 
