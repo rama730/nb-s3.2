@@ -1,14 +1,8 @@
-import type { PresenceMemberState } from '@/lib/realtime/presence-types';
-import type { TypingUser } from '@/hooks/useTypingChannel';
-
-function toTypingUser(member: PresenceMemberState): TypingUser {
-    return {
-        id: member.userId,
-        username: member.profile?.username ?? null,
-        fullName: member.profile?.fullName ?? member.userName ?? null,
-        avatarUrl: member.profile?.avatarUrl ?? null,
-    };
-}
+import {
+    toPresenceTypingUser,
+    type PresenceMemberState,
+    type PresenceTypingUser,
+} from '@/lib/realtime/presence-types';
 
 export function normalizeTrackedConversationIds(
     conversationIds: ReadonlyArray<string | null | undefined>,
@@ -28,24 +22,24 @@ export function normalizeTrackedConversationIds(
 export function deriveTypingUsersFromPresenceState(
     members: ReadonlyArray<PresenceMemberState>,
     currentUserId: string | null,
-): TypingUser[] {
+): PresenceTypingUser[] {
     return members
         .filter((member) => member.typing && member.userId !== currentUserId)
-        .map((member) => toTypingUser(member));
+        .map((member) => toPresenceTypingUser(member));
 }
 
 export function applyTypingDelta(params: {
-    currentUsers: ReadonlyArray<TypingUser>;
+    currentUsers: ReadonlyArray<PresenceTypingUser>;
     member: PresenceMemberState;
     action: 'upsert' | 'leave';
     currentUserId: string | null;
-}): TypingUser[] {
+}): PresenceTypingUser[] {
     const { currentUsers, member, action, currentUserId } = params;
     if (member.userId === currentUserId) {
         return [...currentUsers];
     }
 
-    const typingUser = toTypingUser(member);
+    const typingUser = toPresenceTypingUser(member);
     if (action === 'leave' || !member.typing) {
         return currentUsers.filter((item) => item.id !== typingUser.id);
     }
