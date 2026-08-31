@@ -39,7 +39,7 @@ export interface PrivacyRelationshipState {
 }
 
 export type PrivacyConnectionRow = {
-  id: string;
+  id: string | null;
   requesterId: string;
   addresseeId: string;
   status: "pending" | "accepted" | "rejected" | "cancelled" | "disconnected" | "blocked";
