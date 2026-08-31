@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { isValidGithubBranchName, normalizeGithubRepoUrl } from '@/lib/github/repo-validation';
+import { validateProjectSocialLinks } from '@/lib/projects/social-links';
 
 // Open Role Schema
 export const openRoleSchema = z.object({
@@ -43,13 +44,40 @@ export const termsSchema = z.object({
 });
 
 // External Links Schema
-export const externalLinksSchema = z.object({
+const legacyExternalLinksSchema = z.object({
     discord: z.string().url().optional().or(z.literal('')),
     github: z.string().url().optional().or(z.literal('')),
     website: z.string().url().optional().or(z.literal('')),
     figma: z.string().url().optional().or(z.literal('')),
     slack: z.string().url().optional().or(z.literal('')),
     notion: z.string().url().optional().or(z.literal('')),
+});
+
+const orderedExternalLinkSchema = z.object({
+    id: z.string().min(1),
+    url: z.string().min(1),
+    platform: z.string().optional(),
+    label: z.string().max(80).optional(),
+    destinationLabel: z.string().max(160).optional(),
+    purpose: z.enum(['live-product', 'source-code', 'documentation', 'design-prototype', 'research-publication', 'dataset-model', 'demo-media', 'community', 'distribution-store', 'roadmap-operations', 'support-contact', 'commerce-funding', 'other']).optional(),
+    audience: z.enum(['public', 'members']).optional(),
+    metadata: z.object({
+        health: z.enum(['unknown', 'active', 'unavailable']),
+        checkedAt: z.string().optional(),
+        nameSource: z.enum(['provider', 'open_graph', 'html_title', 'url', 'manual']).optional(),
+        fetchedAt: z.string().optional(),
+        resolvedHost: z.string().optional(),
+        contentType: z.string().optional(),
+    }).optional(),
+    order: z.number().int().nonnegative().optional(),
+});
+
+export const externalLinksSchema = z.union([
+    legacyExternalLinksSchema,
+    z.array(orderedExternalLinkSchema).max(20),
+]).superRefine((value, ctx) => {
+    const validation = validateProjectSocialLinks(value);
+    if (!validation.success) ctx.addIssue({ code: z.ZodIssueCode.custom, message: validation.error });
 });
 
 // Project creation notification defaults (not the global user inbox preferences).
