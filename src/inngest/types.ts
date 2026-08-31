@@ -72,14 +72,10 @@ type ProjectUpdateCleanupEvent = {
     };
 };
 
-type ProjectDocsCleanupEvent = {
+type ProfileImageCleanupEvent = {
     data: {
-        projectId: string;
-        assets: Array<{
-            id: string;
-            bucket: string;
-            storageKey: string;
-        }>;
+        userId: string;
+        storageKey: string;
     };
 };
 
@@ -93,5 +89,5 @@ export const schemas = new EventSchemas().fromRecord<{
     "workspace/connections.sync_suggestions": ConnectionsSyncSuggestionsEvent;
     "notification/fanout": NotificationFanoutInngestEvent;
     "project/updates.cleanup": ProjectUpdateCleanupEvent;
-    "project/docs.cleanup": ProjectDocsCleanupEvent;
+    "storage/profile-image.cleanup": ProfileImageCleanupEvent;
 }>();
