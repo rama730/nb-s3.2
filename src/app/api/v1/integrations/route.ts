@@ -23,10 +23,10 @@ export async function GET(request: Request) {
         username: githubConnection.username,
     });
 
-    const githubProjectsRows = await db
+    const [githubProjectsAggregate] = await db
         .select({
-            id: projects.id,
-            githubLastSyncAt: projects.githubLastSyncAt,
+            count: sql<number>`count(*)::int`,
+            githubLastSyncAt: sql<Date | null>`max(${projects.githubLastSyncAt})`,
         })
         .from(projects)
         .where(
@@ -35,13 +35,7 @@ export async function GET(request: Request) {
                 isNull(projects.deletedAt),
                 isNotNull(projects.githubRepoUrl),
             ),
-        )
-        .orderBy(sql`${projects.updatedAt} DESC`);
-
-    const githubLastSyncAt = githubProjectsRows.reduce<string | null>((latest, row) => {
-        const value = row.githubLastSyncAt?.toISOString() ?? null;
-        return value && (!latest || value > latest) ? value : latest;
-    }, null);
+        );
 
     const passwordLastChangedAt = await getLatestPasswordChangeAt(user.id);
     const githubAccountHealth = await githubAccountHealthPromise;
@@ -49,8 +43,8 @@ export async function GET(request: Request) {
     return jsonSuccess(
         buildIntegrationsData({
             user,
-            githubRepoProjectCount: githubProjectsRows.length,
-            githubLastSyncAt,
+            githubRepoProjectCount: githubProjectsAggregate?.count ?? 0,
+            githubLastSyncAt: githubProjectsAggregate?.githubLastSyncAt?.toISOString() ?? null,
             passwordLastChangedAt: passwordLastChangedAt ?? null,
             githubAccountHealth,
         }),
