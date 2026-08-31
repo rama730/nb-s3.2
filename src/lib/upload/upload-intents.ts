@@ -1,6 +1,6 @@
-import { and, eq, isNull, lt, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { uploadIntents, type UploadIntent } from "@/lib/db/schema";
+import { importJobFiles, uploadIntents, type UploadIntent } from "@/lib/db/schema";
 import { createAdminClient } from "@/lib/supabase/server";
 import {
   normalizeAndValidateFileSize,
@@ -38,7 +38,7 @@ async function markIntentFailure(intentId: string, reason: string) {
       failureReason: reason,
       updatedAt: new Date(),
     })
-    .where(eq(uploadIntents.id, intentId));
+    .where(and(eq(uploadIntents.id, intentId), eq(uploadIntents.status, "pending")));
 }
 
 export async function createUploadIntent(params: {
@@ -227,17 +227,34 @@ export async function finalizeUploadIntent(params: {
   assertPendingIntent(intent);
 
   const admin = await createAdminClient();
-  const { data, error } = await admin.storage.from(intent.bucket).download(intent.storageKey);
-  if (error || !data) {
-    await markIntentFailure(intent.id, error?.message || "Uploaded object is missing");
+  const bucket = admin.storage.from(intent.bucket);
+  const { data: objectInfo, error: infoError } = await bucket.info(intent.storageKey);
+  if (infoError || !objectInfo) {
+    await markIntentFailure(intent.id, infoError?.message || "Uploaded object is missing");
     throw new Error("Uploaded object is missing");
   }
 
   try {
-    await validateUploadedBlobMagicBytes(data, intent.expectedMimeType);
-    const finalizedSize = normalizeAndValidateFileSize(data.size, Number.MAX_SAFE_INTEGER, "Upload");
+    const finalizedSize = normalizeAndValidateFileSize(objectInfo.size, Number.MAX_SAFE_INTEGER, "Upload");
     if (finalizedSize !== intent.expectedSize) {
       throw new Error("Uploaded object size does not match the declared size");
+    }
+
+    if (finalizedSize > 0) {
+      const { data: signedData, error: signedError } = await bucket.createSignedUrl(intent.storageKey, 60);
+      if (signedError || !signedData?.signedUrl) {
+        throw signedError ?? new Error("Failed to verify uploaded object");
+      }
+      const signatureResponse = await fetch(signedData.signedUrl, {
+        headers: { Range: "bytes=0-31" },
+      });
+      if (!signatureResponse.ok) {
+        throw new Error(`Failed to verify uploaded object (${signatureResponse.status})`);
+      }
+      const signature = new Blob([await signatureResponse.arrayBuffer()], {
+        type: intent.expectedMimeType,
+      });
+      await validateUploadedBlobMagicBytes(signature, intent.expectedMimeType);
     }
 
     const [updated] = await db
@@ -250,7 +267,11 @@ export async function finalizeUploadIntent(params: {
         failureReason: null,
         updatedAt: new Date(),
       })
-      .where(eq(uploadIntents.id, intent.id))
+      .where(and(
+        eq(uploadIntents.id, intent.id),
+        eq(uploadIntents.status, "pending"),
+        sql`${uploadIntents.expiresAt} > now()`,
+      ))
       .returning();
 
     if (!updated) {
@@ -281,34 +302,75 @@ export async function finalizeUploadIntents(paramsList: Array<{
 }
 
 export async function cleanupExpiredUploadIntents() {
-  const expired = await db.query.uploadIntents.findMany({
-    where: and(eq(uploadIntents.status, "pending"), lt(uploadIntents.expiresAt, new Date())),
+  const now = new Date();
+  const expired = await db.transaction(async (tx) => {
+    const candidates = await tx
+      .select({
+        id: uploadIntents.id,
+        bucket: uploadIntents.bucket,
+        storageKey: uploadIntents.storageKey,
+      })
+      .from(uploadIntents)
+      .where(or(
+        and(eq(uploadIntents.status, "pending"), lt(uploadIntents.expiresAt, now)),
+        eq(uploadIntents.status, "expired"),
+      ))
+      .orderBy(asc(uploadIntents.expiresAt), asc(uploadIntents.id))
+      .limit(100)
+      .for("update", { skipLocked: true });
+    if (candidates.length === 0) return [];
+
+    await tx.update(uploadIntents)
+      .set({
+        status: "expired",
+        updatedAt: now,
+        failureReason: "Upload intent expired before finalization",
+      })
+      .where(inArray(uploadIntents.id, candidates.map((intent) => intent.id)));
+    return candidates;
   });
 
   if (expired.length === 0) {
-    return { removedObjects: 0, expiredIntents: 0 };
+    return { removedObjects: 0, expiredIntents: 0, retryableIntents: 0 };
   }
 
   const admin = await createAdminClient();
-  let removedObjects = 0;
+  const byBucket = new Map<string, typeof expired>();
   for (const intent of expired) {
-    const { error } = await admin.storage.from(intent.bucket).remove([intent.storageKey]);
-    if (!error) {
-      removedObjects += 1;
+    const items = byBucket.get(intent.bucket) ?? [];
+    items.push(intent);
+    byBucket.set(intent.bucket, items);
+  }
+
+  const removedIds: string[] = [];
+  const retryIds: string[] = [];
+  for (const [bucket, intents] of byBucket) {
+    const { error } = await admin.storage.from(bucket).remove(intents.map((intent) => intent.storageKey));
+    if (error) {
+      retryIds.push(...intents.map((intent) => intent.id));
+    } else {
+      removedIds.push(...intents.map((intent) => intent.id));
     }
   }
 
-  await db
-    .update(uploadIntents)
-    .set({
-      status: "expired",
-      updatedAt: new Date(),
-      failureReason: "Upload intent expired before finalization",
-    })
-    .where(and(eq(uploadIntents.status, "pending"), lt(uploadIntents.expiresAt, new Date())));
+  await db.transaction(async (tx) => {
+    if (retryIds.length > 0) {
+      await tx.update(uploadIntents)
+        .set({ status: "pending", updatedAt: new Date() })
+        .where(and(eq(uploadIntents.status, "expired"), inArray(uploadIntents.id, retryIds)));
+    }
+    if (removedIds.length > 0) {
+      await tx.update(importJobFiles)
+        .set({ status: "failed", errorMessage: "Upload intent expired and cleaned up" })
+        .where(inArray(importJobFiles.uploadIntentId, removedIds));
+      await tx.delete(uploadIntents)
+        .where(and(eq(uploadIntents.status, "expired"), inArray(uploadIntents.id, removedIds)));
+    }
+  });
 
   return {
-    removedObjects,
-    expiredIntents: expired.length,
+    removedObjects: removedIds.length,
+    expiredIntents: removedIds.length,
+    retryableIntents: retryIds.length,
   };
 }
