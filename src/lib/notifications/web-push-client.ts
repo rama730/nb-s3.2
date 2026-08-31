@@ -103,7 +103,6 @@ export async function unsubscribeWebPush(): Promise<WebPushUnsubscribeResult> {
     const sub = await reg.pushManager.getSubscription();
     if (!sub) return { ok: true };
     const endpoint = sub.endpoint;
-    try { await sub.unsubscribe(); } catch { /* best effort */ }
     try {
         const result = await deletePushSubscriptionAction(endpoint);
         if (!result.success) {
@@ -111,11 +110,17 @@ export async function unsubscribeWebPush(): Promise<WebPushUnsubscribeResult> {
                 module: "notifications",
                 error: result.error,
             });
-            return { ok: true, serverCleanupFailed: true };
+            return { ok: false, reason: "server_cleanup_failed" };
         }
     } catch (error) {
         logger.warn("web_push.delete_subscription_failed", { module: "notifications", error });
-        return { ok: true, serverCleanupFailed: true };
+        return { ok: false, reason: "server_cleanup_failed" };
+    }
+    try {
+        const unsubscribed = await sub.unsubscribe();
+        if (!unsubscribed) return { ok: false, reason: "browser_unsubscribe_failed" };
+    } catch {
+        return { ok: false, reason: "browser_unsubscribe_failed" };
     }
     return { ok: true };
 }
