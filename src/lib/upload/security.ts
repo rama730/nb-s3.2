@@ -59,7 +59,8 @@ const MAGIC_BYTE_CHECKERS: Record<string, (bytes: Uint8Array) => boolean> = {
     && bytes[3] === 0x46,
 };
 
-const DEFAULT_PROJECT_UPLOAD_MAX_FILE_BYTES = 25 * 1024 * 1024; // 25MB
+// This must not exceed the project-files/task-files Storage bucket contract.
+const DEFAULT_PROJECT_UPLOAD_MAX_FILE_BYTES = 10 * 1024 * 1024; // 10 MiB
 const DEFAULT_ATTACHMENT_UPLOAD_MAX_FILE_BYTES = 50 * 1024 * 1024; // 50MB
 const MAX_UPLOAD_PATH_LENGTH = 1024;
 const MAX_PATH_SEGMENT_LENGTH = 255;
