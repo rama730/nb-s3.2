@@ -130,8 +130,8 @@ export async function POST(request: NextRequest) {
                 ),
             });
 
-            let nodeId = existingNode?.id || randomUUID();
-            let nextVersion = existingNode ? existingNode.currentVersion + 1 : 1;
+            const nodeId = existingNode?.id || randomUUID();
+            const nextVersion = existingNode ? existingNode.currentVersion + 1 : 1;
 
             if (existingNode) {
                 await tx
