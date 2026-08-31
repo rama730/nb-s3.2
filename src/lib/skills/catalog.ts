@@ -8,7 +8,7 @@ import type {
     SkillSearchResult,
 } from './types'
 
-export const SKILL_CATALOG_VERSION = '1.3.6' as const
+export const SKILL_CATALOG_VERSION = '1.3.7' as const
 export const SKILL_ICON_SOURCE_VERSION = '16.24.1' as const
 export const SKILL_DEVICON_SOURCE_VERSION = '2.17.0' as const
 export const SKILL_CATALOG_MIGRATION_TAG = '0117_market_skill_catalog_1_3_6' as const
@@ -31,6 +31,7 @@ export const SKILL_CATEGORIES: readonly SkillCategoryDefinition[] = [
     { key: 'product', name: 'Product & Delivery', description: 'Product strategy, discovery, delivery, and collaboration.', iconKey: 'map', displayOrder: 120 },
     { key: 'analytics', name: 'Analytics & BI', description: 'Business intelligence, product analytics, and experimentation.', iconKey: 'chart-no-axes-combined', displayOrder: 130 },
     { key: 'games', name: 'Games, Graphics & XR', description: 'Game engines, graphics, spatial computing, and 3D production.', iconKey: 'gamepad-2', displayOrder: 140 },
+    { key: 'scientific-engineering', name: 'Scientific Computing & Engineering', description: 'Engineering simulation, scientific computing, CAD/CAE, and technical design.', iconKey: 'orbit', displayOrder: 145 },
     { key: 'embedded', name: 'Embedded, IoT & Robotics', description: 'Firmware, hardware, robotics, and connected devices.', iconKey: 'cpu', displayOrder: 150 },
     { key: 'blockchain', name: 'Blockchain', description: 'Distributed ledgers, smart contracts, and Web3 ecosystems.', iconKey: 'blocks', displayOrder: 160 },
     { key: 'enterprise', name: 'Enterprise & Automation', description: 'Enterprise platforms, low-code tools, and workflow automation.', iconKey: 'building-2', displayOrder: 170 },
@@ -142,6 +143,10 @@ const GROUPS: readonly SkillGroup[] = [
     { categoryKey: 'games', kind: 'platform', tier: 'core', names: 'Unity|Unreal Engine|Godot|OpenGL|Vulkan|DirectX|WebGL|ARKit|ARCore' },
     { categoryKey: 'games', kind: 'competency', tier: 'extended', names: 'Game Development|Game Design|Technical Art|Shader Programming|Virtual Reality|Augmented Reality|Spatial Computing|3D Modeling|Animation' },
     { categoryKey: 'games', kind: 'platform', tier: 'extended', names: 'Babylon.js|Bevy|Cocos2d-x|CryEngine|GameMaker|Metal|MonoGame|OpenXR|Phaser|Roblox Studio|WebGPU' },
+    { categoryKey: 'scientific-engineering', kind: 'tool', tier: 'core', names: 'COMSOL Multiphysics|ANSYS|LabVIEW|Wolfram Mathematica|GNU Octave|KiCad|LTspice|FreeCAD|Autodesk Revit|Rhinoceros|Siemens NX' },
+    { categoryKey: 'scientific-engineering', kind: 'tool', tier: 'extended', names: 'Abaqus|OpenFOAM|Simulink|SolidWorks|CATIA|Fusion 360|Altium Designer|Onshape|Autodesk Inventor|Grasshopper|PSpice|Proteus|Multisim|Modelica|OpenModelica|GNU Radio' },
+    { categoryKey: 'scientific-engineering', kind: 'competency', tier: 'core', names: 'Scientific Computing|Numerical Methods|Finite Element Analysis (FEA)|Computational Fluid Dynamics (CFD)|Multiphysics Simulation|Computer-Aided Design (CAD)|Computer-Aided Engineering (CAE)|Computer-Aided Manufacturing (CAM)|Structural Analysis|Thermal Analysis|Electromagnetics Simulation|Circuit Simulation|Model-Based Design|Systems Engineering|Digital Twin|Design for Manufacturing|Additive Manufacturing' },
+    { categoryKey: 'scientific-engineering', kind: 'domain', tier: 'core', names: 'Mechanical Engineering|Electrical Engineering|Civil Engineering|Chemical Engineering|Biomedical Engineering|Materials Science|Semiconductor Engineering|Renewable Energy Engineering' },
     { categoryKey: 'embedded', kind: 'platform', tier: 'core', names: 'Arduino|Raspberry Pi|ESP32|STM32|FreeRTOS|ROS|MQTT' },
     { categoryKey: 'embedded', kind: 'competency', tier: 'extended', names: 'Embedded Systems|Firmware Development|FPGA|Robotics|PCB Design|Industrial Automation|CAN Bus|Control Systems|Signal Processing' },
     { categoryKey: 'embedded', kind: 'platform', tier: 'extended', names: 'ArduPilot|BeagleBone|Buildroot|Gazebo|Mbed OS|NVIDIA Jetson|PlatformIO|PX4|Zephyr|Yocto' },
@@ -254,6 +259,17 @@ const ALIASES: Readonly<Record<string, readonly string[]>> = {
     'Debian': ['Raspberry Pi OS', 'Raspbian'],
     'BSD': ['OpenBSD', 'NetBSD'],
     'Linux': ['Gentoo', 'openSUSE', 'Oracle Linux', 'Amazon Linux', 'Asahi Linux', 'elementary OS', 'Linux Mint'],
+    'COMSOL Multiphysics': ['COMSOL'],
+    'ANSYS': ['Ansys', 'ANSYS Workbench'],
+    'Wolfram Mathematica': ['Mathematica'],
+    'GNU Octave': ['Octave'],
+    'Siemens NX': ['NX CAD'],
+    'Finite Element Analysis (FEA)': ['Finite Element Analysis', 'FEA'],
+    'Computational Fluid Dynamics (CFD)': ['Computational Fluid Dynamics', 'CFD'],
+    'Computer-Aided Design (CAD)': ['Computer Aided Design', 'CAD'],
+    'Computer-Aided Engineering (CAE)': ['Computer Aided Engineering', 'CAE'],
+    'Computer-Aided Manufacturing (CAM)': ['Computer Aided Manufacturing', 'CAM'],
+    'Design for Manufacturing': ['DFM'],
 }
 
 export const SKILL_ICON_OVERRIDES: Readonly<Record<string, string>> = {
@@ -370,6 +386,17 @@ export const SKILL_ICON_OVERRIDES: Readonly<Record<string, string>> = {
     'Zed': 'zedindustries',
     'Cocos2d-x': 'cocos',
     'Databricks Mosaic AI': 'databricks',
+    'COMSOL Multiphysics': 'comsol',
+    'ANSYS': 'ansys',
+    'LabVIEW': 'labview',
+    'Wolfram Mathematica': 'wolframmathematica',
+    'GNU Octave': 'octave',
+    'KiCad': 'kicad',
+    'LTspice': 'ltspice',
+    'FreeCAD': 'freecad',
+    'Autodesk Revit': 'autodeskrevit',
+    'Rhinoceros': 'rhinoceros',
+    'Siemens NX': 'siemens',
 }
 
 export const SKILL_DEVICON_OVERRIDES: Readonly<Record<string, string>> = {
@@ -509,6 +536,31 @@ const SEMANTIC_ICON_OVERRIDES: Readonly<Record<string, SkillSemanticIconKey>> = 
     'Collaboration': 'users-round',
     'Leadership': 'user-round-check',
     'Problem Solving': 'lightbulb',
+    'Scientific Computing': 'orbit',
+    'Numerical Methods': 'gauge',
+    'Finite Element Analysis (FEA)': 'gauge',
+    'Computational Fluid Dynamics (CFD)': 'gauge',
+    'Multiphysics Simulation': 'orbit',
+    'Computer-Aided Design (CAD)': 'pen-tool',
+    'Computer-Aided Engineering (CAE)': 'circuit-board',
+    'Computer-Aided Manufacturing (CAM)': 'wrench',
+    'Structural Analysis': 'building-2',
+    'Thermal Analysis': 'activity',
+    'Electromagnetics Simulation': 'circuit-board',
+    'Circuit Simulation': 'circuit-board',
+    'Model-Based Design': 'boxes',
+    'Systems Engineering': 'workflow',
+    'Digital Twin': 'boxes',
+    'Design for Manufacturing': 'wrench',
+    'Additive Manufacturing': 'box',
+    'Mechanical Engineering': 'wrench',
+    'Electrical Engineering': 'circuit-board',
+    'Civil Engineering': 'building-2',
+    'Chemical Engineering': 'test-tube-2',
+    'Biomedical Engineering': 'activity',
+    'Materials Science': 'box',
+    'Semiconductor Engineering': 'cpu',
+    'Renewable Energy Engineering': 'cloud-lightning',
 }
 
 const CATEGORY_ICON = new Map(SKILL_CATEGORIES.map((category) => [category.key, category.iconKey]))
