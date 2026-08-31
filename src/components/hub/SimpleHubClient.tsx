@@ -44,7 +44,6 @@ import { User, Project } from '@/types/hub';
 // Dynamic Modals
 const CreateProjectWizard = dynamic(() => import('@/components/projects/create-wizard/CreateProjectWizard'), { ssr: false });
 const ProjectQuickView = dynamic(() => import('@/components/projects/ProjectQuickView'), { ssr: false });
-const NotificationSettingsModal = dynamic(() => import('@/components/hub/NotificationSettingsModal'), { ssr: false });
 // Optimization: Defer mobile sidebar code until interaction
 const MobileSidebarDrawer = dynamic(() => import('@/components/hub/MobileSidebarDrawer'), { ssr: false });
 
@@ -118,7 +117,6 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
     // Dialog Visibility
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [createModalInitialSource, setCreateModalInitialSource] = useState<'scratch' | 'github' | 'upload' | null>(null);
-    const [showNotificationSettings, setShowNotificationSettings] = useState(false);
     const [profileChecklistItems, setProfileChecklistItems] = useState<string[]>([]);
     const [showProfileChecklist, setShowProfileChecklist] = useState(false);
     const [isFeedScrolling, setIsFeedScrolling] = useState(false);
@@ -140,7 +138,6 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
         [user, returnUserData],
     );
 
-    const { data: myFollowedProjects } = useUserFollowedProjects(currentUser?.id);
     const { seenIds, setHideSeen, markSeen } = useHubSessionSeen();
 
     useEffect(() => {
@@ -232,6 +229,12 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
         if (!hideOpened) return allProjects;
         return allProjects.filter((project) => !seenIds.has(project.id));
     }, [allProjects, hideOpened, seenIds]);
+
+    const visibleProjectIds = useMemo(
+        () => visibleProjects.map((project) => project.id),
+        [visibleProjects],
+    );
+    const { data: myFollowedProjects } = useUserFollowedProjects(currentUser?.id, visibleProjectIds);
 
     useEffect(() => {
         if (!hideOpened) return;
@@ -569,7 +572,6 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
                             />
                         )}
 
-                        <NotificationSettingsModal isOpen={showNotificationSettings} onClose={() => setShowNotificationSettings(false)} />
                     </div>
                 </div>
 
