@@ -1,0 +1,55 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - banner [ref=e3]:
+      - generic [ref=e4]:
+        - link "Navigate to home" [ref=e7] [cursor=pointer]:
+          - /url: /
+          - generic [ref=e14]: NB
+        - navigation "Main navigation" [ref=e16]:
+          - link "Hub" [ref=e17] [cursor=pointer]:
+            - /url: /hub
+          - link "Connections" [ref=e24] [cursor=pointer]:
+            - /url: /people
+          - link "Messages" [ref=e31] [cursor=pointer]:
+            - /url: /messages
+          - link "Settings" [ref=e35] [cursor=pointer]:
+            - /url: /settings
+        - generic [ref=e40]:
+          - button "Theme (loading)" [disabled]
+    - main [ref=e44]:
+      - generic [ref=e46]:
+        - generic [ref=e49]:
+          - generic [ref=e50]:
+            - link "Hub" [ref=e51] [cursor=pointer]:
+              - /url: /hub
+            - generic [ref=e54]:
+              - heading "DeepScope AI" [level=1] [ref=e55]
+              - generic "Project links" [ref=e56]:
+                - link "Open Behance · pavankumard732 · Design & prototype" [ref=e57] [cursor=pointer]:
+                  - /url: /go/project/0adb0049-a58e-44d3-bcb3-db2ee4abdfc6/link-mteqhhtu
+                - link "Open Google Scholar · Dr. Yesudasu Vasimalla · Research & publication" [ref=e59] [cursor=pointer]:
+                  - /url: /go/project/0adb0049-a58e-44d3-bcb3-db2ee4abdfc6/link-ece8db52-bf75-483d-a6ef-21fc128fce61
+                - 'link "Open Recent progress in surface plasmon resonance based sensors: A comprehensive revi · cell.com · Documentation" [ref=e61] [cursor=pointer]':
+                  - /url: /go/project/0adb0049-a58e-44d3-bcb3-db2ee4abdfc6/link-75581e55-1ef0-4597-b14c-7206291191e2
+                - 'link "Open GitHub · rama730/Frontend: Design of patient details · Source code" [ref=e63] [cursor=pointer]':
+                  - /url: /go/project/0adb0049-a58e-44d3-bcb3-db2ee4abdfc6/link-8848f0e4-be54-4be6-acd9-593553f03553
+                - button "Open 2 more project links" [ref=e67] [cursor=pointer]: "+2"
+              - generic [ref=e68]:
+                - generic [ref=e69]: Created by
+                - link "Ramanayudu CH" [ref=e70] [cursor=pointer]:
+                  - /url: /u/ramanayudu_ch
+            - generic [ref=e72]:
+              - generic "Total Views" [ref=e73]: "812"
+              - generic "Followers" [ref=e78]: "0"
+          - generic [ref=e85]:
+            - button "Follow" [ref=e86] [cursor=pointer]
+            - button "Share Project" [ref=e92] [cursor=pointer]
+        - tablist "Project sections" [ref=e101]:
+          - tab "Dashboard" [ref=e102] [cursor=pointer]
+          - tab "Docs" [ref=e108] [cursor=pointer]
+          - tab "Updates" [ref=e111] [cursor=pointer]
+          - tab "Files" [selected] [ref=e115] [cursor=pointer]
+        - tabpanel "Files" [ref=e119]:
+          - complementary [ref=e124]
+  - region "Notifications alt+T"
+  - alert [ref=e214]
