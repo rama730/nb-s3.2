@@ -2,6 +2,7 @@ import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import {
+    applicationEvents,
     conversationParticipants,
     conversations,
     profiles,
@@ -281,7 +282,7 @@ export async function addProjectMemberInternal(
         changed = true;
     }
 
-    if (params.incrementRoleCapacity && params.roleId) {
+    if (changed && params.incrementRoleCapacity && params.roleId) {
         const roleRows = await executor
             .select({ id: projectOpenRoles.id, filled: projectOpenRoles.filled, count: projectOpenRoles.count })
             .from(projectOpenRoles)
@@ -324,14 +325,40 @@ export async function addProjectMemberInternal(
             });
 
             // Sweep database records
-            await executor
+            const rejectedApplications = await executor
                 .update(roleApplications)
-                .set({ status: 'rejected', decisionAt: new Date(), updatedAt: new Date() })
+                .set({
+                    status: 'rejected',
+                    decisionAt: new Date(),
+                    decisionBy: params.actorId,
+                    decisionReasonCode: 'role_capacity_filled',
+                    decisionReasonText: 'The project role was filled before this application was accepted.',
+                    updatedAt: new Date(),
+                })
                 .where(and(
                     eq(roleApplications.projectId, params.projectId),
                     eq(roleApplications.roleId, params.roleId),
                     eq(roleApplications.status, 'pending')
-                ));
+                ))
+                .returning({ id: roleApplications.id });
+
+            if (rejectedApplications.length > 0) {
+                await executor.insert(applicationEvents).values(
+                    rejectedApplications.map((application) => ({
+                        applicationId: application.id,
+                        actorId: params.actorId,
+                        kind: 'rejected' as const,
+                        fromStatus: 'pending',
+                        toStatus: 'rejected',
+                        reasonCode: 'role_capacity_filled',
+                        reasonText: 'The project role was filled before this application was accepted.',
+                        metadata: {
+                            source: params.source,
+                            roleId: params.roleId,
+                        },
+                    })),
+                );
+            }
 
             await executor
                 .update(messageWorkflowItems)
