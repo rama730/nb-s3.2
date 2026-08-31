@@ -4,6 +4,7 @@ import { db } from '@/lib/db';
 import {
     conversations,
     dmPairs,
+    connections,
     conversationParticipants,
     messages,
     messageWorkflowItems,
@@ -14,6 +15,7 @@ import {
     attachmentUploads,
     messageHiddenForUsers,
     messageEditLogs,
+    messagePins,
     profiles,
     projectMembers,
     projects,
@@ -39,7 +41,6 @@ import {
 } from '@/lib/messages/structured';
 import { buildConversationParticipantPreview } from '@/lib/messages/preview-authority';
 import {
-    conversationNeedsPreviewRefresh,
     refreshConversationParticipantPreviews,
 } from '@/lib/messages/preview-refresh';
 import { buildMessageAttachmentAccessUrl } from '@/lib/messages/attachment-access';
@@ -48,11 +49,17 @@ import {
     MESSAGE_MEDIA_PREVIEW_MAX_WIDTH,
     normalizeMediaDimensions,
 } from '@/lib/messages/media-metadata';
-import { buildMessageSearchDocumentSql } from '@/lib/messages/search-document';
 import { isTemporaryMessageId } from '@/lib/messages/utils';
 import { emitMessageBurstNotifications } from '@/lib/notifications/emitters';
-import { markConversationNotificationsRead } from '@/lib/notifications/service';
+import {
+    markConversationNotificationsRead,
+    markMessageBurstSourceDeleted,
+    markMessageReactionSourceDeleted,
+} from '@/lib/notifications/service';
 import { logger } from '@/lib/logger';
+import { getMessageThreadReadScope } from '@/lib/messages/thread-read-scope';
+import { recordMessageSearch } from '@/lib/messages/observability';
+import { buildConversationDisplay } from '@/lib/messages/conversation-display';
 import {
     deriveReceiptDeliveryState,
     type DeliveryCounts,
@@ -66,6 +73,11 @@ import {
     validateUploadedFileMagicBytes,
 } from '@/lib/upload/security';
 import { isUuid } from '@/lib/validations/uuid';
+import { APPLICATION_BANNER_HIDE_AFTER_MS } from '@/lib/chat/banner-lifecycle';
+import {
+    deleteMessageSchema,
+    editMessageSchema,
+} from '@/lib/validations/messaging';
 
 // ============================================================================
 // TYPES
@@ -94,6 +106,15 @@ export interface ConversationWithDetails {
     unreadCount: number;
     lastReadAt?: Date | null;
     lastReadMessageId?: string | null;
+    displayTitle?: string;
+    displayAvatarUrl?: string | null;
+    displaySubtitle?: string;
+    reactionPreview?: {
+        messageId: string;
+        actorUserId: string;
+        emoji: string;
+        createdAt: Date;
+    } | null;
 }
 
 export interface MessageWithSender {
@@ -168,11 +189,15 @@ async function assertDirectMessageReadable(viewerId: string, otherUserId: string
     return { ok: true };
 }
 
-async function isDirectMessagingAllowed(viewerId: string, otherUserId: string): Promise<{ allowed: boolean; error?: string }> {
+export async function isDirectMessagingAllowed(viewerId: string, otherUserId: string): Promise<{ allowed: boolean; error?: string }> {
     const [privacy, recentApplication] = await Promise.all([
         resolvePrivacyRelationship(viewerId, otherUserId),
         db
-            .select({ id: roleApplications.id })
+            .select({
+                id: roleApplications.id,
+                status: roleApplications.status,
+                updatedAt: roleApplications.updatedAt,
+            })
             .from(roleApplications)
             .where(
                 or(
@@ -192,15 +217,23 @@ async function isDirectMessagingAllowed(viewerId: string, otherUserId: string): 
         return { allowed: false, error: 'Messaging is blocked' };
     }
 
-    if (recentApplication.length > 0) {
+    const application = recentApplication[0];
+    const applicationUpdatedAt = application?.updatedAt
+        ? new Date(application.updatedAt).getTime()
+        : Number.NaN;
+    const hasFreshApplication = Boolean(
+        application
+        && (
+            application.status === 'pending'
+            || (Number.isFinite(applicationUpdatedAt)
+                && Date.now() - applicationUpdatedAt <= APPLICATION_BANNER_HIDE_AFTER_MS)
+        ),
+    );
+    if (hasFreshApplication) {
         return { allowed: true };
     }
 
-    if (privacy.isConnected) {
-        return { allowed: true };
-    }
-
-    if (privacy.messagePrivacy === 'everyone') {
+    if (privacy.canSendMessage) {
         return { allowed: true };
     }
 
@@ -227,8 +260,7 @@ function sanitizeMessageSearchText(input: string): string {
 function parseMessageSearchQuery(query: string) {
     const tokens = query
         .trim()
-        .split(/\s+/)
-        .filter(Boolean);
+        .match(/(?:[^\s":]+:)?(?:"[^"]*"|[^\s]+)/gu) ?? [];
     let fromFilter: string | null = null;
     let hasFilter: 'image' | 'video' | 'file' | 'code' | null = null;
     let inFilter: 'project_group' | null = null;
@@ -240,7 +272,14 @@ function parseMessageSearchQuery(query: string) {
     for (const token of tokens) {
         const lower = token.toLowerCase();
         if (lower.startsWith('from:') && lower.length > 5) {
-            const normalizedFrom = lower.slice(5).replace(/[^a-z0-9_]/g, '').slice(0, 32);
+            const normalizedFrom = sanitizeMessageSearchText(
+                token
+                    .slice(5)
+                    .replace(/^"|"$/g, '')
+                    .normalize('NFKC'),
+            )
+                .toLocaleLowerCase()
+                .slice(0, 80);
             if (normalizedFrom) fromFilter = normalizedFrom;
             continue;
         }
@@ -281,6 +320,41 @@ function parseMessageSearchQuery(query: string) {
         hasChip,
         isPinned,
     };
+}
+
+type MessageSearchCursor = {
+    rank: number;
+    createdAt: string;
+    id: string;
+};
+
+function decodeMessageSearchCursor(cursor: string | null | undefined): MessageSearchCursor | null {
+    if (!cursor) return null;
+    try {
+        const parsed = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as Partial<MessageSearchCursor>;
+        const createdAt = typeof parsed.createdAt === 'string' ? new Date(parsed.createdAt) : null;
+        if (
+            typeof parsed.rank !== 'number'
+            || !Number.isFinite(parsed.rank)
+            || !createdAt
+            || Number.isNaN(createdAt.getTime())
+            || typeof parsed.id !== 'string'
+            || !isUuid(parsed.id)
+        ) {
+            return null;
+        }
+        return {
+            rank: parsed.rank,
+            createdAt: createdAt.toISOString(),
+            id: parsed.id,
+        };
+    } catch {
+        return null;
+    }
+}
+
+function encodeMessageSearchCursor(cursor: MessageSearchCursor): string {
+    return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
 }
 
 function extractMessageMentions(content: string) {
@@ -428,37 +502,38 @@ async function getReplyPreviewMap(
     const uniqueReplyIds = Array.from(new Set(replyIds.filter(Boolean)));
     if (uniqueReplyIds.length === 0) return new Map<string, ReplyPreview>();
 
-    const hiddenRows = await db
-        .select({ messageId: messageHiddenForUsers.messageId })
-        .from(messageHiddenForUsers)
-        .where(
-            and(
-                eq(messageHiddenForUsers.userId, viewerId),
-                inArray(messageHiddenForUsers.messageId, uniqueReplyIds)
-            )
-        );
+    const [hiddenRows, rows] = await Promise.all([
+        db
+            .select({ messageId: messageHiddenForUsers.messageId })
+            .from(messageHiddenForUsers)
+            .where(
+                and(
+                    eq(messageHiddenForUsers.userId, viewerId),
+                    inArray(messageHiddenForUsers.messageId, uniqueReplyIds),
+                ),
+            ),
+        db
+            .select({
+                id: messages.id,
+                conversationId: messages.conversationId,
+                senderId: messages.senderId,
+                content: messages.content,
+                type: messages.type,
+                metadata: messages.metadata,
+                deletedAt: messages.deletedAt,
+                username: profiles.username,
+                fullName: profiles.fullName,
+            })
+            .from(messages)
+            .leftJoin(profiles, eq(messages.senderId, profiles.id))
+            .where(
+                and(
+                    eq(messages.conversationId, conversationId),
+                    inArray(messages.id, uniqueReplyIds),
+                ),
+            ),
+    ]);
     const hiddenSet = new Set(hiddenRows.map((row) => row.messageId));
-
-    const rows = await db
-        .select({
-            id: messages.id,
-            conversationId: messages.conversationId,
-            senderId: messages.senderId,
-            content: messages.content,
-            type: messages.type,
-            metadata: messages.metadata,
-            deletedAt: messages.deletedAt,
-            username: profiles.username,
-            fullName: profiles.fullName,
-        })
-        .from(messages)
-        .leftJoin(profiles, eq(messages.senderId, profiles.id))
-        .where(
-            and(
-                eq(messages.conversationId, conversationId),
-                inArray(messages.id, uniqueReplyIds)
-            )
-        );
 
     const previewMap = new Map<string, ReplyPreview>();
     for (const row of rows) {
@@ -514,8 +589,12 @@ async function hydrateConversationMessages(params: {
     if (rows.length === 0) return [] as MessageWithSender[];
 
     const senderIds = [...new Set(rows.map((message) => message.senderId).filter(Boolean))] as string[];
-    const senderProfiles = senderIds.length > 0
-        ? await db
+    const messageIds = rows.map((message) => message.id);
+    const senderMessageIds = rows
+        .filter((message) => message.senderId === viewerId)
+        .map((message) => message.id);
+    const senderProfilesPromise = senderIds.length > 0
+        ? db
             .select({
                 id: profiles.id,
                 username: profiles.username,
@@ -524,41 +603,18 @@ async function hydrateConversationMessages(params: {
             })
             .from(profiles)
             .where(inArray(profiles.id, senderIds))
-        : [];
-
-    const senderMap = new Map(senderProfiles.map((sender) => [sender.id, sender]));
-    const replyPreviewMap = await getReplyPreviewMap(
+        : Promise.resolve([]);
+    const replyPreviewMapPromise = getReplyPreviewMap(
         conversationId,
         viewerId,
         rows.map((message) => message.replyToMessageId).filter(Boolean) as string[],
     );
-
-    const messageIds = rows.map((message) => message.id);
-    const attachmentList = await db
+    const attachmentListPromise = db
         .select()
         .from(messageAttachments)
         .where(inArray(messageAttachments.messageId, messageIds));
-
-    const attachmentMap = new Map<string, typeof attachmentList>();
-    for (const attachment of attachmentList) {
-        if (!attachmentMap.has(attachment.messageId)) {
-            attachmentMap.set(attachment.messageId, []);
-        }
-        attachmentMap.get(attachment.messageId)!.push(attachment);
-    }
-
-    const resolvedAttachmentMap = new Map<
-        string,
-        Awaited<ReturnType<typeof hydrateAttachmentUrls>>
-    >();
-    await Promise.all(
-        Array.from(attachmentMap.entries()).map(async ([messageId, values]) => {
-            resolvedAttachmentMap.set(messageId, await hydrateAttachmentUrls(values as AttachmentRowForResolution[]));
-        }),
-    );
-
-    const reactionSummaryMap = await getReactionSummaryMap(messageIds, viewerId);
-    const privateFollowUpRows = await db
+    const reactionSummaryMapPromise = getReactionSummaryMap(messageIds, viewerId);
+    const privateFollowUpRowsPromise = db
         .select({
             id: messageWorkflowItems.id,
             messageId: messageWorkflowItems.messageId,
@@ -577,6 +633,73 @@ async function hydrateConversationMessages(params: {
             ),
         )
         .orderBy(desc(messageWorkflowItems.updatedAt), desc(messageWorkflowItems.createdAt));
+    const recipientCountPromise = senderMessageIds.length > 0
+        ? db
+            .select({ count: sql<number>`count(*)::int` })
+            .from(conversationParticipants)
+            .where(
+                and(
+                    eq(conversationParticipants.conversationId, conversationId),
+                    ne(conversationParticipants.userId, viewerId),
+                ),
+            )
+        : Promise.resolve([]);
+    const receiptRowsPromise = senderMessageIds.length > 0
+        ? Promise.all([
+            db
+                .select({
+                    messageId: messageDeliveryReceipts.messageId,
+                    count: sql<number>`count(*)::int`,
+                })
+                .from(messageDeliveryReceipts)
+                .where(inArray(messageDeliveryReceipts.messageId, senderMessageIds))
+                .groupBy(messageDeliveryReceipts.messageId),
+            db
+                .select({
+                    messageId: messageReadReceipts.messageId,
+                    count: sql<number>`count(*)::int`,
+                })
+                .from(messageReadReceipts)
+                .where(inArray(messageReadReceipts.messageId, senderMessageIds))
+                .groupBy(messageReadReceipts.messageId),
+        ])
+        : Promise.resolve([[], []] as const);
+    const [
+        senderProfiles,
+        replyPreviewMap,
+        attachmentList,
+        reactionSummaryMap,
+        privateFollowUpRows,
+        recipientRows,
+        [deliveryRows, readRows],
+    ] = await Promise.all([
+        senderProfilesPromise,
+        replyPreviewMapPromise,
+        attachmentListPromise,
+        reactionSummaryMapPromise,
+        privateFollowUpRowsPromise,
+        recipientCountPromise,
+        receiptRowsPromise,
+    ]);
+
+    const senderMap = new Map(senderProfiles.map((sender) => [sender.id, sender]));
+    const attachmentMap = new Map<string, typeof attachmentList>();
+    for (const attachment of attachmentList) {
+        if (!attachmentMap.has(attachment.messageId)) {
+            attachmentMap.set(attachment.messageId, []);
+        }
+        attachmentMap.get(attachment.messageId)!.push(attachment);
+    }
+
+    const resolvedAttachmentMap = new Map<
+        string,
+        Awaited<ReturnType<typeof hydrateAttachmentUrls>>
+    >();
+    await Promise.all(
+        Array.from(attachmentMap.entries()).map(async ([messageId, values]) => {
+            resolvedAttachmentMap.set(messageId, await hydrateAttachmentUrls(values as AttachmentRowForResolution[]));
+        }),
+    );
 
     const privateFollowUpByMessageId = new Map<string, PrivateFollowUpSnapshot>();
     for (const row of privateFollowUpRows) {
@@ -605,57 +728,9 @@ async function hydrateConversationMessages(params: {
     // DM: single recipient — any delivery receipt → delivered, read receipt → read
     // Group/project_group: counts across all non-sender participants
     // ────────────────────────────────────────────────────────────────────────
-    const senderMessageIds = messageIds.filter((id) => {
-        const row = rows.find((r) => r.id === id);
-        return row?.senderId === viewerId;
-    });
-
-    // Count other participants (recipients) for this conversation
-    let recipientCount = 0;
-    if (senderMessageIds.length > 0) {
-        const [countResult] = await db
-            .select({ count: sql<number>`count(*)::int` })
-            .from(conversationParticipants)
-            .where(
-                and(
-                    eq(conversationParticipants.conversationId, conversationId),
-                    ne(conversationParticipants.userId, viewerId),
-                ),
-            );
-        recipientCount = countResult?.count ?? 0;
-    }
-
-    // Fetch delivery + read receipt counts per message (only for sender's messages)
-    const deliveryCountMap = new Map<string, number>();
-    const readCountMap = new Map<string, number>();
-
-    if (senderMessageIds.length > 0) {
-        const [deliveryRows, readRows] = await Promise.all([
-            db
-                .select({
-                    messageId: messageDeliveryReceipts.messageId,
-                    count: sql<number>`count(*)::int`,
-                })
-                .from(messageDeliveryReceipts)
-                .where(inArray(messageDeliveryReceipts.messageId, senderMessageIds))
-                .groupBy(messageDeliveryReceipts.messageId),
-            db
-                .select({
-                    messageId: messageReadReceipts.messageId,
-                    count: sql<number>`count(*)::int`,
-                })
-                .from(messageReadReceipts)
-                .where(inArray(messageReadReceipts.messageId, senderMessageIds))
-                .groupBy(messageReadReceipts.messageId),
-        ]);
-
-        for (const row of deliveryRows) {
-            deliveryCountMap.set(row.messageId, row.count);
-        }
-        for (const row of readRows) {
-            readCountMap.set(row.messageId, row.count);
-        }
-    }
+    const recipientCount = recipientRows[0]?.count ?? 0;
+    const deliveryCountMap = new Map(deliveryRows.map((row) => [row.messageId, row.count] as const));
+    const readCountMap = new Map(readRows.map((row) => [row.messageId, row.count] as const));
 
     return rows.map((messageRow) => {
         const baseMetadata = withPrivateFollowUpMetadata(
@@ -990,13 +1065,19 @@ function shouldAdvanceReadWatermark(
 }
 
 function buildUnreadAfterReadWatermarkPredicate(
+    conversationId: string,
     lastReadMessageId: string | null | undefined,
     lastReadAt: Date | null | undefined,
 ) {
     if (lastReadMessageId) {
         const fallbackReadAt = (lastReadAt ?? new Date(0)).toISOString();
         const watermarkCreatedAt = sql`COALESCE(
-            (SELECT created_at FROM ${messages} WHERE id = ${lastReadMessageId}),
+            (
+                SELECT created_at
+                FROM ${messages}
+                WHERE id = ${lastReadMessageId}
+                  AND conversation_id = ${conversationId}
+            ),
             CAST(${fallbackReadAt} AS timestamptz)
         )`;
 
@@ -1016,62 +1097,8 @@ function buildUnreadAfterReadWatermarkPredicate(
     return null;
 }
 
-async function reconcileConversationUnreadCounts(
-    conversationId: string,
-    userIds?: string[],
-) {
-    const targetUserIds = Array.from(new Set((userIds ?? []).filter(Boolean)));
-    const participants = await db
-        .select({
-            id: conversationParticipants.id,
-            userId: conversationParticipants.userId,
-            lastReadAt: conversationParticipants.lastReadAt,
-            lastReadMessageId: conversationParticipants.lastReadMessageId,
-        })
-        .from(conversationParticipants)
-        .where(
-            targetUserIds.length > 0
-                ? and(
-                    eq(conversationParticipants.conversationId, conversationId),
-                    inArray(conversationParticipants.userId, targetUserIds),
-                )
-                : eq(conversationParticipants.conversationId, conversationId),
-        );
-
-    await Promise.all(participants.map(async (participant) => {
-        const predicates = [
-            eq(messages.conversationId, conversationId),
-            or(isNull(messages.senderId), ne(messages.senderId, participant.userId)),
-            isNull(messages.deletedAt),
-            sql`NOT EXISTS (
-                SELECT 1
-                FROM ${messageHiddenForUsers} h
-                WHERE h.message_id = ${messages.id}
-                  AND h.user_id = ${participant.userId}
-            )`,
-        ];
-        const unreadAfterWatermark = buildUnreadAfterReadWatermarkPredicate(
-            participant.lastReadMessageId,
-            participant.lastReadAt,
-        );
-        if (unreadAfterWatermark) predicates.push(unreadAfterWatermark);
-
-        const [row] = await db
-            .select({ count: sql<number>`COUNT(*)::int` })
-            .from(messages)
-            .where(and(...predicates));
-
-        await db
-            .update(conversationParticipants)
-            .set({ unreadCount: Number(row?.count ?? 0) })
-            .where(eq(conversationParticipants.id, participant.id));
-    }));
-}
-
 type NormalizedAttachmentInput = UploadedAttachment & {
     storagePath: string;
-    signedUrl: string;
-    thumbnailUrl: string | null;
 };
 
 function buildImageThumbnailUrl(signedUrl: string): string {
@@ -1144,6 +1171,17 @@ async function normalizeUploadedAttachmentsForCommit(
     userId: string
 ): Promise<{ attachments?: NormalizedAttachmentInput[]; error?: string }> {
     if (attachments.length === 0) return { attachments: [] };
+    if (attachments.length > 12) {
+        return { error: 'A message can contain at most 12 attachments.' };
+    }
+
+    const uniqueUploadIds = new Set(attachments.map((attachment) => attachment.id.trim()));
+    if (
+        uniqueUploadIds.size !== attachments.length
+        || Array.from(uniqueUploadIds).some((id) => id.length < 1 || id.length > 160)
+    ) {
+        return { error: 'One or more attachment upload references are invalid.' };
+    }
 
     const normalizedWithPath = attachments.map((attachment) => {
         const storagePath = resolveAttachmentStoragePath(attachment);
@@ -1158,94 +1196,76 @@ async function normalizeUploadedAttachmentsForCommit(
         return { error: 'You do not have permission to attach one or more of these files.' };
     }
 
-    const missingSignedPaths = normalizedWithPath
-        .filter((item) => !item.attachment.url)
-        .map((item) => item.storagePath!) as string[];
-    const signedByPath = missingSignedPaths.length > 0
-        ? await resolveSignedAttachmentUrls(missingSignedPaths)
-        : new Map<string, string>();
-
-    if (signedByPath.size !== missingSignedPaths.length) {
-        return { error: 'Some attachments are not ready yet. Please retry in a moment.' };
-    }
-
     return {
-        attachments: normalizedWithPath.map(({ attachment, storagePath }) => {
-            const signedUrl = attachment.url || signedByPath.get(storagePath!) || null;
-            if (!signedUrl) {
-                throw new Error('Attachment URL missing during commit normalization');
-            }
-            return {
-                ...attachment,
-                storagePath: storagePath!,
-                signedUrl,
-                thumbnailUrl: attachment.type === 'image'
-                    ? (attachment.thumbnailUrl || buildImageThumbnailUrl(signedUrl))
-                    : (attachment.thumbnailUrl || null),
-            };
-        }),
+        attachments: normalizedWithPath.map(({ attachment, storagePath }) => ({
+            ...attachment,
+            id: attachment.id.trim(),
+            storagePath: storagePath!,
+        })),
     };
 }
 
-async function markAttachmentUploadsCommitted(
+async function claimAttachmentUploadsForMessage(
     tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
     userId: string,
-    clientUploadIds: string[]
+    conversationId: string,
+    attachments: NormalizedAttachmentInput[],
 ) {
-    if (clientUploadIds.length === 0) return;
+    if (attachments.length === 0) return [];
+    const clientUploadIds = attachments.map((attachment) => attachment.id);
 
-    await tx
+    // Claim only fresh uploaded sessions. A committed upload is never reusable;
+    // idempotent send retries are resolved by clientMessageId before this path.
+    const claimed = await tx
         .update(attachmentUploads)
         .set({
             status: 'committed',
+            conversationId,
             error: null,
             updatedAt: new Date(),
         })
-        .where(
-            and(
-                eq(attachmentUploads.userId, userId),
-                inArray(attachmentUploads.clientUploadId, clientUploadIds)
-            )
-        );
-}
-
-async function validateAttachmentOwnershipForConversation(
-    userId: string,
-    conversationId: string,
-    clientUploadIds: string[]
-): Promise<{ ok: boolean; error?: string }> {
-    if (clientUploadIds.length === 0) return { ok: true };
-
-    const rows = await db
-        .select({
+        .where(and(
+            eq(attachmentUploads.userId, userId),
+            inArray(attachmentUploads.clientUploadId, clientUploadIds),
+            eq(attachmentUploads.status, 'uploaded'),
+            or(
+                isNull(attachmentUploads.conversationId),
+                eq(attachmentUploads.conversationId, conversationId),
+            ),
+        ))
+        .returning({
             clientUploadId: attachmentUploads.clientUploadId,
-            status: attachmentUploads.status,
-            conversationId: attachmentUploads.conversationId,
-        })
-        .from(attachmentUploads)
-        .where(
-            and(
-                eq(attachmentUploads.userId, userId),
-                inArray(attachmentUploads.clientUploadId, clientUploadIds)
-            )
-        );
+            storagePath: attachmentUploads.storagePath,
+            filename: attachmentUploads.filename,
+            mimeType: attachmentUploads.mimeType,
+            sizeBytes: attachmentUploads.sizeBytes,
+        });
 
-    if (rows.length !== clientUploadIds.length) {
-        return { ok: false, error: 'Some attachments are missing or inaccessible.' };
+    if (claimed.length !== attachments.length) {
+        throw new Error('ATTACHMENT_CLAIM_MISMATCH');
     }
 
-    for (const row of rows) {
-        if (row.status !== 'uploaded' && row.status !== 'committed') {
-            return { ok: false, error: 'Some attachments are not ready yet. Please retry in a moment.' };
+    const inputById = new Map(attachments.map((attachment) => [attachment.id, attachment] as const));
+    return claimed.map((upload) => {
+        const input = inputById.get(upload.clientUploadId);
+        if (!input || !upload.storagePath || input.storagePath !== upload.storagePath) {
+            throw new Error('ATTACHMENT_PATH_MISMATCH');
         }
-        if (row.conversationId !== null && row.conversationId !== conversationId) {
-            if (!row.conversationId.startsWith('draft:')) {
-                return { ok: false, error: 'Attachment conversation mismatch detected.' };
-            }
-        }
-    }
-
-    return { ok: true };
+        const mimeType = upload.mimeType || input.mimeType || 'application/octet-stream';
+        const type: UploadedAttachment['type'] = mimeType.startsWith('image/')
+            ? 'image'
+            : mimeType.startsWith('video/')
+                ? 'video'
+                : 'file';
+        return {
+            ...input,
+            type,
+            storagePath: upload.storagePath,
+            filename: upload.filename,
+            mimeType,
+            sizeBytes: upload.sizeBytes ?? input.sizeBytes,
+        };
+    });
 }
 
 // ============================================================================
@@ -1346,7 +1366,8 @@ export async function getOrCreateDMConversation(
 
 export async function getConversations(
     limit: number = 20,
-    cursor?: string
+    cursor?: string,
+    scope: 'active' | 'archived' = 'active',
 ): Promise<{
     success: boolean;
     error?: string;
@@ -1359,14 +1380,20 @@ export async function getConversations(
         if (!user) return { success: false, error: 'Not authenticated' };
 
         const [cursorAtRaw, cursorConversationIdRaw] = cursor ? cursor.split('|') : [];
-        const parsedCursorAt = cursorAtRaw ? new Date(cursorAtRaw) : cursor ? new Date(cursor) : undefined;
+        const parsedCursorAt = cursorAtRaw ? new Date(cursorAtRaw) : undefined;
         const cursorAt = parsedCursorAt && !Number.isNaN(parsedCursorAt.getTime()) ? parsedCursorAt : undefined;
         const cursorConversationId =
             cursorConversationIdRaw && isUuid(cursorConversationIdRaw)
                 ? cursorConversationIdRaw
                 : undefined;
+        if (cursor && (!cursorAt || !cursorConversationId)) {
+            return { success: false, error: 'Invalid conversation cursor' };
+        }
+        if (scope !== 'active' && scope !== 'archived') {
+            return { success: false, error: 'Invalid conversation scope' };
+        }
         const safeLimit = Math.max(1, Math.min(limit, 100));
-        const dedupeKey = `messages:conversations:${user.id}:${safeLimit}:${cursorAt?.toISOString() ?? ''}:${cursorConversationId ?? ''}`;
+        const dedupeKey = `messages:conversations:${user.id}:${scope}:${safeLimit}:${cursorAt?.toISOString() ?? ''}:${cursorConversationId ?? ''}`;
 
         return await runInFlightDeduped(dedupeKey, async () => {
             const userConversations = await db.execute<{
@@ -1378,12 +1405,18 @@ export async function getConversations(
                 last_message_preview: string | null;
                 last_message_sender_id: string | null;
                 last_message_type: string | null;
+                last_reaction_at: Date | null;
+                last_reaction_message_id: string | null;
+                last_reaction_emoji: string | null;
+                last_reaction_actor_id: string | null;
                 last_read_at: Date | null;
                 last_read_message_id: string | null;
                 updated_at: Date;
                 sort_at: Date;
                 archived_at: Date | null;
                 muted: boolean | null;
+                project_title: string | null;
+                project_cover_image: string | null;
             }>(sql`
                 SELECT 
                     cp.conversation_id,
@@ -1394,28 +1427,37 @@ export async function getConversations(
                     cp.last_message_preview,
                     cp.last_message_sender_id,
                     cp.last_message_type,
+                    cp.last_reaction_at,
+                    cp.last_reaction_message_id,
+                    cp.last_reaction_emoji,
+                    cp.last_reaction_actor_id,
                     cp.last_read_at,
                     cp.last_read_message_id,
                     c.updated_at,
                     cp.archived_at,
                     cp.muted,
-                    COALESCE(cp.last_message_at, c.updated_at) AS sort_at
+                    p.title AS project_title,
+                    p.cover_image AS project_cover_image,
+                    cp.last_message_at AS sort_at
                 FROM ${conversationParticipants} cp
                 INNER JOIN ${conversations} c ON c.id = cp.conversation_id
+                LEFT JOIN ${projects} p ON p.conversation_id = c.id
                 WHERE cp.user_id = ${user.id}
-                AND cp.archived_at IS NULL
-                AND c.type != 'project_group'
+                ${scope === 'archived'
+                    ? sql`AND cp.archived_at IS NOT NULL`
+                    : sql`AND cp.archived_at IS NULL`}
+                ${scope === 'archived' ? sql`` : sql`AND c.type != 'project_group'`}
                 AND cp.last_message_id IS NOT NULL
                 ${cursorAt ? sql`
                     AND (
-                        COALESCE(cp.last_message_at, c.updated_at) < ${cursorAt.toISOString()}
+                        cp.last_message_at < ${cursorAt.toISOString()}
                         ${cursorConversationId ? sql`OR (
-                            COALESCE(cp.last_message_at, c.updated_at) = ${cursorAt.toISOString()}
+                            cp.last_message_at = ${cursorAt.toISOString()}
                             AND cp.conversation_id < ${cursorConversationId}
                         )` : sql``}
                     )
                 ` : sql``}
-                ORDER BY COALESCE(cp.last_message_at, c.updated_at) DESC, cp.conversation_id DESC
+                ORDER BY cp.last_message_at DESC, cp.conversation_id DESC
                 LIMIT ${safeLimit + 1}
             `);
 
@@ -1459,8 +1501,15 @@ export async function getConversations(
                 id: userConv.conversation_id,
                 type: userConv.type,
                 updatedAt: userConv.sort_at || userConv.last_message_at || userConv.updated_at || new Date(),
-                lifecycleState: userConv.last_message_id ? 'active' : 'draft',
+                lifecycleState: scope === 'archived'
+                    ? 'archived'
+                    : userConv.last_message_id
+                        ? 'active'
+                        : 'draft',
                 muted: Boolean(userConv.muted),
+                displayTitle: userConv.project_title ?? undefined,
+                displayAvatarUrl: userConv.project_cover_image,
+                displaySubtitle: userConv.type === 'project_group' ? 'Project' : undefined,
                 participants: (participantMap.get(userConv.conversation_id) || []).map(p => ({
                     id: p.userId,
                     username: p.username,
@@ -1477,18 +1526,24 @@ export async function getConversations(
                 unreadCount: userConv.unread_count || 0, // O(1) Read from denormalized column
                 lastReadAt: userConv.last_read_at ?? null,
                 lastReadMessageId: userConv.last_read_message_id ?? null,
+                reactionPreview: userConv.last_reaction_at
+                    && userConv.last_reaction_message_id
+                    && userConv.last_reaction_emoji
+                    && userConv.last_reaction_actor_id
+                    ? {
+                        messageId: userConv.last_reaction_message_id,
+                        actorUserId: userConv.last_reaction_actor_id,
+                        emoji: userConv.last_reaction_emoji,
+                        createdAt: userConv.last_reaction_at,
+                    }
+                    : null,
             };
         }).filter(Boolean) as ConversationWithDetails[];
-        const reconciledResult = await reconcileConversationLastMessagePreviews(user.id, result);
-        const hydratedResult = await hydrateConversationLastMessageDeliveryMetadata(user.id, reconciledResult);
-        const orderedResult = sortConversationsByLatestActivity(hydratedResult);
-
-        // Re-sort client side just in case mapping shuffled, though map preservation usually works
-        // The initial query defined the order.
+        const hydratedResult = await hydrateConversationLastMessageDeliveryMetadata(user.id, result);
 
             return {
                 success: true,
-                conversations: orderedResult,
+                conversations: hydratedResult,
                 hasMore,
                 nextCursor: hasMore
                     ? `${paginatedConvs[paginatedConvs.length - 1]!.sort_at.toISOString()}|${paginatedConvs[paginatedConvs.length - 1]!.conversation_id}`
@@ -1517,33 +1572,42 @@ export async function getMessages(
     nextCursor?: string;
 }> {
     try {
-        const user = await getAuthUser();
+        const scopedViewer = getMessageThreadReadScope(conversationId);
+        const user = scopedViewer ? { id: scopedViewer.viewerId } : await getAuthUser();
         if (!user) return { success: false, error: 'Not authenticated' };
         const safeLimit = Math.max(1, Math.min(100, limit));
         const [cursorAtRaw, cursorMessageIdRaw] = cursor ? cursor.split('|') : [];
-        const parsedCursorAt = cursorAtRaw ? new Date(cursorAtRaw) : cursor ? new Date(cursor) : undefined;
+        const parsedCursorAt = cursorAtRaw ? new Date(cursorAtRaw) : undefined;
         const cursorAt = parsedCursorAt && !Number.isNaN(parsedCursorAt.getTime()) ? parsedCursorAt : undefined;
-        const cursorMessageId = cursorMessageIdRaw || undefined;
+        const cursorMessageId = cursorMessageIdRaw && isUuid(cursorMessageIdRaw)
+            ? cursorMessageIdRaw
+            : undefined;
+        if (cursor && (!cursorAt || !cursorMessageId)) {
+            return { success: false, error: 'Invalid message cursor' };
+        }
         const cursorKey = cursorAt ? `${cursorAt.toISOString()}|${cursorMessageId || ''}` : 'head';
         return await runInFlightDeduped(
             `messages:list:${user.id}:${conversationId}:${cursorKey}:${safeLimit}`,
             async () => {
 
-        // Verify user is participant
-        const participantMembershipId = await getConversationMembershipId(conversationId, user.id);
+        let conversationMeta: { type: typeof conversations.$inferSelect.type } | undefined = scopedViewer
+            ? { type: scopedViewer.conversationType }
+            : undefined;
 
-        if (!participantMembershipId) {
-            return { success: false, error: 'Not a participant of this conversation' };
+        let dmOtherParticipantId: string | null = scopedViewer?.otherParticipantId ?? null;
+        if (!scopedViewer) {
+            const participantMembershipId = await getConversationMembershipId(conversationId, user.id);
+            if (!participantMembershipId) {
+                return { success: false, error: 'Not a participant of this conversation' };
+            }
+            [conversationMeta] = await db
+                .select({ type: conversations.type })
+                .from(conversations)
+                .where(eq(conversations.id, conversationId))
+                .limit(1);
         }
 
-        const [conversationMeta] = await db
-            .select({ type: conversations.type })
-            .from(conversations)
-            .where(eq(conversations.id, conversationId))
-            .limit(1);
-
-        let dmOtherParticipantId: string | null = null;
-        if (conversationMeta?.type === 'dm') {
+        if (!scopedViewer && conversationMeta?.type === 'dm') {
             const [otherParticipant] = await db
                 .select({ userId: conversationParticipants.userId })
                 .from(conversationParticipants)
@@ -1679,7 +1743,7 @@ export async function getMessages(
 
 export async function getMessageContext(
     conversationId: string,
-    messageId: string
+    messageId: string,
 ): Promise<{
     success: boolean;
     error?: string;
@@ -1901,33 +1965,6 @@ async function consumeDirectMessageTargetRateLimit(viewerId: string, targetUserI
     return consumeRateLimit(`msg-target:${viewerId}:${targetUserId}`, 60, 300);
 }
 
-export async function sendMessage(
-    conversationId: string,
-    content: string,
-    type: 'text' | 'image' | 'video' | 'file' = 'text',
-    attachmentIds?: string[],
-    options?: {
-        clientMessageId?: string;
-        replyToMessageId?: string | null;
-        contextChips?: MessageContextChip[];
-        messageType?: 'text' | 'image' | 'video' | 'file';
-    }
-): Promise<SendMessageResult> {
-    if (attachmentIds && attachmentIds.length > 0) {
-        return { success: false, error: 'Legacy attachment ids are no longer supported. Please upload attachments before sending.' };
-    }
-
-    return sendMessageWithAttachments(
-        conversationId,
-        content,
-        [],
-        {
-            ...options,
-            messageType: type,
-        },
-    );
-}
-
 // ============================================================================
 // MARK CONVERSATION AS READ
 // ============================================================================
@@ -1973,10 +2010,27 @@ export async function markConversationAsRead(
                         eq(conversationParticipants.userId, user.id)
                     )
                 )
-                .limit(1);
+                .limit(1)
+                .for('update');
 
             if (!membership) {
                 return { ok: false as const, error: 'Not a participant of this conversation' };
+            }
+
+            // ponytail: repeated visibility/read observers commonly submit the
+            // same watermark. Once this row is already clear, no database
+            // recount, participant write, or notification write is needed.
+            if (
+                serverLastReadMessageId
+                && membership.lastReadMessageId === serverLastReadMessageId
+                && (membership.unreadCount ?? 0) === 0
+            ) {
+                return {
+                    ok: true as const,
+                    membership,
+                    updatedMembership: membership,
+                    shouldClearNotifications: false,
+                };
             }
 
             let watermarkMessage:
@@ -2040,42 +2094,51 @@ export async function markConversationAsRead(
                     : membership.lastReadMessageId ?? watermarkMessage.id
                 : membership.lastReadMessageId ?? null;
 
-            if (watermarkMessage && shouldAdvanceWatermark) {
-                const previousWatermarkId = membership.lastReadMessageId;
-                const unreadMessages = await tx
-                    .select({ id: messages.id })
-                    .from(messages)
-                    .where(
-                        and(
-                            eq(messages.conversationId, conversationId),
-                            or(isNull(messages.senderId), ne(messages.senderId, user.id)),
-                            isNull(messages.deletedAt),
-                            lte(messages.createdAt, watermarkMessage.createdAt),
-                            previousWatermarkId
-                                ? sql`${messages.createdAt} > COALESCE(
-                                    (SELECT created_at FROM ${messages} WHERE id = ${previousWatermarkId}),
-                                    '1970-01-01'::timestamptz
-                                  )`
-                                : sql`true`,
-                            sql`NOT EXISTS (
-                                SELECT 1 FROM ${messageReadReceipts} rr
-                                WHERE rr.message_id = ${messages.id}
-                                AND rr.user_id = ${user.id}
-                            )`,
-                        ),
-                    )
-                    .orderBy(desc(messages.createdAt))
-                    .limit(200);
+            if (!shouldAdvanceWatermark && (membership.unreadCount ?? 0) === 0) {
+                return {
+                    ok: true as const,
+                    membership,
+                    updatedMembership: membership,
+                    shouldClearNotifications: false,
+                };
+            }
 
-                if (unreadMessages.length > 0) {
-                    await tx.insert(messageReadReceipts)
-                        .values(unreadMessages.map((m) => ({
-                            messageId: m.id,
-                            conversationId,
-                            userId: user.id,
-                        })))
-                        .onConflictDoNothing();
-                }
+            if (watermarkMessage && shouldAdvanceWatermark) {
+                const previousReadAt = membership.lastReadAt ?? new Date(0);
+                const previousReadId =
+                    membership.lastReadMessageId ?? '00000000-0000-0000-0000-000000000000';
+                await tx.execute(sql`
+                    INSERT INTO ${messageReadReceipts} (
+                        message_id,
+                        conversation_id,
+                        user_id,
+                        read_at
+                    )
+                    SELECT
+                        message.id,
+                        ${conversationId},
+                        ${user.id},
+                        now()
+                    FROM ${messages} message
+                    WHERE message.conversation_id = ${conversationId}
+                      AND message.deleted_at IS NULL
+                      AND message.sender_id IS DISTINCT FROM ${user.id}
+                      AND (message.created_at, message.id) > (
+                        ${previousReadAt.toISOString()},
+                        ${previousReadId}::uuid
+                      )
+                      AND (message.created_at, message.id) <= (
+                        ${watermarkMessage.createdAt instanceof Date ? watermarkMessage.createdAt.toISOString() : watermarkMessage.createdAt},
+                        ${watermarkMessage.id}::uuid
+                      )
+                      AND NOT EXISTS (
+                        SELECT 1
+                        FROM ${messageHiddenForUsers} hidden
+                        WHERE hidden.message_id = message.id
+                          AND hidden.user_id = ${user.id}
+                      )
+                    ON CONFLICT (message_id, user_id) DO NOTHING
+                `);
             }
 
             const predicates = [
@@ -2090,6 +2153,7 @@ export async function markConversationAsRead(
                 )`,
             ];
             const unreadAfterWatermark = buildUnreadAfterReadWatermarkPredicate(
+                conversationId,
                 nextLastReadMessageId,
                 nextLastReadAt,
             );
@@ -2107,7 +2171,6 @@ export async function markConversationAsRead(
                     lastReadAt: nextLastReadAt,
                     lastReadMessageId: nextLastReadMessageId,
                     unreadCount: finalUnreadCount,
-                    archivedAt: null,
                 })
                 .where(eq(conversationParticipants.id, membership.id))
                 .returning({
@@ -2120,6 +2183,9 @@ export async function markConversationAsRead(
                 ok: true as const,
                 membership,
                 updatedMembership,
+                shouldClearNotifications:
+                    (membership.unreadCount ?? 0) > 0
+                    && (updatedMembership?.unreadCount ?? 0) === 0,
             };
         });
 
@@ -2128,7 +2194,7 @@ export async function markConversationAsRead(
         }
         const updatedMembership = result.updatedMembership;
 
-        if ((updatedMembership?.unreadCount ?? 0) === 0) {
+        if (result.shouldClearNotifications) {
             try {
                 await markConversationNotificationsRead(user.id, conversationId);
             } catch (error) {
@@ -2237,57 +2303,172 @@ export async function setConversationMuted(
 
 export async function searchMessages(
     query: string,
-    limit: number = 20
+    limit: number = 20,
+    cursor?: string | null,
 ): Promise<{
     success: boolean;
     error?: string;
+    errorCode?: 'INVALID_QUERY' | 'INVALID_CURSOR' | 'RATE_LIMITED' | 'SEARCH_FAILED';
+    nextCursor?: string | null;
     results?: Array<{
         message: MessageWithSender;
         conversationId: string;
-        // Pure Optimization: Return full details to hydrate ghost conversations
-        conversation: ConversationWithDetails;
+        displayTitle: string;
+        displayAvatarUrl: string | null;
+        conversationType: ConversationWithDetails['type'];
+        contextLabel: string;
+        matchedSnippet: string;
+        attachmentSummary: {
+            count: number;
+            filename: string | null;
+        };
     }>;
 }> {
+    const searchStartedAt = Date.now();
+    const queryLength = Array.from(query?.normalize('NFKC') ?? '').length;
+    const completeSearch = <T extends {
+        success: boolean;
+        errorCode?: 'INVALID_QUERY' | 'INVALID_CURSOR' | 'RATE_LIMITED' | 'SEARCH_FAILED';
+        nextCursor?: string | null;
+        results?: Array<unknown>;
+    }>(result: T): T => {
+        const resultCount = result.results?.length ?? 0;
+        const outcome = result.success
+            ? (resultCount > 0 ? 'success' : 'empty')
+            : result.errorCode === 'RATE_LIMITED'
+                ? 'rate_limited'
+                : result.errorCode === 'INVALID_QUERY' || result.errorCode === 'INVALID_CURSOR'
+                    ? 'invalid'
+                    : 'error';
+        recordMessageSearch({
+            queryLength,
+            durationMs: Date.now() - searchStartedAt,
+            resultCount,
+            outcome,
+            errorCode: result.errorCode,
+            hasMore: Boolean(result.nextCursor),
+        });
+        return result;
+    };
+
     try {
         const user = await getAuthUser();
-        if (!user) return { success: false, error: 'Not authenticated' };
+        if (!user) return completeSearch({ success: false, error: 'Not authenticated' });
 
-        if (!query?.trim()) {
-            return { success: true, results: [] };
+        const normalizedInput = sanitizeMessageSearchText(query?.normalize('NFKC') ?? '');
+        if (!normalizedInput) {
+            return completeSearch({ success: true, results: [], nextCursor: null });
         }
-        const { textQuery, fromFilter, hasFilter, inFilter, kindFilter, hasChip, isPinned } = parseMessageSearchQuery(query);
+        const { textQuery, fromFilter, hasFilter, inFilter, kindFilter, hasChip, isPinned } =
+            parseMessageSearchQuery(normalizedInput);
         if (!textQuery && !fromFilter && !hasFilter && !inFilter && !kindFilter && !hasChip && !isPinned) {
-            return { success: true, results: [] };
+            return completeSearch({ success: true, results: [], nextCursor: null });
         }
+
+        if (textQuery && Array.from(textQuery).length < 2) {
+            return completeSearch({
+                success: false,
+                error: 'Enter at least two characters to search message history.',
+                errorCode: 'INVALID_QUERY',
+            });
+        }
+
+        const parsedLimit = Number.isFinite(limit) ? Math.trunc(limit) : NaN;
+        if (!Number.isInteger(parsedLimit) || parsedLimit < 1) {
+            return completeSearch({
+                success: false,
+                error: 'Invalid search page size.',
+                errorCode: 'INVALID_QUERY',
+            });
+        }
+        const pageSize = Math.min(parsedLimit, 50);
+        const decodedCursor = decodeMessageSearchCursor(cursor);
+        if (cursor && !decodedCursor) {
+            return completeSearch({
+                success: false,
+                error: 'Invalid search cursor.',
+                errorCode: 'INVALID_CURSOR',
+            });
+        }
+
+        const searchRate = await consumeRateLimit(`message-search:${user.id}`, 90, 60, {
+            failMode: 'stale_or_shed',
+        });
+        if (!searchRate.allowed) {
+            return completeSearch({
+                success: false,
+                error: 'Message search is temporarily busy. Please try again shortly.',
+                errorCode: 'RATE_LIMITED',
+            });
+        }
+
         const normalizedQuery = textQuery;
         const searchPattern = normalizedQuery ? `%${normalizedQuery}%` : null;
-        const internalLimit = Math.min(200, Math.max(limit * 6, 40));
-        const searchDocument = buildMessageSearchDocumentSql({
-            content: messages.content,
-            metadata: messages.metadata,
-        });
+        const rankExpression = normalizedQuery
+            ? sql<number>`ts_rank_cd(
+                ${messages.searchDocument},
+                websearch_to_tsquery('simple', ${normalizedQuery})
+            )`
+            : sql<number>`0::real`;
 
         const conversationScopePredicate = sql`EXISTS (
             SELECT 1
             FROM ${conversationParticipants} search_cp
             INNER JOIN ${conversations} search_c
                 ON search_c.id = search_cp.conversation_id
+            LEFT JOIN ${dmPairs} search_dp
+                ON search_dp.conversation_id = search_c.id
             WHERE search_cp.conversation_id = ${messages.conversationId}
               AND search_cp.user_id = ${user.id}
+              AND search_cp.archived_at IS NULL
               ${inFilter ? sql`AND search_c.type = ${inFilter}` : sql``}
+              AND (
+                  search_c.type <> 'dm'
+                  OR (
+                      search_dp.conversation_id IS NOT NULL
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM ${connections} blocked_connection
+                          WHERE blocked_connection.status = 'blocked'
+                            AND (
+                                (
+                                    blocked_connection.requester_id = search_dp.user_low
+                                    AND blocked_connection.addressee_id = search_dp.user_high
+                                )
+                                OR (
+                                    blocked_connection.requester_id = search_dp.user_high
+                                    AND blocked_connection.addressee_id = search_dp.user_low
+                                )
+                            )
+                      )
+                  )
+              )
         )`;
 
         const textPredicate = normalizedQuery
             ? sql`(
-                to_tsvector('english', ${searchDocument}) @@ websearch_to_tsquery('english', ${normalizedQuery})
+                ${messages.searchDocument} @@ websearch_to_tsquery('simple', ${normalizedQuery})
                 OR ${messages.content} ILIKE ${searchPattern}
                 OR coalesce(${messages.metadata} #>> '{structured,summary}', '') ILIKE ${searchPattern}
                 OR coalesce(${messages.metadata} #>> '{structured,title}', '') ILIKE ${searchPattern}
+                OR EXISTS (
+                    SELECT 1
+                    FROM ${messageAttachments} search_attachment
+                    WHERE search_attachment.message_id = ${messages.id}
+                      AND search_attachment.filename ILIKE ${searchPattern}
+                )
             )`
             : sql`true`;
         const hasPredicate = hasFilter === 'code'
             ? sql`${messages.content} ILIKE ${'%```%'}`
-            : (hasFilter ? eq(messages.type, hasFilter) : sql`true`);
+            : (hasFilter
+                ? sql`EXISTS (
+                    SELECT 1
+                    FROM ${messageAttachments} typed_attachment
+                    WHERE typed_attachment.message_id = ${messages.id}
+                      AND typed_attachment.type = ${hasFilter}
+                )`
+                : sql`true`);
         const kindPredicate = kindFilter
             ? sql`coalesce(${messages.metadata} #>> '{structured,kind}', '') = ${kindFilter}`
             : sql`true`;
@@ -2299,10 +2480,40 @@ export async function searchMessages(
             )`
             : sql`true`;
         const pinnedPredicate = isPinned
-            ? sql`coalesce(${messages.metadata}->>'pinned', 'false') = 'true'`
+            ? sql`EXISTS (
+                SELECT 1
+                FROM ${messagePins} search_pin
+                WHERE search_pin.message_id = ${messages.id}
+                  AND search_pin.conversation_id = ${messages.conversationId}
+            )`
+            : sql`true`;
+        const fromPredicate = fromFilter
+            ? sql`EXISTS (
+                SELECT 1
+                FROM ${profiles} search_sender
+                WHERE search_sender.id = ${messages.senderId}
+                  AND (
+                      lower(coalesce(search_sender.full_name, '')) LIKE ${`%${fromFilter}%`}
+                      OR lower(coalesce(search_sender.username, '')) LIKE ${`%${fromFilter}%`}
+                      OR search_sender.id::text = ${fromFilter}
+                  )
+            )`
+            : sql`true`;
+        const cursorPredicate = decodedCursor
+            ? sql`(
+                ${rankExpression} < ${decodedCursor.rank}
+                OR (
+                    ${rankExpression} = ${decodedCursor.rank}
+                    AND ${messages.createdAt} < ${new Date(decodedCursor.createdAt)}
+                )
+                OR (
+                    ${rankExpression} = ${decodedCursor.rank}
+                    AND ${messages.createdAt} = ${new Date(decodedCursor.createdAt)}
+                    AND ${messages.id} < ${decodedCursor.id}
+                )
+            )`
             : sql`true`;
 
-        // Search using full-text search
         const searchResults = await db
             .select({
                 id: messages.id,
@@ -2315,14 +2526,17 @@ export async function searchMessages(
                 createdAt: messages.createdAt,
                 editedAt: messages.editedAt,
                 deletedAt: messages.deletedAt,
-                rank: normalizedQuery
-                    ? sql<number>`
-                        ts_rank_cd(
-                            to_tsvector('english', ${searchDocument}),
-                            websearch_to_tsquery('english', ${normalizedQuery})
-                        )
-                    `
-                    : sql<number>`0`,
+                rank: rankExpression,
+                attachmentCount: sql<number>`(
+                    SELECT count(*)::integer
+                    FROM ${messageAttachments} search_attachment_count
+                    WHERE search_attachment_count.message_id = ${messages.id}
+                )`,
+                attachmentFilename: sql<string | null>`(
+                    SELECT min(search_attachment_name.filename)
+                    FROM ${messageAttachments} search_attachment_name
+                    WHERE search_attachment_name.message_id = ${messages.id}
+                )`,
             })
             .from(messages)
             .where(
@@ -2339,26 +2553,21 @@ export async function searchMessages(
                     hasPredicate,
                     kindPredicate,
                     chipPredicate,
-                    pinnedPredicate
+                    pinnedPredicate,
+                    fromPredicate,
+                    cursorPredicate,
                 )
             )
-            .orderBy(desc(sql`
-                CASE
-                    WHEN ${normalizedQuery || ''} = '' THEN 0
-                    ELSE ts_rank_cd(
-                        to_tsvector('english', ${searchDocument}),
-                        websearch_to_tsquery('english', ${normalizedQuery || ''})
-                    )
-                END
-            `), desc(messages.createdAt))
-            .limit(internalLimit);
+            .orderBy(desc(rankExpression), desc(messages.createdAt), desc(messages.id))
+            .limit(pageSize + 1);
 
         if (searchResults.length === 0) {
-            return { success: true, results: [] };
+            return completeSearch({ success: true, results: [], nextCursor: null });
         }
 
-        // Get sender profiles
-        const senderIds = [...new Set(searchResults.map(m => m.senderId).filter(Boolean))] as string[];
+        const pageRows = searchResults.slice(0, pageSize);
+        const hasMore = searchResults.length > pageSize;
+        const senderIds = [...new Set(pageRows.map(m => m.senderId).filter(Boolean))] as string[];
         const senderProfiles = senderIds.length > 0
             ? await db
                 .select({
@@ -2372,47 +2581,16 @@ export async function searchMessages(
             : [];
 
         const senderMap = new Map(senderProfiles.map(s => [s.id, s]));
-
-        // Pure Optimization: Hydrate conversation details for found messages
-        // This prevents "Ghost Conversation" crashes in the client
-        const resultConversationIds = [...new Set(searchResults.map(m => m.conversationId))];
-
-        // 1. Get conversation details + last message
-        const conversationsWithDetails = await db.execute<{
-            id: string;
-            type: string;
-            updated_at: Date;
-            last_message_id: string | null;
-            last_message_preview: string | null;
-            last_message_sender_id: string | null;
-            last_message_at: Date | null;
-            last_message_type: string | null;
-            unread_count: number;
-            last_read_at: Date | null;
-            last_read_message_id: string | null;
-            muted: boolean | null;
-        }>(sql`
-            SELECT 
-                c.id,
-                c.type,
-                c.updated_at,
-                cp.last_message_id,
-                cp.last_message_preview,
-                cp.last_message_sender_id,
-                cp.last_message_at,
-                cp.last_message_type,
-                cp.unread_count,
-                cp.last_read_at,
-                cp.last_read_message_id,
-                cp.muted
-            FROM ${conversations} c
-            INNER JOIN ${conversationParticipants} cp
-                ON cp.conversation_id = c.id
-               AND cp.user_id = ${user.id}
-            WHERE c.id IN ${resultConversationIds}
-        `);
-
-        // 2. Get participants
+        const resultConversationIds = [...new Set(pageRows.map(m => m.conversationId))];
+        const conversationRows = await db
+            .select({
+                id: conversations.id,
+                type: conversations.type,
+                projectTitle: projects.title,
+            })
+            .from(conversations)
+            .leftJoin(projects, eq(projects.conversationId, conversations.id))
+            .where(inArray(conversations.id, resultConversationIds));
         const allParticipants = await db
             .select({
                 conversationId: conversationParticipants.conversationId,
@@ -2425,8 +2603,7 @@ export async function searchMessages(
             .innerJoin(profiles, eq(profiles.id, conversationParticipants.userId))
             .where(inArray(conversationParticipants.conversationId, resultConversationIds));
 
-        // 3. Build Maps
-        const detailsMap = new Map(Array.from(conversationsWithDetails).map((conversation) => [conversation.id, conversation]));
+        const conversationMap = new Map(conversationRows.map((conversation) => [conversation.id, conversation]));
         const participantMap = new Map<string, typeof allParticipants>();
 
         for (const p of allParticipants) {
@@ -2437,77 +2614,36 @@ export async function searchMessages(
                 participantMap.get(p.conversationId)!.push(p);
             }
         }
-
-        const dmOtherUserIdsByConversation = new Map<string, string>();
-        for (const conversationId of resultConversationIds) {
-            const details = detailsMap.get(conversationId);
-            if (details?.type !== 'dm') continue;
-            const otherUserId = participantMap.get(conversationId)?.[0]?.userId ?? null;
-            if (otherUserId) {
-                dmOtherUserIdsByConversation.set(conversationId, otherUserId);
-            }
-        }
-
-        const privacyByOtherUserId = dmOtherUserIdsByConversation.size > 0
-            ? new Map(
-                await Promise.all(
-                    Array.from(new Set(dmOtherUserIdsByConversation.values())).map(async (otherUserId) =>
-                        [otherUserId, await resolvePrivacyRelationship(user.id, otherUserId)] as const,
-                    ),
-                ),
-            )
-            : new Map<string, Awaited<ReturnType<typeof resolvePrivacyRelationship>> | null>();
-        const blockedDmConversationIds = new Set<string>();
-        for (const [conversationId, otherUserId] of dmOtherUserIdsByConversation) {
-            const privacy = privacyByOtherUserId.get(otherUserId) ?? null;
-            if (!privacy || privacy.blockedByViewer || privacy.blockedByTarget) {
-                blockedDmConversationIds.add(conversationId);
-            }
-        }
-
-        const visibleSearchResults = searchResults.filter((message) =>
-            !blockedDmConversationIds.has(message.conversationId),
-        );
-        if (visibleSearchResults.length === 0) {
-            return { success: true, results: [] };
-        }
-
-        const reactionSummaryMap = await getReactionSummaryMap(
-            visibleSearchResults.map((message) => message.id),
-            user.id,
-        );
-
-        const results = visibleSearchResults.map(m => {
-            const details = detailsMap.get(m.conversationId);
-            const participants = participantMap.get(m.conversationId) || [];
-
-            // Build full conversation object
-            const conversation: ConversationWithDetails = {
-                id: m.conversationId,
-                type: details?.type as 'dm' | 'group' | 'project_group' || 'dm',
-                updatedAt: details?.updated_at || new Date(),
-                lifecycleState: details?.last_message_id ? 'active' : 'draft',
-                muted: Boolean(details?.muted),
-                participants: participants.map(p => ({
-                    id: p.userId,
-                    username: p.username,
-                    fullName: p.fullName,
-                    avatarUrl: p.avatarUrl,
-                })),
-                lastMessage: details?.last_message_id ? {
-                    id: details.last_message_id,
-                    content: details.last_message_preview,
-                    senderId: details.last_message_sender_id,
-                    createdAt: details.last_message_at || details.updated_at || new Date(),
-                    type: details.last_message_type,
-                } : null,
-                unreadCount: details?.unread_count || 0,
-                lastReadAt: details?.last_read_at ?? null,
-                lastReadMessageId: details?.last_read_message_id ?? null,
-            };
-
+        const results = pageRows.map(m => {
+            const conversation = conversationMap.get(m.conversationId);
+            const participants = participantMap.get(m.conversationId) ?? [];
+            const conversationType = (conversation?.type ?? 'dm') as ConversationWithDetails['type'];
+            const display = buildConversationDisplay({
+                type: conversationType,
+                participants,
+                projectTitle: conversation?.projectTitle,
+            });
+            const structuredMetadata = (m.metadata ?? {}) as Record<string, unknown>;
+            const structured = structuredMetadata.structured;
+            const structuredRecord = structured && typeof structured === 'object'
+                ? structured as Record<string, unknown>
+                : null;
+            const fallbackSnippet = typeof structuredRecord?.summary === 'string'
+                ? structuredRecord.summary
+                : typeof structuredRecord?.title === 'string'
+                    ? structuredRecord.title
+                    : m.attachmentFilename || 'Attachment';
             return {
                 conversationId: m.conversationId,
+                displayTitle: display.title,
+                displayAvatarUrl: display.avatarUrl,
+                conversationType,
+                contextLabel: display.subtitle,
+                matchedSnippet: m.content?.trim() || fallbackSnippet,
+                attachmentSummary: {
+                    count: m.attachmentCount,
+                    filename: m.attachmentFilename,
+                },
                 message: {
                     id: m.id,
                     conversationId: m.conversationId,
@@ -2516,42 +2652,35 @@ export async function searchMessages(
                     clientMessageId: m.clientMessageId,
                     content: m.content,
                     type: m.type as MessageWithSender['type'],
-                    metadata: withReactionSummaryMetadata(
-                        (m.metadata || {}) as Record<string, unknown>,
-                        reactionSummaryMap.get(m.id) || [],
-                    ),
+                    metadata: structuredMetadata,
                     createdAt: m.createdAt,
                     editedAt: m.editedAt,
                     deletedAt: m.deletedAt,
                     sender: m.senderId ? senderMap.get(m.senderId) || null : null,
                     attachments: [],
                 },
-                conversation
             };
-        }).filter((item) => {
-            if (!fromFilter) return true;
-            const sender = item.message.sender;
-            const senderText = `${sender?.fullName || ''} ${sender?.username || ''}`.toLowerCase();
-            return senderText.includes(fromFilter);
-        }).slice(0, limit);
-        const hydratedConversations = await hydrateConversationLastMessageDeliveryMetadata(
-            user.id,
-            results.map((item) => item.conversation),
-        );
-        const hydratedConversationById = new Map(
-            hydratedConversations.map((conversation) => [conversation.id, conversation] as const),
-        );
+        });
+        const lastRow = pageRows.at(-1);
 
-        return {
+        return completeSearch({
             success: true,
-            results: results.map((item) => ({
-                ...item,
-                conversation: hydratedConversationById.get(item.conversation.id) ?? item.conversation,
-            })),
-        };
+            results,
+            nextCursor: hasMore && lastRow
+                ? encodeMessageSearchCursor({
+                    rank: Number(lastRow.rank),
+                    createdAt: lastRow.createdAt.toISOString(),
+                    id: lastRow.id,
+                })
+                : null,
+        });
     } catch (error) {
         console.error('Error searching messages:', error);
-        return { success: false, error: 'Failed to search messages' };
+        return completeSearch({
+            success: false,
+            error: 'Failed to search messages',
+            errorCode: 'SEARCH_FAILED',
+        });
     }
 }
 
@@ -2564,47 +2693,49 @@ export async function editMessage(
     nextContent: string
 ): Promise<{ success: boolean; error?: string }> {
     try {
+        const parsed = editMessageSchema.safeParse({ messageId, content: nextContent });
+        if (!parsed.success) {
+            return { success: false, error: 'Invalid message update' };
+        }
+
         const user = await getAuthUser();
         if (!user) return { success: false, error: 'Not authenticated' };
         const { allowed: editRlOk } = await consumeRateLimit(`msg:${user.id}`, 120, 60);
         if (!editRlOk) return { success: false, error: 'Rate limit exceeded' };
 
-        const normalizedContent = nextContent.trim();
-        if (!normalizedContent) {
-            return { success: false, error: 'Message cannot be empty' };
-        }
-        if (normalizedContent.length > MAX_MESSAGE_CONTENT_LENGTH) {
-            return { success: false, error: `Message too long. Maximum is ${MAX_MESSAGE_CONTENT_LENGTH} characters.` };
-        }
+        const normalizedContent = parsed.data.content;
 
-        const [messageRow] = await db
-            .select({
-                id: messages.id,
-                conversationId: messages.conversationId,
-                senderId: messages.senderId,
-                content: messages.content,
-                createdAt: messages.createdAt,
-                deletedAt: messages.deletedAt,
-            })
-            .from(messages)
-            .where(eq(messages.id, messageId))
-            .limit(1);
+        const result = await db.transaction(async (tx) => {
+            const [messageRow] = await tx
+                .select({
+                    id: messages.id,
+                    conversationId: messages.conversationId,
+                    senderId: messages.senderId,
+                    content: messages.content,
+                    createdAt: messages.createdAt,
+                    deletedAt: messages.deletedAt,
+                })
+                .from(messages)
+                .where(eq(messages.id, parsed.data.messageId))
+                .limit(1)
+                .for('update');
 
-        if (!messageRow) return { success: false, error: 'Message not found' };
-        if (messageRow.senderId !== user.id) return { success: false, error: 'Not authorized' };
-        if (messageRow.deletedAt) return { success: false, error: 'Cannot edit deleted message' };
+            if (!messageRow) return { success: false as const, error: 'Message not found' };
+            if (messageRow.senderId !== user.id) return { success: false as const, error: 'Not authorized' };
+            if (messageRow.deletedAt) return { success: false as const, error: 'Cannot edit deleted message' };
 
-        const editWindowMs = MESSAGE_EDIT_WINDOW_MINUTES * 60 * 1000;
-        if (Date.now() - messageRow.createdAt.getTime() > editWindowMs) {
-            return { success: false, error: `Edit window expired (${MESSAGE_EDIT_WINDOW_MINUTES} minutes)` };
-        }
+            const editWindowMs = MESSAGE_EDIT_WINDOW_MINUTES * 60 * 1000;
+            if (Date.now() - messageRow.createdAt.getTime() > editWindowMs) {
+                return {
+                    success: false as const,
+                    error: `Edit window expired (${MESSAGE_EDIT_WINDOW_MINUTES} minutes)`,
+                };
+            }
 
-        const currentContent = messageRow.content || '';
-        if (currentContent === normalizedContent) {
-            return { success: true };
-        }
+            if ((messageRow.content || '') === normalizedContent) {
+                return { success: true as const };
+            }
 
-        await db.transaction(async (tx) => {
             await tx
                 .insert(messageEditLogs)
                 .values({
@@ -2620,25 +2751,24 @@ export async function editMessage(
                     content: normalizedContent,
                     editedAt: new Date(),
                 })
-                .where(eq(messages.id, messageRow.id));
-        });
-
-        if (await conversationNeedsPreviewRefresh(messageRow.conversationId, messageRow.id)) {
-            try {
-                await refreshConversationParticipantPreviews(messageRow.conversationId);
-            } catch (previewRefreshError) {
-                console.error(
-                    'Failed to refresh conversation participant previews after editing message:',
-                    previewRefreshError,
-                    {
-                        conversationId: messageRow.conversationId,
-                        messageId: messageRow.id,
-                    },
+                .where(
+                    and(
+                        eq(messages.id, messageRow.id),
+                        eq(messages.senderId, user.id),
+                        isNull(messages.deletedAt),
+                    ),
                 );
-            }
-        }
 
-            return { success: true };
+            await tx.execute(sql`
+                SELECT app_private.nb_reconcile_conversation_participants(
+                    ${messageRow.conversationId}::uuid,
+                    NULL::uuid
+                )
+            `);
+
+            return { success: true as const };
+        });
+        return result;
     } catch (error) {
         console.error('Error editing message:', error);
         return { success: false, error: 'Failed to edit message' };
@@ -2650,111 +2780,125 @@ export async function deleteMessage(
     scope: 'me' | 'everyone' = 'everyone'
 ): Promise<{ success: boolean; error?: string }> {
     try {
+        const parsed = deleteMessageSchema.safeParse({ messageId, scope });
+        if (!parsed.success) {
+            return { success: false, error: 'Invalid message deletion' };
+        }
+
         const user = await getAuthUser();
         if (!user) return { success: false, error: 'Not authenticated' };
         const { allowed: delRlOk } = await consumeRateLimit(`msg:${user.id}`, 120, 60);
         if (!delRlOk) return { success: false, error: 'Rate limit exceeded' };
 
-        const [messageRow] = await db
-            .select({
-                id: messages.id,
-                conversationId: messages.conversationId,
-                senderId: messages.senderId,
-                metadata: messages.metadata,
-                deletedAt: messages.deletedAt,
-            })
-            .from(messages)
-            .where(eq(messages.id, messageId))
-            .limit(1);
-
-        if (!messageRow) return { success: false, error: 'Message not found' };
-
-        const [membership] = await db
-            .select({ id: conversationParticipants.id })
-            .from(conversationParticipants)
-            .where(
-                and(
-                    eq(conversationParticipants.conversationId, messageRow.conversationId),
-                    eq(conversationParticipants.userId, user.id)
-                )
-            )
-            .limit(1);
-
-        if (!membership) {
-            return { success: false, error: 'Not authorized' };
-        }
-
-        if (scope === 'me') {
-            await db
-                .insert(messageHiddenForUsers)
-                .values({
-                    messageId: messageRow.id,
-                    userId: user.id,
+        return await db.transaction(async (tx) => {
+            const [messageRow] = await tx
+                .select({
+                    id: messages.id,
+                    conversationId: messages.conversationId,
+                    senderId: messages.senderId,
+                    deletedAt: messages.deletedAt,
                 })
-                .onConflictDoNothing({
-                    target: [messageHiddenForUsers.messageId, messageHiddenForUsers.userId],
-                });
+                .from(messages)
+                .where(eq(messages.id, parsed.data.messageId))
+                .limit(1)
+                .for('update');
 
-            await reconcileConversationUnreadCounts(messageRow.conversationId, [user.id]);
+            if (!messageRow) return { success: false, error: 'Message not found' };
 
-            try {
-                if (await conversationNeedsPreviewRefresh(messageRow.conversationId, messageRow.id)) {
-                    await refreshConversationParticipantPreviews(messageRow.conversationId);
-                }
-            } catch (previewRefreshError) {
-                console.error(
-                    'Failed to refresh conversation participant previews after hiding message for viewer:',
-                    previewRefreshError,
-                    {
-                        conversationId: messageRow.conversationId,
-                        messageId: messageRow.id,
-                    },
+            const [membership] = await tx
+                .select({ id: conversationParticipants.id })
+                .from(conversationParticipants)
+                .where(
+                    and(
+                        eq(conversationParticipants.conversationId, messageRow.conversationId),
+                        eq(conversationParticipants.userId, user.id),
+                    ),
+                )
+                .limit(1);
+
+            if (!membership) return { success: false, error: 'Not authorized' };
+
+            if (parsed.data.scope === 'me') {
+                await tx
+                    .insert(messageHiddenForUsers)
+                    .values({ messageId: messageRow.id, userId: user.id })
+                    .onConflictDoNothing({
+                        target: [messageHiddenForUsers.messageId, messageHiddenForUsers.userId],
+                    });
+
+                await tx.execute(sql`
+                    SELECT app_private.nb_reconcile_conversation_participants(
+                        ${messageRow.conversationId}::uuid,
+                        ${user.id}::uuid
+                    )
+                `);
+                return { success: true };
+            }
+
+            if (messageRow.senderId !== user.id) {
+                return { success: false, error: 'Only sender can unsend for everyone' };
+            }
+
+            if (!messageRow.deletedAt) {
+                await tx
+                    .update(messages)
+                    .set({
+                        deletedAt: new Date(),
+                        content: null,
+                        metadata: sql`
+                            jsonb_set(
+                                jsonb_set(
+                                    COALESCE(${messages.metadata}, '{}'::jsonb),
+                                    '{deletionScope}',
+                                    '"everyone"'::jsonb,
+                                    true
+                                ),
+                                '{deletedBy}',
+                                to_jsonb(${user.id}::text),
+                                true
+                            )
+                        `,
+                    })
+                    .where(
+                        and(
+                            eq(messages.id, messageRow.id),
+                            eq(messages.senderId, user.id),
+                            isNull(messages.deletedAt),
+                        ),
+                    );
+
+                await markMessageBurstSourceDeleted(
+                    messageRow.conversationId,
+                    messageRow.id,
+                    tx,
                 );
+                await markMessageReactionSourceDeleted(
+                    messageRow.conversationId,
+                    messageRow.id,
+                    tx,
+                );
+                await tx
+                    .update(conversationParticipants)
+                    .set({
+                        lastReactionAt: null,
+                        lastReactionMessageId: null,
+                        lastReactionEmoji: null,
+                        lastReactionActorId: null,
+                    })
+                    .where(and(
+                        eq(conversationParticipants.conversationId, messageRow.conversationId),
+                        eq(conversationParticipants.lastReactionMessageId, messageRow.id),
+                    ));
             }
 
+            await tx.execute(sql`
+                SELECT app_private.nb_reconcile_conversation_participants(
+                    ${messageRow.conversationId}::uuid,
+                    NULL::uuid
+                )
+            `);
             return { success: true };
-        }
-
-        if (messageRow.senderId !== user.id) {
-            return { success: false, error: 'Only sender can unsend for everyone' };
-        }
-
-        if (messageRow.deletedAt) {
-            await reconcileConversationUnreadCounts(messageRow.conversationId);
-            return { success: true };
-        }
-
-        await db
-            .update(messages)
-            .set({
-                deletedAt: new Date(),
-                content: null,
-                metadata: {
-                    ...(messageRow.metadata || {}),
-                    deletionScope: 'everyone',
-                    deletedBy: user.id,
-                },
-            })
-            .where(eq(messages.id, messageRow.id));
-
-        await reconcileConversationUnreadCounts(messageRow.conversationId);
-
-        try {
-            if (await conversationNeedsPreviewRefresh(messageRow.conversationId, messageRow.id)) {
-                await refreshConversationParticipantPreviews(messageRow.conversationId);
-            }
-        } catch (previewRefreshError) {
-            console.error(
-                'Failed to refresh conversation participant previews after deleting message:',
-                previewRefreshError,
-                {
-                    conversationId: messageRow.conversationId,
-                    messageId: messageRow.id,
-                },
-            );
-        }
-
-        return { success: true };
+        });
     } catch (error) {
         console.error('Error deleting message:', error);
         return { success: false, error: 'Failed to delete message' };
@@ -2770,24 +2914,27 @@ export async function getPinnedMessages(
     limit: number = 3
 ): Promise<{ success: boolean; error?: string; messages?: MessageWithSender[] }> {
     try {
-        const user = await getAuthUser();
+        const scopedViewer = getMessageThreadReadScope(conversationId);
+        const user = scopedViewer ? { id: scopedViewer.viewerId } : await getAuthUser();
         if (!user) return { success: false, error: 'Not authenticated' };
         const safeLimit = Math.max(1, Math.min(20, limit));
         return await runInFlightDeduped(`messages:pinned:${user.id}:${conversationId}:${safeLimit}`, async () => {
 
-        const [membership] = await db
-            .select({ id: conversationParticipants.id })
-            .from(conversationParticipants)
-            .where(
-                and(
-                    eq(conversationParticipants.conversationId, conversationId),
-                    eq(conversationParticipants.userId, user.id)
+        if (!scopedViewer) {
+            const [membership] = await db
+                .select({ id: conversationParticipants.id })
+                .from(conversationParticipants)
+                .where(
+                    and(
+                        eq(conversationParticipants.conversationId, conversationId),
+                        eq(conversationParticipants.userId, user.id)
+                    )
                 )
-            )
-            .limit(1);
+                .limit(1);
 
-        if (!membership) {
-            return { success: false, error: 'Not authorized' };
+            if (!membership) {
+                return { success: false, error: 'Not authorized' };
+            }
         }
 
         const rows = await db
@@ -2804,12 +2951,18 @@ export async function getPinnedMessages(
                 editedAt: messages.editedAt,
                 deletedAt: messages.deletedAt,
             })
-            .from(messages)
+            .from(messagePins)
+            .innerJoin(
+                messages,
+                and(
+                    eq(messages.id, messagePins.messageId),
+                    eq(messages.conversationId, messagePins.conversationId),
+                ),
+            )
             .where(
                 and(
                     eq(messages.conversationId, conversationId),
                     isNull(messages.deletedAt),
-                    sql`coalesce(${messages.metadata}->>'pinned', 'false') = 'true'`,
                     sql`NOT EXISTS (
                         SELECT 1
                         FROM ${messageHiddenForUsers} h
@@ -2818,9 +2971,7 @@ export async function getPinnedMessages(
                     )`
                 )
             )
-            .orderBy(
-                desc(sql`coalesce((${messages.metadata}->>'pinnedAt')::timestamptz, ${messages.createdAt})`)
-            )
+            .orderBy(desc(messagePins.pinnedAt), desc(messages.id))
             .limit(safeLimit);
 
         if (rows.length === 0) {
@@ -2907,57 +3058,47 @@ export async function setMessagePinned(
         const user = await getAuthUser();
         if (!user) return { success: false, error: 'Not authenticated' };
 
-        const [messageRow] = await db
-            .select({
-                id: messages.id,
-                conversationId: messages.conversationId,
-                metadata: messages.metadata,
-                deletedAt: messages.deletedAt,
-            })
-            .from(messages)
-            .where(eq(messages.id, messageId))
-            .limit(1);
-
-        if (!messageRow || messageRow.deletedAt) {
-            return { success: false, error: 'Message not found' };
-        }
-
-        const [membership] = await db
-            .select({ id: conversationParticipants.id })
-            .from(conversationParticipants)
-            .where(
-                and(
-                    eq(conversationParticipants.conversationId, messageRow.conversationId),
-                    eq(conversationParticipants.userId, user.id)
+        return await db.transaction(async (tx) => {
+            const [messageRow] = await tx
+                .select({
+                    id: messages.id,
+                    conversationId: messages.conversationId,
+                    deletedAt: messages.deletedAt,
+                })
+                .from(messages)
+                .innerJoin(
+                    conversationParticipants,
+                    and(
+                        eq(conversationParticipants.conversationId, messages.conversationId),
+                        eq(conversationParticipants.userId, user.id),
+                    ),
                 )
-            )
-            .limit(1);
+                .where(eq(messages.id, messageId))
+                .limit(1);
 
-        if (!membership) {
-            return { success: false, error: 'Not authorized' };
-        }
-
-        const metadata = (messageRow.metadata || {}) as Record<string, unknown>;
-        const nextMetadata = pinned
-            ? {
-                ...metadata,
-                pinned: true,
-                pinnedAt: new Date().toISOString(),
-                pinnedBy: user.id,
+            if (!messageRow || messageRow.deletedAt) {
+                return { success: false, error: 'Message not found' };
             }
-            : {
-                ...metadata,
-                pinned: false,
-                pinnedAt: null,
-                pinnedBy: null,
-            };
 
-        await db
-            .update(messages)
-            .set({ metadata: nextMetadata })
-            .where(eq(messages.id, messageRow.id));
+            if (pinned) {
+                await tx
+                    .insert(messagePins)
+                    .values({
+                        messageId: messageRow.id,
+                        conversationId: messageRow.conversationId,
+                        pinnedBy: user.id,
+                        pinnedAt: new Date(),
+                    })
+                    .onConflictDoUpdate({
+                        target: messagePins.messageId,
+                        set: { pinnedBy: user.id, pinnedAt: new Date() },
+                    });
+            } else {
+                await tx.delete(messagePins).where(eq(messagePins.messageId, messageRow.id));
+            }
 
-        return { success: true };
+            return { success: true };
+        });
     } catch (error) {
         console.error('Error setting message pin state:', error);
         return { success: false, error: 'Failed to update pin state' };
@@ -3014,6 +3155,7 @@ export interface UploadedAttachment {
     thumbnailUrl: string | null;
     width: number | null;
     height: number | null;
+    localUrl?: string;
 }
 
 export async function uploadAttachment(
@@ -3036,59 +3178,32 @@ export async function uploadAttachment(
                 : (typeof crypto !== 'undefined' && 'randomUUID' in crypto
                     ? crypto.randomUUID()
                     : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
+        if (clientUploadId.length > 160) {
+            return { success: false, error: 'Invalid upload id' };
+        }
         const conversationIdRaw = formData.get('conversationId');
-        const conversationId =
-            typeof conversationIdRaw === 'string' && conversationIdRaw !== 'new' && conversationIdRaw.length > 0
-                ? conversationIdRaw
-                : null;
-
-        // Track upload lifecycle for reliability and post-mortem diagnostics.
-        await db
-            .insert(attachmentUploads)
-            .values({
-                userId: user.id,
-                clientUploadId,
-                conversationId,
-                filename: file.name,
-                mimeType: file.type || null,
-                sizeBytes: file.size,
-                status: 'uploading',
-                error: null,
-                updatedAt: new Date(),
-                expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24),
-            })
-            .onConflictDoUpdate({
-                target: [attachmentUploads.userId, attachmentUploads.clientUploadId],
-                set: {
-                    conversationId,
-                    filename: file.name,
-                    mimeType: file.type || null,
-                    sizeBytes: file.size,
-                    status: 'uploading',
-                    error: null,
-                    updatedAt: new Date(),
-                    expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24),
-                },
-            });
+        const candidateConversationId = typeof conversationIdRaw === 'string'
+            ? conversationIdRaw.trim()
+            : '';
+        const conversationId = (
+            candidateConversationId
+            && candidateConversationId !== 'new'
+            && !candidateConversationId.startsWith('draft:')
+        )
+            ? candidateConversationId
+            : null;
+        if (conversationId && !isUuid(conversationId)) {
+            return { success: false, error: 'Invalid conversation' };
+        }
+        if (conversationId && !await getConversationMembershipId(conversationId, user.id)) {
+            return { success: false, error: 'Conversation not found' };
+        }
 
         const maxAttachmentSizeMb = Math.floor(ATTACHMENT_UPLOAD_MAX_FILE_BYTES / (1024 * 1024));
         let normalizedSize = 0;
         try {
             normalizedSize = normalizeAndValidateFileSize(file.size, ATTACHMENT_UPLOAD_MAX_FILE_BYTES);
         } catch {
-            await db
-                .update(attachmentUploads)
-                .set({
-                    status: 'failed',
-                    error: `File too large. Maximum size is ${maxAttachmentSizeMb}MB.`,
-                    updatedAt: new Date(),
-                })
-                .where(
-                    and(
-                        eq(attachmentUploads.userId, user.id),
-                        eq(attachmentUploads.clientUploadId, clientUploadId)
-                    )
-                );
             return { success: false, error: `File too large. Maximum size is ${maxAttachmentSizeMb}MB.` };
         }
 
@@ -3096,38 +3211,12 @@ export async function uploadAttachment(
         try {
             mimeType = normalizeAndValidateMimeType(file.type || 'application/octet-stream');
         } catch {
-            await db
-                .update(attachmentUploads)
-                .set({
-                    status: 'failed',
-                    error: 'Unsupported or invalid MIME type',
-                    updatedAt: new Date(),
-                })
-                .where(
-                    and(
-                        eq(attachmentUploads.userId, user.id),
-                        eq(attachmentUploads.clientUploadId, clientUploadId)
-                    )
-                );
             return { success: false, error: 'Unsupported file type.' };
         }
 
         try {
             await validateUploadedFileMagicBytes(file, mimeType);
         } catch {
-            await db
-                .update(attachmentUploads)
-                .set({
-                    status: 'failed',
-                    error: 'File contents do not match the declared MIME type',
-                    updatedAt: new Date(),
-                })
-                .where(
-                    and(
-                        eq(attachmentUploads.userId, user.id),
-                        eq(attachmentUploads.clientUploadId, clientUploadId)
-                    )
-                );
             return { success: false, error: 'Uploaded file contents do not match the declared type.' };
         }
 
@@ -3146,19 +3235,6 @@ export async function uploadAttachment(
         const isAllowedByExtension = allowedDocumentExtensions.has(ext);
 
         if (!isAllowedMime && !isAllowedByExtension) {
-            await db
-                .update(attachmentUploads)
-                .set({
-                    status: 'failed',
-                    error: 'Unsupported file type',
-                    updatedAt: new Date(),
-                })
-                .where(
-                    and(
-                        eq(attachmentUploads.userId, user.id),
-                        eq(attachmentUploads.clientUploadId, clientUploadId)
-                    )
-                );
             return {
                 success: false,
                 error: 'Unsupported file type. Please upload image, video, PDF, DOC, DOCX, or TXT files.',
@@ -3173,6 +3249,40 @@ export async function uploadAttachment(
             fileType = 'video';
         }
 
+        const uploadSession = await db
+            .insert(attachmentUploads)
+            .values({
+                userId: user.id,
+                clientUploadId,
+                conversationId,
+                filename: file.name,
+                mimeType,
+                sizeBytes: normalizedSize,
+                status: 'uploading',
+                error: null,
+                updatedAt: new Date(),
+                expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24),
+            })
+            .onConflictDoUpdate({
+                target: [attachmentUploads.userId, attachmentUploads.clientUploadId],
+                set: {
+                    conversationId,
+                    filename: file.name,
+                    mimeType,
+                    sizeBytes: normalizedSize,
+                    status: 'uploading',
+                    error: null,
+                    storagePath: null,
+                    updatedAt: new Date(),
+                    expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24),
+                },
+                setWhere: sql`${attachmentUploads.status} IN ('queued', 'failed', 'canceled', 'expired')`,
+            })
+            .returning({ id: attachmentUploads.id });
+        if (uploadSession.length !== 1) {
+            return { success: false, error: 'This upload reference has already been used.' };
+        }
+
         // Generate unique filename
         const timestamp = Date.now();
         const uniqueName = `${timestamp}-${Math.random().toString(36).substring(7)}.${ext || 'bin'}`;
@@ -3184,6 +3294,8 @@ export async function uploadAttachment(
             .from(ATTACHMENTS_BUCKET)
             .upload(storagePath, file, {
                 contentType: mimeType || undefined,
+                // Object keys are immutable; replacements always receive a new key.
+                cacheControl: '31536000',
                 upsert: false,
             });
 
@@ -3199,10 +3311,36 @@ export async function uploadAttachment(
                 .where(
                     and(
                         eq(attachmentUploads.userId, user.id),
-                        eq(attachmentUploads.clientUploadId, clientUploadId)
+                        eq(attachmentUploads.clientUploadId, clientUploadId),
+                        eq(attachmentUploads.status, 'uploading'),
                     )
                 );
             return { success: false, error: 'Failed to upload file' };
+        }
+
+        // Record the durable object path immediately after Storage succeeds.
+        // Signing is an optional presentation step; retention can now always
+        // locate and remove the object if anything below fails.
+        const uploadedTransition = await db
+            .update(attachmentUploads)
+            .set({
+                status: 'uploaded',
+                storagePath,
+                error: null,
+                updatedAt: new Date(),
+            })
+            .where(
+                and(
+                    eq(attachmentUploads.userId, user.id),
+                    eq(attachmentUploads.clientUploadId, clientUploadId),
+                    eq(attachmentUploads.status, 'uploading'),
+                )
+            )
+            .returning({ id: attachmentUploads.id });
+        if (uploadedTransition.length !== 1) {
+            const admin = await createAdminClient();
+            await admin.storage.from(ATTACHMENTS_BUCKET).remove([storagePath]);
+            return { success: false, error: 'Upload was canceled before it completed.' };
         }
 
         // Generate short-lived URL for optimistic rendering in sender UI.
@@ -3213,22 +3351,25 @@ export async function uploadAttachment(
             await db
                 .update(attachmentUploads)
                 .set({
-                    status: 'failed',
                     error: 'Failed to generate file URL',
                     updatedAt: new Date(),
                 })
                 .where(
                     and(
                         eq(attachmentUploads.userId, user.id),
-                        eq(attachmentUploads.clientUploadId, clientUploadId)
+                        eq(attachmentUploads.clientUploadId, clientUploadId),
+                        eq(attachmentUploads.status, 'uploaded'),
                     )
                 );
             return { success: false, error: 'Failed to generate file URL' };
         }
 
         // Generate thumbnail URL for images
+        const tinyBase64 = formData.get('tinyBase64');
         let thumbnailUrl: string | null = null;
-        if (fileType === 'image') {
+        if (typeof tinyBase64 === 'string' && tinyBase64.startsWith('data:image/')) {
+            thumbnailUrl = tinyBase64;
+        } else if (fileType === 'image') {
             thumbnailUrl = buildImageThumbnailUrl(signedUrl);
         }
 
@@ -3245,21 +3386,6 @@ export async function uploadAttachment(
             height: mediaDimensions?.height ?? null,
         };
 
-        await db
-            .update(attachmentUploads)
-            .set({
-                status: 'uploaded',
-                storagePath,
-                error: null,
-                updatedAt: new Date(),
-            })
-            .where(
-                and(
-                    eq(attachmentUploads.userId, user.id),
-                    eq(attachmentUploads.clientUploadId, clientUploadId)
-                )
-            );
-
         return { success: true, attachment };
     } catch (error) {
         console.error('Error uploading attachment:', error);
@@ -3275,7 +3401,7 @@ export async function cancelAttachmentUpload(
         if (!user) return { success: false, error: 'Not authenticated' };
         if (!clientUploadId?.trim()) return { success: false, error: 'Invalid upload id' };
 
-        await db
+        const canceled = await db
             .update(attachmentUploads)
             .set({
                 status: 'canceled',
@@ -3285,9 +3411,47 @@ export async function cancelAttachmentUpload(
             .where(
                 and(
                     eq(attachmentUploads.userId, user.id),
-                    eq(attachmentUploads.clientUploadId, clientUploadId.trim())
+                    eq(attachmentUploads.clientUploadId, clientUploadId.trim()),
+                    inArray(attachmentUploads.status, ['queued', 'uploading', 'uploaded', 'failed']),
                 )
-            );
+            )
+            .returning({
+                id: attachmentUploads.id,
+                storagePath: attachmentUploads.storagePath,
+            });
+
+        if (canceled[0]?.storagePath) {
+            const admin = await createAdminClient();
+            const { error } = await admin.storage
+                .from(ATTACHMENTS_BUCKET)
+                .remove([canceled[0].storagePath]);
+            if (error) {
+                await db
+                    .update(attachmentUploads)
+                    .set({
+                        error: `cleanup_pending:${error.message}`,
+                        updatedAt: new Date(),
+                    })
+                    .where(eq(attachmentUploads.id, canceled[0].id));
+            }
+        }
+
+        if (canceled.length === 0) {
+            const [existing] = await db
+                .select({ status: attachmentUploads.status })
+                .from(attachmentUploads)
+                .where(
+                    and(
+                        eq(attachmentUploads.userId, user.id),
+                        eq(attachmentUploads.clientUploadId, clientUploadId.trim()),
+                    ),
+                )
+                .limit(1);
+            if (!existing) return { success: false, error: 'Upload not found' };
+            if (existing.status === 'committed') {
+                return { success: false, error: 'A sent attachment cannot be canceled.' };
+            }
+        }
 
         return { success: true };
     } catch (error) {
@@ -3320,18 +3484,20 @@ export async function sendMessageWithAttachments(
         const replyToMessageId = options?.replyToMessageId?.trim() || undefined;
         const contextChips = options?.contextChips ?? [];
 
-        // Verify user is participant
-        const participantMembershipId = await getConversationMembershipId(conversationId, user.id);
+        // These independent reads previously ran serially for every message.
+        const [participantMembershipId, conversationRows] = await Promise.all([
+            getConversationMembershipId(conversationId, user.id),
+            db
+                .select({ type: conversations.type })
+                .from(conversations)
+                .where(eq(conversations.id, conversationId))
+                .limit(1),
+        ]);
+        const [conversationRecord] = conversationRows;
 
         if (!participantMembershipId) {
             return { success: false, error: 'Not a participant of this conversation' };
         }
-
-        const [conversationRecord] = await db
-            .select({ type: conversations.type })
-            .from(conversations)
-            .where(eq(conversations.id, conversationId))
-            .limit(1);
 
         if (!conversationRecord) {
             return { success: false, error: 'Conversation not found' };
@@ -3371,16 +3537,18 @@ export async function sendMessageWithAttachments(
         if ((content?.trim() || '').length > MAX_MESSAGE_CONTENT_LENGTH) {
             return { success: false, error: `Message too long. Maximum is ${MAX_MESSAGE_CONTENT_LENGTH} characters.` };
         }
+        if (attachments.length > 12) {
+            return { success: false, error: 'A message can contain at most 12 attachments.' };
+        }
 
         const normalizedContent = content?.trim() || '';
         const mentions = extractMessageMentions(normalizedContent);
-        const replyPreview = await validateReplyTarget(
-            conversationId,
-            user.id,
-            replyToMessageId
-        );
-
-        const existing = await findExistingMessageByClientKey(conversationId, user.id, clientMessageId);
+        // Reply validation and client-message idempotency are independent
+        // read-only checks, so neither should wait for the other.
+        const [replyPreview, existing] = await Promise.all([
+            validateReplyTarget(conversationId, user.id, replyToMessageId),
+            findExistingMessageByClientKey(conversationId, user.id, clientMessageId),
+        ]);
         if (existing) {
             const [senderProfile] = await db
                 .select({
@@ -3428,16 +3596,31 @@ export async function sendMessageWithAttachments(
         if (!normalizedCommit.attachments) {
             return { success: false, error: normalizedCommit.error || 'Attachments are not ready yet' };
         }
-        const committedAttachments = normalizedCommit.attachments;
+        const requestedAttachments = normalizedCommit.attachments;
+        const primaryAttachment = requestedAttachments[0] ?? null;
+        const previewKind = primaryAttachment?.type === 'file'
+            && primaryAttachment.mimeType.toLowerCase().startsWith('audio/')
+            ? 'voice'
+            : primaryAttachment?.type ?? null;
 
         // Determine message type based on attachments
         let messageType: 'text' | 'image' | 'video' | 'file' = options?.messageType ?? 'text';
-        if (committedAttachments.length > 0) {
-            const primaryAttachment = committedAttachments[0]!;
+        if (requestedAttachments.length > 0) {
+            const primaryAttachment = requestedAttachments[0]!;
             messageType = primaryAttachment.type;
         }
 
-        const { newMessage, senderProfile, persistedAttachments } = await db.transaction(async (tx) => {
+        const { newMessage, senderProfile, persistedAttachments, committedAttachments } = await db.transaction(async (tx) => {
+            const claimedAttachments = await claimAttachmentUploadsForMessage(
+                tx,
+                user.id,
+                conversationId,
+                requestedAttachments,
+            );
+            if (claimedAttachments[0]) {
+                messageType = claimedAttachments[0].type;
+            }
+
             const [msg] = await tx
                 .insert(messages)
                 .values({
@@ -3459,6 +3642,7 @@ export async function sendMessageWithAttachments(
                                 ? { mentionRoles: mentions.mentionRoles }
                                 : {}),
                             ...(normalizedContent.includes('```') ? { hasCode: true } : {}),
+                            ...(previewKind ? { previewKind } : {}),
                         }, contextChips),
                         'sent',
                     ),
@@ -3466,19 +3650,19 @@ export async function sendMessageWithAttachments(
                 .returning();
 
             let insertedAttachments: Array<typeof messageAttachments.$inferSelect> = [];
-            if (committedAttachments.length > 0) {
+            if (claimedAttachments.length > 0) {
                 insertedAttachments = await tx
                     .insert(messageAttachments)
                     .values(
-                        committedAttachments.map(att => ({
+                        claimedAttachments.map(att => ({
                             messageId: msg!.id,
-                            storagePath: att.storagePath || null,
+                            storagePath: att.storagePath,
                             type: att.type,
-                            url: att.signedUrl,
+                            url: null,
                             filename: att.filename,
                             sizeBytes: att.sizeBytes,
                             mimeType: att.mimeType,
-                            thumbnailUrl: att.thumbnailUrl,
+                            thumbnailUrl: null,
                             width: att.width,
                             height: att.height,
                         }))
@@ -3486,11 +3670,26 @@ export async function sendMessageWithAttachments(
                     .returning();
             }
 
-            await markAttachmentUploadsCommitted(
-                tx,
-                user.id,
-                committedAttachments.map((attachment) => attachment.id)
-            );
+            // ponytail: the insert trigger owns text-message ordering, previews,
+            // and unread state. Attachment rows are created after that trigger,
+            // so only attachment messages need this richer preview overwrite.
+            if (claimedAttachments.length > 0) {
+                await tx
+                    .update(conversationParticipants)
+                    .set(buildConversationParticipantPreview({
+                        id: msg!.id,
+                        content: msg!.content,
+                        type: msg!.type,
+                        metadata: msg!.metadata as Record<string, unknown> | null,
+                        senderId: msg!.senderId,
+                        createdAt: msg!.createdAt,
+                        replyToMessageId: msg!.replyToMessageId,
+                    }))
+                    .where(and(
+                        eq(conversationParticipants.conversationId, conversationId),
+                        eq(conversationParticipants.lastMessageId, msg!.id),
+                    ));
+            }
 
             const [profile] = await tx
                 .select({
@@ -3503,7 +3702,12 @@ export async function sendMessageWithAttachments(
                 .where(eq(profiles.id, user.id))
                 .limit(1);
 
-            return { newMessage: msg, senderProfile: profile, persistedAttachments: insertedAttachments };
+            return {
+                newMessage: msg,
+                senderProfile: profile,
+                persistedAttachments: insertedAttachments,
+                committedAttachments: claimedAttachments,
+            };
         });
 
         const recipients = await db
@@ -3527,7 +3731,7 @@ export async function sendMessageWithAttachments(
                 actorName: senderProfile?.fullName ?? senderProfile?.username ?? null,
                 actorAvatarUrl: senderProfile?.avatarUrl ?? null,
                 conversationId,
-                previewText: normalizedContent || (attachments.length ? 'Sent an attachment' : 'Sent a message'),
+                sourceMessageId: newMessage!.id,
             });
         } catch (error) {
             logger.error('messages.notification_emit_failed', {
@@ -3556,7 +3760,7 @@ export async function sendMessageWithAttachments(
                 sizeBytes: attachment.sizeBytes,
                 mimeType: attachment.mimeType,
                 thumbnailUrl: attachment.type === 'image'
-                    ? accessUrl
+                    ? buildMessageAttachmentAccessUrl(attachment.id, { preview: true })
                     : (committed?.thumbnailUrl || attachment.thumbnailUrl),
                 width: attachment.width,
                 height: attachment.height,
@@ -3672,16 +3876,28 @@ export interface ProjectGroupConversation {
 
 export async function getProjectGroups(
     limit: number = 20,
-    offset: number = 0
+    cursor?: string | null
 ): Promise<{
     success: boolean;
     error?: string;
     projectGroups?: ProjectGroupConversation[];
     hasMore?: boolean;
+    nextCursor?: string | null;
 }> {
     try {
         const user = await getAuthUser();
         if (!user) return { success: false, error: 'Not authenticated' };
+        const safeLimit = Number.isFinite(limit)
+            ? Math.min(Math.max(Math.trunc(limit), 1), 100)
+            : 20;
+        const [cursorAtRaw, cursorConversationIdRaw] = cursor ? cursor.split('|') : [];
+        const cursorAt = cursorAtRaw ? new Date(cursorAtRaw) : null;
+        const cursorConversationId = cursorConversationIdRaw && isUuid(cursorConversationIdRaw)
+            ? cursorConversationIdRaw
+            : null;
+        if (cursor && (!cursorAt || Number.isNaN(cursorAt.getTime()) || !cursorConversationId)) {
+            return { success: false, error: 'Invalid project conversation cursor' };
+        }
 
         // OPTIMIZED: Single query fetching project details, member counts, last message, AND unread counts
         // Uses the denormalized 'unread_count' from conversation_participants for O(1) performance
@@ -3722,8 +3938,18 @@ export async function getProjectGroups(
                 INNER JOIN ${conversationParticipants} cp ON cp.conversation_id = p.conversation_id AND cp.user_id = ${user.id}
                 WHERE pm.user_id = ${user.id}
                 AND p.conversation_id IS NOT NULL
-                ORDER BY c.updated_at DESC
-                LIMIT ${limit + 1} OFFSET ${offset}
+                AND cp.archived_at IS NULL
+                ${cursorAt && cursorConversationId
+                    ? sql`AND (
+                        COALESCE(cp.last_message_at, c.updated_at) < ${cursorAt}
+                        OR (
+                            COALESCE(cp.last_message_at, c.updated_at) = ${cursorAt}
+                            AND c.id < ${cursorConversationId}
+                        )
+                    )`
+                    : sql``}
+                ORDER BY COALESCE(cp.last_message_at, c.updated_at) DESC, c.id DESC
+                LIMIT ${safeLimit + 1}
             ),
             member_counts AS (
                 SELECT 
@@ -3750,12 +3976,12 @@ export async function getProjectGroups(
                 COALESCE(up.unread_count, 0) as unread_count
             FROM user_projects up
             LEFT JOIN member_counts mc ON mc.project_id = up.project_id
-            ORDER BY up.updated_at DESC
+            ORDER BY COALESCE(up.last_message_at, up.updated_at) DESC, up.conversation_id DESC
         `);
 
         const projectArray = Array.from(projectGroupsResult);
-        const hasMore = projectArray.length > limit;
-        const paginatedProjects = projectArray.slice(0, limit);
+        const hasMore = projectArray.length > safeLimit;
+        const paginatedProjects = projectArray.slice(0, safeLimit);
         const paginatedProjectIds = paginatedProjects.map((project) => project.project_id);
 
         const memberPreviewRows = paginatedProjects.length > 0
@@ -3842,10 +4068,14 @@ export async function getProjectGroups(
             })),
         );
 
+        const lastProject = paginatedProjects.at(-1);
         return {
             success: true,
             projectGroups: hydratedProjectGroups.map(({ type: _type, ...project }) => project),
             hasMore,
+            nextCursor: hasMore && lastProject
+                ? `${(lastProject.last_message_at ?? lastProject.updated_at).toISOString()}|${lastProject.conversation_id}`
+                : null,
         };
     } catch (error) {
         console.error('Error fetching project groups:', error);
