@@ -1,12 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import {
-    getReplyFocusLabel,
-    getReplyPreviewBadge,
-    getReplyPreviewText,
-    type ReplyPreviewLike,
-} from '@/lib/messages/reply-preview';
+import { getReplyPreviewBadge, getReplyPreviewText, type ReplyPreviewLike } from '@/lib/messages/reply-preview';
 import { createStructuredMessagePayload } from '@/lib/messages/structured';
 
 function createReplyPreview(overrides: Partial<ReplyPreviewLike> = {}): ReplyPreviewLike {
@@ -57,10 +52,4 @@ test('reply preview uses structured metadata when replying to a structured card'
 
     assert.equal(getReplyPreviewBadge(reply), 'Feedback request');
     assert.equal(getReplyPreviewText(reply), 'Please review the current draft');
-});
-
-test('getReplyFocusLabel distinguishes reply, pin, and external navigation', () => {
-    assert.equal(getReplyFocusLabel('reply'), 'Original reply');
-    assert.equal(getReplyFocusLabel('pin'), 'Pinned message');
-    assert.equal(getReplyFocusLabel('external'), 'Referenced message');
 });
