@@ -32,6 +32,8 @@ export type TaskDiscussionReply = TaskDiscussionBaseEntry;
 
 export type TaskDiscussionComment = TaskDiscussionBaseEntry & {
   replies: TaskDiscussionReply[];
+  replyCount?: number;
+  repliesHaveMore?: boolean;
 };
 
 export type TaskDiscussionThreadPage = {
@@ -78,9 +80,9 @@ function sortReplies(items: TaskDiscussionReply[]) {
 
 function sortComments(items: TaskDiscussionComment[]) {
   return [...items].sort((left, right) => {
-    const byCreatedAt = Date.parse(left.createdAt) - Date.parse(right.createdAt);
+    const byCreatedAt = Date.parse(right.createdAt) - Date.parse(left.createdAt);
     if (byCreatedAt !== 0) return byCreatedAt;
-    return left.id.localeCompare(right.id);
+    return right.id.localeCompare(left.id);
   });
 }
 
@@ -101,7 +103,7 @@ function upsertComment(comments: TaskDiscussionComment[], comment: TaskDiscussio
 export function mergeTaskDiscussionPage(
   current: TaskDiscussionThreadPage,
   incoming: TaskDiscussionThreadPage,
-  mode: "replace" | "prepend_older" = "replace",
+  mode: "replace" | "append_older" = "replace",
 ): TaskDiscussionThreadPage {
   if (mode === "replace") {
     return {
