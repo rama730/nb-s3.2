@@ -3,6 +3,7 @@
 import { memo, useEffect, useRef } from "react";
 import { ArrowLeft, ArrowRight, Check, CheckCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { getStageCompletionTooltip } from "@/lib/projects/journey-completion";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 
 interface JourneyTimelineProps {
@@ -32,16 +33,7 @@ export function getJourneyStageWindow(stageCount: number, currentStageIndex: num
     };
 }
 
-function formatStageDate(value?: string) {
-    if (!value) return null;
-    const date = new Date(value);
-    if (!Number.isFinite(date.getTime())) return null;
-    return date.toLocaleDateString("en-US", {
-        month: "short",
-        day: "numeric",
-        year: "numeric",
-    });
-}
+export { getStageCompletionTooltip } from "@/lib/projects/journey-completion";
 
 export const JourneyTimeline = memo(function JourneyTimeline({
     stages,
@@ -123,7 +115,6 @@ export const JourneyTimeline = memo(function JourneyTimeline({
                             const isCurrent = index === safeCurrentStageIndex;
                             const hasPrevious = index > 0;
                             const hasNext = index < lastIndex;
-                            const completedAt = isCompleted ? formatStageDate(stageCompletionDates[String(index)]) : null;
                             const stageItem = (
                                 <div key={index} data-stage-index={index} className="relative z-10 flex min-w-0 flex-col items-center gap-2 py-0.5 text-center">
                                     {hasPrevious ? (
@@ -179,11 +170,11 @@ export const JourneyTimeline = memo(function JourneyTimeline({
                                 </div>
                             );
 
-                            return completedAt ? (
+                            return isCompleted ? (
                                 <TooltipPrimitive.Root key={index} delayDuration={150}>
                                     <TooltipPrimitive.Trigger asChild>{stageItem}</TooltipPrimitive.Trigger>
                                     <TooltipPrimitive.Content className="z-50 rounded bg-zinc-900 px-2 py-1 text-[10px] text-white shadow-md">
-                                        Finished on {completedAt}
+                                        {getStageCompletionTooltip(stageCompletionDates[String(index)])}
                                     </TooltipPrimitive.Content>
                                 </TooltipPrimitive.Root>
                             ) : (
