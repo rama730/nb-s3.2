@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { parseSqlGovernanceManifest } from "../src/lib/standards/sql-governance";
+
 interface JournalEntry {
   idx: number;
   tag: string;
@@ -47,7 +49,15 @@ function checkNoDuplicateTags(entries: JournalEntry[]): string[] {
 }
 
 function main() {
-  const migrationTags = readMigrationTags();
+  const manifest = parseSqlGovernanceManifest(
+    JSON.parse(fs.readFileSync(path.join(rootDir, "standards", "sql-governance.manifest.json"), "utf8")),
+  );
+  const quarantinedTags = new Set(
+    manifest.breakGlassExceptions
+      .filter((exception) => exception.path.startsWith(`${manifest.migrationDirectory}/`))
+      .map((exception) => path.basename(exception.path, ".sql")),
+  );
+  const migrationTags = readMigrationTags().filter((tag) => !quarantinedTags.has(tag));
   const journal = readJournal();
   const journalTags = journal.entries.map((entry) => entry.tag);
 
