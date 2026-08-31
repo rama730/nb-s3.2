@@ -1,68 +1,96 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useAuth } from '@/hooks/useAuth';
-import { ChatPopupV2 } from './v2/ChatPopupV2';
 import { useMessagesV2OutboxSync } from '@/hooks/useMessagesV2OutboxSync';
 import { usePublishOnlinePresence } from '@/hooks/usePublishOnlinePresence';
 
 interface ChatProviderProps {
     children?: React.ReactNode;
+    presenceEnabled?: boolean;
 }
 
-const DISABLE_CHAT_IN_E2E = process.env.NEXT_PUBLIC_E2E_AUTH_FALLBACK === "1";
+const CHAT_IDLE_MS = 5 * 60_000;
+const HEARTBEAT_INTERVAL_MS = 4 * 60_000;
+const INITIAL_HEARTBEAT_COOLDOWN_MS = 60_000;
+let lastSuccessfulHeartbeatAt = 0;
+let heartbeatInFlight = false;
 
-export function ChatProvider({ children = null }: ChatProviderProps) {
-    if (DISABLE_CHAT_IN_E2E) {
-        return <>{children}</>;
-    }
-    return <ChatProviderInner>{children}</ChatProviderInner>;
+function OnlinePresencePublisher() {
+    usePublishOnlinePresence();
+    return null;
 }
 
-function ChatProviderInner({ children = null }: ChatProviderProps) {
+export function ChatProvider({ children = null, presenceEnabled = true }: ChatProviderProps) {
+    return <ChatProviderInner presenceEnabled={presenceEnabled}>{children}</ChatProviderInner>;
+}
+
+function ChatProviderInner({ children = null, presenceEnabled = true }: ChatProviderProps) {
     const { user, isLoading } = useAuth();
     const active = Boolean(user) && !isLoading;
+    const presenceActive = active && presenceEnabled;
+    const [engaged, setEngaged] = useState(() => typeof document === 'undefined' || !document.hidden);
     useMessagesV2OutboxSync(active);
-    usePublishOnlinePresence();
 
     useEffect(() => {
-        if (!active) return;
+        if (!presenceActive) {
+            setEngaged(false);
+            return;
+        }
 
-        let interval: number | null = null;
-        const heartbeat = () => {
-            void fetch('/api/v1/presence/heartbeat', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                keepalive: true,
-            });
+        let idleTimer: number | null = null;
+        const pause = () => {
+            if (idleTimer !== null) window.clearTimeout(idleTimer);
+            idleTimer = null;
+            setEngaged(false);
         };
-        const start = () => {
-            if (interval !== null) return;
-            heartbeat();
-            interval = window.setInterval(heartbeat, 4 * 60_000);
+        const resume = () => {
+            if (document.hidden) return;
+            setEngaged(true);
+            if (idleTimer !== null) window.clearTimeout(idleTimer);
+            idleTimer = window.setTimeout(pause, CHAT_IDLE_MS);
         };
-        const stop = () => {
-            if (interval === null) return;
-            window.clearInterval(interval);
-            interval = null;
-        };
-        const onVisibilityChange = () => {
-            if (document.hidden) stop();
-            else start();
-        };
+        const onVisibilityChange = () => document.hidden ? pause() : resume();
+        const activityEvents = ['pointerdown', 'keydown', 'touchstart', 'focus'] as const;
 
-        if (!document.hidden) start();
+        activityEvents.forEach((name) => window.addEventListener(name, resume, { passive: true }));
         document.addEventListener('visibilitychange', onVisibilityChange);
+        onVisibilityChange();
         return () => {
-            stop();
+            if (idleTimer !== null) window.clearTimeout(idleTimer);
+            activityEvents.forEach((name) => window.removeEventListener(name, resume));
             document.removeEventListener('visibilitychange', onVisibilityChange);
         };
-    }, [active, user?.id]);
+    }, [presenceActive]);
+
+    useEffect(() => {
+        if (!presenceActive || !engaged) return;
+
+        const heartbeat = async (initial = false) => {
+            if (heartbeatInFlight) return;
+            if (initial && Date.now() - lastSuccessfulHeartbeatAt < INITIAL_HEARTBEAT_COOLDOWN_MS) return;
+            heartbeatInFlight = true;
+            try {
+                const response = await fetch('/api/v1/presence/heartbeat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    keepalive: true,
+                });
+                if (response.ok) lastSuccessfulHeartbeatAt = Date.now();
+            } finally {
+                heartbeatInFlight = false;
+            }
+        };
+
+        void heartbeat(true);
+        const interval = window.setInterval(() => void heartbeat(), HEARTBEAT_INTERVAL_MS);
+        return () => window.clearInterval(interval);
+    }, [engaged, presenceActive, user?.id]);
 
     return (
         <>
             {children}
-            {active && <ChatPopupV2 />}
+            {presenceActive && engaged ? <OnlinePresencePublisher /> : null}
         </>
     );
 }
