@@ -2,14 +2,13 @@ import { notFound, permanentRedirect } from 'next/navigation';
 import { getProfileDetails } from '@/lib/data/profile';
 import { ProfileV2Client } from '@/components/profile/v2/ProfileV2Client';
 import { Metadata } from 'next';
-import { Suspense } from 'react';
+import { cache, Suspense } from 'react';
 import { resolvePublicUsernameRoute } from '@/lib/usernames/service';
 import { buildRouteMetadata, DEFAULT_ROUTE_OG_IMAGE } from '@/lib/metadata/route-metadata';
 import { getViewerAuthContext } from '@/lib/server/viewer-context';
 import { buildProfileMetadataDescription, buildPublicProfileTitle } from '@/lib/profile/display';
 import { getProfileProjectsWithOpenRolesAction } from '@/app/actions/project';
 
-export const dynamic = 'force-dynamic';
 export const dynamicParams = true; // Allow new profiles to be generated on demand
 
 function decodeUsernameParam(username: string): string | null {
@@ -20,34 +19,27 @@ function decodeUsernameParam(username: string): string | null {
     }
 }
 
-export async function generateMetadata({ params }: { params: Promise<{ username: string }> }): Promise<Metadata> {
-    const { username } = await params;
+// ponytail: metadata and body share the same auth-qualified profile read.
+const readPublicProfileRoute = cache(async (username: string) => {
     const decodedUsername = decodeUsernameParam(username);
-    if (!decodedUsername) {
-        return buildRouteMetadata({
-            title: 'Profile Not Found | Edge',
-            description: 'The requested profile could not be found.',
-            path: `/u/${encodeURIComponent(username)}`,
-        });
-    }
+    if (!decodedUsername) return { status: 'not_found' as const, currentUsername: username };
 
     const route = await resolvePublicUsernameRoute({ username: decodedUsername });
     if (route.status === 'not_found') {
-        return buildRouteMetadata({
-            title: 'Profile Not Found | Edge',
-            description: 'The requested profile could not be found.',
-            path: `/u/${encodeURIComponent(decodedUsername)}`,
-        });
+        return { status: 'not_found' as const, currentUsername: decodedUsername };
     }
 
     const viewerAuth = await getViewerAuthContext();
     const data = await getProfileDetails(route.currentUsername, {
         viewerUser: viewerAuth.user ?? null,
-        skipHeavyData: true,
-        recordViewEvent: false,
     });
+    return { status: route.status, currentUsername: route.currentUsername, viewerAuth, data };
+});
 
-    if (data.privacyStatus === 'not_found' || !data.profile || data.lockedShell) {
+export async function generateMetadata({ params }: { params: Promise<{ username: string }> }): Promise<Metadata> {
+    const { username } = await params;
+    const route = await readPublicProfileRoute(username);
+    if (route.status === 'not_found' || route.data.privacyStatus === 'not_found' || !route.data.profile || route.data.lockedShell) {
         return buildRouteMetadata({
             title: 'Profile Not Found | Edge',
             description: 'The requested profile could not be found.',
@@ -55,7 +47,7 @@ export async function generateMetadata({ params }: { params: Promise<{ username:
         });
     }
 
-    const profile = data.profile;
+    const profile = route.data.profile;
     return buildRouteMetadata({
         title: buildPublicProfileTitle({
             username: profile.username,
@@ -80,12 +72,7 @@ async function ResolvedPublicProfile({
 }) {
     const { username } = await params;
 
-    const decodedUsername = decodeUsernameParam(username);
-    if (!decodedUsername) {
-        notFound();
-    }
-
-    const route = await resolvePublicUsernameRoute({ username: decodedUsername });
+    const route = await readPublicProfileRoute(username);
     if (route.status === 'not_found') {
         notFound();
     }
@@ -93,20 +80,13 @@ async function ResolvedPublicProfile({
         permanentRedirect(`/u/${encodeURIComponent(route.currentUsername)}`);
     }
 
-    const viewerAuth = await getViewerAuthContext();
-    const data = await getProfileDetails(route.currentUsername, { viewerUser: viewerAuth.user ?? null });
+    const { data, viewerAuth } = route;
 
     if (data.privacyStatus === 'not_found' || !data.profile) {
         notFound();
     }
 
-    const openRolesProjects = await getProfileProjectsWithOpenRolesAction(data.profile.id);
-
-    let viewerHasOpenRoles = false;
-    if (viewerAuth?.user && viewerAuth.user.id !== data.profile.id) {
-        const viewerProjects = await getProfileProjectsWithOpenRolesAction(viewerAuth.user.id);
-        viewerHasOpenRoles = viewerProjects.length > 0;
-    }
+    const openRolesProjects = await getProfileProjectsWithOpenRolesAction(data.profile.id, viewerAuth.user?.id ?? null);
 
     return (
         <ProfileV2Client
@@ -118,8 +98,7 @@ async function ResolvedPublicProfile({
             privacyRelationship={data.privacyRelationship}
             lockedShell={data.lockedShell}
             collaborationSummary={data.collaborationSummary}
-            initialOpenRolesProjects={openRolesProjects}
-            viewerHasOpenRoles={viewerHasOpenRoles}
+            initialOpenRolesProjects={openRolesProjects.items}
         />
     );
 }
