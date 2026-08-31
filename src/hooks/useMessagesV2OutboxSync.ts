@@ -10,6 +10,7 @@ import {
     upsertThreadConversation,
 } from '@/lib/messages/v2-cache';
 import { useMessagesV2OutboxStore } from '@/stores/messagesV2OutboxStore';
+import { recordMessagesDraftLifecycle } from '@/lib/messages/observability';
 
 // Wave 4 Step 14: tighten the retry backoff so Instagram-style sends that hit a
 // flaky network recover in ~250 ms instead of ~2 s.
@@ -20,35 +21,64 @@ function getRetryDelay(attempt: number) {
 }
 
 const MAX_RETRY_ATTEMPTS = 20;
-// The interval only serves as a safety net; actual retries fire as soon as
-// `nextRetryAt` is reached, so this can be much tighter than the old 10 s.
-const FLUSH_INTERVAL_MS = 500;
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
+function nextFlushDelay(items: ReturnType<typeof useMessagesV2OutboxStore.getState>['items']) {
+    const now = Date.now();
+    let nextRetryAt: number | null = null;
+
+    for (const item of items) {
+        if (item.state === 'sending' || item.attempts >= MAX_RETRY_ATTEMPTS) continue;
+        if (!Number.isFinite(item.nextRetryAt)) continue;
+        if (nextRetryAt === null || item.nextRetryAt < nextRetryAt) {
+            nextRetryAt = item.nextRetryAt;
+        }
+    }
+
+    if (nextRetryAt === null) return null;
+    return Math.min(Math.max(0, nextRetryAt - now), MAX_TIMER_DELAY_MS);
+}
 
 export function useMessagesV2OutboxSync(enabled: boolean) {
     const queryClient = useQueryClient();
     const storeRef = useRef(useMessagesV2OutboxStore.getState());
     const inFlightIdsRef = useRef(new Set<string>());
 
-    // Keep storeRef current without triggering effect re-runs.
-    useEffect(() => {
-        return useMessagesV2OutboxStore.subscribe((state) => {
-            storeRef.current = state;
-        });
-    }, []);
-
-    // Requeue any items stuck in 'sending' state on mount (app crash recovery).
-    useEffect(() => {
-        if (!enabled) return;
-        storeRef.current.requeueSendingItems(Date.now());
-    }, [enabled]);
-
-    // Stable flush loop — does NOT depend on `items` to avoid effect churn.
     useEffect(() => {
         if (!enabled) return;
 
         let cancelled = false;
+        let flushing = false;
+        let timer: number | null = null;
+
+        const clearScheduledFlush = () => {
+            if (timer !== null) {
+                window.clearTimeout(timer);
+                timer = null;
+            }
+        };
+
+        const scheduleFlush = () => {
+            clearScheduledFlush();
+            const delay = nextFlushDelay(storeRef.current.items);
+            if (delay === null) return;
+
+            if (flushing) {
+                return;
+            }
+
+            timer = window.setTimeout(() => {
+                timer = null;
+                void flush();
+            }, delay);
+        };
 
         const flush = async () => {
+            if (flushing) {
+                return;
+            }
+
+            flushing = true;
             const { items, markItem, removeItem } = storeRef.current;
             const now = Date.now();
             const eligible = items
@@ -60,117 +90,136 @@ export function useMessagesV2OutboxSync(enabled: boolean) {
                 )
                 .sort((a, b) => a.createdAt - b.createdAt);
 
-            for (const item of eligible) {
-                if (cancelled) return;
+            try {
+                for (const item of eligible) {
+                    if (cancelled) return;
 
-                // Permanently fail items that exceeded max retries.
-                if (item.attempts >= MAX_RETRY_ATTEMPTS) {
-                    markItem(item.clientMessageId, {
-                        state: 'failed',
-                        error: 'Max retries exceeded. Please resend manually.',
-                        nextRetryAt: Number.MAX_SAFE_INTEGER,
-                    });
-                    continue;
-                }
-
-                inFlightIdsRef.current.add(item.clientMessageId);
-                markItem(item.clientMessageId, { state: 'sending' });
-                try {
-                    const result = item.mode === 'structured' && item.structuredAction
-                        ? await sendStructuredConversationMessageV2({
-                            conversationId: item.conversationId,
-                            targetUserId: item.targetUserId ?? null,
-                            clientMessageId: item.clientMessageId,
-                            kind: item.structuredAction.kind,
-                            title: item.structuredAction.title ?? null,
-                            summary: item.structuredAction.summary,
-                            note: item.structuredAction.note ?? null,
-                            projectId: item.structuredAction.projectId ?? null,
-                            taskId: item.structuredAction.taskId ?? null,
-                            fileId: item.structuredAction.fileId ?? null,
-                            profileId: item.structuredAction.profileId ?? null,
-                            amount: item.structuredAction.amount ?? null,
-                            unit: item.structuredAction.unit ?? null,
-                            dueAt: item.structuredAction.dueAt ?? null,
-                            completed: item.structuredAction.completed ?? null,
-                            blocked: item.structuredAction.blocked ?? null,
-                            next: item.structuredAction.next ?? null,
-                            contextChips: item.contextChips ?? [],
-                        })
-                        : await sendConversationMessageV2({
-                            conversationId: item.conversationId,
-                            targetUserId: item.targetUserId ?? null,
-                            content: item.content,
-                            attachments: item.attachments,
-                            clientMessageId: item.clientMessageId,
-                            replyToMessageId: item.replyToMessageId ?? null,
-                            contextChips: item.contextChips ?? [],
+                    // Permanently fail items that exceeded max retries.
+                    if (item.attempts >= MAX_RETRY_ATTEMPTS) {
+                        markItem(item.clientMessageId, {
+                            state: 'failed',
+                            error: 'Max retries exceeded. Please resend manually.',
+                            nextRetryAt: Number.MAX_SAFE_INTEGER,
                         });
-
-                    if (result.success && result.conversationId) {
-                        removeItem(item.clientMessageId);
-                        if (result.conversation) {
-                            upsertThreadConversation(queryClient, result.conversation);
-                        }
-                        if (result.message) {
-                            replaceOptimisticThreadMessage(
-                                queryClient,
-                                result.conversationId,
-                                item.clientMessageId,
-                                result.message,
-                                result.conversation ?? null,
-                            );
-                            patchConversationLastMessageFromMessage(queryClient, result.conversationId, result.message);
-                        } else if (result.conversation) {
-                            upsertInboxConversation(queryClient, result.conversation);
-                        }
                         continue;
                     }
 
-                    const nextAttempts = item.attempts + 1;
-                    const exhaustedRetries = nextAttempts >= MAX_RETRY_ATTEMPTS;
-                    markItem(item.clientMessageId, {
-                        attempts: nextAttempts,
-                        state: 'failed',
-                        nextRetryAt: exhaustedRetries
-                            ? Number.MAX_SAFE_INTEGER
-                            : Date.now() + getRetryDelay(nextAttempts),
-                        error: exhaustedRetries
-                            ? 'Max retries exceeded. Please resend manually.'
-                            : result.error || 'retry_failed',
-                    });
-                } catch (error) {
-                    const nextAttempts = item.attempts + 1;
-                    const exhaustedRetries = nextAttempts >= MAX_RETRY_ATTEMPTS;
-                    markItem(item.clientMessageId, {
-                        attempts: nextAttempts,
-                        state: 'failed',
-                        nextRetryAt: exhaustedRetries
-                            ? Number.MAX_SAFE_INTEGER
-                            : Date.now() + getRetryDelay(nextAttempts),
-                        error: exhaustedRetries
-                            ? 'Max retries exceeded. Please resend manually.'
-                            : error instanceof Error ? error.message : String(error) || 'exception_failed',
-                    });
-                } finally {
-                    inFlightIdsRef.current.delete(item.clientMessageId);
+                    inFlightIdsRef.current.add(item.clientMessageId);
+                    markItem(item.clientMessageId, { state: 'sending' });
+                    try {
+                        const result = item.mode === 'structured' && item.structuredAction
+                            ? await sendStructuredConversationMessageV2({
+                                conversationId: item.conversationId,
+                                targetUserId: item.targetUserId ?? null,
+                                clientMessageId: item.clientMessageId,
+                                kind: item.structuredAction.kind,
+                                title: item.structuredAction.title ?? null,
+                                summary: item.structuredAction.summary,
+                                note: item.structuredAction.note ?? null,
+                                projectId: item.structuredAction.projectId ?? null,
+                                taskId: item.structuredAction.taskId ?? null,
+                                fileId: item.structuredAction.fileId ?? null,
+                                profileId: item.structuredAction.profileId ?? null,
+                                amount: item.structuredAction.amount ?? null,
+                                unit: item.structuredAction.unit ?? null,
+                                dueAt: item.structuredAction.dueAt ?? null,
+                                completed: item.structuredAction.completed ?? null,
+                                blocked: item.structuredAction.blocked ?? null,
+                                next: item.structuredAction.next ?? null,
+                                contextChips: item.contextChips ?? [],
+                            })
+                            : await sendConversationMessageV2({
+                                conversationId: item.conversationId,
+                                targetUserId: item.targetUserId ?? null,
+                                content: item.content,
+                                attachments: item.attachments,
+                                clientMessageId: item.clientMessageId,
+                                replyToMessageId: item.replyToMessageId ?? null,
+                                contextChips: item.contextChips ?? [],
+                            });
+
+                        if (result.success && result.conversationId) {
+                            if (
+                                item.conversationId.startsWith('draft:')
+                                && result.conversationId !== item.conversationId
+                            ) {
+                                recordMessagesDraftLifecycle('first_message_sent');
+                            }
+                            removeItem(item.clientMessageId);
+                            if (result.conversation) {
+                                upsertThreadConversation(queryClient, result.conversation);
+                            }
+                            if (result.message) {
+                                replaceOptimisticThreadMessage(
+                                    queryClient,
+                                    result.conversationId,
+                                    item.clientMessageId,
+                                    result.message,
+                                    result.conversation ?? null,
+                                );
+                                patchConversationLastMessageFromMessage(queryClient, result.conversationId, result.message);
+                            } else if (result.conversation) {
+                                upsertInboxConversation(queryClient, result.conversation);
+                            }
+                            continue;
+                        }
+
+                        const nextAttempts = item.attempts + 1;
+                        const exhaustedRetries = nextAttempts >= MAX_RETRY_ATTEMPTS;
+                        markItem(item.clientMessageId, {
+                            attempts: nextAttempts,
+                            state: 'failed',
+                            nextRetryAt: exhaustedRetries
+                                ? Number.MAX_SAFE_INTEGER
+                                : Date.now() + getRetryDelay(nextAttempts),
+                            error: exhaustedRetries
+                                ? 'Max retries exceeded. Please resend manually.'
+                                : result.error || 'retry_failed',
+                        });
+                    } catch (error) {
+                        const nextAttempts = item.attempts + 1;
+                        const exhaustedRetries = nextAttempts >= MAX_RETRY_ATTEMPTS;
+                        markItem(item.clientMessageId, {
+                            attempts: nextAttempts,
+                            state: 'failed',
+                            nextRetryAt: exhaustedRetries
+                                ? Number.MAX_SAFE_INTEGER
+                                : Date.now() + getRetryDelay(nextAttempts),
+                            error: exhaustedRetries
+                                ? 'Max retries exceeded. Please resend manually.'
+                                : error instanceof Error ? error.message : String(error) || 'exception_failed',
+                        });
+                    } finally {
+                        inFlightIdsRef.current.delete(item.clientMessageId);
+                    }
+                }
+            } finally {
+                flushing = false;
+                if (!cancelled) {
+                    scheduleFlush();
                 }
             }
         };
 
+        const unsubscribe = useMessagesV2OutboxStore.subscribe((state) => {
+            storeRef.current = state;
+            scheduleFlush();
+        });
+
+        storeRef.current = useMessagesV2OutboxStore.getState();
+        storeRef.current.requeueSendingItems(Date.now());
         void flush();
-        const timer = window.setInterval(() => {
-            void flush();
-        }, FLUSH_INTERVAL_MS);
 
         const onOnline = () => {
+            storeRef.current.requeueExhaustedItems(Date.now());
             void flush();
         };
         window.addEventListener('online', onOnline);
 
         return () => {
             cancelled = true;
-            window.clearInterval(timer);
+            unsubscribe();
+            clearScheduledFlush();
             window.removeEventListener('online', onOnline);
         };
     }, [enabled, queryClient]);
