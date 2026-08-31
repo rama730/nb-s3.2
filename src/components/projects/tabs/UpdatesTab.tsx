@@ -828,6 +828,8 @@ function UpdateComments({
   const [focusedCommentId, setFocusedCommentId] = useState<string | null>(null);
   const [showAllAncestors, setShowAllAncestors] = useState(false);
   const [focusedReplyDraft, setFocusedReplyDraft] = useState("");
+  const sectionRef = useRef<HTMLDivElement | null>(null);
+  const [isNearViewport, setIsNearViewport] = useState(Boolean(highlightedCommentId));
   const commentsKey = useMemo(
     () => queryKeys.project.detail.updateComments(projectId, update.id),
     [projectId, update.id],
@@ -846,9 +848,32 @@ function UpdateComments({
       return result.data;
     },
     getNextPageParam: (lastPage) => lastPage.nextCursor,
-    enabled: update.commentCount > 0 || Boolean(currentUserId),
+    enabled: isNearViewport && (update.commentCount > 0 || Boolean(highlightedCommentId)),
     staleTime: 15_000,
+    refetchOnWindowFocus: false,
   });
+
+  useEffect(() => {
+    if (isNearViewport || highlightedCommentId) {
+      setIsNearViewport(true);
+      return;
+    }
+    const element = sectionRef.current;
+    if (!element || typeof IntersectionObserver === "undefined") {
+      setIsNearViewport(true);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((entry) => entry.isIntersecting)) return;
+        setIsNearViewport(true);
+        observer.disconnect();
+      },
+      { rootMargin: "500px 0px" },
+    );
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [highlightedCommentId, isNearViewport]);
 
   const commentMutation = useMutation({
     mutationFn: async ({ content, parentId }: { content: string; parentId?: string | null }) => {
@@ -1292,55 +1317,6 @@ function UpdateComments({
   };
 
   useEffect(() => {
-    if (!update.id) return;
-    const supabase = createClient();
-    const channel = subscribeActiveResource({
-      supabase,
-      resourceType: "project_hydration",
-      resourceId: `update-comments:${update.id}`,
-      bindings: [
-        {
-          event: "*",
-          table: "project_update_comments",
-          filter: `update_id=eq.${update.id}`,
-          handler: (payload) => {
-            const nextUserId =
-              realtimeStringField(payload.new, "user_id") ??
-              realtimeStringField(payload.old, "user_id");
-            if (nextUserId && nextUserId === currentUserId) return;
-            void queryClient.invalidateQueries({ queryKey: commentsKey });
-
-            if (payload.eventType === "INSERT") {
-              queryClient.setQueryData(
-                updatesQueryKey,
-                (existing: InfiniteData<UpdatesPage> | undefined) =>
-                  updatePages(existing, (item) =>
-                    item.id === update.id
-                      ? { ...item, commentCount: item.commentCount + 1 }
-                      : item,
-                  ),
-              );
-            } else if (payload.eventType === "DELETE") {
-              queryClient.setQueryData(
-                updatesQueryKey,
-                (existing: InfiniteData<UpdatesPage> | undefined) =>
-                  updatePages(existing, (item) =>
-                    item.id === update.id
-                      ? { ...item, commentCount: Math.max(0, item.commentCount - 1) }
-                      : item,
-                  ),
-              );
-            }
-          },
-        },
-      ],
-    });
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [commentsKey, currentUserId, queryClient, update.id, updatesQueryKey]);
-
-  useEffect(() => {
     if (!highlightedCommentId) return;
     if (!allComments.some((comment) => comment.id === highlightedCommentId))
       return;
@@ -1352,7 +1328,7 @@ function UpdateComments({
   }, [allComments, highlightedCommentId]);
 
   return (
-    <div className="mt-2 flex min-h-0 flex-col border-t border-zinc-100 pt-2 dark:border-zinc-900">
+    <div ref={sectionRef} className="mt-2 flex min-h-0 flex-col border-t border-zinc-100 pt-2 dark:border-zinc-900">
       {focusedComment ? (
         <div className="flex flex-col min-h-0">
           <button
@@ -2209,6 +2185,7 @@ export default function UpdatesTab({
     },
     getNextPageParam: (lastPage) => lastPage.nextCursor,
     staleTime: 20_000,
+    refetchOnWindowFocus: false,
   });
 
   const updates = useMemo(
@@ -2288,6 +2265,31 @@ export default function UpdatesTab({
         }
       }
     };
+    const handleProjectCommentChange = (payload: any) => {
+      const authorId =
+        realtimeStringField(payload.new, "user_id") ??
+        realtimeStringField(payload.old, "user_id");
+      if (authorId && authorId === currentUserId) return;
+      const updateId =
+        realtimeStringField(payload.new, "update_id") ??
+        realtimeStringField(payload.old, "update_id");
+      if (!updateId) return;
+
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.project.detail.updateComments(projectId, updateId),
+      });
+      if (payload.eventType !== "INSERT" && payload.eventType !== "DELETE") return;
+      const delta = payload.eventType === "INSERT" ? 1 : -1;
+      queryClient.setQueryData(
+        updatesQueryKey,
+        (existing: InfiniteData<UpdatesPage> | undefined) =>
+          updatePages(existing, (item) =>
+            item.id === updateId
+              ? { ...item, commentCount: Math.max(0, item.commentCount + delta) }
+              : item,
+          ),
+      );
+    };
     const channel = subscribeActiveResource({
       supabase,
       resourceType: "project_hydration",
@@ -2298,6 +2300,12 @@ export default function UpdatesTab({
           table: "project_updates",
           filter: `project_id=eq.${projectId}`,
           handler: handleProjectUpdateChange,
+        },
+        {
+          event: "*",
+          table: "project_update_comments",
+          filter: `project_id=eq.${projectId}`,
+          handler: handleProjectCommentChange,
         },
       ],
     });
