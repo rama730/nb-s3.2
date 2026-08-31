@@ -80,7 +80,8 @@ Supported suites:
 - `auth-entry-pages`
 - `authenticated-shells`
 - `workspace-bootstrap`
-- `messages-reconnect-storm`
+- `messages-route-entry-churn`
+- `realtime-reconnect`
 - `worker-isolation`
 
 If you only want a subset:
