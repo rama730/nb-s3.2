@@ -29,8 +29,8 @@ function decideStatus(input: {
         blockers.push(`Load suite failures: ${loadFailures.map((result) => result.suite).join(', ')}`)
     }
 
-    const reconnectStorm = input.loadResults.find((result) => result.suite === 'messages-reconnect-storm')
-    if (reconnectStorm && (reconnectStorm.p95Ms ?? 0) > 900) {
+    const reconnectStorm = input.loadResults.find((result) => result.suite === 'realtime-reconnect')
+    if (!reconnectStorm || reconnectStorm.ok !== true || (reconnectStorm.p95Ms ?? 0) > 1500) {
         recommendations.push('Validate Supabase Realtime channel and reconnect capacity before claiming 1M headroom.')
     }
 
