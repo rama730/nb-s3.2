@@ -152,14 +152,14 @@ export async function saveFileRevision(params: {
       throw new Error(uploadSession.error || "Failed to prepare upload");
     }
 
-    const uploadResponse = await fetch(uploadSession.url, {
-      method: "PUT",
-      headers: { "Content-Type": contentType },
-      body: file,
-    });
-    if (!uploadResponse.ok) {
-      throw new Error(`Upload failed (${uploadResponse.status})`);
-    }
+    const token = uploadSession.token || new URL(uploadSession.url).searchParams.get("token");
+    if (!token) throw new Error("Upload token is missing");
+
+    const { error: uploadError } = await supabase.storage
+      .from("project-files")
+      .uploadToSignedUrl(storagePath, token, file, { contentType });
+
+    if (uploadError) throw new Error(`Upload failed: ${uploadError.message}`);
 
     const contentHash =
       hashResult && hashResult.kind === "full" ? hashResult.hashHex : null;
