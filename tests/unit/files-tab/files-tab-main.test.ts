@@ -43,7 +43,7 @@ describe("FilesTabMain — structural contract (Req 1.2, 1.3, 1.5-1.8)", () => {
   it("reads `canEdit` from `useFilesTabRole()` (design § FilesTabRoot)", () => {
     assert.match(SRC, /useFilesTabRole\(\)/);
     // The destructured `canEdit` is referenced explicitly.
-    assert.match(SRC, /\{\s*canEdit\s*\}\s*=\s*useFilesTabRole\(\)/);
+    assert.match(SRC, /\{\s*canEdit,\s*canManageFiles\s*\}\s*=\s*useFilesTabRole\(\)/);
   });
 
   it("uses the prescribed wrapper classes (Req 1.7 full-width main)", () => {
