@@ -71,10 +71,11 @@ Dedicated runtime commands:
 
 ```bash
 npm run dev
+npm run dev:collab
 npm run run:load-suite -- --base-url=http://127.0.0.1:3000 --auth-cookie="sb-access-token=...; sb-refresh-token=..."
 ```
 
-`npm run dev` starts the Next.js app and the local Yjs collaboration server. Typing indicators and cursor presence connect through Supabase Realtime.
+`npm run dev` starts only the Next.js app. Use `npm run dev:collab` when actively developing collaborative Docs; it adds the local Yjs server. Typing indicators and cursor presence connect through Supabase Realtime.
 
 ## Environment
 
