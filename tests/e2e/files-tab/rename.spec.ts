@@ -144,7 +144,7 @@ test.describe("Files tab V3 — rename", () => {
       // invokes the same `openRename` action. This keeps the area
       // traceable to Req 7.4 even if Req 14.8's keyboard surface regresses.
       const inlineInput = sidebar.locator("input").first();
-      let inlineReady = await inlineInput
+      const inlineReady = await inlineInput
         .waitFor({ state: "visible", timeout: 3000 })
         .then(() => true)
         .catch(() => false);
