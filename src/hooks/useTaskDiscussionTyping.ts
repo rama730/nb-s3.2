@@ -2,7 +2,7 @@
 
 import { useCallback, useMemo } from 'react';
 
-import type { PresenceMemberState } from '@/lib/realtime/presence-types';
+import { toPresenceTypingUser, type PresenceMemberState } from '@/lib/realtime/presence-types';
 import type { TaskDiscussionTypingUser } from '@/lib/projects/task-discussion';
 
 import { usePresenceTyping } from './usePresenceTyping';
@@ -17,15 +17,6 @@ type SendTypingParams = {
   parentCommentId?: string | null;
 };
 
-function toTypingUser(member: PresenceMemberState): TaskDiscussionTypingUser {
-  return {
-    id: member.userId,
-    username: member.profile?.username ?? null,
-    fullName: member.profile?.fullName ?? member.userName ?? null,
-    avatarUrl: member.profile?.avatarUrl ?? null,
-  };
-}
-
 function isTaskCommentTypingMember(member: PresenceMemberState, currentUserId: string | null) {
   return (
     member.typing
@@ -39,7 +30,7 @@ function normalizeTypingSnapshot(members: Iterable<PresenceMemberState>): TaskDi
   const repliesByParentId: Record<string, TaskDiscussionTypingUser[]> = {};
 
   for (const member of members) {
-    const typingUser = toTypingUser(member);
+    const typingUser = toPresenceTypingUser(member);
     const parentCommentId = member.typingContext?.scope === 'task_comment'
       ? member.typingContext.parentCommentId ?? null
       : null;
