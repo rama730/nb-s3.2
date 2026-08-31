@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { Loader2 } from 'lucide-react';
 import dynamic from 'next/dynamic';
@@ -11,9 +11,10 @@ import ProjectLayout from '@/components/projects/dashboard/ProjectLayout';
 import InviteCollaboratorModal from '@/components/projects/dashboard/InviteCollaboratorModal';
 import { TabErrorBoundary } from '@/components/projects/TabErrorBoundary';
 import type { Project } from '@/types/hub';
-import { toggleProjectFollowAction, updateProjectStageAction, incrementProjectViewAction } from '@/app/actions/project';
+import { getProjectLiveStatsAction, toggleProjectFollowAction, updateProjectStageAction, incrementProjectViewAction } from '@/app/actions/project';
 import { getApplicationStatusAction, acceptProposedRoleAction, declineProposedRoleAction, type ApplicationStatusResult } from '@/app/actions/applications';
 import { resolveMessageWorkflowActionV2 } from '@/app/actions/messaging';
+import { resolveProjectInvitationAction } from '@/app/actions/project/guidance';
 import { useProjectMembers } from '@/hooks/hub/useProjectMembers';
 import { filesFeatureFlags } from '@/lib/features/files';
 import { getProjectNodes } from '@/app/actions/files/nodes';
@@ -23,7 +24,13 @@ import { subscribeProjectStage, subscribeProjectStats } from '@/lib/realtime/sub
 import type { SprintDetailPayload } from '@/lib/projects/sprint-detail';
 import type { TaskPanelTab } from '@/hooks/useTaskPanelResource';
 import { normalizeProjectDocSlug } from '@/lib/projects/doc-slug';
-import { isProjectTabVisibleToViewer, normalizeProjectMemberRole, normalizeProjectPublicTabVisibility, resolveAllowedProjectTab, type ProjectMemberRole } from '@/lib/projects/settings-policies';
+import { canProjectMemberUploadFiles, isProjectTabVisibleToViewer, normalizeProjectMemberRole, normalizeProjectPublicTabVisibility, resolveAllowedProjectTab, type ProjectMemberRole } from '@/lib/projects/settings-policies';
+import {
+    useUIStore,
+    WORKSPACE_TASK_HANDOFF_STORAGE_KEY,
+    readWorkspaceTaskHandoff,
+    type WorkspaceTaskHandoff,
+} from '@/lib/stores/ui-store';
 
 import { DashboardTab, DocTab, UpdatesTab, TasksTab, FilesTab, AnalyticsTab, SprintPlanning, ProjectSettingsTab } from '@/components/projects/dashboard/ProjectTabsRegistry';
 
@@ -59,7 +66,7 @@ function clearProjectDetailScopedParams(params: URLSearchParams, activeTab: stri
     }
 
     if (resetActiveTab || activeTab !== 'files') {
-        for (const key of ['fileId', 'path', 'line', 'column']) {
+        for (const key of ['fileId', 'path', 'line', 'column', 'filesView', 'filesTask']) {
             changed = deleteParam(params, key) || changed;
         }
     }
@@ -99,7 +106,52 @@ export default function ProjectDashboardClient({ project, currentUserId, viewerD
     const pathname = usePathname();
     const queryClient = useQueryClient();
     const searchParams = useSearchParams();
+    const workspaceTaskHandoff = useUIStore((state) => state.workspaceTaskHandoff);
+    const setWorkspaceTaskHandoff = useUIStore((state) => state.setWorkspaceTaskHandoff);
+    const [sessionTaskHandoff, setSessionTaskHandoff] = useState<WorkspaceTaskHandoff | null>(() => {
+        if (typeof window === 'undefined') return null;
+        const handoff = readWorkspaceTaskHandoff(window.sessionStorage.getItem(WORKSPACE_TASK_HANDOFF_STORAGE_KEY));
+        return handoff?.projectId === project.id ? handoff : null;
+    });
+    useEffect(() => {
+        if (workspaceTaskHandoff || typeof window === 'undefined') return;
+        try {
+            const stored = readWorkspaceTaskHandoff(
+                window.sessionStorage.getItem(WORKSPACE_TASK_HANDOFF_STORAGE_KEY),
+            );
+            if (stored?.projectId === project.id) setSessionTaskHandoff(stored);
+            else window.sessionStorage.removeItem(WORKSPACE_TASK_HANDOFF_STORAGE_KEY);
+        } catch {
+            try {
+                window.sessionStorage.removeItem(WORKSPACE_TASK_HANDOFF_STORAGE_KEY);
+            } catch {
+                // Storage is unavailable; no persisted handoff can be used.
+            }
+        }
+    }, [project.id, workspaceTaskHandoff]);
+    const pendingWorkspaceTaskHandoff = workspaceTaskHandoff ?? sessionTaskHandoff;
+    const workspaceInitialTaskId =
+        pendingWorkspaceTaskHandoff?.projectId === project.id
+            ? pendingWorkspaceTaskHandoff.taskId
+            : null;
     const applyRoleIdFromUrl = searchParams?.get('applyRole') || null;
+
+    // Keep the handoff alive until TasksTab has actually opened the panel.
+    // Clearing it on dashboard mount races the lazy task-tab mount.
+    const consumeWorkspaceTaskHandoff = useCallback(() => {
+        if (pendingWorkspaceTaskHandoff?.projectId === project.id) {
+            setWorkspaceTaskHandoff(null);
+            setSessionTaskHandoff(null);
+            try {
+                window.sessionStorage.removeItem(WORKSPACE_TASK_HANDOFF_STORAGE_KEY);
+            } catch {
+                // The in-memory handoff is already consumed.
+            }
+        }
+    }, [pendingWorkspaceTaskHandoff, project.id, setWorkspaceTaskHandoff]);
+    // The detail shell already resolves viewer-safe guidance in parallel with
+    // the rest of the project header. Avoid a second client POST on every open.
+    const guidance = (project as { guidance?: unknown }).guidance ?? null;
 
     const invalidateProjectDetailSlices = useCallback(
         (options?: { shell?: boolean; shellRefresh?: boolean; tasks?: boolean; sprints?: boolean; analytics?: boolean; members?: boolean; files?: boolean }) => {
@@ -204,10 +256,10 @@ export default function ProjectDashboardClient({ project, currentUserId, viewerD
     const followRequestRef = useRef(0);
     const followInFlightRef = useRef(false);
     const shareRequestRef = useRef(0);
-    const viewRequestRef = useRef(0);
     const stageRequestRef = useRef(0);
     const roleApplyRequestRef = useRef<string | null>(null);
     const statsChannelRef = useRef<any>(null);
+    const statsInvalidationTimerRef = useRef<number | null>(null);
 
     const setStageVersionSafe = useCallback((nextVersion: string | null) => {
         stageVersionRef.current = nextVersion;
@@ -261,6 +313,11 @@ export default function ProjectDashboardClient({ project, currentUserId, viewerD
             } else if (applicationStatus.workflowItemId) {
                 res = await resolveMessageWorkflowActionV2({
                     workflowItemId: applicationStatus.workflowItemId,
+                    action,
+                });
+            } else if (applicationStatus.invitationId) {
+                res = await resolveProjectInvitationAction({
+                    invitationId: applicationStatus.invitationId,
                     action,
                 });
             } else {
@@ -333,8 +390,9 @@ export default function ProjectDashboardClient({ project, currentUserId, viewerD
             viewCount,
             followersCount,
             stageCompletionDates,
+            guidance,
         }),
-        [project, viewCount, followersCount, stageCompletionDates],
+        [project, viewCount, followersCount, stageCompletionDates, guidance],
     );
     const extendedProject = projectWithLiveStats as any;
 
@@ -383,10 +441,9 @@ export default function ProjectDashboardClient({ project, currentUserId, viewerD
     // Fetch application status for non-owners (lightweight O(1) query)
     useEffect(() => {
         if (!currentUserId || isOwner || isMember) return;
-        if (rolesWithFilled.length === 0) return;
 
         getApplicationStatusAction(project.id).then(setApplicationStatus);
-    }, [project.id, currentUserId, isOwner, isMember, rolesWithFilled.length]);
+    }, [project.id, currentUserId, isOwner, isMember]);
 
     // Hook Integration: Scalable Member Loading
     const shouldLoadMembers = activeTab === 'dashboard' || activeTab === 'tasks' || activeTab === 'updates' || activeTab === 'sprints' || activeTab === 'settings';
@@ -419,6 +476,11 @@ export default function ProjectDashboardClient({ project, currentUserId, viewerD
         return member ? normalizeProjectMemberRole((member as any).membershipRole, 'member') : null;
     }, [allMembers, currentUserId, isOwner]);
     const canManageProjectSettings = isOwner || currentProjectRole === 'admin';
+    const canEditTasks = isOwner || currentProjectRole === 'admin' || currentProjectRole === 'member';
+    const canManageFiles = isOwner || currentProjectRole === 'admin';
+    const currentFileMember = allMembers.find((item: any) => item?.id === currentUserId);
+    const canUploadFiles = isOwner || canProjectMemberUploadFiles({ role: currentProjectRole, fileUploadEnabled: currentFileMember?.fileUploadEnabled });
+    const canReadTaskFiles = isProjectTabVisibleToViewer({ tabId: 'tasks', isOwnerOrMember, publicTabVisibility });
 
     const currentUserName = useMemo(() => {
         if (!currentUserId) return undefined;
@@ -579,54 +641,41 @@ export default function ProjectDashboardClient({ project, currentUserId, viewerD
         if (activeTab !== 'readme') setIsReadmeEditing(false);
     }, [activeTab]);
 
-    const filesPrefetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const filesPrefetchQueryKey = useMemo(() => queryKeys.project.detail.filesNodes(project.id, null), [project.id]);
-
     const handleTabHover = useCallback(
         (tabId: string) => {
-            if (!(filesFeatureFlags.prefetchHover || filesFeatureFlags.wave2PrefetchHover)) return;
-            if (tabId !== 'files') return;
-            if (activeTab === 'files') return;
-            if (!isOwnerOrMember) return;
-            if (filesPrefetchTimerRef.current) {
-                clearTimeout(filesPrefetchTimerRef.current);
-                filesPrefetchTimerRef.current = null;
+            // Warm only the surface the user is expressing intent to open.
+            // Data prefetch stays scoped below so hovering one tab never fans
+            // out requests for the rest of the project workspace.
+            switch (tabId) {
+                case 'readme':
+                    void import('@/components/projects/tabs/DocTab');
+                    break;
+                case 'updates':
+                    void import('@/components/projects/tabs/UpdatesTab');
+                    break;
+                case 'sprints':
+                    void import('@/components/projects/tabs/SprintPlanning');
+                    break;
+                case 'tasks':
+                    void import('@/components/projects/v2/TasksTab');
+                    break;
+                case 'analytics':
+                    void import('@/components/projects/tabs/AnalyticsTab');
+                    break;
+                case 'settings':
+                    void import('@/components/projects/tabs/ProjectSettingsTab');
+                    break;
+                case 'files':
+                    void import('@/components/projects/v2/files-tab/FilesTabRoot');
+                    break;
+                default:
+                    break;
             }
-            filesPrefetchTimerRef.current = setTimeout(() => {
-                const queryState = queryClient.getQueryState(filesPrefetchQueryKey);
-                const isFresh = !!queryState?.dataUpdatedAt && Date.now() - queryState.dataUpdatedAt < 60_000;
-                if (isFresh) return;
-                void import('@/components/projects/v2/files-tab/FilesTabRoot');
-                queryClient.prefetchQuery({
-                    queryKey: filesPrefetchQueryKey,
-                    queryFn: () => getProjectNodes(project.id, null),
-                    staleTime: 60_000,
-                });
-            }, 450);
         },
-        [activeTab, filesPrefetchQueryKey, isOwnerOrMember, project.id, queryClient],
+        [],
     );
 
-    const handleTabLeave = useCallback(
-        (tabId: string) => {
-            if (tabId !== 'files') return;
-            if (filesPrefetchTimerRef.current) {
-                clearTimeout(filesPrefetchTimerRef.current);
-                filesPrefetchTimerRef.current = null;
-            }
-            void queryClient.cancelQueries({ queryKey: filesPrefetchQueryKey });
-        },
-        [filesPrefetchQueryKey, queryClient],
-    );
 
-    useEffect(() => {
-        return () => {
-            if (filesPrefetchTimerRef.current) {
-                clearTimeout(filesPrefetchTimerRef.current);
-                filesPrefetchTimerRef.current = null;
-            }
-        };
-    }, []);
 
     // Actions
     const handleEdit = useCallback(() => {
@@ -716,8 +765,8 @@ export default function ProjectDashboardClient({ project, currentUserId, viewerD
                 if (statsChannelRef.current) {
                     void statsChannelRef.current.send({
                         type: 'broadcast',
-                        event: 'stats_update',
-                        payload: { followersCount: reconciledCount },
+                        event: 'stats_invalidate',
+                        payload: {},
                     });
                 }
             }
@@ -760,56 +809,81 @@ export default function ProjectDashboardClient({ project, currentUserId, viewerD
         // Live updates are synced via the realtime broadcast channel below.
 
         // 2. Subscribe to live realtime broadcast updates
-        const channel = subscribeProjectStats({
+        let channel: Awaited<ReturnType<typeof subscribeProjectStats>> = null;
+        void subscribeProjectStats({
             supabase,
             projectId: project.id,
-            onStatsUpdate: (payload: { viewCount?: number; followersCount?: number }) => {
-                if (!active) return;
-                const liveViews = payload.viewCount;
-                if (typeof liveViews === 'number') {
-                    setViewCount((current: number) => Math.max(current, liveViews));
-                }
-                if (typeof payload.followersCount === 'number') {
-                    setFollowersCount(payload.followersCount);
-                }
+            onInvalidate: () => {
+                if (!active || statsInvalidationTimerRef.current !== null) return;
+                statsInvalidationTimerRef.current = window.setTimeout(() => {
+                    statsInvalidationTimerRef.current = null;
+                    void getProjectLiveStatsAction(project.id).then((result) => {
+                        if (!active || !result.success) return;
+                        if (typeof result.viewCount === 'number') {
+                            setViewCount((current: number) => Math.max(current, result.viewCount!));
+                        }
+                        if (typeof result.followersCount === 'number') {
+                            setFollowersCount(result.followersCount);
+                        }
+                    });
+                }, 180);
             },
+        }).then((nextChannel) => {
+            if (!nextChannel) return;
+            if (!active) {
+                void supabase.removeChannel(nextChannel);
+                return;
+            }
+            channel = nextChannel;
+            statsChannelRef.current = nextChannel;
+        }).catch((error) => {
+            logger.warn('project.stats-realtime.unavailable', {
+                projectId: project.id,
+                error: error instanceof Error ? error.message : String(error),
+            });
         });
-        statsChannelRef.current = channel;
 
         return () => {
             active = false;
+            if (statsInvalidationTimerRef.current !== null) {
+                window.clearTimeout(statsInvalidationTimerRef.current);
+                statsInvalidationTimerRef.current = null;
+            }
             statsChannelRef.current = null;
-            void supabase.removeChannel(channel);
+            if (channel) void supabase.removeChannel(channel);
         };
     }, [project?.id]);
 
     useEffect(() => {
         if (!project?.id) return;
-        const requestId = ++viewRequestRef.current;
         let cancelled = false;
+        const sessionKey = `project:view:${project.id}`;
+        try {
+            if (window.sessionStorage.getItem(sessionKey)) return;
+        } catch {
+            // Storage can be unavailable in privacy-restricted browser modes.
+        }
+
         const incrementView = () => {
-            if (cancelled) return;
+            if (cancelled || document.visibilityState !== 'visible') return;
             incrementProjectViewAction(project.id).then((result) => {
                 if (cancelled) return;
-                if (!isMountedRef.current || requestId !== viewRequestRef.current) return;
+                if (!isMountedRef.current) return;
                 const nextViewCount = result.viewCount;
                 if (result.success && typeof nextViewCount === 'number') {
+                    try {
+                        window.sessionStorage.setItem(sessionKey, '1');
+                    } catch {
+                        // Counting remains best-effort when storage is unavailable.
+                    }
                     setViewCount((current: number) => Math.max(current, nextViewCount));
-
-                    // Invalidate the Hub project feed query cache
-                    void queryClient.invalidateQueries({
-                        queryKey: queryKeys.hub.projectsSimpleRoot(),
-                    });
-                    void queryClient.invalidateQueries({
-                        queryKey: queryKeys.globalSearch.hubRoot(),
-                    });
 
                     // Broadcast updated view count to peers
                     if (statsChannelRef.current) {
                         void statsChannelRef.current.send({
                             type: 'broadcast',
-                            event: 'stats_update',
-                            payload: { viewCount: nextViewCount },
+                            event: 'stats_invalidate',
+                            payload: {},
                         });
                     }
 
@@ -830,9 +904,9 @@ export default function ProjectDashboardClient({ project, currentUserId, viewerD
         let idleId: number | null = null;
         let timeoutId: number | null = null;
         if (typeof window.requestIdleCallback === 'function') {
-            idleId = window.requestIdleCallback(incrementView, { timeout: 2500 });
+            idleId = window.requestIdleCallback(incrementView, { timeout: 10_000 });
         } else {
-            timeoutId = window.setTimeout(incrementView, 1200);
+            timeoutId = window.setTimeout(incrementView, 5_000);
         }
         return () => {
             cancelled = true;
@@ -841,12 +915,16 @@ export default function ProjectDashboardClient({ project, currentUserId, viewerD
             }
             if (timeoutId !== null) window.clearTimeout(timeoutId);
         };
-    }, [project?.id, queryClient]);
+    }, [project?.id]);
 
     const handleApplyToRole = useCallback(
         (role: any) => {
             if (!currentUserId) {
                 toast.error('Please log in to apply');
+                return;
+            }
+            if (isOwner || isMember) {
+                toast.error('Project members cannot apply for an additional role');
                 return;
             }
 
@@ -865,7 +943,7 @@ export default function ProjectDashboardClient({ project, currentUserId, viewerD
             setPreselectedRoleId(role?.id || undefined);
             setIsApplyModalOpen(true);
         },
-        [currentUserId, applicationStatus],
+        [currentUserId, applicationStatus, isMember, isOwner],
     );
 
     useEffect(() => {
@@ -996,7 +1074,7 @@ export default function ProjectDashboardClient({ project, currentUserId, viewerD
     const filesSyncStatus = extendedProject?.syncStatus;
     const initialTaskDrawerId = searchParams?.get('drawerType') === 'task' ? searchParams.get('drawerId') : null;
     const initialTaskPanelTabParam = searchParams?.get('panelTab');
-    const initialTaskPanelTab = initialTaskPanelTabParam === 'details' || initialTaskPanelTabParam === 'subtasks' || initialTaskPanelTabParam === 'comments' || initialTaskPanelTabParam === 'files' || initialTaskPanelTabParam === 'activity' ? (initialTaskPanelTabParam as TaskPanelTab) : null;
+    const initialTaskPanelTab = initialTaskPanelTabParam === 'details' || initialTaskPanelTabParam === 'subtasks' || initialTaskPanelTabParam === 'comments' || initialTaskPanelTabParam === 'files' ? (initialTaskPanelTabParam as TaskPanelTab) : null;
     const initialOpenFileId = searchParams?.get('fileId') || null;
     const initialOpenPath = searchParams?.get('path') || null;
 
@@ -1004,10 +1082,10 @@ export default function ProjectDashboardClient({ project, currentUserId, viewerD
     const filesTabContent = useMemo(
         () => (
             <TabErrorBoundary tabName="Files" fillContainer>
-                <FilesTab projectId={project.id} projectName={project.title} currentUserId={currentUserId || undefined} isOwnerOrMember={isOwnerOrMember} isActive={activeTab === 'files'} syncStatus={filesSyncStatus} initialOpenFileId={initialOpenFileId} initialOpenPath={initialOpenPath} />
+                <FilesTab key={`${project.id}:${currentUserId ?? 'viewer'}`} projectId={project.id} projectName={project.title} currentUserId={currentUserId || undefined} isOwner={isOwner} isOwnerOrMember={isOwnerOrMember} canManageFiles={canManageFiles} canUploadFiles={canUploadFiles} canReadTasks={canReadTaskFiles} isActive={activeTab === 'files'} syncStatus={filesSyncStatus} initialOpenFileId={initialOpenFileId} initialOpenPath={initialOpenPath} />
             </TabErrorBoundary>
         ),
-        [project.id, project.title, currentUserId, isOwnerOrMember, activeTab, filesSyncStatus, initialOpenFileId, initialOpenPath],
+        [project.id, project.title, currentUserId, isOwner, isOwnerOrMember, canManageFiles, canUploadFiles, canReadTaskFiles, activeTab, filesSyncStatus, initialOpenFileId, initialOpenPath],
     );
 
     if (!project) {
@@ -1019,11 +1097,11 @@ export default function ProjectDashboardClient({ project, currentUserId, viewerD
     }
 
     return (
-        <ProjectLayout project={projectWithLiveStats} isOwner={isOwner} canManageSettings={canManageProjectSettings} isOwnerOrMember={isOwnerOrMember} publicTabVisibility={publicTabVisibility} activeTab={activeTab} isDocEditing={isDocEditing} onTabChange={handleTabChange} followersCount={followersCount} viewCount={viewCount} isFollowing={isFollowing} onFollow={handleFollow} followLoading={followLoading} onShare={handleShare} onTabHover={handleTabHover} onTabLeave={handleTabLeave}>
+        <ProjectLayout project={projectWithLiveStats} isOwner={isOwner} canManageSettings={canManageProjectSettings} isOwnerOrMember={isOwnerOrMember} publicTabVisibility={publicTabVisibility} activeTab={activeTab} isDocEditing={isDocEditing} onTabChange={handleTabChange} followersCount={followersCount} viewCount={viewCount} isFollowing={isFollowing} onFollow={handleFollow} followLoading={followLoading} onShare={handleShare} onTabHover={handleTabHover}>
             {activeTab === 'dashboard' && (
                 <div className="w-full h-full min-h-0">
                     <TabErrorBoundary tabName="Dashboard">
-                        <DashboardTab project={projectWithLiveStats} isCreator={isOwner} isCollaborator={isMember} members={members} loadingMembers={loadingMembers} rolesWithFilled={rolesWithFilled} onEdit={handleEdit} onAdvanceStage={handleAdvanceStage} onRedoStage={handleRegressStage} onApplyToRole={handleApplyToRole} onManageTeam={() => setIsInviteModalOpen(true)} lifecycleStages={lifecycleStages} currentStageIndex={optimisticStageIndex} applicationStatus={applicationStatus} onAcceptInvitation={() => void handleInvitation('accept')} onDeclineInvitation={() => void handleInvitation('decline')} invitationLoading={invitationLoading} />
+                        <DashboardTab project={projectWithLiveStats} isCreator={isOwner} isCollaborator={isMember} canManageTeam={canManageProjectSettings} members={members} loadingMembers={loadingMembers} rolesWithFilled={rolesWithFilled} onEdit={handleEdit} onAdvanceStage={handleAdvanceStage} onRedoStage={handleRegressStage} onApplyToRole={handleApplyToRole} onManageTeam={() => setIsInviteModalOpen(true)} lifecycleStages={lifecycleStages} currentStageIndex={optimisticStageIndex} applicationStatus={applicationStatus} onAcceptInvitation={() => void handleInvitation('accept')} onDeclineInvitation={() => void handleInvitation('decline')} invitationLoading={invitationLoading} />
                     </TabErrorBoundary>
                 </div>
             )}
@@ -1031,7 +1109,7 @@ export default function ProjectDashboardClient({ project, currentUserId, viewerD
             {activeTab === 'readme' && (
                 <div className="w-full h-full min-h-0">
                     <TabErrorBoundary tabName="Docs" fillContainer>
-                        <DocTab projectId={project.id} project={projectWithLiveStats} currentUserId={currentUserId} currentUserName={currentUserName} onEditingChange={setIsReadmeEditing} />
+                        <DocTab projectId={project.id} project={projectWithLiveStats} />
                     </TabErrorBoundary>
                 </div>
             )}
@@ -1048,7 +1126,7 @@ export default function ProjectDashboardClient({ project, currentUserId, viewerD
                 <div className="w-full h-full min-h-0">
                     <TabErrorBoundary tabName="Sprints">
                         <div className="space-y-6">
-                            <SprintPlanning projectId={project.id} projectSlug={project.slug || project.id} projectName={project.title} isOwner={isOwner} isOwnerOrMember={isOwnerOrMember} initialSprintData={initialSprintData} />
+                            <SprintPlanning projectId={project.id} projectSlug={project.slug || project.id} projectName={project.title} projectKey={project.key} isOwner={isOwner} isOwnerOrMember={isOwnerOrMember} initialSprintData={initialSprintData} />
                         </div>
                     </TabErrorBoundary>
                 </div>
@@ -1057,7 +1135,7 @@ export default function ProjectDashboardClient({ project, currentUserId, viewerD
             {activeTab === 'tasks' && (
                 <div className="w-full h-full min-h-0">
                     <TabErrorBoundary tabName="Tasks">
-                        <TasksTab projectId={project.id} projectName={project.title} currentUserId={currentUserId || undefined} isOwner={isOwner} isOwnerOrMember={isOwnerOrMember} initialTasks={tasks} members={allMembers} sprints={sprints} initialOpenTaskId={initialTaskDrawerId} initialPanelTab={initialTaskPanelTab} />
+                        <TasksTab projectId={project.id} projectSlug={project.slug || project.id} projectName={project.title} currentUserId={currentUserId || undefined} isOwner={isOwner} canEditTasks={canEditTasks} canManageFiles={canManageFiles} canManageWorkflow={canManageProjectSettings} initialTasks={tasks} members={allMembers} sprints={sprints} initialOpenTaskId={initialTaskDrawerId ?? workspaceInitialTaskId} initialPanelTab={initialTaskPanelTab} initialCommentId={searchParams?.get('commentId')} initialFileId={searchParams?.get('fileId')} onInitialTaskOpened={workspaceInitialTaskId ? consumeWorkspaceTaskHandoff : undefined} />
                     </TabErrorBoundary>
                 </div>
             )}
@@ -1130,6 +1208,7 @@ export default function ProjectDashboardClient({ project, currentUserId, viewerD
                     }}
                     projectId={project.id}
                     projectTitle={project.title}
+                    canAppointGuidance={isOwner}
                 />
             )}
         </ProjectLayout>
