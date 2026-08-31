@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { createHash } from "node:crypto";
 
 import { enforceRouteLimit, jsonError } from "@/app/api/v1/_shared";
 import { getProjectAccessById } from "@/lib/data/project-access";
@@ -12,7 +13,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const SIGNED_URL_TTL_SECONDS = 15 * 60;
-const PRIVATE_REDIRECT_MAX_AGE_SECONDS = 120;
+const PRIVATE_REDIRECT_MAX_AGE_SECONDS = 12 * 60;
 const PUBLIC_REDIRECT_MAX_AGE_SECONDS = 5 * 60;
 
 export async function GET(request: NextRequest, context: { params: Promise<{ id: string }> }) {
@@ -42,6 +43,18 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
     });
     if (!canReadUpdates) return jsonError("Not found", 404, "NOT_FOUND");
 
+    const etag = `"update-media-${createHash("sha256").update(storageKey).digest("base64url").slice(0, 16)}"`;
+    const isPublicAnonymousRead = !user && !isOwnerOrMember;
+    const cacheControl = isPublicAnonymousRead
+        ? `public, max-age=${PUBLIC_REDIRECT_MAX_AGE_SECONDS}, s-maxage=${PUBLIC_REDIRECT_MAX_AGE_SECONDS}, stale-while-revalidate=86400`
+        : `private, max-age=${PRIVATE_REDIRECT_MAX_AGE_SECONDS}`;
+    if (request.headers.get("if-none-match") === etag) {
+        return new NextResponse(null, {
+            status: 304,
+            headers: { ETag: etag, "Cache-Control": cacheControl, Vary: "Cookie, Authorization" },
+        });
+    }
+
     const admin = await createAdminClient();
     const { data, error } = await admin.storage
         .from(PROJECT_UPDATE_MEDIA_BUCKET)
@@ -58,13 +71,7 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
     }
 
     const response = NextResponse.redirect(data.signedUrl, 302);
-    const isPublicAnonymousRead = !user && !isOwnerOrMember;
-    response.headers.set(
-        "Cache-Control",
-        isPublicAnonymousRead
-            ? `public, max-age=${PUBLIC_REDIRECT_MAX_AGE_SECONDS}, s-maxage=${PUBLIC_REDIRECT_MAX_AGE_SECONDS}, stale-while-revalidate=86400`
-            : `private, max-age=${PRIVATE_REDIRECT_MAX_AGE_SECONDS}`,
-    );
+    response.headers.set("Cache-Control", cacheControl);
     response.headers.set(
         "CDN-Cache-Control",
         isPublicAnonymousRead
@@ -72,6 +79,7 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
             : "private, no-store",
     );
     response.headers.set("Vary", "Cookie, Authorization");
+    response.headers.set("ETag", etag);
     response.headers.set("X-Content-Type-Options", "nosniff");
     return response;
 }
