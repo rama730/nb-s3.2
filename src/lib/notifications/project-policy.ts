@@ -369,7 +369,9 @@ export const PROJECT_NOTIFICATION_EVENT_REGISTRY = {
         allowMemberOverride: true,
         mandatory: false,
         aggregate: "none",
-        visible: true,
+        // A sprint is activated as part of creation; there is no separate
+        // start action, so do not offer a preference that cannot fire.
+        visible: false,
     }),
     "sprints.updated": E({
         key: "sprints.updated",
@@ -519,7 +521,8 @@ export const PROJECT_NOTIFICATION_EVENT_REGISTRY = {
         allowMemberOverride: true,
         mandatory: false,
         aggregate: "burst_10m",
-        visible: true,
+        // Bulk task editing is not an application capability yet.
+        visible: false,
     }),
     "workflows.assigned": E({
         key: "workflows.assigned",
@@ -759,7 +762,9 @@ export const PROJECT_NOTIFICATION_EVENT_REGISTRY = {
         allowMemberOverride: true,
         mandatory: false,
         aggregate: "none",
-        visible: true,
+        // The current Doc surface is a published, read-only viewer. Keep the
+        // dormant publish event out of preferences until a producer exists.
+        visible: false,
     }),
     "readme.major_edited": E({
         key: "readme.major_edited",
@@ -774,7 +779,9 @@ export const PROJECT_NOTIFICATION_EVENT_REGISTRY = {
         allowMemberOverride: true,
         mandatory: false,
         aggregate: "digest_only",
-        visible: true,
+        // Document edits are draft-only until a publish action; publish has
+        // its own delivered notification and must not promise a duplicate.
+        visible: false,
     }),
     "updates.published": E({
         key: "updates.published",
@@ -819,7 +826,9 @@ export const PROJECT_NOTIFICATION_EVENT_REGISTRY = {
         allowMemberOverride: true,
         mandatory: false,
         aggregate: "digest_only",
-        visible: true,
+        // Digests require a scheduled delivery service; individual updates
+        // already notify followers through updates.published.
+        visible: false,
     }),
 } as const satisfies Record<ProjectNotificationEventKey, ProjectNotificationRegistryEntry>;
 
