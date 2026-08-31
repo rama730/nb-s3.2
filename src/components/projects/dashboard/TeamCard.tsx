@@ -26,6 +26,13 @@ interface TeamCardProject {
             leadFocus?: string | null;
         } | null;
     } | null;
+    guidance?: {
+        guideUserId: string;
+        label: string;
+        fullName?: string | null;
+        username?: string | null;
+        avatarUrl?: string | null;
+    } | null;
 }
 
 interface TeamMember {
@@ -42,6 +49,7 @@ interface TeamCardProps {
     project: TeamCardProject;
     members: TeamMember[];
     isCreator: boolean;
+    canInvite?: boolean;
     onInvite: () => void;
     loadingMembers?: boolean;
 }
@@ -103,11 +111,13 @@ const TeamCard = memo(function TeamCard({
     project,
     members,
     isCreator,
+    canInvite = isCreator,
     onInvite,
     loadingMembers,
 }: TeamCardProps) {
     const rawLeadFocus = project?.importSource?.metadata?.leadFocus;
     const leadFocus = typeof rawLeadFocus === "string" ? rawLeadFocus.trim() : "";
+    const guidance = project?.guidance ?? null;
 
     const avatars = useMemo<AvatarEntry[]>(() => {
         const ownerEntry: AvatarEntry[] = project?.owner?.id
@@ -146,7 +156,9 @@ const TeamCard = memo(function TeamCard({
                     src: reference.avatarUrl,
                     fallback: toInitials(reference.displayName),
                     name: reference.displayName,
-                    role: shortenRoleLabel(formatProjectTeamRole({
+                    role: member.id === guidance?.guideUserId
+                        ? `${guidance.label} · Co-leader`
+                        : shortenRoleLabel(formatProjectTeamRole({
                         membershipRole: member.membershipRole,
                         projectRoleTitle: member.projectRoleTitle,
                     })),
@@ -155,6 +167,8 @@ const TeamCard = memo(function TeamCard({
                 };
             })
             .sort((a, b) => {
+                if (a.id === guidance?.guideUserId) return -1;
+                if (b.id === guidance?.guideUserId) return 1;
                 const aMs = a.sortDateMs;
                 const bMs = b.sortDateMs;
                 if (typeof aMs === "number" && typeof bMs === "number") return bMs - aMs;
@@ -163,18 +177,41 @@ const TeamCard = memo(function TeamCard({
                 return a.name.localeCompare(b.name);
             });
 
-        return [...ownerEntry, ...collaborators];
-    }, [leadFocus, members, project]);
+        const guidanceEntry = guidance && !collaborators.some((member) => member.id === guidance.guideUserId)
+            ? (() => {
+                const reference = buildProjectPersonReference({
+                    person: {
+                        id: guidance.guideUserId,
+                        fullName: guidance.fullName,
+                        username: guidance.username,
+                        avatarUrl: guidance.avatarUrl,
+                    },
+                    membershipRole: "admin",
+                    isActiveMember: true,
+                });
+                return [{
+                    id: guidance.guideUserId,
+                    src: reference.avatarUrl,
+                    fallback: toInitials(reference.displayName),
+                    name: reference.displayName,
+                    role: `${guidance.label} · Co-leader`,
+                    username: guidance.username,
+                }];
+            })()
+            : [];
+
+        return [...ownerEntry, ...guidanceEntry, ...collaborators];
+    }, [guidance, leadFocus, members, project]);
 
     const showMoreCount = avatars.length - 5;
 
     return (
         <DashboardCard
-            title="The Team"
+            title={guidance ? "Project Leadership" : "The Team"}
             icon={Users}
             compact
             className="flex h-fit flex-col"
-            action={isCreator ? (
+            action={canInvite ? (
                 <button
                     type="button"
                     onClick={onInvite}
