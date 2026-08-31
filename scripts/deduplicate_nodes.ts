@@ -133,38 +133,83 @@ async function deduplicate() {
             await tx`DROP TABLE nodes_to_discard;`;
         });
 
-        // 10. Drop existing indexes if they exist to avoid conflicts when creating new ones
-        console.log("Step 10: Recreating unique indexes...");
-        await sql`DROP INDEX IF EXISTS project_nodes_active_parent_name_uidx;`;
-        await sql`DROP INDEX IF EXISTS project_nodes_active_project_path_uidx;`;
-        await sql`DROP INDEX IF EXISTS project_nodes_active_parent_name_uidx_new;`;
-        await sql`DROP INDEX IF EXISTS project_nodes_active_project_path_uidx_new;`;
+        // Build and validate replacements before swapping names. The currently
+        // active indexes remain in place throughout, so a failed build cannot
+        // leave a uniqueness gap.
+        console.log("Step 10: Building replacement unique indexes...");
+        const existingReplacements = await sql<{
+            name: string;
+            valid: boolean;
+            unique: boolean;
+        }[]>`
+            SELECT c.relname AS name, i.indisvalid AS valid, i.indisunique AS unique
+            FROM pg_class c
+            JOIN pg_index i ON i.indexrelid = c.oid
+            WHERE c.relname IN (
+              'project_nodes_active_parent_name_uidx_replacement',
+              'project_nodes_active_project_path_uidx_replacement'
+            )
+        `;
+        const replacementByName = new Map(existingReplacements.map((row) => [row.name, row]));
 
-        // 11. Create the new unique indexes
-        console.log("Creating unique index: project_nodes_active_parent_name_uidx...");
-        await sql`
-            CREATE UNIQUE INDEX project_nodes_active_parent_name_uidx 
+        const parentReplacement = replacementByName.get('project_nodes_active_parent_name_uidx_replacement');
+        if (parentReplacement && (!parentReplacement.valid || !parentReplacement.unique)) {
+            await sql`DROP INDEX CONCURRENTLY project_nodes_active_parent_name_uidx_replacement`;
+        }
+        if (!parentReplacement || !parentReplacement.valid || !parentReplacement.unique) {
+          await sql`
+            CREATE UNIQUE INDEX CONCURRENTLY project_nodes_active_parent_name_uidx_replacement
             ON project_nodes (
               project_id, 
               COALESCE(parent_id, '00000000-0000-0000-0000-000000000000'::uuid), 
               LOWER(name), 
               COALESCE(task_id, '00000000-0000-0000-0000-000000000000'::uuid)
             ) WHERE deleted_at IS NULL;
-        `;
+          `;
+        }
 
-        console.log("Creating unique index: project_nodes_active_project_path_uidx...");
-        await sql`
-            CREATE UNIQUE INDEX project_nodes_active_project_path_uidx 
+        const pathReplacement = replacementByName.get('project_nodes_active_project_path_uidx_replacement');
+        if (pathReplacement && (!pathReplacement.valid || !pathReplacement.unique)) {
+            await sql`DROP INDEX CONCURRENTLY project_nodes_active_project_path_uidx_replacement`;
+        }
+        if (!pathReplacement || !pathReplacement.valid || !pathReplacement.unique) {
+          await sql`
+            CREATE UNIQUE INDEX CONCURRENTLY project_nodes_active_project_path_uidx_replacement
             ON project_nodes (
               project_id, 
               path, 
               COALESCE(task_id, '00000000-0000-0000-0000-000000000000'::uuid)
             ) WHERE deleted_at IS NULL;
+          `;
+        }
+
+        const [verification] = await sql<{ valid_count: number }[]>`
+            SELECT COUNT(*)::int AS valid_count
+            FROM pg_class c
+            JOIN pg_index i ON i.indexrelid = c.oid
+            WHERE c.relname IN (
+              'project_nodes_active_parent_name_uidx_replacement',
+              'project_nodes_active_project_path_uidx_replacement'
+            )
+              AND i.indisvalid
+              AND i.indisunique
         `;
+        if (verification?.valid_count !== 2) {
+            throw new Error('Replacement unique indexes did not validate');
+        }
+
+        await sql.begin(async (tx) => {
+            const transaction = tx as unknown as typeof sql;
+            await transaction`DROP INDEX IF EXISTS project_nodes_active_parent_name_uidx`;
+            await transaction`DROP INDEX IF EXISTS project_nodes_active_project_path_uidx`;
+            await transaction`ALTER INDEX project_nodes_active_parent_name_uidx_replacement RENAME TO project_nodes_active_parent_name_uidx`;
+            await transaction`ALTER INDEX project_nodes_active_project_path_uidx_replacement RENAME TO project_nodes_active_project_path_uidx`;
+        });
 
         console.log("✅ Bulk deduplication and index building finished successfully.");
     } catch (e: any) {
         console.error("❌ Bulk deduplication failed:", e.message);
+        throw e;
     } finally {
         await sql.end();
     }
