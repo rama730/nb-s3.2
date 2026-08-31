@@ -122,7 +122,7 @@ describe("useFolderContents / deriveFolderContents — status matrix (Req 4.1, 4
       assert.deepEqual(result.children.map((n) => n.id), ["b", "a", "c"]);
     });
 
-    it("silently filters out child ids that are not present in nodesById", () => {
+    it("treats orphaned cached child ids as incomplete, not confirmed empty", () => {
       // `enforceNodesBudget` can evict a node without pruning every
       // `childrenByParentId` entry. The hook must tolerate the orphan
       // instead of crashing.
@@ -134,8 +134,8 @@ describe("useFolderContents / deriveFolderContents — status matrix (Req 4.1, 4
           nodesById: { a },
         }),
       );
-      assert.equal(result.status, "ready");
-      assert.deepEqual(result.children.map((n) => n.id), ["a"]);
+      assert.equal(result.status, "loading");
+      assert.deepEqual(result.children, []);
     });
   });
 
@@ -148,7 +148,7 @@ describe("useFolderContents / deriveFolderContents — status matrix (Req 4.1, 4
       assert.deepEqual(result.children, []);
     });
 
-    it("prioritizes error over loaded cached children so the Retry affordance is always reachable (Req 4.10)", () => {
+    it("preserves cached children with a retryable refresh warning", () => {
       const a = makeNode("a", "folder-1");
       const result = deriveFolderContents(
         baseSnapshot({
@@ -158,10 +158,9 @@ describe("useFolderContents / deriveFolderContents — status matrix (Req 4.1, 4
           nodesById: { a },
         }),
       );
-      assert.equal(result.status, "error");
-      // Children intentionally suppressed in the error branch so the view
-      // does not render a mix of a stale list + error indicator.
-      assert.deepEqual(result.children, []);
+      assert.equal(result.status, "ready");
+      assert.equal(result.refreshError, true);
+      assert.deepEqual(result.children, [a]);
     });
 
     it("prioritizes error over loading (error dominates the status lattice)", () => {
