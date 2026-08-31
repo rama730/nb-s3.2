@@ -890,6 +890,237 @@
       "when": 1783987200000,
       "tag": "0127_profile_contribution_authority",
       "breakpoints": true
+    },
+    {
+      "idx": 127,
+      "version": "7",
+      "when": 1784808000000,
+      "tag": "0128_notification_activity_state_contract",
+      "breakpoints": true
+    },
+    {
+      "idx": 128,
+      "version": "7",
+      "when": 1785024000000,
+      "tag": "0129_messages_data_authority",
+      "breakpoints": true
+    },
+    {
+      "idx": 129,
+      "version": "7",
+      "when": 1785110400000,
+      "tag": "0130_messages_fk_support_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 130,
+      "version": "7",
+      "when": 1785196800000,
+      "tag": "0131_messages_native_payload_contract",
+      "breakpoints": true
+    },
+    {
+      "idx": 131,
+      "version": "7",
+      "when": 1785283200000,
+      "tag": "0132_message_notification_preview_redaction",
+      "breakpoints": true
+    },
+    {
+      "idx": 132,
+      "version": "7",
+      "when": 1785369600000,
+      "tag": "0133_message_preview_lifecycle",
+      "breakpoints": true
+    },
+    {
+      "idx": 133,
+      "version": "7",
+      "when": 1785456000000,
+      "tag": "0134_message_reaction_activity",
+      "breakpoints": true
+    },
+    {
+      "idx": 134,
+      "version": "7",
+      "when": 1785542400000,
+      "tag": "0135_project_custom_workflow",
+      "breakpoints": true
+    },
+    {
+      "idx": 135,
+      "version": "7",
+      "when": 1785628800000,
+      "tag": "0136_task_board_read_index",
+      "breakpoints": true
+    },
+    {
+      "idx": 136,
+      "version": "7",
+      "when": 1785715200000,
+      "tag": "0137_task_activity_events",
+      "breakpoints": true
+    },
+    {
+      "idx": 137,
+      "version": "7",
+      "when": 1785801600000,
+      "tag": "0138_task_activity_actor_index",
+      "breakpoints": true
+    },
+    {
+      "idx": 138,
+      "version": "7",
+      "when": 1785888000000,
+      "tag": "0139_project_workflow_columns",
+      "breakpoints": true
+    },
+    {
+      "idx": 139,
+      "version": "7",
+      "when": 1785974400000,
+      "tag": "0140_project_workflow_defaults_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 140,
+      "version": "7",
+      "when": 1786060800000,
+      "tag": "0141_project_workflow_legacy_presentation_backfill",
+      "breakpoints": true
+    },
+    {
+      "idx": 141,
+      "version": "7",
+      "when": 1786147200000,
+      "tag": "0142_project_workflow_columns_realtime",
+      "breakpoints": true
+    },
+    {
+      "idx": 142,
+      "version": "7",
+      "when": 1786233600000,
+      "tag": "0143_project_guidance_invitations",
+      "breakpoints": true
+    },
+    {
+      "idx": 143,
+      "version": "7",
+      "when": 1786320000000,
+      "tag": "0144_project_social_links",
+      "breakpoints": true
+    },
+    {
+      "idx": 144,
+      "version": "7",
+      "when": 1786406400000,
+      "tag": "0145_project_sprint_events",
+      "breakpoints": true
+    },
+    {
+      "idx": 145,
+      "version": "7",
+      "when": 1786492800000,
+      "tag": "0146_sprint_activity_history",
+      "breakpoints": true
+    },
+    {
+      "idx": 146,
+      "version": "7",
+      "when": 1786579200000,
+      "tag": "0147_foreign_key_leading_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 147,
+      "version": "7",
+      "when": 1786665600000,
+      "tag": "0148_sprint_timeline_origin",
+      "breakpoints": true
+    },
+    {
+      "idx": 148,
+      "version": "7",
+      "when": 1786752000000,
+      "tag": "0149_sprint_lifecycle_memberships",
+      "breakpoints": true
+    },
+    {
+      "idx": 149,
+      "version": "7",
+      "when": 1786838400000,
+      "tag": "0150_task_file_tags",
+      "breakpoints": true
+    },
+    {
+      "idx": 150,
+      "version": "7",
+      "when": 1786924800000,
+      "tag": "0151_retire_project_custom_workflow",
+      "breakpoints": true
+    },
+    {
+      "idx": 151,
+      "version": "7",
+      "when": 1786888999999,
+      "tag": "0125_ponytail_allow_office_mimes",
+      "breakpoints": true
+    },
+    {
+      "idx": 152,
+      "version": "7",
+      "when": 1786889000000,
+      "tag": "0153_task_server_table_lineage",
+      "breakpoints": true
+    },
+    {
+      "idx": 153,
+      "version": "7",
+      "when": 1786889000001,
+      "tag": "0154_native_database_security_hardening",
+      "breakpoints": true
+    },
+    {
+      "idx": 154,
+      "version": "7",
+      "when": 1786889000002,
+      "tag": "0155_account_deletion_privacy",
+      "breakpoints": true
+    },
+    {
+      "idx": 155,
+      "version": "7",
+      "when": 1786889000003,
+      "tag": "0156_profile_counter_authority",
+      "breakpoints": true
+    },
+    {
+      "idx": 156,
+      "version": "7",
+      "when": 1786901240000,
+      "tag": "0157_storage_realtime_contract_alignment",
+      "breakpoints": true
+    },
+    {
+      "idx": 157,
+      "version": "7",
+      "when": 1786902060000,
+      "tag": "0158_lifecycle_retention_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 158,
+      "version": "7",
+      "when": 1787200400000,
+      "tag": "0159_presence_project_members_authorization",
+      "breakpoints": true
+    },
+    {
+      "idx": 159,
+      "version": "7",
+      "when": 1787200765000,
+      "tag": "0160_realtime_authorization_activation",
+      "breakpoints": true
     }
   ]
 }
