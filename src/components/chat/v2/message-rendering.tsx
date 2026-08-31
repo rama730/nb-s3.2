@@ -125,6 +125,7 @@ export function CodeSegmentV2({
     isOwn: boolean;
 }) {
     const [copied, setCopied] = useState(false);
+    const [isCollapsed, setIsCollapsed] = useState(true);
     const copyTimeoutRef = useRef<number | null>(null);
 
     useEffect(() => {
@@ -152,6 +153,9 @@ export function CodeSegmentV2({
         }
     }, [code]);
 
+    const lineCount = code.split('\n').length;
+    const isLongContent = lineCount > 10 || code.length > 500;
+
     return (
         <div
             className={cn(
@@ -170,9 +174,26 @@ export function CodeSegmentV2({
                     <span>{copied ? 'Copied' : 'Copy'}</span>
                 </button>
             </div>
-            <pre className="max-w-full overflow-x-auto px-3 py-2 text-[12px] leading-5 text-zinc-100">
-                <code>{code}</code>
-            </pre>
+            <div className={cn(
+                "relative overflow-hidden transition-all duration-300 ease-in-out",
+                isLongContent ? (isCollapsed ? "max-h-[280px]" : "max-h-[4000px]") : ""
+            )}>
+                <pre className="max-w-full overflow-x-auto px-3 py-2 text-[12px] leading-5 text-zinc-100">
+                    <code>{code}</code>
+                </pre>
+                {isLongContent && isCollapsed && (
+                    <div className="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-zinc-950/95 to-transparent pointer-events-none" />
+                )}
+            </div>
+            {isLongContent && (
+                <button
+                    type="button"
+                    onClick={() => setIsCollapsed(!isCollapsed)}
+                    className="w-full border-t border-white/5 bg-black/20 py-2 text-xs font-medium text-zinc-400 hover:bg-black/40 hover:text-zinc-200 focus-visible:outline-none focus-visible:bg-black/40 transition-colors"
+                >
+                    {isCollapsed ? "Show more" : "Show less"}
+                </button>
+            )}
         </div>
     );
 }
