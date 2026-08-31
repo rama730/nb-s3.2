@@ -350,6 +350,7 @@ export function useConnectionsFeed<TTab extends ConnectionsFeedTab>(
         getNextPageParam: (lastPage) => lastPage.nextCursor || undefined,
         staleTime: tab === 'network' ? 30_000 : 60_000,
         gcTime: 5 * 60_000,
+        refetchOnWindowFocus: false,
         enabled,
     });
 }
@@ -404,19 +405,26 @@ function mapSentRequest(item: RequestConnectionItem): PendingSentRequest {
     };
 }
 
-export function usePendingRequests(limit = 20) {
+export function usePendingRequests(
+    limit = 20,
+    enabled = true,
+    options: { includeSent?: boolean } = {},
+) {
+    const includeSent = options.includeSent ?? true;
     return useQuery({
-        queryKey: CONNECTIONS_QUERY_KEYS.pendingRequests(limit),
+        queryKey: [...CONNECTIONS_QUERY_KEYS.pendingRequests(limit), { includeSent }] as const,
         queryFn: async (): Promise<PendingRequestsData> => {
-            const [incoming, sent] = await Promise.all([
-                getConnectionsFeed({ tab: 'requests_incoming', limit }),
-                getConnectionsFeed({ tab: 'requests_sent', limit }),
-            ]);
+            const [incoming, sent] = includeSent
+                ? await Promise.all([
+                    getConnectionsFeed({ tab: 'requests_incoming', limit }),
+                    getConnectionsFeed({ tab: 'requests_sent', limit }),
+                ])
+                : [await getConnectionsFeed({ tab: 'requests_incoming', limit }), null];
 
             const incomingOk = incoming.success
                 ? (incoming as FeedPage<RequestConnectionItem>)
                 : { items: [], hasMore: false, nextCursor: null, stats: EMPTY_STATS };
-            const sentOk = sent.success
+            const sentOk = sent?.success
                 ? (sent as FeedPage<RequestConnectionItem>)
                 : { items: [], hasMore: false, nextCursor: null, stats: EMPTY_STATS };
 
@@ -430,6 +438,8 @@ export function usePendingRequests(limit = 20) {
         },
         staleTime: 45_000,
         gcTime: 5 * 60 * 1000,
+        refetchOnWindowFocus: false,
+        enabled,
     });
 }
 
@@ -450,7 +460,7 @@ function connectionMutationTargetId(variables: unknown) {
     return undefined;
 }
 
-export function useRequestHistory(limit = 40, historyFilters?: HistoryFilters) {
+export function useRequestHistory(limit = 40, historyFilters?: HistoryFilters, enabled = true) {
     const filtersKey = historyFilters ? JSON.stringify(historyFilters) : '';
     return useInfiniteQuery({
         queryKey: [...CONNECTIONS_QUERY_KEYS.requestHistory(limit), filtersKey] as const,
@@ -462,6 +472,8 @@ export function useRequestHistory(limit = 40, historyFilters?: HistoryFilters) {
         initialPageParam: undefined as string | undefined,
         getNextPageParam: (lastPage) => lastPage.nextCursor || undefined,
         staleTime: 20_000,
+        refetchOnWindowFocus: false,
+        enabled,
     });
 }
 
