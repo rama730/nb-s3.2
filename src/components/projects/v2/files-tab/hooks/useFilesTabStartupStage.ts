@@ -29,7 +29,7 @@
 // `FilesTabRoot` at the component level (tests/unit/files-tab/stage-timeout).
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 export type StartupStage = "explorer" | "main" | "diagnostics";
 
@@ -182,40 +182,25 @@ function defaultOnTimeoutWarn(timedOutStage: StartupStage): void {
  * two projects gets a fresh staged boot.
  */
 export function useFilesTabStartupStage(projectId: string): [StartupStage, (s: StartupStage) => void] {
-  const machineRef = useRef<StartupStageMachine | null>(null);
-  const prevProjectId = useRef<string>(projectId);
-
-  if (!machineRef.current || prevProjectId.current !== projectId) {
-    if (machineRef.current) machineRef.current.dispose();
-    machineRef.current = new StartupStageMachine();
-    prevProjectId.current = projectId;
-  }
-
-  const machine = machineRef.current;
-  const [stage, setStage] = useState<StartupStage>(machine.getStage());
+  const [machine, setMachine] = useState<StartupStageMachine | null>(null);
+  const [stage, setStage] = useState<StartupStage>("explorer");
 
   useEffect(() => {
-    // Sync React state if the machine advanced before the effect ran
-    setStage(machine.getStage());
-    const unsubscribe = machine.subscribe(() => {
-      setStage(machine.getStage());
+    const nextMachine = new StartupStageMachine();
+    setMachine(nextMachine);
+    setStage(nextMachine.getStage());
+    const unsubscribe = nextMachine.subscribe(() => {
+      setStage(nextMachine.getStage());
     });
     return () => {
       unsubscribe();
+      nextMachine.dispose();
     };
-  }, [machine]);
-
-  useEffect(() => {
-    return () => {
-      if (machineRef.current) {
-        machineRef.current.dispose();
-      }
-    };
-  }, []);
+  }, [projectId]);
 
   const signalStageComplete = useCallback((s: StartupStage) => {
-    machineRef.current?.signalStageComplete(s);
-  }, []);
+    machine?.signalStageComplete(s);
+  }, [machine]);
 
   return [stage, signalStageComplete];
 }
