@@ -54,6 +54,7 @@ export function FolderListLoading({
 
 export interface FolderListEmptyProps {
   className?: string;
+  message?: string;
 }
 
 /**
@@ -62,6 +63,7 @@ export interface FolderListEmptyProps {
  */
 export function FolderListEmpty({
   className,
+  message = "This folder is empty",
 }: FolderListEmptyProps): React.JSX.Element {
   return (
     <div
@@ -72,7 +74,7 @@ export function FolderListEmpty({
         className,
       )}
     >
-      This folder is empty
+      {message}
     </div>
   );
 }
