@@ -6,7 +6,7 @@ const AUTH_COOKIE = __ENV.AUTH_COOKIE || '';
 
 export const options = {
     scenarios: {
-        reconnect_storm: {
+        route_entry_churn: {
             executor: 'ramping-vus',
             startVUs: 0,
             stages: [
@@ -25,10 +25,10 @@ export const options = {
     },
 };
 
-export default function messagesReconnectStorm() {
+export default function messagesRouteEntryChurn() {
     const response = http.get(`${BASE_URL}/messages`, {
         headers: {
-            'user-agent': 'k6-messages-reconnect-storm',
+            'user-agent': 'k6-messages-route-entry-churn',
             'x-forwarded-for': `198.51.100.${(__VU % 240) + 10}`,
             'cookie': AUTH_COOKIE,
             'cache-control': 'no-cache',
@@ -42,4 +42,3 @@ export default function messagesReconnectStorm() {
 
     sleep(Math.random() * 0.4);
 }
-
