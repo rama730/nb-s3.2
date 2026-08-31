@@ -1,64 +1,41 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
-import { useRouter } from "next/navigation";
-
+import { useCallback, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import type { ProjectNode } from "@/lib/db/schema";
+import { linkNodeToTask, unlinkNodeFromTask } from "@/app/actions/files/links";
 import {
-  linkNodeToTask,
-  unlinkNodeFromTask,
-} from "@/app/actions/files/links";
-import { createFileNode, createFolder } from "@/app/actions/files/mutations";
-import { getProjectNodes } from "@/app/actions/files/nodes";
+  createFileNode,
+  createFolder,
+  getOrCreateTaskSystemFolderAction,
+  getUploadCollisionSummary,
+} from "@/app/actions/files/mutations";
 import { getUploadPresignedUrl } from "@/app/actions/upload";
+import { applyUploadedFileRevision } from "@/app/actions/files/versions";
 import { buildProjectFileKey } from "@/lib/storage/project-file-key";
 import type { DroppedFolder } from "@/lib/files/folder-drop";
-import { topLevelChildNames } from "@/lib/files/folder-drop";
-import {
-  resolveTaskFileIntent,
-  type TaskFileIntentResolution,
-  type TaskFileResolutionChoice,
-} from "@/lib/projects/task-file-intelligence";
-import { saveFileAsNewVersion } from "@/hooks/useFileVersions";
 import { newClientId } from "@/lib/utils/client-id";
+import { saveFileAsNewVersion as saveFileAsNewVersionOrig } from "@/hooks/useFileVersions";
+import type { TaskFileRole } from "@/lib/projects/task-file-intelligence";
+import { confirmUploadCollisions } from "@/lib/files/upload-collisions";
 
-export type TaskFileUploadStatus = {
-  id: string;
-  filename: string;
-  progress: number;
-  status: "uploading" | "awaiting_resolution" | "success" | "error";
-  error?: string;
-};
-
-export type TaskFilePendingResolution = {
-  id: string;
-  source: "upload";
-  /**
-   * Wave 3: distinguishes file uploads / existing-file attach attempts from
-   * folder-drop resolutions. Folders use a different choice set and an
-   * attached payload (`folderPayload`) describing the contents.
-   */
-  candidateType: "file" | "folder";
-  candidateName: string;
-  candidateNodeId: string | null;
-  candidateNodeName: string | null;
-  resolution: TaskFileIntentResolution;
-  options: TaskFileResolutionChoice[];
-  /**
-   * Folder drops pass their normalized contents through the resolution
-   * prompt; the hook consumes this once the user picks a choice.
-   */
-  folderPayload?: {
-    rootName: string;
-    entries: Array<{ file: File; relativePath: string }>;
+async function runWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T, idx: number) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let currentIndex = 0;
+  const worker = async () => {
+    while (currentIndex < items.length) {
+      const index = currentIndex++;
+      results[index] = await fn(items[index] as T, index);
+    }
   };
-};
+  const workers = Array.from({ length: Math.min(limit, items.length) }, () => worker());
+  await Promise.all(workers);
+  return results;
+}
 
-type UploadJob = {
-  id: string;
-  file: File;
-};
+// We keep dummy types for TS compatibility with parent components if they import them.
+export type TaskFileUploadStatus = { id: string; status: "uploading" | "success" | "error"; progress: number; filename: string };
+export type TaskFilePendingResolution = null;
 
 function extOf(name: string) {
   const parts = name.split(".");
@@ -71,42 +48,13 @@ function appendUploadSuffix(filename: string, suffix: number) {
   return `${filename.slice(0, idx)}-${suffix}${filename.slice(idx)}`;
 }
 
-function resolutionOptionsFor(resolution: TaskFileIntentResolution) {
-  if (resolution.intent === "replace_existing") {
-    return ["replace", "attach_new", "cancel"] as TaskFileResolutionChoice[];
-  }
-
-  if (resolution.intent === "candidate_child_of_linked_folder") {
-    return ["link_existing", "attach_new", "cancel"] as TaskFileResolutionChoice[];
-  }
-
-  if (resolution.intent === "ambiguous") {
-    return ["attach_new", "cancel"] as TaskFileResolutionChoice[];
-  }
-
-  // Wave 3 folder intents — distinct choice ordering so the recommended
-  // button surfaces first in the modal.
-  if (resolution.intent === "folder_replace_existing") {
-    return ["replace", "merge", "attach_new", "cancel"] as TaskFileResolutionChoice[];
-  }
-
-  if (resolution.intent === "folder_merge_into_existing") {
-    return ["merge", "subfolder", "attach_new", "cancel"] as TaskFileResolutionChoice[];
-  }
-
-  if (resolution.intent === "folder_create_subfolder") {
-    return ["subfolder", "attach_new", "cancel"] as TaskFileResolutionChoice[];
-  }
-
-  return ["attach_new", "cancel"] as TaskFileResolutionChoice[];
-}
-
 export function useTaskFileMutations(params: {
   projectId: string;
   taskId: string;
   canEdit: boolean;
+  enabled: boolean;
   attachments: (ProjectNode & { annotation?: string | null })[];
-  setAttachments: Dispatch<SetStateAction<ProjectNode[]>>;
+  setAttachments: React.Dispatch<React.SetStateAction<ProjectNode[]>>;
   refreshAttachments: () => Promise<ProjectNode[]>;
   onError?: (message: string | null) => void;
   onAfterMutation?: () => Promise<void> | void;
@@ -115,7 +63,6 @@ export function useTaskFileMutations(params: {
     projectId,
     taskId,
     canEdit,
-    attachments,
     setAttachments,
     refreshAttachments,
     onError,
@@ -123,669 +70,249 @@ export function useTaskFileMutations(params: {
   } = params;
 
   const supabase = useMemo(() => createClient(), []);
-  const router = useRouter();
-  const [uploadQueue, setUploadQueue] = useState<TaskFileUploadStatus[]>([]);
-  const [pendingResolutions, setPendingResolutions] = useState<TaskFilePendingResolution[]>([]);
-  const [unresolvedReplacementCount, setUnresolvedReplacementCount] = useState(0);
-  const [unclassifiedUploadCount, setUnclassifiedUploadCount] = useState(0);
-  const successTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pendingUploadJobsRef = useRef<Map<string, UploadJob>>(new Map());
-  const isUploading = uploadQueue.some((item) => item.status === "uploading");
-
-  useEffect(() => {
-    return () => {
-      if (successTimerRef.current) clearTimeout(successTimerRef.current);
-    };
-  }, []);
-
-  const notifyError = useCallback((message: string | null) => {
-    onError?.(message);
-  }, [onError]);
-
-  const pendingResolution = pendingResolutions[0] ?? null;
-
-  const updateStatus = useCallback((id: string, updates: Partial<TaskFileUploadStatus>) => {
-    setUploadQueue((current) =>
-      current.map((item) => (item.id === id ? { ...item, ...updates } : item)),
-    );
-  }, []);
-
-  const clearPendingWarnings = useCallback(() => {
-    setUnresolvedReplacementCount(0);
-    setUnclassifiedUploadCount(0);
-  }, []);
-
-  const markDeferredResolution = useCallback((resolution: TaskFileIntentResolution) => {
-    if (resolution.intent === "replace_existing") {
-      setUnresolvedReplacementCount((current) => current + 1);
-      return;
-    }
-
-    setUnclassifiedUploadCount((current) => current + 1);
-  }, []);
-
-  const loadIntentSearchMatches = useCallback(async (candidateName: string) => {
-    const query = candidateName.trim();
-    if (query.length < 2) return [] as ProjectNode[];
-    const result = await getProjectNodes(projectId, null, query);
-    return Array.isArray(result) ? result : result.nodes;
-  }, [projectId]);
-
-  const analyzeCandidate = useCallback(async (candidate: {
-    name: string;
-    node?: ProjectNode | null;
-  }) => {
-    const searchMatches = await loadIntentSearchMatches(candidate.name);
-    return resolveTaskFileIntent({
-      candidateName: candidate.name,
-      candidateNode: candidate.node ?? null,
-      attachments,
-      searchMatches,
-    });
-  }, [attachments, loadIntentSearchMatches]);
-
-  const handleDownload = useCallback((node: ProjectNode) => {
-    const pathParts = node.path && node.path !== "/"
-      ? node.path.split("/").filter(Boolean)
-      : [node.name];
-    const encodedPath = pathParts.map((part) => encodeURIComponent(part)).join("/");
-    const href = `/projects/${projectId}?tab=files&fileId=${encodeURIComponent(node.id)}&path=${encodedPath}`;
-    router.push(href);
-  }, [projectId, router]);
-
+  const [isUploading, setIsUploading] = useState(false);
   const runAfterSuccess = useCallback(async () => {
-    clearPendingWarnings();
-    await refreshAttachments();
-    await onAfterMutation?.();
-  }, [clearPendingWarnings, onAfterMutation, refreshAttachments]);
-
-  const finalizeExistingLink = useCallback(async (nodeId: string, replaceNodeId?: string | null) => {
-    await linkNodeToTask(taskId, nodeId, replaceNodeId && replaceNodeId !== nodeId
-      ? { notificationKind: "task_file_replaced" }
-      : undefined);
-    if (replaceNodeId && replaceNodeId !== nodeId && attachments.some((attachment) => attachment.id === replaceNodeId)) {
-      await unlinkNodeFromTask(taskId, replaceNodeId);
+    window.dispatchEvent(new CustomEvent("project:task-files-changed", { detail: { projectId, taskId } }));
+    try {
+      await refreshAttachments();
+      await onAfterMutation?.();
+    } catch {
+      onError?.("Change saved. Could not refresh the file list; reopen Files to retry.");
     }
-    await runAfterSuccess();
-  }, [attachments, runAfterSuccess, taskId]);
+  }, [onAfterMutation, refreshAttachments, projectId, taskId, onError]);
 
-  const uploadNewNode = useCallback(async (job: UploadJob, options: {
-    parentId: string | null;
-    linkToTask: boolean;
-    replaceNodeId?: string | null;
-  }) => {
+  const uploadFile = useCallback(async (file: File, options?: { parentId?: string | null; linkToTask?: boolean; taskOwned?: boolean; annotation?: string | null; role?: TaskFileRole }) => {
     let storagePath: string | null = null;
     let createdNode: ProjectNode | null = null;
 
     try {
-      const fileExt = extOf(job.file.name);
+      const fileExt = extOf(file.name);
       const opaque = newClientId();
       storagePath = buildProjectFileKey(projectId, `${opaque}${fileExt ? `.${fileExt}` : ""}`);
-      const contentType = job.file.type || "application/octet-stream";
+      const contentType = file.type || "application/octet-stream";
 
-      updateStatus(job.id, { progress: 20, status: "uploading", error: undefined });
+      const uploadSession = await getUploadPresignedUrl(storagePath, contentType, file.size);
+      if ("error" in uploadSession) throw new Error(uploadSession.error || "Failed to prepare upload");
 
-      const uploadSession = await getUploadPresignedUrl(storagePath, contentType, job.file.size);
-      if ("error" in uploadSession) {
-        throw new Error(uploadSession.error || "Failed to prepare upload");
-      }
+      const token = uploadSession.token || new URL(uploadSession.url).searchParams.get("token");
+      if (!token) throw new Error("Upload token is missing");
 
-      const uploadResponse = await fetch(uploadSession.url, {
-        method: "PUT",
-        headers: { "Content-Type": contentType },
-        body: job.file,
-      });
-      if (!uploadResponse.ok) {
-        throw new Error(`Upload failed (${uploadResponse.status})`);
-      }
+      const { error: uploadError } = await supabase.storage
+        .from("project-files")
+        .uploadToSignedUrl(storagePath, token, file, { contentType });
 
-      updateStatus(job.id, { progress: 60 });
+      if (uploadError) throw new Error(`Upload failed: ${uploadError.message}`);
 
-      let candidateName = job.file.name;
+      let candidateName = file.name;
       for (let attempt = 0; attempt < 5; attempt += 1) {
         try {
-          createdNode = (await createFileNode(projectId, options.parentId, {
+          createdNode = (await createFileNode(projectId, options?.parentId ?? null, {
             name: candidateName,
             s3Key: storagePath,
-            size: job.file.size,
+            size: file.size,
             mimeType: contentType,
             uploadIntentId: uploadSession.uploadIntentId,
+            taskId: options?.linkToTask || options?.taskOwned ? taskId : undefined,
+            taskLink: options?.linkToTask ? { role: options.role, annotation: options.annotation } : undefined,
           })) as ProjectNode;
           break;
         } catch (error) {
-          const message = error instanceof Error ? error.message : "";
-          if (!message.includes("already exists in this location")) {
-            throw error;
-          }
-          candidateName = appendUploadSuffix(job.file.name, attempt + 1);
+          if (!(error instanceof Error) || !error.message.includes("already exists in this location")) throw error;
+          candidateName = appendUploadSuffix(file.name, attempt + 1);
         }
       }
 
-      if (!createdNode) {
-        throw new Error("Failed to create attachment record");
-      }
+      if (!createdNode) throw new Error("Failed to create attachment record");
 
-      updateStatus(job.id, { progress: 85 });
-
-      if (options.linkToTask) {
-        await linkNodeToTask(taskId, createdNode.id, options.replaceNodeId && options.replaceNodeId !== createdNode.id
-          ? { notificationKind: "task_file_replaced" }
-          : undefined);
-        if (options.replaceNodeId && options.replaceNodeId !== createdNode.id && attachments.some((attachment) => attachment.id === options.replaceNodeId)) {
-          await unlinkNodeFromTask(taskId, options.replaceNodeId);
-        }
-      }
-
-      updateStatus(job.id, { progress: 100, status: "success", error: undefined });
-      await runAfterSuccess();
       return { success: true as const, node: createdNode };
     } catch (error) {
-      if (!createdNode && storagePath) {
-        await supabase.storage.from("project-files").remove([storagePath]).catch(() => null);
-      }
-      const message = error instanceof Error ? error.message : "Upload failed";
-      updateStatus(job.id, { status: "error", error: message });
-      notifyError(message);
-      return { success: false as const, error: message };
+      // Finalization may have committed even if its response was lost. Never
+      // delete the uploaded object here; the upload-intent cleanup owns orphans.
+      window.dispatchEvent(new CustomEvent("project:task-files-changed", { detail: { projectId, taskId } }));
+      return { success: false as const, error: error instanceof Error ? error.message : "Upload failed" };
     }
-  }, [attachments, notifyError, projectId, runAfterSuccess, supabase.storage, taskId, updateStatus]);
+  }, [projectId, supabase.storage, taskId]);
 
-  /**
-   * Upload `file` as a NEW version of an existing node via
-   * `replaceNodeWithNewVersion`. This path is used when the user drops a
-   * modified file back into the Files tab and confirms "Save as new version"
-   * — see `open-file-sessions.ts` for the detection flow. Unlike
-   * `uploadNewNode`, this never creates a sibling node; it appends to
-   * `file_versions` and bumps `project_nodes.current_version` atomically.
-   *
-   * Delegates the core upload+replace logic to `saveFileAsNewVersion` from
-   * `useFileVersions`, preserving task-bound behavior (upload queue tracking,
-   * progress updates, notifications, and post-mutation callbacks).
-   *
-   * Returns the mutated ProjectNode on success.
-   */
-  const saveAsNewVersion = useCallback(
-    async (
-      nodeId: string,
-      file: File,
-      options?: { comment?: string | null },
-    ) => {
-      if (!canEdit) return { success: false as const, error: "Forbidden" };
-      notifyError(null);
+  const uploadFiles = useCallback(async (files: File[], options?: { annotation?: string; parentId?: string; role?: TaskFileRole }) => {
+    if (!canEdit || files.length === 0) return { success: false as const, error: "Cannot upload files" };
+    onError?.(null);
+    setIsUploading(true);
+    try {
+      let resolvedParentId = options?.parentId;
+      if (!resolvedParentId && options?.annotation !== "#deliverable") {
+        resolvedParentId = await getOrCreateTaskSystemFolderAction(projectId, taskId);
+      }
 
-      const jobId = newClientId();
-      setUploadQueue((current) => [
-        ...current,
-        {
-          id: jobId,
-          filename: file.name,
-          progress: 0,
-          status: "uploading",
-        },
-      ]);
+      const collisions = await getUploadCollisionSummary(
+        projectId,
+        resolvedParentId ?? null,
+        files.map((file) => file.name),
+        { taskId },
+      );
+      if (!confirmUploadCollisions(collisions)) {
+        return { success: false as const, error: "Upload cancelled" };
+      }
+      const filesToUpload = files.filter(
+        (file) => !collisions.existingFiles.includes(file.name),
+      );
+      if (filesToUpload.length === 0) {
+        return { success: true as const };
+      }
 
-      updateStatus(jobId, { progress: 15 });
+      const results = await runWithConcurrency(filesToUpload, 3, (file) => uploadFile(file, {
+        linkToTask: true,
+        annotation: options?.annotation,
+        parentId: resolvedParentId,
+        role: options?.role ?? "working",
+      }));
+      const failed = results.filter((result) => !result.success);
+      const succeeded = results.length - failed.length;
+      if (succeeded > 0) await runAfterSuccess();
+      if (failed.length > 0) {
+        const firstFailure = failed[0]!;
+        throw new Error(("error" in firstFailure && firstFailure.error) || `${failed.length} upload${failed.length === 1 ? "" : "s"} failed`);
+      }
+      return { success: true as const };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Upload failed";
+      onError?.(message);
+      return { success: false as const, error: message };
+    } finally {
+      setIsUploading(false);
+    }
+  }, [canEdit, onError, runAfterSuccess, uploadFile]);
 
-      // Delegate core upload+replace logic to useFileVersions utility
-      const result = await saveFileAsNewVersion({
+  const uploadFolders = useCallback(async (folders: DroppedFolder[], options?: { role?: TaskFileRole; parentId?: string | null }) => {
+    if (!canEdit || folders.length === 0) return { success: false as const, error: "Cannot upload folders" };
+    onError?.(null);
+    setIsUploading(true);
+    let createdAnyFolder = false;
+    try {
+      const resolvedParentId = options?.parentId ?? await getOrCreateTaskSystemFolderAction(projectId, taskId);
+      const uploadPaths = folders.flatMap((folder) =>
+        folder.files.map((entry) => [folder.name, entry.relativePath || entry.file.name].filter(Boolean).join("/")),
+      );
+      const collisions = await getUploadCollisionSummary(
+        projectId,
+        resolvedParentId,
+        uploadPaths,
+        { taskId },
+      );
+      if (!confirmUploadCollisions(collisions)) {
+        return { success: false as const, error: "Upload cancelled" };
+      }
+      const existingFiles = new Set(collisions.existingFiles);
+
+      for (const folder of folders) {
+        const role = options?.role ?? "working";
+        const existingRootId = collisions.folderIdsByPath[folder.name];
+        const rootFolder = existingRootId
+          ? { id: existingRootId }
+          : (await createFolder(projectId, resolvedParentId, folder.name, { taskId })) as Pick<ProjectNode, "id">;
+        if (!existingRootId) {
+          createdAnyFolder = true;
+        }
+        await linkNodeToTask(taskId, rootFolder.id, { role });
+
+        const chainCache = new Map<string, string>();
+        chainCache.set("", rootFolder.id);
+
+        for (const entry of folder.files) {
+          const segments = entry.relativePath.split("/");
+          const filename = segments.pop() ?? entry.file.name;
+          const key = segments.join("/");
+
+          let parentId = chainCache.get(key);
+          if (!parentId) {
+            let currentParentId = rootFolder.id;
+            for (let index = 0; index < segments.length; index += 1) {
+              const segment = segments[index]!;
+              const relativeFolderPath = [folder.name, ...segments.slice(0, index + 1)].join("/");
+              const existingFolderId = collisions.folderIdsByPath[relativeFolderPath];
+              if (existingFolderId) {
+                currentParentId = existingFolderId;
+                continue;
+              }
+              const created = (await createFolder(projectId, currentParentId, segment, { taskId })) as ProjectNode;
+              currentParentId = created.id;
+            }
+            parentId = currentParentId;
+            chainCache.set(key, parentId);
+          }
+
+          const fileObj = entry.file.name === filename ? entry.file : new File([entry.file], filename, { type: entry.file.type });
+          const relativeFilePath = [folder.name, entry.relativePath || filename].filter(Boolean).join("/");
+          if (existingFiles.has(relativeFilePath)) continue;
+          const result = await uploadFile(fileObj, { parentId, taskOwned: true });
+          if (!result.success) throw new Error(result.error);
+          createdAnyFolder = true; // Also refresh successful files added to a reused folder.
+        }
+      }
+      await runAfterSuccess();
+      return { success: true as const };
+    } catch (error) {
+      if (createdAnyFolder) await runAfterSuccess();
+      const message = error instanceof Error ? error.message : "Folder upload failed";
+      onError?.(message);
+      return { success: false as const, error: message };
+    } finally {
+      setIsUploading(false);
+    }
+  }, [canEdit, onError, projectId, runAfterSuccess, taskId, uploadFile]);
+
+  const saveAsNewVersion = useCallback(async (nodeId: string, file: File, options?: { comment?: string | null }) => {
+    if (!canEdit) return { success: false as const, error: "Forbidden" };
+    onError?.(null);
+    setIsUploading(true);
+    try {
+      const result = await saveFileAsNewVersionOrig({
         projectId,
         nodeId,
         file,
-        comment: options?.comment,
+        comment: options?.comment || null,
         supabase,
       });
 
-      if (result.success) {
-        updateStatus(jobId, { progress: 100, status: "success", error: undefined });
-        await runAfterSuccess();
+      if (!result.success) throw new Error(result.error);
 
-        if (successTimerRef.current) clearTimeout(successTimerRef.current);
-        successTimerRef.current = setTimeout(() => {
-          setUploadQueue((current) =>
-            current.filter((item) => item.status !== "success"),
-          );
-        }, 3000);
-
-        return { success: true as const, node: result.node, version: result.version };
-      } else {
-        const message = result.error;
-        updateStatus(jobId, { status: "error", error: message });
-        notifyError(message);
-        return { success: false as const, error: message };
-      }
-    },
-    [canEdit, notifyError, projectId, runAfterSuccess, supabase, updateStatus],
-  );
-
-  const queuePendingResolution = useCallback((payload: TaskFilePendingResolution) => {
-    setPendingResolutions((current) => [...current, payload]);
-  }, []);
-
-  // ---------------------------------------------------------------------
-  // Wave 3 — folder drop orchestration
-  // ---------------------------------------------------------------------
-
-  /**
-   * Resolve a relative directory path under `rootParentId`, creating
-   * missing folders as we go. Returns the id of the deepest folder.
-   *
-   * Implemented with O(depth) round-trips: for each segment we list the
-   * parent's children and either reuse an existing subfolder or create
-   * one. Each depth gets one `getProjectNodes(parent)` call plus at most
-   * one `createFolder(parent, name)` call. For a 20-file flat drop this
-   * is ~2 requests total. A nested drop pays per level.
-   */
-  const ensureFolderChain = useCallback(
-    async (rootParentId: string | null, segments: string[]) => {
-      let currentParentId = rootParentId;
-      for (const segment of segments) {
-        const listing = await getProjectNodes(projectId, currentParentId);
-        const children = Array.isArray(listing) ? listing : listing.nodes;
-        const existing = children.find(
-          (node) => node.type === "folder" && node.name === segment,
-        );
-        if (existing) {
-          currentParentId = existing.id;
-          continue;
-        }
-        const created = (await createFolder(projectId, currentParentId, segment)) as ProjectNode;
-        currentParentId = created.id;
-      }
-      return currentParentId;
-    },
-    [projectId],
-  );
-
-  /**
-   * Upload each entry under the given root parent, recreating the nested
-   * directory structure implied by `relativePath`. Kept sequential so
-   * folder-chain creation doesn't race on identical segments.
-   */
-  const uploadFolderEntries = useCallback(
-    async (
-      entries: Array<{ file: File; relativePath: string }>,
-      rootParentId: string | null,
-    ) => {
-      // Cache folder chains we've already resolved so a 50-file flat folder
-      // doesn't pay 50 `getProjectNodes` calls.
-      const chainCache = new Map<string, string | null>();
-      chainCache.set("", rootParentId);
-
-      for (const entry of entries) {
-        const segments = entry.relativePath.split("/");
-        const filename = segments.pop() ?? entry.file.name;
-        const key = segments.join("/");
-
-        let parentId = chainCache.get(key) ?? null;
-        if (!chainCache.has(key)) {
-          parentId = await ensureFolderChain(rootParentId, segments);
-          chainCache.set(key, parentId);
-        }
-
-        // Re-use the existing uploadNewNode pipeline but give it the file
-        // under its correct filename (not the relativePath).
-        const job: UploadJob = {
-          id: newClientId(),
-          file:
-            entry.file.name === filename
-              ? entry.file
-              : new File([entry.file], filename, {
-                  type: entry.file.type,
-                  lastModified: entry.file.lastModified,
-                }),
-        };
-        pendingUploadJobsRef.current.set(job.id, job);
-        setUploadQueue((current) => [
-          ...current,
-          {
-            id: job.id,
-            filename,
-            progress: 0,
-            status: "uploading",
-          },
-        ]);
-        // We link individual files only when they land at the top level
-        // (no path segments). Nested files inherit linkage via their
-        // containing folder, which the caller links explicitly.
-        await uploadNewNode(job, {
-          parentId,
-          linkToTask: segments.length === 0 && !rootParentId,
-        });
-        pendingUploadJobsRef.current.delete(job.id);
-      }
-    },
-    [ensureFolderChain, uploadNewNode],
-  );
-
-  const analyzeFolderCandidate = useCallback(
-    (folder: DroppedFolder) => {
-      return resolveTaskFileIntent({
-        candidateName: folder.name,
-        candidateType: "folder",
-        candidateChildNames: topLevelChildNames(folder),
-        attachments,
-      });
-    },
-    [attachments],
-  );
-
-  const enqueueFolderJob = useCallback(
-    async (folder: DroppedFolder) => {
-      const resolution = analyzeFolderCandidate(folder);
-      const jobId = newClientId();
-      setUploadQueue((current) => [
-        ...current,
-        {
-          id: jobId,
-          filename: `${folder.name}/ (${folder.files.length} files)`,
-          progress: 0,
-          status: resolution.requiresPrompt ? "awaiting_resolution" : "uploading",
-        },
-      ]);
-
-      if (resolution.requiresPrompt) {
-        queuePendingResolution({
-          id: jobId,
-          source: "upload",
-          candidateType: "folder",
-          candidateName: folder.name,
-          candidateNodeId: null,
-          candidateNodeName: null,
-          resolution,
-          options: resolutionOptionsFor(resolution),
-          folderPayload: { rootName: folder.name, entries: folder.files },
-        });
-        return { success: true as const, jobId };
-      }
-
-      // No prompt needed → default to "attach as new folder at task root".
-      try {
-        updateStatus(jobId, { status: "uploading", progress: 20 });
-        const rootFolder = (await createFolder(projectId, null, folder.name)) as ProjectNode;
-        updateStatus(jobId, { progress: 50 });
-        await uploadFolderEntries(folder.files, rootFolder.id);
-        await linkNodeToTask(taskId, rootFolder.id);
-        updateStatus(jobId, { progress: 100, status: "success", error: undefined });
-        await runAfterSuccess();
-        return { success: true as const, jobId };
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Folder upload failed";
-        updateStatus(jobId, { status: "error", error: message });
-        notifyError(message);
-        return { success: false as const, error: message };
-      }
-    },
-    [
-      analyzeFolderCandidate,
-      notifyError,
-      projectId,
-      queuePendingResolution,
-      runAfterSuccess,
-      taskId,
-      updateStatus,
-      uploadFolderEntries,
-    ],
-  );
-
-  const uploadFolders = useCallback(
-    async (folders: DroppedFolder[]) => {
-      if (!canEdit) return { success: false as const, error: "Forbidden" };
-      if (folders.length === 0) return { success: true as const };
-      notifyError(null);
-      for (const folder of folders) {
-        await enqueueFolderJob(folder);
-      }
-      if (successTimerRef.current) clearTimeout(successTimerRef.current);
-      successTimerRef.current = setTimeout(() => {
-        setUploadQueue((current) => current.filter((item) => item.status !== "success"));
-      }, 3000);
-      return { success: true as const };
-    },
-    [canEdit, enqueueFolderJob, notifyError],
-  );
-
-  const enqueueUploadJob = useCallback(async (file: File) => {
-    const job: UploadJob = {
-      id: newClientId(),
-      file,
-    };
-
-    pendingUploadJobsRef.current.set(job.id, job);
-    setUploadQueue((current) => [
-      ...current,
-      {
-        id: job.id,
-        filename: file.name,
-        progress: 0,
-        status: "uploading",
-      },
-    ]);
-
-    const resolution = await analyzeCandidate({ name: file.name });
-    if (resolution.requiresPrompt) {
-      updateStatus(job.id, {
-        status: "awaiting_resolution",
-        progress: 0,
-        error: undefined,
-      });
-      queuePendingResolution({
-        id: job.id,
-        source: "upload",
-        candidateType: "file",
-        candidateName: file.name,
-        candidateNodeId: null,
-        candidateNodeName: null,
-        resolution,
-        options: resolutionOptionsFor(resolution),
-      });
-      return { success: true as const };
+      await runAfterSuccess();
+      return { success: true as const, node: result.node as ProjectNode, version: result.version };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Version upload failed";
+      onError?.(message);
+      return { success: false as const, error: message };
+    } finally {
+      setIsUploading(false);
     }
-
-    return uploadNewNode(job, {
-      parentId: null,
-      linkToTask: true,
-    });
-  }, [analyzeCandidate, queuePendingResolution, updateStatus, uploadNewNode]);
-
-  const uploadFiles = useCallback(async (files: File[]) => {
-    if (!files.length || !canEdit) {
-      return { success: false as const, error: "Forbidden" };
-    }
-
-    notifyError(null);
-    const results = await Promise.all(files.map((file) => enqueueUploadJob(file)));
-
-    if (successTimerRef.current) clearTimeout(successTimerRef.current);
-    successTimerRef.current = setTimeout(() => {
-      setUploadQueue((current) => current.filter((item) => item.status !== "success"));
-    }, 3000);
-
-    const firstFailure = results.find((result) => !result.success);
-    if (firstFailure && "error" in firstFailure) {
-      return { success: false as const, error: firstFailure.error };
-    }
-
-    return { success: true as const };
-  }, [canEdit, enqueueUploadJob, notifyError]);
+  }, [canEdit, onError, projectId, runAfterSuccess, supabase]);
 
   const unlinkAttachment = useCallback(async (nodeId: string) => {
     if (!canEdit) return { success: false as const, error: "Forbidden" };
-
-    notifyError(null);
-    const previous = attachments;
+    onError?.(null);
     setAttachments((current) => current.filter((attachment) => attachment.id !== nodeId));
-
     try {
       await unlinkNodeFromTask(taskId, nodeId);
       await runAfterSuccess();
       return { success: true as const };
     } catch (error) {
-      setAttachments(previous);
       const message = error instanceof Error ? error.message : "Failed to unlink file";
-      notifyError(message);
+      onError?.(message);
+      await refreshAttachments(); // Revert optimistic update
       return { success: false as const, error: message };
     }
-  }, [attachments, canEdit, notifyError, runAfterSuccess, setAttachments, taskId]);
-
-  const resolvePendingResolution = useCallback(async (choice: TaskFileResolutionChoice) => {
-    const pending = pendingResolutions[0] ?? null;
-    if (!pending) {
-      return { success: false as const, error: "No pending file decision" };
-    }
-
-    setPendingResolutions((current) => current.slice(1));
-
-    if (choice === "cancel") {
-      markDeferredResolution(pending.resolution);
-      if (pending.source === "upload") {
-        updateStatus(pending.id, { status: "error", error: "Upload canceled" });
-        pendingUploadJobsRef.current.delete(pending.id);
-      }
-      return { success: true as const };
-    }
-
-    try {
-      // Wave 3 — folder-drop resolution. No per-file UploadJob is tracked
-      // at this level; the payload on `pending` carries the whole folder.
-      if (pending.source === "upload" && pending.candidateType === "folder") {
-        const payload = pending.folderPayload;
-        if (!payload) {
-          throw new Error("Folder contents are no longer available");
-        }
-
-        const runFolderChoice = async () => {
-          updateStatus(pending.id, { status: "uploading", progress: 20 });
-
-          if (choice === "merge" || choice === "replace") {
-            // Merge / replace target is the existing linked folder. For
-            // "replace" we intentionally use the same destination but
-            // overwrites happen at the per-file layer (existing sibling
-            // names collide and either pop the file resolver prompt via
-            // `createFileNode`'s unique-name check or get suffixed).
-            const targetParent =
-              pending.resolution.matchedNodeId ?? pending.resolution.linkedFolderId ?? null;
-            if (!targetParent) {
-              throw new Error("Merge target is no longer available");
-            }
-            updateStatus(pending.id, { progress: 50 });
-            await uploadFolderEntries(payload.entries, targetParent);
-          } else if (choice === "subfolder") {
-            const parent = pending.resolution.linkedFolderId;
-            if (!parent) {
-              throw new Error("Parent folder is no longer available");
-            }
-            updateStatus(pending.id, { progress: 40 });
-            const sub = (await createFolder(projectId, parent, payload.rootName)) as ProjectNode;
-            updateStatus(pending.id, { progress: 60 });
-            await uploadFolderEntries(payload.entries, sub.id);
-          } else {
-            // "attach_new" (default) — create a fresh top-level folder
-            // under the project root and link it to the task.
-            updateStatus(pending.id, { progress: 40 });
-            const newRoot = (await createFolder(
-              projectId,
-              null,
-              payload.rootName,
-            )) as ProjectNode;
-            updateStatus(pending.id, { progress: 60 });
-            await uploadFolderEntries(payload.entries, newRoot.id);
-            await linkNodeToTask(taskId, newRoot.id);
-          }
-
-          updateStatus(pending.id, { progress: 100, status: "success", error: undefined });
-          await runAfterSuccess();
-          if (successTimerRef.current) clearTimeout(successTimerRef.current);
-          successTimerRef.current = setTimeout(() => {
-            setUploadQueue((current) => current.filter((item) => item.status !== "success"));
-          }, 3000);
-        };
-
-        await runFolderChoice();
-        return { success: true as const };
-      }
-
-      if (pending.source === "upload") {
-        const job = pendingUploadJobsRef.current.get(pending.id);
-        if (!job) {
-          throw new Error("Upload is no longer available");
-        }
-
-        if (choice === "replace") {
-          const result = await uploadNewNode(job, {
-            parentId: null,
-            linkToTask: true,
-            replaceNodeId: pending.resolution.matchedNodeId,
-          });
-          pendingUploadJobsRef.current.delete(pending.id);
-          return result;
-        }
-
-        if (choice === "link_existing") {
-          updateStatus(pending.id, {
-            status: "success",
-            progress: 100,
-            error: undefined,
-          });
-          clearPendingWarnings();
-          pendingUploadJobsRef.current.delete(pending.id);
-          if (successTimerRef.current) clearTimeout(successTimerRef.current);
-          successTimerRef.current = setTimeout(() => {
-            setUploadQueue((current) => current.filter((item) => item.status !== "success"));
-          }, 3000);
-          return { success: true as const };
-        }
-
-        const result = await uploadNewNode(job, {
-          parentId: null,
-          linkToTask: true,
-        });
-        pendingUploadJobsRef.current.delete(pending.id);
-        return result;
-      }
-
-      throw new Error("Unsupported file decision");
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to resolve file action";
-      notifyError(message);
-      return { success: false as const, error: message };
-    }
-  }, [
-    clearPendingWarnings,
-    finalizeExistingLink,
-    markDeferredResolution,
-    notifyError,
-    pendingResolutions,
-    projectId,
-    runAfterSuccess,
-    taskId,
-    updateStatus,
-    uploadFolderEntries,
-    uploadNewNode,
-  ]);
+  }, [canEdit, onError, refreshAttachments, runAfterSuccess, setAttachments, taskId]);
 
   return useMemo(() => ({
-    uploadQueue,
+    uploadQueue: [] as TaskFileUploadStatus[],
     isUploading,
-    pendingResolution,
-    unresolvedReplacementCount,
-    unclassifiedUploadCount,
+    pendingResolution: null,
+    unresolvedReplacementCount: 0,
+    unclassifiedUploadCount: 0,
     uploadFiles,
     uploadFolders,
     unlinkAttachment,
-    resolvePendingResolution,
+    resolvePendingResolution: async () => ({ success: false as const, error: "Removed" }),
     saveAsNewVersion,
-    downloadAttachment: handleDownload,
-  }), [
-    uploadQueue,
-    isUploading,
-    pendingResolution,
-    unresolvedReplacementCount,
-    unclassifiedUploadCount,
-    uploadFiles,
-    uploadFolders,
-    unlinkAttachment,
-    resolvePendingResolution,
-    saveAsNewVersion,
-    handleDownload,
-  ]);
+    downloadAttachment: () => {}, // unused natively here typically
+  }), [isUploading, saveAsNewVersion, unlinkAttachment, uploadFiles, uploadFolders]);
 }
