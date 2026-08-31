@@ -15,7 +15,7 @@ export function ScrollToBottomFab({ visible, showNewMessages = false, onClick }:
             onClick={onClick}
             tabIndex={-1}
             aria-label={showNewMessages ? 'Jump to new messages' : 'Scroll to newest message'}
-            className={`absolute bottom-24 right-5 z-20 flex items-center justify-center gap-2 rounded-full border border-border/70 bg-card text-foreground transition-all duration-200 hover:bg-muted ${
+            className={`absolute bottom-24 left-1/2 -translate-x-1/2 z-20 flex items-center justify-center gap-2 rounded-full border border-border/70 bg-card text-foreground transition-all duration-200 hover:bg-muted ${
                 showNewMessages ? 'h-10 px-3' : 'h-11 w-11'
             } ${
                 visible ? 'scale-100 opacity-100' : 'pointer-events-none scale-75 opacity-0'
