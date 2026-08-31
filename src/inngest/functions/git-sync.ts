@@ -1,8 +1,8 @@
 import { inngest } from "../client";
 import simpleGit from "simple-git";
 import { db } from "@/lib/db";
-import { projects, projectNodes, projectNodeEvents, projectNodeLocks, projectGitDeltas, projectNodeConflicts, profiles, importJobFiles, uploadIntents } from "@/lib/db/schema";
-import { eq, and, isNull, lt, sql, inArray } from "drizzle-orm";
+import { projects, projectNodes, projectNodeEvents, projectNodeLocks, projectGitDeltas, projectNodeConflicts, profiles } from "@/lib/db/schema";
+import { eq, and, isNull, sql, inArray } from "drizzle-orm";
 import { createAdminClient } from "@/lib/supabase/server";
 import { tmpdir } from "os";
 import { mkdtemp, rm, readFile, writeFile, mkdir, readdir, stat, rename } from "fs/promises";
@@ -23,6 +23,7 @@ import { runWithConcurrency } from "@/lib/utils/concurrency";
 import { logger } from "@/lib/logger";
 import { verifySignedJobRequestToken } from "@/lib/security/job-request";
 import { deleteExpiredFileLeases } from "@/lib/files/file-lock-service";
+import { cleanupExpiredUploadIntents } from "@/lib/upload/upload-intents";
 
 const execFileAsync = promisify(execFile);
 const GIT_COMMAND_TIMEOUT_MS = (() => {
@@ -780,115 +781,82 @@ export const gitPull = inngest.createFunction(
                     let newCount = 0;
                     let updatedCount = 0;
                     let deletedCount = 0;
+                    let failedUploads = 0;
 
-                    const nodesToUpsert: any[] = [];
-                    const s3UploadPromises: Promise<any>[] = [];
-
-                    for (const filePath of repoFiles) {
-                        seenPaths.add(filePath);
-                        const fullPath = resolvePathUnderRoot(tempDir, filePath, "repository file path");
-                        const content = await readFile(fullPath);
-                        const hash = computeFileHash(content);
-
-                        const existingNode = nodeByPath.get(filePath);
-
-                        if (existingNode && existingNode.type === "file") {
-                            if (existingNode.gitHash === hash) continue;
-
-                            const fileName = filePath.split("/").pop() ?? filePath;
-                            let nextS3Key = existingNode.s3Key ?? null;
-
-                            if (nextS3Key) {
-                                s3UploadPromises.push((async () => {
-                                    const { error: updateError } = await adminClient.storage
-                                        .from("project-files")
-                                        .update(nextS3Key, content, {
-                                            contentType: "application/octet-stream",
-                                            upsert: true,
-                                        });
-                                    if (updateError) {
-                                        logger.warn("github.sync.pull.storage.update_failed", {
-                                            projectId,
-                                            s3Key: nextS3Key,
-                                            hash,
-                                            error: updateError.message,
-                                        });
-                                    }
-                                })());
-                            } else {
-                                const createdS3Key = buildProjectFileKey(projectId, `${randomUUID()}/${fileName}`);
-                                s3UploadPromises.push((async () => {
-                                    const { error: uploadError } = await adminClient.storage
-                                        .from("project-files")
-                                        .upload(createdS3Key, content, {
-                                            contentType: "application/octet-stream",
-                                        });
-                                    if (uploadError) {
-                                        logger.warn("github.sync.pull.storage.upload_failed_missing_key", {
-                                            projectId,
-                                            s3Key: createdS3Key,
-                                            hash,
-                                            nodeId: existingNode.id,
-                                            error: uploadError.message,
-                                        });
-                                    }
-                                })());
-                                nextS3Key = createdS3Key;
-                            }
-
-                            nodesToUpsert.push({
-                                id: existingNode.id,
-                                projectId,
-                                parentId: existingNode.parentId,
-                                type: "file",
-                                name: fileName,
-                                s3Key: nextS3Key,
-                                size: content.length,
-                                gitHash: hash,
-                                createdBy: userId,
-                                updatedAt: new Date(),
-                            });
-                            updatedCount++;
-                        } else {
-                            const dir = dirname(filePath);
-                            const parentId = await ensureFolder(dir);
-                            const fileName = filePath.split("/").pop() ?? filePath;
-
-                            const s3Key = buildProjectFileKey(projectId, `${randomUUID()}/${fileName}`);
-                            s3UploadPromises.push((async () => {
-                                const { error: uploadError } = await adminClient.storage
-                                    .from("project-files")
-                                    .upload(s3Key, content, {
-                                        contentType: "application/octet-stream",
-                                    });
-
-                                if (uploadError) {
-                                    logger.warn("github.sync.pull.storage.upload_failed", {
-                                        projectId,
-                                        s3Key,
-                                        hash,
-                                        error: uploadError.message,
-                                    });
-                                }
-                            })());
-
-                            nodesToUpsert.push({
-                                id: randomUUID(),
-                                projectId,
-                                parentId,
-                                type: "file",
-                                name: fileName,
-                                s3Key,
-                                size: content.length,
-                                gitHash: hash,
-                                createdBy: userId,
-                            });
-                            newCount++;
-                        }
+                    const directoryPaths = Array.from(new Set(
+                        repoFiles.map((filePath) => dirname(filePath)).filter((path) => path !== "."),
+                    )).sort((left, right) => left.split("/").length - right.split("/").length || left.localeCompare(right));
+                    for (const directoryPath of directoryPaths) {
+                        await ensureFolder(directoryPath);
                     }
 
-                    // Await all parallel uploads
-                    await Promise.all(s3UploadPromises);
+                    const uploadResults = await runWithConcurrency(
+                        repoFiles,
+                        GITHUB_WORKER_BUDGETS.applyConcurrency,
+                        async (filePath) => {
+                            seenPaths.add(filePath);
+                            const fullPath = resolvePathUnderRoot(tempDir, filePath, "repository file path");
+                            const content = await readFile(fullPath);
+                            const hash = computeFileHash(content);
+                            const existingNode = nodeByPath.get(filePath);
+
+                            if (existingNode?.type === "file" && existingNode.gitHash === hash) {
+                                return null;
+                            }
+
+                            const fileName = filePath.split("/").pop() ?? filePath;
+                            const s3Key = existingNode?.type === "file" && existingNode.s3Key
+                                ? existingNode.s3Key
+                                : buildProjectFileKey(projectId, `${randomUUID()}/${fileName}`);
+                            const storage = adminClient.storage.from("project-files");
+                            try {
+                                const { error: storageError } = existingNode?.type === "file" && existingNode.s3Key
+                                    ? await storage.update(s3Key, content, {
+                                        contentType: "application/octet-stream",
+                                        cacheControl: "3600",
+                                        upsert: true,
+                                    })
+                                    : await storage.upload(s3Key, content, {
+                                        contentType: "application/octet-stream",
+                                        cacheControl: "3600",
+                                    });
+                                if (storageError) throw storageError;
+                            } catch (error) {
+                                failedUploads += 1;
+                                logger.warn("github.sync.pull.storage_write_failed", {
+                                    projectId,
+                                    path: filePath,
+                                    s3Key,
+                                    hash,
+                                    nodeId: existingNode?.id ?? null,
+                                    error: errorMessage(error),
+                                });
+                                // Leave the database hash/key unchanged so the next pull retries this file.
+                                return null;
+                            }
+
+                            const isUpdate = existingNode?.type === "file";
+                            return {
+                                kind: isUpdate ? "updated" as const : "new" as const,
+                                node: {
+                                    id: isUpdate ? existingNode.id : randomUUID(),
+                                    projectId,
+                                    parentId: isUpdate ? existingNode.parentId : (folderCache.get(dirname(filePath)) ?? null),
+                                    type: "file" as const,
+                                    name: fileName,
+                                    s3Key,
+                                    size: content.length,
+                                    gitHash: hash,
+                                    createdBy: userId,
+                                    ...(isUpdate ? { updatedAt: new Date() } : {}),
+                                },
+                            };
+                        },
+                    );
+                    const confirmedUploads = uploadResults.filter((result) => result !== null);
+                    const nodesToUpsert = confirmedUploads.map((result) => result.node);
+                    newCount = confirmedUploads.filter((result) => result.kind === "new").length;
+                    updatedCount = confirmedUploads.filter((result) => result.kind === "updated").length;
 
                     // Bulk upsert new and updated nodes
                     if (nodesToUpsert.length > 0) {
@@ -903,6 +871,9 @@ export const gitPull = inngest.createFunction(
                                     updatedAt: sql`excluded.updated_at`,
                                 }
                             });
+                    }
+                    if (failedUploads > 0) {
+                        throw new Error(`Git pull left ${failedUploads} Storage write(s) pending retry`);
                     }
 
                     const idsToDelete: string[] = [];
@@ -941,6 +912,7 @@ export const gitPull = inngest.createFunction(
                             newFiles: newCount,
                             updatedFiles: updatedCount,
                             deletedFiles: deletedCount,
+                            failedUploads,
                             authSource: access.source,
                             installationId: access.installationId,
                             deliveryId: deliveryId ?? null,
@@ -953,6 +925,7 @@ export const gitPull = inngest.createFunction(
                         newFiles: newCount,
                         updatedFiles: updatedCount,
                         deletedFiles: deletedCount,
+                        failedUploads,
                         authSource: access.source,
                         installationId: access.installationId,
                     });
@@ -962,6 +935,7 @@ export const gitPull = inngest.createFunction(
                         newFiles: newCount,
                         updatedFiles: updatedCount,
                         deletedFiles: deletedCount,
+                        failedUploads,
                     };
                 } finally {
                     await cleanupTemporaryDirectory(tempDir, "pull");
@@ -992,65 +966,10 @@ export const gitPull = inngest.createFunction(
 );
 
 export const uploadIntentCleanup = inngest.createFunction(
-    { id: "upload-intent-cleanup" },
+    { id: "upload-intent-cleanup", concurrency: 1 },
     { cron: "*/15 * * * *" },
     async ({ step }) => {
-        await step.run("cleanup-expired-intents", async () => {
-            const now = new Date();
-            const expiredIntents = await db
-                .select({
-                    id: uploadIntents.id,
-                    bucket: uploadIntents.bucket,
-                    storageKey: uploadIntents.storageKey,
-                })
-                .from(uploadIntents)
-                .where(
-                    and(
-                        eq(uploadIntents.status, "pending"),
-                        lt(uploadIntents.expiresAt, now)
-                    )
-                );
-
-            if (expiredIntents.length === 0) return;
-
-            const adminClient = await createAdminClient();
-            const bucketKeysMap: Record<string, string[]> = {};
-            for (const intent of expiredIntents) {
-                if (!bucketKeysMap[intent.bucket]) {
-                    bucketKeysMap[intent.bucket] = [];
-                }
-                bucketKeysMap[intent.bucket]!.push(intent.storageKey);
-            }
-
-            // Clean up from S3
-            for (const [bucket, keys] of Object.entries(bucketKeysMap)) {
-                try {
-                    await adminClient.storage.from(bucket).remove(keys);
-                } catch (err) {
-                    logger.error("upload_intent.cleanup_storage_failed", {
-                        module: "git-sync",
-                        bucket,
-                        error: errorMessage(err),
-                    });
-                }
-            }
-
-            const intentIds = expiredIntents.map((i) => i.id);
-
-            // Update any importJobFiles reference first to mark them failed
-            await db
-                .update(importJobFiles)
-                .set({
-                    status: 'failed',
-                    errorMessage: 'Upload intent expired and cleaned up',
-                })
-                .where(inArray(importJobFiles.uploadIntentId, intentIds));
-
-            // Delete upload intents
-            await db
-                .delete(uploadIntents)
-                .where(inArray(uploadIntents.id, intentIds));
-        });
+        return step.run("cleanup-expired-intents", cleanupExpiredUploadIntents);
     }
 );
 
