@@ -1,0 +1,150 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - banner [ref=e3]:
+      - generic [ref=e4]:
+        - link "Navigate to home" [ref=e7] [cursor=pointer]:
+          - /url: /
+          - generic [ref=e14]: NB
+        - navigation "Main navigation" [ref=e16]:
+          - link "Hub" [ref=e17] [cursor=pointer]:
+            - /url: /hub
+          - link "Connections" [ref=e24] [cursor=pointer]:
+            - /url: /people
+          - link "Messages" [ref=e31] [cursor=pointer]:
+            - /url: /messages
+          - link "Settings" [ref=e35] [cursor=pointer]:
+            - /url: /settings
+        - generic [ref=e40]:
+          - button "Toggle theme" [ref=e41] [cursor=pointer]
+          - link "Sign in" [ref=e45] [cursor=pointer]:
+            - /url: /login
+    - main [ref=e46]:
+      - generic [ref=e49]:
+        - generic [ref=e52]:
+          - generic [ref=e53]:
+            - link "Hub" [ref=e54] [cursor=pointer]:
+              - /url: /hub
+            - generic [ref=e57]:
+              - heading "DeepScope AI" [level=1] [ref=e58]
+              - generic [ref=e59]:
+                - generic [ref=e60]: Created by
+                - link "Ramanayudu CH" [ref=e61] [cursor=pointer]:
+                  - /url: /u/ramanayudu_ch
+              - generic "Active Project" [ref=e62]
+            - generic [ref=e64]:
+              - generic "Total Views" [ref=e65]: "430"
+              - generic "Followers" [ref=e70]: "0"
+          - generic [ref=e77]:
+            - button "Follow" [ref=e78] [cursor=pointer]
+            - button "Share Project" [ref=e84] [cursor=pointer]
+        - generic [ref=e93]:
+          - button "Dashboard" [ref=e94] [cursor=pointer]
+          - button "Docs" [ref=e101] [cursor=pointer]
+          - button "Updates" [ref=e104] [cursor=pointer]
+          - button "Files" [ref=e108] [cursor=pointer]
+        - region "Project detail content" [ref=e111]:
+          - generic [ref=e114]:
+            - generic [ref=e117]:
+              - generic [ref=e118]:
+                - heading "DeepScope AI" [level=1] [ref=e119]
+                - generic [ref=e120]: Startup
+              - paragraph [ref=e123]: See Beyond the Surface of Any Website.
+              - generic [ref=e124]:
+                - generic [ref=e125]:
+                  - heading [level=3] [ref=e127]
+                  - generic [ref=e133]:
+                    - paragraph [ref=e139]: Discovery
+                    - paragraph [ref=e146]: Design
+                    - paragraph [ref=e153]: MVP Build
+                    - paragraph [ref=e160]: Beta
+                    - paragraph [ref=e167]: Alpha release
+                    - paragraph [ref=e173]: Beta Release
+                    - paragraph [ref=e177]: Launch & Iterate
+                - generic [ref=e178]:
+                  - heading "Vision & Description" [level=3] [ref=e179]
+                  - paragraph [ref=e182]: DeepScope AI is a smart browser extension + web dashboard that deeply scans websites and automatically finds hidden settings, important options, policies, and internal navigation paths. Instead of manually searching through menus like cookies, privacy settings, display options, billing pages, or hidden tools, DeepScope AI understands the structure of the website and guides the user directly to the exact location. It works like a powerful AI search assistant for websites.
+                - generic [ref=e183]:
+                  - 'button "The Problem Today’s websites are: • Complex • Deeply nested • Full of hidden menus • Hard to navigate Users struggle to: • Find privacy or cookie settings • Locate account deletion options • Change important configuration settings • Access buried features • Understand large dashboards Even developers waste time searching through admin panels. Manual search = Time waste + Frustration. Click to read full text" [ref=e184] [cursor=pointer]':
+                    - heading "The Problem" [level=3] [ref=e185]
+                    - paragraph [ref=e186]: "Today’s websites are: • Complex • Deeply nested • Full of hidden menus • Hard to navigate Users struggle to: • Find privacy or cookie settings • Locate account deletion options • Change important configuration settings • Access buried features • Understand large dashboards Even developers waste time searching through admin panels. Manual search = Time waste + Frustration."
+                    - generic [ref=e187]: Click to read full text
+                  - 'button "The Solution DeepScope AI will: 1. Crawl the current website. 2. Extract navigation structure. 3. Use AI to understand semantic meaning. 4. Provide a smart search bar. 5. Highlight and auto-navigate to relevant sections. 6. Suggest hidden options (like “delete account”, “billing”, “API keys”, etc.) It behaves like: • Spotlight for websites • AI-powered internal search • Smart assistant for navigation Click to read full text" [ref=e188] [cursor=pointer]':
+                    - heading "The Solution" [level=3] [ref=e189]
+                    - paragraph [ref=e190]: "DeepScope AI will: 1. Crawl the current website. 2. Extract navigation structure. 3. Use AI to understand semantic meaning. 4. Provide a smart search bar. 5. Highlight and auto-navigate to relevant sections. 6. Suggest hidden options (like “delete account”, “billing”, “API keys”, etc.) It behaves like: • Spotlight for websites • AI-powered internal search • Smart assistant for navigation"
+                    - generic [ref=e191]: Click to read full text
+                - generic [ref=e192]:
+                  - generic [ref=e193]:
+                    - heading "Tags" [level=3] [ref=e194]
+                    - generic [ref=e195]:
+                      - generic [ref=e196]: "#AI"
+                      - generic [ref=e197]: "#Semantic Search"
+                      - generic [ref=e198]: "#Browser Extension"
+                      - generic [ref=e199]: "#Web Crawling"
+                      - generic [ref=e200]: "#UX Optimization"
+                      - generic [ref=e201]: "#Productivity Tool"
+                      - generic [ref=e202]: "#NLP"
+                      - generic [ref=e203]: "#Developer Tool"
+                  - generic [ref=e204]:
+                    - heading "Skills & Tech" [level=3] [ref=e205]
+                    - generic [ref=e206]:
+                      - generic [ref=e207]: React
+                      - generic [ref=e211]: TypeScript
+                      - generic [ref=e215]: Tailwind CSS
+                      - generic [ref=e219]: Chrome Extension API
+                      - generic [ref=e223]: Node.js
+                      - generic [ref=e227]: Express
+                      - generic [ref=e232]: Supabase
+                      - generic [ref=e236]: OpenAI API
+                      - generic [ref=e241]: MiniLM
+                      - generic [ref=e245]: Embeddings
+                      - generic [ref=e249]: Vector Databases
+            - generic [ref=e253]:
+              - generic [ref=e255]:
+                - heading "The Team" [level=3] [ref=e264]
+                - generic [ref=e268]:
+                  - link "Ramanayudu CH profile" [ref=e269] [cursor=pointer]:
+                    - /url: /u/ramanayudu_ch
+                    - generic [ref=e272]:
+                      - generic [ref=e273]: Ramanayudu CH
+                      - generic [ref=e274]: ·
+                      - generic [ref=e275]: Lead / Frontend Developer
+                  - link "Lakshmi CH profile" [ref=e276] [cursor=pointer]:
+                    - /url: /u/lakshmi_ch
+                    - generic [ref=e279]:
+                      - generic [ref=e280]: Lakshmi CH
+                      - generic [ref=e281]: ·
+                      - generic [ref=e282]: QA Engineer · Member
+                  - link "Rama profile" [ref=e283] [cursor=pointer]:
+                    - /url: /u/ch_rama
+                    - generic [ref=e286]:
+                      - generic [ref=e287]: Rama
+                      - generic [ref=e288]: ·
+                      - generic [ref=e289]: UI/UX Designer · Member
+              - generic [ref=e290]:
+                - heading "Open Roles" [level=3] [ref=e297]
+                - generic [ref=e301]:
+                  - button "Backend Developer · 1 spot left • API creation • Web crawling logic • Embedding pipeline • Database management Apply" [ref=e302] [cursor=pointer]:
+                    - generic [ref=e303]:
+                      - generic [ref=e304]:
+                        - generic [ref=e305]: Backend Developer
+                        - generic [ref=e306]: ·
+                        - generic [ref=e307]: 1 spot left
+                      - paragraph [ref=e308]: • API creation • Web crawling logic • Embedding pipeline • Database management
+                    - generic [ref=e309]: Apply
+                  - button "Frontend Developer · 2 spots left • Defines vision • Designs features • Oversees system architecture • Manages roadmap Apply" [ref=e311] [cursor=pointer]:
+                    - generic [ref=e312]:
+                      - generic [ref=e313]:
+                        - generic [ref=e314]: Frontend Developer
+                        - generic [ref=e315]: ·
+                        - generic [ref=e316]: 2 spots left
+                      - paragraph [ref=e317]: • Defines vision • Designs features • Oversees system architecture • Manages roadmap
+                    - generic [ref=e318]: Apply
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=e325] [cursor=pointer]:
+    - generic [ref=e328]:
+      - text: Compiling
+      - generic [ref=e329]:
+        - generic [ref=e330]: .
+        - generic [ref=e331]: .
+        - generic [ref=e332]: .
+  - alert [ref=e333]
