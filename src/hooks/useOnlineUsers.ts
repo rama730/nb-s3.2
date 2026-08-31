@@ -18,6 +18,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 
+import { useAuth } from '@/hooks/useAuth';
 import { subscribePresenceRoom } from '@/lib/realtime/presence-client';
 import type {
     PresenceMemberState,
@@ -44,6 +45,8 @@ interface RoomTracker {
  *                 online status of at least one watched user changes.
  */
 export function useOnlineUsers(userIds: string[]): OnlineMap {
+    const { user, session, isLoading } = useAuth();
+    const realtimeReady = Boolean(user?.id && session?.access_token && !isLoading);
     // Sort+dedupe so the dependency for the main effect is stable across
     // renders that pass the same set in different order.
     const userIdsRef = useRef<string[]>([]);
@@ -67,7 +70,7 @@ export function useOnlineUsers(userIds: string[]): OnlineMap {
         if (typeof window === 'undefined') return;
 
         const trackers = trackersRef.current;
-        const desiredIds = new Set(stableIds);
+        const desiredIds = new Set(realtimeReady ? stableIds : []);
 
         // 1. Unsubscribe from rooms we no longer care about.
         for (const [userId, tracker] of Array.from(trackers.entries())) {
@@ -82,7 +85,7 @@ export function useOnlineUsers(userIds: string[]): OnlineMap {
         }
 
         // 2. Subscribe to new user rooms.
-        for (const userId of stableIds) {
+        for (const userId of realtimeReady ? stableIds : []) {
             if (trackers.has(userId)) continue;
 
             const tracker: RoomTracker = {
@@ -161,7 +164,7 @@ export function useOnlineUsers(userIds: string[]): OnlineMap {
         // the top of the effect body (we unsubscribe rooms that fell out of
         // the desired set and subscribe new ones). If we tore everything down
         // in cleanup, every id change would thrash the WebSocket subscriptions.
-    }, [stableIds]);
+    }, [realtimeReady, stableIds]);
 
     // Unmount-only cleanup: release every tracked subscription when the
     // consumer (e.g. conversation list) itself unmounts.
