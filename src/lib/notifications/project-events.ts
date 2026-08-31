@@ -160,6 +160,21 @@ function previewFor(input: EnqueueProjectNotificationEventInput, project: Projec
     };
 }
 
+async function normalizeProjectNotificationActor(input: EnqueueProjectNotificationEventInput) {
+    if (!input.actorUserId) return input;
+    const actor = await readProjectNotificationActorSnapshot(input.actorUserId);
+    const actorName = actor.actorName ?? input.actorName ?? input.preview?.actorName ?? null;
+    const actorAvatarUrl = actor.actorAvatarUrl ?? input.actorAvatarUrl ?? input.preview?.actorAvatarUrl ?? null;
+    return {
+        ...input,
+        actorName,
+        actorAvatarUrl,
+        preview: input.preview
+            ? { ...input.preview, actorName, actorAvatarUrl }
+            : input.preview,
+    };
+}
+
 function uniqueIds(values: Array<string | null | undefined>) {
     return Array.from(new Set(values.filter((value): value is string => typeof value === "string" && value.length > 0)));
 }
@@ -271,14 +286,23 @@ export async function resolveProjectNotificationRecipients(params: {
     return { project, members, recipientIds: Array.from(ids) };
 }
 
-export async function enqueueProjectNotificationEvent(input: EnqueueProjectNotificationEventInput) {
+function buildProjectNotificationWrites(params: {
+    input: EnqueueProjectNotificationEventInput;
+    project: ProjectRow;
+    members: MemberRow[];
+    followerIds: string[];
+}) {
+    const { input, project, members, followerIds } = params;
     const entry = PROJECT_NOTIFICATION_EVENT_REGISTRY[input.eventKey];
-    const { project, members, recipientIds } = await resolveProjectNotificationRecipients({
-        projectId: input.projectId,
-        eventKey: input.eventKey,
-        input,
-    });
-    if (!project || recipientIds.length === 0) return { enqueued: 0 };
+    const recipientSet = new Set<string>();
+    for (const group of entry.defaultRecipients) {
+        addGroupRecipients({ ids: recipientSet, group, project, members, input });
+    }
+    uniqueIds(input.directRecipientIds ?? []).forEach((id) => recipientSet.add(id));
+    if (entry.defaultRecipients.includes("followers") && project.visibility === "public") {
+        followerIds.forEach((id) => recipientSet.add(id));
+    }
+    const recipientIds = Array.from(recipientSet);
     const maxRecipients = typeof input.maxRecipients === "number" && Number.isFinite(input.maxRecipients)
         ? Math.max(0, Math.trunc(input.maxRecipients))
         : null;
@@ -336,18 +360,84 @@ export async function enqueueProjectNotificationEvent(input: EnqueueProjectNotif
             },
         });
     }
+    return writes;
+}
+
+/**
+ * Emits related events with one project/member/actor snapshot and one
+ * notification fanout. Callers that already hold several linked task events
+ * should use this owner instead of repeating the project policy queries.
+ */
+export async function enqueueProjectNotificationEvents(
+    sourceInputs: EnqueueProjectNotificationEventInput[],
+    options?: { actorName?: string | null; actorAvatarUrl?: string | null },
+) {
+    if (sourceInputs.length === 0) return { enqueued: 0 };
+    const projectId = sourceInputs[0]!.projectId;
+    const actorUserId = sourceInputs[0]!.actorUserId ?? null;
+    if (sourceInputs.some((input) => input.projectId !== projectId || (input.actorUserId ?? null) !== actorUserId)) {
+        throw new Error("Batched project notification events must share one project and actor");
+    }
+
+    const normalizedActor = options
+        ? {
+            ...sourceInputs[0]!,
+            actorName: options.actorName ?? null,
+            actorAvatarUrl: options.actorAvatarUrl ?? null,
+        }
+        : await normalizeProjectNotificationActor(sourceInputs[0]!);
+    const inputs = sourceInputs.map((input) => ({
+        ...input,
+        actorName: normalizedActor.actorName,
+        actorAvatarUrl: normalizedActor.actorAvatarUrl,
+        preview: input.preview
+            ? {
+                ...input.preview,
+                actorName: normalizedActor.actorName ?? input.preview.actorName ?? null,
+                actorAvatarUrl: normalizedActor.actorAvatarUrl ?? input.preview.actorAvatarUrl ?? null,
+            }
+            : input.preview,
+    }));
+    const { project, members } = await resolveProjectNotificationRecipients({
+        projectId,
+        eventKey: inputs[0]!.eventKey,
+        input: inputs[0],
+    });
+    if (!project) return { enqueued: 0 };
+
+    const needsFollowers = project.visibility === "public" && inputs.some((input) =>
+        PROJECT_NOTIFICATION_EVENT_REGISTRY[input.eventKey].defaultRecipients.includes("followers"),
+    );
+    const followerIds = needsFollowers
+        ? (await db
+            .select({ userId: projectFollows.userId })
+            .from(projectFollows)
+            .where(eq(projectFollows.projectId, projectId)))
+            .map((row) => row.userId)
+        : [];
+
+    const writes = inputs.flatMap((input) => buildProjectNotificationWrites({
+        input,
+        project,
+        members,
+        followerIds,
+    }));
 
     if (writes.length === 0) return { enqueued: 0 };
     const result = await emitNotificationWrites(writes);
     if ("error" in result && result.error) {
         logger.warn("project_notifications.enqueue_failed", {
             module: "notifications",
-            projectId: input.projectId,
-            eventKey: input.eventKey,
+            projectId,
+            eventKey: inputs.length === 1 ? inputs[0]!.eventKey : "batch",
             error: result.error,
         });
     }
     return result;
+}
+
+export async function enqueueProjectNotificationEvent(sourceInput: EnqueueProjectNotificationEventInput) {
+    return enqueueProjectNotificationEvents([sourceInput]);
 }
 
 export async function readProjectNotificationActorSnapshot(userId: string | null | undefined) {
