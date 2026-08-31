@@ -176,6 +176,32 @@ test("context filtering narrows analytics data before builders run", () => {
     assert.equal(scoped.files.length, 0);
 });
 
+test("timeline prefers durable task and sprint history over state snapshots", () => {
+    const input = baseInput();
+    input.taskEvents = [{
+        id: "task-event-1",
+        taskId: "task-1",
+        actorId: "member-1",
+        eventType: "status_changed",
+        payload: { from: "todo", to: "blocked" },
+        createdAt: "2026-05-06T00:00:00.000Z",
+    }];
+    input.sprintEvents = [{
+        id: "sprint-event-1",
+        sprintId: "sprint-1",
+        actorId: "owner-1",
+        eventType: "created",
+        payload: {},
+        createdAt: "2026-05-01T00:00:00.000Z",
+    }];
+
+    const timeline = buildProjectAnalyticsTimeline(input, { limit: 50 });
+    assert.ok(timeline.items.some((event) => event.id === "task-event:task-event-1"));
+    assert.ok(timeline.items.some((event) => event.id === "sprint-event:sprint-event-1"));
+    assert.equal(timeline.items.some((event) => event.id === "task:task-1:updated"), false);
+    assert.equal(timeline.items.some((event) => event.id === "sprint:sprint-1"), false);
+});
+
 test("private files are removed before analytics builders run", () => {
     const input = baseInput();
     input.files.push({
