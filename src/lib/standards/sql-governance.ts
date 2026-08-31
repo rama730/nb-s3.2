@@ -17,6 +17,7 @@ export const SqlGovernanceManifestSchema = z.object({
   policyVersion: z.literal(1),
   defaultChangeKind: z.enum(SQL_CHANGE_KINDS),
   migrationDirectory: z.string().min(1),
+  strictLineageFromIndex: z.number().int().nonnegative(),
   existingMigrationFiles: z.array(z.string().min(1)).min(1),
   legacyDatabaseTags: z.array(z.string().min(1)).default([]),
   allowedUtilitySqlFiles: z.array(z.string().min(1)).default([]),
