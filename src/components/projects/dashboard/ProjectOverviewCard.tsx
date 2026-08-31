@@ -1,6 +1,6 @@
 "use client";
 
-import { ExternalLink, Github, Lock, Zap } from "lucide-react";
+import { Lock, Zap } from "lucide-react";
 import { memo, useMemo, useState } from "react";
 import { SkillList } from "@/components/skills/SkillList";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -179,26 +179,6 @@ const ProjectOverviewCard = memo(function ProjectOverviewCard({
                             </div>
                         ) : null}
 
-                        {(project?.github_url || project?.demo_url) ? (
-                            <div className="space-y-3">
-                                <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">Resources</h3>
-                                <div className="flex flex-col gap-2">
-                                    {project.github_url ? (
-                                        <a href={project.github_url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 text-sm font-medium text-zinc-600 hover:text-primary hover:underline dark:text-zinc-300">
-                                            <Github className="h-4 w-4" />
-                                            Source Code
-                                            <ExternalLink className="h-3 w-3 text-zinc-400" />
-                                        </a>
-                                    ) : null}
-                                    {project.demo_url ? (
-                                        <a href={project.demo_url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 text-sm font-medium text-zinc-600 hover:text-primary hover:underline dark:text-zinc-300">
-                                            <ExternalLink className="h-4 w-4" />
-                                            Live Demo
-                                        </a>
-                                    ) : null}
-                                </div>
-                            </div>
-                        ) : null}
                     </div>
                 </div>
             </div>
