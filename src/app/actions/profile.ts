@@ -24,6 +24,8 @@ import { resolvePrivacyRelationship } from '@/lib/privacy/resolver'
 import { logger } from '@/lib/logger'
 import { UsernamePersistenceError, getUsernameAvailability, mapUsernamePersistenceError } from '@/lib/usernames/service'
 import { syncProfileSkills } from '@/lib/skills/service'
+import { socialLinkItemsFromStorage, validateSocialLinkCollection } from '@/lib/profile/normalization'
+import { enqueueSupersededProfileImages } from '@/lib/profile/image-cleanup'
 
 export type UpdateProfileInput = ProfileUpdateInput
 export type ProfileUpdateErrorCode =
@@ -43,7 +45,7 @@ export type ProfileUpdateErrorCode =
 
 export type UpdateProfileActionResult =
     | { success: true; updatedAt: string }
-    | { success: false; error: string; errorCode: ProfileUpdateErrorCode; code?: ProfileUpdateErrorCode }
+    | { success: false; error: string; errorCode: ProfileUpdateErrorCode; code?: ProfileUpdateErrorCode; currentSocialLinks?: unknown; updatedAt?: string }
 
 const PROFILE_UPDATE_LIMIT = 30
 const PROFILE_UPDATE_WINDOW_SECONDS = 60
@@ -61,7 +63,6 @@ const ALLOWED_PROFILE_IMAGE_MIME_TYPES = new Set([
     'image/jpeg',
     'image/png',
     'image/webp',
-    'image/gif',
 ])
 
 // SEC-H6 / SEC-H12: per-kind per-user throttle so a compromised session can't
@@ -89,8 +90,6 @@ function profileImageExtensionFromMimeType(mimeType: string): string {
             return 'png'
         case 'image/webp':
             return 'webp'
-        case 'image/gif':
-            return 'gif'
         default:
             return 'bin'
     }
@@ -275,7 +274,16 @@ export async function updateProfileAction(data: UpdateProfileInput): Promise<Upd
         if (!result.success) {
             return { success: false, error: result.error.issues[0]!.message, errorCode: 'VALIDATION_ERROR' }
         }
-        const validData = normalizeProfileUpdateInput(result.data)
+        const socialLinks = result.data.socialLinks === undefined
+            ? null
+            : validateSocialLinkCollection(result.data.socialLinks)
+        if (socialLinks && !socialLinks.success) {
+            return { success: false, error: socialLinks.error, errorCode: 'VALIDATION_ERROR' }
+        }
+        const validData = normalizeProfileUpdateInput({
+            ...result.data,
+            ...(socialLinks ? { socialLinks: socialLinks.links } : {}),
+        })
 
         const current = await db.query.profiles.findFirst({
             where: eq(profiles.id, user.id),
@@ -292,6 +300,7 @@ export async function updateProfileAction(data: UpdateProfileInput): Promise<Upd
                 skills: true,
                 interests: true,
                 socialLinks: true,
+                socialLinkMetadata: true,
                 visibility: true,
                 messagePrivacy: true,
                 openTo: true,
@@ -412,7 +421,22 @@ export async function updateProfileAction(data: UpdateProfileInput): Promise<Upd
         if (patch.bannerUrl !== undefined) updateData.bannerUrl = toNullableString(patch.bannerUrl)
         if (patch.skills !== undefined) updateData.skills = patch.skills
         if (patch.interests !== undefined) updateData.interests = patch.interests
-        if (patch.socialLinks !== undefined) updateData.socialLinks = patch.socialLinks
+        if (patch.socialLinks !== undefined) {
+            updateData.socialLinks = patch.socialLinks
+            const beforeValidation = validateSocialLinkCollection(current.socialLinks)
+            const before = beforeValidation.success ? beforeValidation.links : []
+            const after = socialLinkItemsFromStorage(patch.socialLinks)
+            const previousById = new Map(before.map((link) => [link.id, link.url]))
+            const retainedHealth = Object.fromEntries(
+                Object.entries(current.socialLinkMetadata ?? {}).filter(([id]) => {
+                    const next = after.find((link) => link.id === id)
+                    // A saved replacement clears only that link's stale state;
+                    // changing profile text or reordering links does not hide it.
+                    return Boolean(next && previousById.get(id) === next.url)
+                }),
+            )
+            updateData.socialLinkMetadata = retainedHealth
+        }
         if (patch.visibility !== undefined) updateData.visibility = patch.visibility
         if (patch.messagePrivacy !== undefined) updateData.messagePrivacy = patch.messagePrivacy
         if (patch.openTo !== undefined) updateData.openTo = patch.openTo
@@ -454,6 +478,18 @@ export async function updateProfileAction(data: UpdateProfileInput): Promise<Upd
                 nextValue: { value: (patch as Record<string, unknown>)[item.key] ?? null },
                 metadata: {},
             }))
+        if (patch.socialLinks !== undefined) {
+            auditRows.push({
+                userId: user.id,
+                eventType: 'social_links_changed',
+                previousValue: { value: { count: socialLinkItemsFromStorage(current.socialLinks).length } },
+                nextValue: { value: {
+                    count: socialLinkItemsFromStorage(patch.socialLinks).length,
+                    platforms: socialLinkItemsFromStorage(patch.socialLinks).map((link) => link.platform || 'other').sort(),
+                } },
+                metadata: { source: 'profile_social_presence' },
+            })
+        }
 
         let updatedRows: Array<{ id: string; updatedAt: Date; username: string | null }> = []
         try {
@@ -550,15 +586,30 @@ export async function updateProfileAction(data: UpdateProfileInput): Promise<Upd
 
         if (updatedRows.length === 0) {
             if (expectedUpdatedAt) {
+                const latest = await db.query.profiles.findFirst({
+                    where: eq(profiles.id, user.id),
+                    columns: { socialLinks: true, updatedAt: true },
+                });
                 return {
                     success: false,
                     error: 'Profile was updated elsewhere. Please refresh and retry.',
                     errorCode: 'PROFILE_CONFLICT',
                     code: 'PROFILE_CONFLICT',
+                    currentSocialLinks: latest?.socialLinks ?? current.socialLinks,
+                    updatedAt: (latest?.updatedAt ?? current.updatedAt).toISOString(),
                 }
             }
             return { success: false, error: 'Profile not found', errorCode: 'PROFILE_NOT_FOUND' }
         }
+
+        await enqueueSupersededProfileImages(user.id, [
+            patch.avatarUrl !== undefined && patch.avatarUrl !== current.avatarUrl
+                ? current.avatarUrl
+                : null,
+            patch.bannerUrl !== undefined && patch.bannerUrl !== current.bannerUrl
+                ? current.bannerUrl
+                : null,
+        ])
 
         if (patch.username || patch.fullName || patch.avatarUrl) {
             try {
