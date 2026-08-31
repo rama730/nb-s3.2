@@ -340,6 +340,12 @@ export async function runGithubProjectImport(input: {
 
         const localMap = new Map(localNodes.map((n) => [n.path, n]));
         const filesToInsert: typeof fileNodes = [];
+        const filesToUpdate: Array<{
+          id: string;
+          git_hash: string;
+          size: number;
+          current_version: number;
+        }> = [];
         const resolutionMap = resolutions || {};
 
         // Track remote paths to detect deletions
@@ -347,35 +353,27 @@ export async function runGithubProjectImport(input: {
 
         // 2. Classify remote files
         const totalFilesToProcess = fileNodes.length;
-        let processedFiles = 0;
-        let lastProgressUpdate = Date.now();
-
         const updateProgress = async (processed: number, phase: string, msg: string) => {
-          processedFiles = processed;
           const percentage = totalFilesToProcess > 0 ? Math.round((processed / totalFilesToProcess) * 100) : 100;
-          const now = Date.now();
-          if (processed === 0 || processed === totalFilesToProcess || now - lastProgressUpdate > 300) {
-            lastProgressUpdate = now;
-            await db
-              .update(projects)
-              .set({
-                importSource: {
-                  ...existingSource,
-                  metadata: {
-                    ...sourceMetadata,
-                    syncPhase: phase,
-                    syncProgress: {
-                      total: totalFilesToProcess,
-                      processed,
-                      percentage,
-                      message: msg,
-                    },
+          await db
+            .update(projects)
+            .set({
+              importSource: {
+                ...existingSource,
+                metadata: {
+                  ...sourceMetadata,
+                  syncPhase: phase,
+                  syncProgress: {
+                    total: totalFilesToProcess,
+                    processed,
+                    percentage,
+                    message: msg,
                   },
-                } as any,
-                updatedAt: new Date(),
-              })
-              .where(eq(projects.id, projectId));
-          }
+                },
+              } as any,
+              updatedAt: new Date(),
+            })
+            .where(eq(projects.id, projectId));
         };
 
         await updateProgress(0, "reconciling", "Analyzing repository changes...");
@@ -395,17 +393,12 @@ export async function runGithubProjectImport(input: {
               const shouldOverwrite = res === "overwrite_github" || (!isLocallyModified);
 
               if (shouldOverwrite) {
-                // Update existing node
-                await db
-                  .update(projectNodes)
-                  .set({
-                    gitHash: remote.sha,
-                    s3Key: null, // Reset to pull fresh from remote
-                    size: remote.size,
-                    currentVersion: local.currentVersion + 1,
-                    updatedAt: new Date(),
-                  })
-                  .where(eq(projectNodes.id, local.id));
+                filesToUpdate.push({
+                  id: local.id,
+                  git_hash: remote.sha,
+                  size: remote.size,
+                  current_version: local.currentVersion + 1,
+                });
               }
             }
           } else {
@@ -413,15 +406,10 @@ export async function runGithubProjectImport(input: {
             filesToInsert.push(remote);
           }
 
-          processedFiles++;
-          if (processedFiles % 10 === 0 || processedFiles === totalFilesToProcess) {
-            await updateProgress(processedFiles, "reconciling", `Processing file changes (${processedFiles}/${totalFilesToProcess})...`);
-          }
         }
 
-        await updateProgress(totalFilesToProcess, "reconciling", "Applying deletions and finalizing nodes...");
-
         // 3. Handle remote deletions
+        const nodeIdsToDelete: string[] = [];
         for (const local of localNodes) {
           if (!remotePaths.has(local.path)) {
             // Check if local was modified and user chose to keep it
@@ -431,22 +419,43 @@ export async function runGithubProjectImport(input: {
             const shouldKeep = res === "keep_local" || (isLocallyModified && res !== "overwrite_github");
 
             if (!shouldKeep) {
-              // Delete locally
-              await db
-                .update(projectNodes)
-                .set({
-                  deletedAt: new Date(),
-                  updatedAt: new Date(),
-                })
-                .where(eq(projectNodes.id, local.id));
+              nodeIdsToDelete.push(local.id);
             }
           }
         }
+
+        await db.transaction(async (tx) => {
+          for (let index = 0; index < filesToUpdate.length; index += RECONCILE_DELETE_BATCH_SIZE) {
+            const batch = filesToUpdate.slice(index, index + RECONCILE_DELETE_BATCH_SIZE);
+            await tx.execute(sql`
+              UPDATE project_nodes node
+              SET git_blob_hash = patch.git_hash,
+                  s3_key = NULL,
+                  size = patch.size,
+                  current_version = patch.current_version,
+                  updated_at = now()
+              FROM jsonb_to_recordset(${JSON.stringify(batch)}::jsonb)
+                AS patch(id uuid, git_hash text, size bigint, current_version integer)
+              WHERE node.id = patch.id
+                AND node.project_id = ${projectId}::uuid
+                AND node.deleted_at IS NULL
+            `);
+          }
+          for (let index = 0; index < nodeIdsToDelete.length; index += RECONCILE_DELETE_BATCH_SIZE) {
+            const batch = nodeIdsToDelete.slice(index, index + RECONCILE_DELETE_BATCH_SIZE);
+            await tx
+              .update(projectNodes)
+              .set({ deletedAt: new Date(), updatedAt: new Date() })
+              .where(and(eq(projectNodes.projectId, projectId), inArray(projectNodes.id, batch)));
+          }
+        });
 
         // 4. Insert brand new files
         if (filesToInsert.length > 0) {
           await insertVirtualFileNodes(projectId, filesToInsert, folderMap, userId);
         }
+
+        await updateProgress(totalFilesToProcess, "reconciling", "Repository changes applied.");
         
         // --- END RECONCILIATION ---
 
