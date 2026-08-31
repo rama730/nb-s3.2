@@ -2,6 +2,7 @@
 
 import React, { Suspense, useMemo, type CSSProperties } from "react";
 import dynamic from "next/dynamic";
+import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema, type Options as RehypeSanitizeOptions } from "rehype-sanitize";
@@ -160,7 +161,6 @@ type MarkdownAstNode = {
 function sourceTargetProps(
     kind: ProjectDocEditorTargetKind,
     node?: MarkdownAstNode,
-    highlightedTargetId?: string | null,
 ) {
     const line = node?.position?.start?.line ?? null;
     const offset = node?.position?.start?.offset ?? null;
@@ -170,7 +170,6 @@ function sourceTargetProps(
         "data-readme-source-offset": offset ?? undefined,
         "data-readme-source-kind": kind,
         "data-readme-editor-target-id": targetId,
-        "data-readme-highlighted": highlightedTargetId === targetId ? "true" : undefined,
     };
 }
 
@@ -178,6 +177,21 @@ function sourceHighlightClass(highlighted: boolean) {
     return highlighted
         ? "bg-blue-100/80 shadow-[0_0_0_4px_rgba(59,130,246,0.2)] dark:bg-blue-500/20"
         : "";
+}
+
+function sourceHighlightProps(
+    targetId: string | null | undefined,
+    highlightedTargetId: string | null | undefined,
+    highlightedTargetToken: number | null | undefined,
+) {
+    const highlighted = Boolean(targetId && highlightedTargetId === targetId);
+    return {
+        highlighted,
+        attributes: {
+            "data-readme-highlighted": highlighted ? "true" : undefined,
+            "data-readme-highlight-token": highlighted ? highlightedTargetToken ?? undefined : undefined,
+        },
+    };
 }
 
 function adjustNodePosition(node: MarkdownAstNode | undefined, lineOffset: number, charOffset: number): MarkdownAstNode | undefined {
@@ -200,19 +214,19 @@ function ProjectDocInlineReferenceChip({
     option,
     reference,
     targetId,
-    highlighted,
-    highlightToken,
     onRequestTarget,
     project,
+    highlightedTargetId,
+    highlightedTargetToken,
 }: {
     fallback: React.ReactNode;
     option?: ProjectDocReferenceOption | null;
     reference?: { kind: ProjectDocReferenceKind; id: string } | null;
     targetId?: string | null;
-    highlighted?: boolean;
-    highlightToken?: number | null;
     onRequestTarget?: (targetId: string) => void;
     project?: Project | null;
+    highlightedTargetId?: string | null;
+    highlightedTargetToken?: number | null;
 }) {
     const router = useRouter();
     const kind = option?.kind ?? reference?.kind ?? null;
@@ -229,7 +243,7 @@ function ProjectDocInlineReferenceChip({
     const content = (
         <>
             {option?.avatarUrl ? (
-                <img src={option.avatarUrl} alt="" className="h-4 w-4 rounded-full object-cover align-[-0.2rem]" />
+                <Image src={option.avatarUrl} alt="" width={16} height={16} sizes="16px" className="h-4 w-4 rounded-full object-cover align-[-0.2rem]" />
             ) : isContributor ? (
                 <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-blue-500/15 text-[9px] font-bold text-blue-500 align-[-0.2rem]">
                     {label.charAt(0).toUpperCase()}
@@ -238,9 +252,10 @@ function ProjectDocInlineReferenceChip({
             <span className="font-semibold text-blue-600 dark:text-blue-300">{label}</span>
         </>
     );
+    const targetHighlight = sourceHighlightProps(targetId, highlightedTargetId, highlightedTargetToken);
     const className = cn(
         "mx-0.5 inline-flex max-w-full cursor-pointer items-baseline gap-1 rounded-sm align-baseline text-sm leading-[inherit] no-underline outline-none transition-[background-color,box-shadow,color] hover:text-blue-500  ",
-        highlighted && "bg-blue-100/80 shadow-[0_0_0_4px_rgba(59,130,246,0.22)] dark:bg-blue-500/20",
+        sourceHighlightClass(targetHighlight.highlighted),
     );
     const title = [label, detail].filter(Boolean).join(" · ");
     const optionHref = option?.href;
@@ -250,7 +265,7 @@ function ProjectDocInlineReferenceChip({
             "data-readme-target": "true",
             "data-readme-target-kind": "reference",
             "data-readme-target-id": targetId,
-            "data-readme-highlight-token": highlighted ? highlightToken ?? undefined : undefined,
+            ...targetHighlight.attributes,
         }
         : {};
 
@@ -426,8 +441,6 @@ export const ProjectDocRenderer = React.memo(function ProjectDocRenderer({
     editorMode = false,
     fidelity = "app",
     className,
-    highlightedTargetId,
-    highlightedTargetToken,
     onMediaLoad,
     onRequestTarget,
     onRequestSourcePosition,
@@ -436,6 +449,8 @@ export const ProjectDocRenderer = React.memo(function ProjectDocRenderer({
     viewModel,
     docSlug,
     renderedSlugs = [],
+    highlightedTargetId,
+    highlightedTargetToken,
 }: {
     content: string;
     project: Project;
@@ -444,8 +459,6 @@ export const ProjectDocRenderer = React.memo(function ProjectDocRenderer({
     editorMode?: boolean;
     fidelity?: "app" | "github";
     className?: string;
-    highlightedTargetId?: string | null;
-    highlightedTargetToken?: number | null;
     onMediaLoad?: () => void;
     onRequestTarget?: (targetId: string) => void;
     onRequestSourcePosition?: (position: ProjectDocEditorSourcePosition) => void;
@@ -454,6 +467,8 @@ export const ProjectDocRenderer = React.memo(function ProjectDocRenderer({
     viewModel?: ProjectDocViewModel;
     docSlug?: string;
     renderedSlugs?: string[];
+    highlightedTargetId?: string | null;
+    highlightedTargetToken?: number | null;
 }) {
     const searchParams = useSearchParams();
     const normalizedDocSlug = normalizeProjectDocSlug(docSlug ?? searchParams?.get("doc") ?? "readme");
@@ -492,73 +507,9 @@ export const ProjectDocRenderer = React.memo(function ProjectDocRenderer({
             .map(([key, preview]) => `${key}:${preview.items.map((item) => `${item.id}:${item.title}:${item.status ?? ""}`).join(",")}`)
             .join("|")
     ), [effectivePreviewByKey]);
-    React.useEffect(() => {
-        if (typeof document === "undefined") return;
 
-        // Clean up previous highlights
-        const highlightedEls = document.querySelectorAll("[data-readme-highlighted='true']");
-        highlightedEls.forEach((el) => {
-            el.removeAttribute("data-readme-highlighted");
-            el.removeAttribute("data-readme-highlight-token");
-            el.classList.remove(
-                "bg-blue-100/80", 
-                "shadow-[0_0_0_4px_rgba(59,130,246,0.2)]", 
-                "dark:bg-blue-500/20",
-                "-mx-2", 
-                "px-2", 
-                "border-blue-400", 
-                "bg-blue-100/90", 
-                "ring-2", 
-                "ring-blue-400/45", 
-                "shadow-[0_0_0_5px_rgba(59,130,246,0.24)]", 
-                "dark:border-blue-400", 
-                "dark:bg-blue-500/30", 
-                "dark:ring-blue-400/45"
-            );
-        });
 
-        if (!highlightedTargetId) return;
-
-        // Find target element by selector
-        const escapedId = typeof CSS !== "undefined" && typeof CSS.escape === "function" 
-            ? CSS.escape(highlightedTargetId) 
-            : highlightedTargetId.replace(/["\\#.:,[\]=]/g, "\\$&");
-        const selector = `#${escapedId}, [data-readme-editor-target-id="${escapedId}"], [data-readme-target-id="${escapedId}"]`;
-        const targetEls = document.querySelectorAll(selector);
-
-        targetEls.forEach((el) => {
-            el.setAttribute("data-readme-highlighted", "true");
-            if (highlightedTargetToken) {
-                el.setAttribute("data-readme-highlight-token", String(highlightedTargetToken));
-            }
-
-            const kind = el.getAttribute("data-readme-source-kind") || el.getAttribute("data-readme-target-kind");
-            const isHeading = kind === "heading" || ["H1", "H2", "H3", "H4"].includes(el.tagName);
-
-            if (isHeading) {
-                el.classList.add(
-                    "-mx-2", 
-                    "px-2", 
-                    "border-blue-400", 
-                    "bg-blue-100/90", 
-                    "ring-2", 
-                    "ring-blue-400/45", 
-                    "shadow-[0_0_0_5px_rgba(59,130,246,0.24)]", 
-                    "dark:border-blue-400", 
-                    "dark:bg-blue-500/30", 
-                    "dark:ring-blue-400/45"
-                );
-            } else {
-                el.classList.add(
-                    "bg-blue-100/80", 
-                    "shadow-[0_0_0_4px_rgba(59,130,246,0.2)]", 
-                    "dark:bg-blue-500/20"
-                );
-            }
-        });
-    }, [highlightedTargetId, highlightedTargetToken]);
-
-    const markdownRenderSignature = `${fidelity}:${allowExternalImages ? "external" : "safe"}:${previewRenderSignature}:${highlightedTargetId || ""}`;
+    const markdownRenderSignature = `${fidelity}:${allowExternalImages ? "external" : "safe"}:${previewRenderSignature}:${highlightedTargetId ?? ""}:${highlightedTargetToken ?? ""}`;
     const inlineReferenceEntriesByHref = useMemo(() => {
         const map = new Map<string, Array<{
             targetId: string;
@@ -598,8 +549,10 @@ export const ProjectDocRenderer = React.memo(function ProjectDocRenderer({
         const occurrenceIndex = headingRenderCounts.get(headingText) ?? 0;
         headingRenderCounts.set(headingText, occurrenceIndex + 1);
         const targetId = id || headingTargetQueues.get(headingText)?.[occurrenceIndex] || slugifyReadmeHeading(headingText, fallbackHeadingIds);
-        const sourceProps = sourceTargetProps("heading", node, highlightedTargetId);
-        const highlighted = highlightedTargetId === targetId || highlightedTargetId === sourceProps["data-readme-editor-target-id"];
+        const sourceProps = sourceTargetProps("heading", node);
+        const targetHighlight = sourceHighlightProps(targetId, highlightedTargetId, highlightedTargetToken);
+        const sourceHighlight = sourceHighlightProps(sourceProps["data-readme-editor-target-id"], highlightedTargetId, highlightedTargetToken);
+        const highlighted = targetHighlight.highlighted || sourceHighlight.highlighted;
         return (
             <Tag
                 id={targetId}
@@ -613,8 +566,7 @@ export const ProjectDocRenderer = React.memo(function ProjectDocRenderer({
                 className={cn(
                     className,
                     "rounded-md outline-none transition-[background-color,box-shadow,color]",
-                    " ",
-                    highlighted && "-mx-2 px-2 border-blue-400 bg-blue-100/90 ring-2 ring-blue-400/45 shadow-[0_0_0_5px_rgba(59,130,246,0.24)] dark:border-blue-400 dark:bg-blue-500/30 dark:ring-blue-400/45",
+                    sourceHighlightClass(highlighted),
                 )}
                 {...props}
             >
@@ -629,26 +581,31 @@ export const ProjectDocRenderer = React.memo(function ProjectDocRenderer({
         h3: ({ children, id, node, ...props }: React.HTMLAttributes<HTMLHeadingElement> & { node?: MarkdownAstNode }) => renderHeading("h3", children, id, "mb-2 mt-5 scroll-mt-24 text-lg font-semibold", node, props),
         h4: ({ children, id, node, ...props }: React.HTMLAttributes<HTMLHeadingElement> & { node?: MarkdownAstNode }) => renderHeading("h4", children, id, "mb-2 mt-4 scroll-mt-24 text-base font-semibold", node, props),
         p: ({ node, ...props }: React.HTMLAttributes<HTMLParagraphElement> & { node?: MarkdownAstNode }) => {
-            const sourceProps = sourceTargetProps("paragraph", node, highlightedTargetId);
+            const sourceProps = sourceTargetProps("paragraph", node);
+            const targetHighlight = sourceHighlightProps(sourceProps["data-readme-editor-target-id"], highlightedTargetId, highlightedTargetToken);
             return (
                 <p
-                    className={cn("mb-3 rounded-md text-sm leading-6 text-zinc-700 transition-[background-color,box-shadow] dark:text-zinc-300", sourceHighlightClass(Boolean(sourceProps["data-readme-highlighted"])))}
+                    className={cn("mb-3 rounded-md text-sm leading-6 text-zinc-700 transition-[background-color,box-shadow] dark:text-zinc-300", sourceHighlightClass(targetHighlight.highlighted))}
                     {...sourceProps}
+                    {...targetHighlight.attributes}
                     {...props}
                 />
             );
         },
         ul: ({ node, ...props }: React.HTMLAttributes<HTMLUListElement> & { node?: MarkdownAstNode }) => {
-            const sourceProps = sourceTargetProps("list", node, highlightedTargetId);
-            return <ul className={cn("mb-3 rounded-md list-disc space-y-1 pl-5 text-sm text-zinc-700 transition-[background-color,box-shadow] dark:text-zinc-300", sourceHighlightClass(Boolean(sourceProps["data-readme-highlighted"])))} {...sourceProps} {...props} />;
+            const sourceProps = sourceTargetProps("list", node);
+            const targetHighlight = sourceHighlightProps(sourceProps["data-readme-editor-target-id"], highlightedTargetId, highlightedTargetToken);
+            return <ul className={cn("mb-3 rounded-md list-disc space-y-1 pl-5 text-sm text-zinc-700 transition-[background-color,box-shadow] dark:text-zinc-300", sourceHighlightClass(targetHighlight.highlighted))} {...sourceProps} {...targetHighlight.attributes} {...props} />;
         },
         ol: ({ node, ...props }: React.HTMLAttributes<HTMLOListElement> & { node?: MarkdownAstNode }) => {
-            const sourceProps = sourceTargetProps("list", node, highlightedTargetId);
-            return <ol className={cn("mb-3 rounded-md list-decimal space-y-1 pl-5 text-sm text-zinc-700 transition-[background-color,box-shadow] dark:text-zinc-300", sourceHighlightClass(Boolean(sourceProps["data-readme-highlighted"])))} {...sourceProps} {...props} />;
+            const sourceProps = sourceTargetProps("list", node);
+            const targetHighlight = sourceHighlightProps(sourceProps["data-readme-editor-target-id"], highlightedTargetId, highlightedTargetToken);
+            return <ol className={cn("mb-3 rounded-md list-decimal space-y-1 pl-5 text-sm text-zinc-700 transition-[background-color,box-shadow] dark:text-zinc-300", sourceHighlightClass(targetHighlight.highlighted))} {...sourceProps} {...targetHighlight.attributes} {...props} />;
         },
         blockquote: ({ node, ...props }: React.HTMLAttributes<HTMLQuoteElement> & { node?: MarkdownAstNode }) => {
-            const sourceProps = sourceTargetProps("blockquote", node, highlightedTargetId);
-            return <blockquote className={cn("my-4 rounded-md border-l-4 border-zinc-300 pl-4 text-sm text-zinc-600 transition-[background-color,box-shadow] dark:border-zinc-700 dark:text-zinc-400", sourceHighlightClass(Boolean(sourceProps["data-readme-highlighted"])))} {...sourceProps} {...props} />;
+            const sourceProps = sourceTargetProps("blockquote", node);
+            const targetHighlight = sourceHighlightProps(sourceProps["data-readme-editor-target-id"], highlightedTargetId, highlightedTargetToken);
+            return <blockquote className={cn("my-4 rounded-md border-l-4 border-zinc-300 pl-4 text-sm text-zinc-600 transition-[background-color,box-shadow] dark:border-zinc-700 dark:text-zinc-400", sourceHighlightClass(targetHighlight.highlighted))} {...sourceProps} {...targetHighlight.attributes} {...props} />;
         },
         a: ({ href, rel, target, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => {
             const reference = parseReadmeReferenceHref(typeof href === "string" ? href : null);
@@ -660,13 +617,14 @@ export const ProjectDocRenderer = React.memo(function ProjectDocRenderer({
                 return (
                     <ProjectDocInlineReferenceChip
                         fallback={props.children}
-                        highlighted={highlightedTargetId === targetId}
-                        highlightToken={highlightedTargetId === targetId ? highlightedTargetToken : null}
+
                         onRequestTarget={onRequestTarget}
                         option={entry?.option}
                         reference={entry?.reference ?? reference}
                         targetId={targetId}
                         project={project}
+                        highlightedTargetId={highlightedTargetId}
+                        highlightedTargetToken={highlightedTargetToken}
                     />
                 );
             }
@@ -705,8 +663,9 @@ export const ProjectDocRenderer = React.memo(function ProjectDocRenderer({
                     : typeof offset === "number"
                         ? commandTargetMaps.inlineByOffset.get(offset)
                         : undefined;
-                const sourceProps = sourceTargetProps("inline-code", node, highlightedTargetId);
-                const inlineCommandHighlighted = highlightedTargetId === inlineCommandId || Boolean(sourceProps["data-readme-highlighted"]);
+                const sourceProps = sourceTargetProps("inline-code", node);
+                const inlineCommandHighlighted = highlightedTargetId === inlineCommandId
+                    || highlightedTargetId === sourceProps["data-readme-editor-target-id"];
                 return (
                     <code
                         id={inlineCommandId}
@@ -745,9 +704,9 @@ export const ProjectDocRenderer = React.memo(function ProjectDocRenderer({
                         endLine: command.codeLineEnd ?? command.codeLineStart ?? 0,
                     }))
                 : [];
-            const sourceProps = sourceTargetProps("command", node, highlightedTargetId);
-            const blockHighlighted = highlightedTargetId === commandId || Boolean(sourceProps["data-readme-highlighted"]);
-            const lineTargetHighlighted = lineTargets.some((target) => target.id === highlightedTargetId);
+            const sourceProps = sourceTargetProps("command", node);
+            const blockHighlighted = highlightedTargetId === commandId;
+            const lineTargetHighlighted = lineTargets.some((target) => highlightedTargetId === target.id);
             return (
                 <ProjectDocCommandBlock
                     id={commandId}
@@ -755,7 +714,7 @@ export const ProjectDocRenderer = React.memo(function ProjectDocRenderer({
                     editorTargetId={sourceProps["data-readme-editor-target-id"]}
                     highlighted={blockHighlighted}
                     highlightedTargetId={highlightedTargetId}
-                    highlightToken={blockHighlighted || lineTargetHighlighted ? highlightedTargetToken : null}
+                    highlightToken={highlightedTargetToken}
                     language={match[1]}
                     lineTargets={lineTargets}
                     onCopied={commandId ? onRequestTarget : undefined}
@@ -774,8 +733,9 @@ export const ProjectDocRenderer = React.memo(function ProjectDocRenderer({
                 allowExternalImages,
                 project,
             });
-            const sourceProps = sourceTargetProps("image", node, highlightedTargetId);
-            const highlighted = Boolean(sourceProps["data-readme-highlighted"]);
+            const sourceProps = sourceTargetProps("image", node);
+            const targetHighlight = sourceHighlightProps(sourceProps["data-readme-editor-target-id"], highlightedTargetId, highlightedTargetToken);
+            const highlighted = targetHighlight.highlighted;
             if (!image.src) {
                 return (
                     <span
@@ -784,6 +744,7 @@ export const ProjectDocRenderer = React.memo(function ProjectDocRenderer({
                         data-readme-media-blocked={image.blockedReason ?? "invalid"}
                         title={image.blockedReason === "external" ? "External image hidden by document settings." : "Document image could not be resolved."}
                         {...sourceProps}
+                        {...targetHighlight.attributes}
                     >
                         {image.blockedReason === "external" ? "Image hidden" : "Image unavailable"}
                     </span>
@@ -805,13 +766,15 @@ export const ProjectDocRenderer = React.memo(function ProjectDocRenderer({
                     data-readme-media-original-src={image.originalSrc || undefined}
                     className={readmeMediaClass(image.kind, highlighted)}
                     {...sourceProps}
+                    {...targetHighlight.attributes}
                 />
             );
         },
         table: ({ node, ...props }: React.TableHTMLAttributes<HTMLTableElement> & { node?: MarkdownAstNode }) => {
-            const sourceProps = sourceTargetProps("table", node, highlightedTargetId);
+            const sourceProps = sourceTargetProps("table", node);
+            const targetHighlight = sourceHighlightProps(sourceProps["data-readme-editor-target-id"], highlightedTargetId, highlightedTargetToken);
             return (
-                <div className={cn("my-5 overflow-x-auto rounded-md transition-[background-color,box-shadow]", sourceHighlightClass(Boolean(sourceProps["data-readme-highlighted"])))} {...sourceProps}>
+                <div className={cn("my-5 overflow-x-auto rounded-md transition-[background-color,box-shadow]", sourceHighlightClass(targetHighlight.highlighted))} {...sourceProps} {...targetHighlight.attributes}>
                     <table className="min-w-full table-fixed border-collapse text-left text-sm" {...props} />
                 </div>
             );
