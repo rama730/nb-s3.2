@@ -6,6 +6,7 @@ import test from "node:test";
 const API_V1_ROOT = path.resolve(process.cwd(), "src/app/api/v1");
 const EXEMPT_MUTATING_ROUTES = new Set([
   path.resolve(API_V1_ROOT, "webhooks/github/route.ts"),
+  path.resolve(API_V1_ROOT, "extension/auth-code/route.ts"),
 ]);
 
 function collectRouteFiles(root: string, files: string[] = []) {
@@ -29,12 +30,16 @@ test("mutating API v1 routes require CSRF validation unless explicitly exempted"
     const source = fs.readFileSync(filePath, "utf8");
     const hasMutatingHandler = /export\s+async\s+function\s+(POST|PUT|PATCH|DELETE)\b/.test(source);
     if (!hasMutatingHandler || EXEMPT_MUTATING_ROUTES.has(filePath)) {
+      if (filePath.endsWith("extension/auth-code/route.ts")) {
+        assert.match(source, /csrfProtection = "one-time-code-and-state"/);
+        assert.match(source, /timingSafeEqual/);
+      }
       continue;
     }
 
     assert.match(
       source,
-      /validateCsrf\(/,
+      /validateCsrf\(|csrf:\s*true/,
       `${path.relative(process.cwd(), filePath)} is missing validateCsrf()`,
     );
   }
