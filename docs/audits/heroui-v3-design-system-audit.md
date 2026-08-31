@@ -1,5 +1,7 @@
 # HeroUI v3 design-system and application integration audit
 
+> Historical snapshot from 2026-07-21. Do not use its verification status as current database, migration, capacity, or Supabase evidence; use the 2026-08-13 complete SQL/Supabase audit and a fresh verification run.
+
 **Audit date:** 2026-07-21  
 **Target:** HeroUI React v3.2.2, source revision `4af1230b97616f4c48b59f9716412ca883ddd9cf` (`v3` branch)  
 **Application:** `nb-s3` / Edge (Next.js 16, React 19.2, Tailwind CSS 4)  
