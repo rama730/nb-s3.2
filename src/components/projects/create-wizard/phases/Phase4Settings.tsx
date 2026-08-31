@@ -3,6 +3,8 @@
 import { useFormContext } from 'react-hook-form';
 import { CreateProjectInput } from '@/lib/validations/project';
 import { Globe, Lock } from 'lucide-react';
+import { ProjectLinkEditorFields } from '@/components/projects/dashboard/ProjectSocialLinksCard';
+import { socialLinkItemsFromStorage } from '@/lib/profile/normalization';
 
 const DEFAULT_TERMS = {
     ip_agreement: 'discuss' as const,
@@ -13,9 +15,11 @@ const DEFAULT_TERMS = {
 };
 
 export default function Phase4Settings() {
-    const { register, setValue, watch } = useFormContext<CreateProjectInput>();
+    const { setValue, watch } = useFormContext<CreateProjectInput>();
     const visibility = watch('visibility');
     const terms = watch('terms');
+    const externalLinks = socialLinkItemsFromStorage(watch('external_links'));
+    const importSource = watch('import_source');
 
     const updateTerms = (updates: Partial<typeof DEFAULT_TERMS>) => {
         setValue('terms', {
@@ -93,64 +97,21 @@ export default function Phase4Settings() {
                 </div>
             </div>
 
-            {/* External Links */}
+            {/* Project Links */}
             <div>
                 <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100 mb-2">
-                    External Links
+                    Project Links
                 </h3>
                 <p className="text-sm text-zinc-500 dark:text-zinc-400 mb-4">
-                    Add links to your project resources
+                    Paste any public project destination. The service and icon are detected automatically.
                 </p>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                        <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">
-                            GitHub
-                        </label>
-                        <input
-                            {...register('external_links.github')}
-                            type="url"
-                            className="w-full px-4 py-2 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100"
-                            placeholder="https://github.com/..."
-                        />
-                    </div>
-
-                    <div>
-                        <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">
-                            Website
-                        </label>
-                        <input
-                            {...register('external_links.website')}
-                            type="url"
-                            className="w-full px-4 py-2 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100"
-                            placeholder="https://..."
-                        />
-                    </div>
-
-                    <div>
-                        <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">
-                            Discord
-                        </label>
-                        <input
-                            {...register('external_links.discord')}
-                            type="url"
-                            className="w-full px-4 py-2 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100"
-                            placeholder="https://discord.gg/..."
-                        />
-                    </div>
-
-                    <div>
-                        <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">
-                            Figma
-                        </label>
-                        <input
-                            {...register('external_links.figma')}
-                            type="url"
-                            className="w-full px-4 py-2 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100"
-                            placeholder="https://figma.com/..."
-                        />
-                    </div>
-                </div>
+                <ProjectLinkEditorFields
+                    links={externalLinks}
+                    savedLinks={[]}
+                    onChange={(links) => setValue('external_links', links, { shouldDirty: true, shouldValidate: true })}
+                    githubRepoUrl={importSource?.type === 'github' ? importSource.repoUrl : null}
+                    projectType={watch('project_type')}
+                />
             </div>
         </div>
     );
