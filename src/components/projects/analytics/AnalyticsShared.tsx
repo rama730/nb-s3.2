@@ -280,7 +280,7 @@ function getEventPresentation(type: ProjectAnalyticsTimelineEvent["type"]) {
     }
 }
 
-export function TimelineEventRow({ event }: { event: ProjectAnalyticsTimelineEvent }) {
+export function TimelineEventRow({ event, compact = false }: { event: ProjectAnalyticsTimelineEvent; compact?: boolean }) {
     const occurred = new Date(event.occurredAt);
     const occurredLabel = Number.isNaN(occurred.getTime())
         ? "Unknown time"
@@ -294,7 +294,7 @@ export function TimelineEventRow({ event }: { event: ProjectAnalyticsTimelineEve
     const { Icon, colorClass } = getEventPresentation(event.type);
 
     return (
-        <article className="relative pl-0 py-3 text-xs">
+        <article className={`relative pl-0 text-xs ${compact ? "py-2.5" : "py-3"}`}>
             {/* Centered Node Icon/Avatar */}
             <div className="absolute -left-[38px] top-1.5 z-10 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
                 {event.actor ? (
@@ -320,8 +320,9 @@ export function TimelineEventRow({ event }: { event: ProjectAnalyticsTimelineEve
                     <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.14em] text-zinc-500 dark:bg-zinc-900 dark:text-zinc-400">
                         {event.type}
                     </span>
+                    <span className="text-[10px] font-medium text-zinc-400 dark:text-zinc-500">{event.sourceSurface}</span>
                 </div>
-                <p className="mt-1 text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">{event.description}</p>
+                {!compact ? <p className="mt-1 text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">{event.description}</p> : null}
                 {event.representativeNames?.length ? (
                     <div className="mt-2 flex flex-wrap gap-1.5">
                         {event.representativeNames.map((name) => (
@@ -343,7 +344,7 @@ export function TimelineEventRow({ event }: { event: ProjectAnalyticsTimelineEve
                             by {event.actor.name}
                         </span>
                     ) : null}
-                    <AnalyticsActionLink link={event.actionLink} />
+                    {!compact ? <AnalyticsActionLink link={event.actionLink} /> : null}
                 </div>
             </div>
         </article>
