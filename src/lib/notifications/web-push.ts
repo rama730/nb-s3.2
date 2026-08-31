@@ -1,5 +1,5 @@
 import webpush, { type PushSubscription as WebPushSubscription } from "web-push";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { notificationDeliveries, pushSubscriptions } from "@/lib/db/schema";
@@ -125,6 +125,8 @@ export async function dispatchWebPush(userId: string, item: NotificationItem): P
 
     const payload = JSON.stringify(buildPayload(item));
     const deadEndpointIds: string[] = [];
+    const successfulEndpointIds: string[] = [];
+    const failedEndpointIds: string[] = [];
     const deliveryRecords: DeliveryRecord[] = [];
     let delivered = 0;
 
@@ -136,6 +138,7 @@ export async function dispatchWebPush(userId: string, item: NotificationItem): P
         try {
             await webpush.sendNotification(subscription, payload, { TTL: 60 * 60 * 24 });
             delivered += 1;
+            successfulEndpointIds.push(row.id);
             deliveryRecords.push({
                 notificationId: item.id,
                 userId,
@@ -151,6 +154,7 @@ export async function dispatchWebPush(userId: string, item: NotificationItem): P
             if (status === 404 || status === 410) {
                 deadEndpointIds.push(row.id);
             } else {
+                failedEndpointIds.push(row.id);
                 logger.warn("notifications.web_push_send_failed", {
                     module: "notifications",
                     statusCode: status ?? null,
@@ -169,6 +173,43 @@ export async function dispatchWebPush(userId: string, item: NotificationItem): P
     }));
 
     await logDeliveries(deliveryRecords);
+
+    const subscriptionStateUpdates: Promise<unknown>[] = [];
+    const now = new Date();
+    if (successfulEndpointIds.length > 0) {
+        subscriptionStateUpdates.push(
+            db.update(pushSubscriptions)
+                .set({ failureCount: 0, lastSeenAt: now, updatedAt: now })
+                .where(and(
+                    eq(pushSubscriptions.userId, userId),
+                    inArray(pushSubscriptions.id, successfulEndpointIds),
+                )),
+        );
+    }
+    if (failedEndpointIds.length > 0) {
+        subscriptionStateUpdates.push(
+            db.update(pushSubscriptions)
+                .set({
+                    failureCount: sql`${pushSubscriptions.failureCount} + 1`,
+                    updatedAt: now,
+                })
+                .where(and(
+                    eq(pushSubscriptions.userId, userId),
+                    inArray(pushSubscriptions.id, failedEndpointIds),
+                )),
+        );
+    }
+    if (subscriptionStateUpdates.length > 0) {
+        try {
+            await Promise.all(subscriptionStateUpdates);
+        } catch (error) {
+            logger.warn("notifications.web_push_subscription_state_failed", {
+                module: "notifications",
+                userId,
+                error: error instanceof Error ? error.message : String(error),
+            });
+        }
+    }
 
     let pruned = 0;
     if (deadEndpointIds.length > 0) {
