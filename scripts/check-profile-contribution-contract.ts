@@ -47,7 +47,10 @@ async function main() {
   ]);
 
   requireContract("schema has platform-or-external authority constraint", schema.includes("profile_project_contributions_authority_shape_check"));
-  requireContract("schema has optimistic version", schema.includes("version: integer('version').default(1).notNull()"));
+  requireContract(
+    "schema has optimistic version",
+    /version:\s*integer\(["']version["']\)\.default\(1\)\.notNull\(\)/.test(schema),
+  );
   requireContract("external identity is unique", schema.includes("profile_project_contributions_profile_external_active_unique"));
   requireContract("migration relationally backfills skills", migration.includes('INSERT INTO "profile_contribution_skills"'));
   requireContract("migration repairs duplicated idempotency history", migration.includes("row_number() OVER"));
