@@ -6,12 +6,15 @@ import {
 } from "@supabase/supabase-js";
 
 import { createClient } from "@/lib/supabase/client";
+import { isPrivateRealtimeAuthorizationEnabled } from "./authorization";
 import type {
   PresenceClientEvent,
   PresenceMemberState,
+  PresenceMemberProfile,
   PresenceRoomRole,
   PresenceRoomType,
   PresenceServerEvent,
+  PresenceTypingContext,
 } from "./presence-types";
 
 export type PresenceStatus = "connecting" | "connected" | "disconnected" | "error";
@@ -41,6 +44,9 @@ type PresenceRoomEntry = {
   status: PresenceStatus;
   latestStateEvent: Extract<PresenceServerEvent, { type: "presence.state" }> | null;
   lastTrackedUserId: string | null;
+  _lastTrackTime?: number;
+  _pendingTrackTimer?: ReturnType<typeof setTimeout> | null;
+  failureReported: boolean;
 };
 
 type SupabasePresenceMeta = Partial<PresenceMemberState> & {
@@ -54,6 +60,14 @@ type SupabasePresenceJoinPayload = {
 type SupabasePresenceLeavePayload = {
   key: string;
   leftPresences: SupabasePresenceMeta[];
+};
+type TypingBroadcastPayload = {
+  connectionId: string;
+  userId: string;
+  typing: boolean;
+  typingContext: PresenceTypingContext | null;
+  userName: string | null;
+  profile: PresenceMemberProfile | null;
 };
 type RealtimeSubscribeStatus =
   (typeof REALTIME_SUBSCRIBE_STATES)[keyof typeof REALTIME_SUBSCRIBE_STATES];
@@ -82,10 +96,17 @@ function computePresenceHealthSnapshot(): PresenceHealthSnapshot {
     (entry) => entry.listeners.size > 0 || entry.statusListeners.size > 0,
   );
   const connectedRoomCount = activeEntries.filter((entry) => entry.status === "connected").length;
-  const disconnectedRoomCount = activeEntries.filter((entry) => entry.status !== "connected").length;
-  const degraded = activeEntries.length > 0 && disconnectedRoomCount > 0;
+  const disconnectedRoomCount = activeEntries.filter((entry) => entry.status === "disconnected" || entry.status === "error").length;
+
+  const status = activeEntries.length > 0 && disconnectedRoomCount === activeEntries.length
+    ? "unavailable"
+    : disconnectedRoomCount > 0
+      ? "degraded"
+      : "healthy";
+  const degraded = status !== "healthy";
+
   return {
-    status: activeEntries.length === 0 || connectedRoomCount > 0 ? "healthy" : "unavailable",
+    status,
     degraded,
     activeRoomCount: activeEntries.length,
     connectedRoomCount,
@@ -189,43 +210,106 @@ function emitPresenceDelta(
   }
 }
 
-async function resolveCurrentUserId(entry: PresenceRoomEntry, event?: PresenceClientEvent) {
-  if (event?.type === "typing" && event.userId) return event.userId;
-  if (entry.roomType === "user" && entry.role === "editor") return entry.roomId;
+async function resolveCurrentUserId(entry: PresenceRoomEntry) {
   if (entry.lastTrackedUserId) return entry.lastTrackedUserId;
 
   const { data } = await createClient().auth.getUser();
   return data.user?.id ?? null;
 }
 
+function canPublishToPresenceRoom(entry: PresenceRoomEntry, userId: string) {
+  // Per-user rooms have one publisher: the room owner. Other clients may
+  // observe an authorized peer, but must never add their own presence state
+  // to that peer's room. Shared rooms publish participant presence normally.
+  return entry.roomType !== "user" || entry.roomId === userId;
+}
+
 async function trackPresence(entry: PresenceRoomEntry, event?: PresenceClientEvent) {
   if (!entry.channel || entry.status !== "connected") return;
-  const userId = await resolveCurrentUserId(entry, event);
-  if (!userId) return;
+  const userId = await resolveCurrentUserId(entry);
+  if (!userId || !canPublishToPresenceRoom(entry, userId)) return;
 
   entry.lastTrackedUserId = userId;
   const typingEvent = event?.type === "typing" ? event : null;
-  await entry.channel.track({
-    connectionId: entry.connectionId,
-    userId,
-    roomType: entry.roomType,
-    roomId: entry.roomId,
-    role: entry.role,
-    lastSeenAt: Date.now(),
-    cursorFrame: event?.type === "cursor" ? event.frame : null,
-    typing: typingEvent?.isTyping ?? false,
-    typingContext: typingEvent?.context ?? null,
-    userName: event?.type === "cursor" ? event.userName ?? null : null,
-    profile: typingEvent?.profile ?? null,
-  });
+
+  const payload = {
+      connectionId: entry.connectionId,
+      userId,
+      roomType: entry.roomType,
+      roomId: entry.roomId,
+      role: entry.role,
+      lastSeenAt: Date.now(),
+      cursorFrame: event?.type === "cursor" ? event.frame : null,
+      typing: typingEvent?.isTyping ?? false,
+      typingContext: typingEvent?.context ?? null,
+      userName: event?.type === "cursor" ? event.userName ?? null : null,
+      profile: typingEvent?.profile ?? null,
+  };
+
+  const executeTrack = async (data: typeof payload) => {
+      try {
+          await entry.channel.track(data);
+      } catch (error) {
+          console.debug("[presence-client] failed to track presence", error);
+      }
+  };
+
+  const now = Date.now();
+  const MIN_TRACK_INTERVAL_MS = 2500;
+
+  if (!entry._lastTrackTime) {
+      entry._lastTrackTime = 0;
+  }
+
+  const timeSinceLastTrack = now - entry._lastTrackTime;
+
+  if (timeSinceLastTrack < MIN_TRACK_INTERVAL_MS) {
+      if (entry._pendingTrackTimer) clearTimeout(entry._pendingTrackTimer);
+      entry._pendingTrackTimer = setTimeout(() => {
+          entry._lastTrackTime = Date.now();
+          void executeTrack(payload);
+      }, MIN_TRACK_INTERVAL_MS - timeSinceLastTrack);
+      return;
+  }
+
+  entry._lastTrackTime = now;
+  if (entry._pendingTrackTimer) {
+      clearTimeout(entry._pendingTrackTimer);
+      entry._pendingTrackTimer = null;
+  }
+  void executeTrack(payload);
 }
 
-function createEntry(roomType: PresenceRoomType, roomId: string, role: PresenceRoomRole) {
+async function broadcastTyping(entry: PresenceRoomEntry, event: PresenceClientEvent) {
+  if (!entry.channel || entry.status !== "connected" || event.type !== "typing") return;
+  const userId = await resolveCurrentUserId(entry);
+  if (!userId || !canPublishToPresenceRoom(entry, userId)) return;
+
+  const payload = {
+      connectionId: entry.connectionId,
+      userId,
+      typing: event.isTyping,
+      typingContext: event.context,
+      userName: null,
+      profile: event.profile,
+  };
+
+  try {
+      await entry.channel.send({
+          type: "broadcast",
+          event: "typing",
+          payload,
+      });
+  } catch (error) {
+      console.debug("[presence-client] failed to broadcast typing", error);
+  }
+}
+
+function setupChannel(roomType: PresenceRoomType, roomId: string, connectionId: string) {
   const supabase = createClient();
-  const connectionId = createConnectionId();
-  const channel = supabase
+  return supabase
     .channel(getRoomTopic(roomType, roomId), {
-      config: { presence: { key: connectionId } },
+      config: { private: true, presence: { key: connectionId } },
     })
     .on("presence", { event: "sync" }, () => {
       const entry = presenceEntries.get(getRoomKey(roomType, roomId));
@@ -241,7 +325,45 @@ function createEntry(roomType: PresenceRoomType, roomId: string, role: PresenceR
       const entry = presenceEntries.get(getRoomKey(roomType, roomId));
       if (!entry) return;
       emitPresenceDelta(entry, "leave", String(key), leftPresences);
+    })
+    .on("broadcast", { event: "typing" }, ({ payload }: { payload: TypingBroadcastPayload }) => {
+      const entry = presenceEntries.get(getRoomKey(roomType, roomId));
+      if (!entry || !payload) return;
+      const authenticatedMember = flattenPresenceState(entry).find((member) =>
+        member.connectionId === String(payload.connectionId)
+        && member.userId === String(payload.userId),
+      );
+      if (!authenticatedMember) return;
+
+      const memberEvent: PresenceServerEvent = {
+        type: "presence.delta",
+        action: payload.typing ? "upsert" : "leave",
+        roomType: entry.roomType,
+        roomId: entry.roomId,
+        member: {
+            connectionId: String(payload.connectionId),
+            userId: String(payload.userId),
+            roomType: entry.roomType,
+            roomId: entry.roomId,
+            role: "viewer",
+            lastSeenAt: Date.now(),
+            cursorFrame: null,
+            typing: payload.typing,
+            typingContext: payload.typingContext ?? null,
+            userName: payload.userName ?? null,
+            profile: authenticatedMember.profile ?? null,
+        }
+      };
+
+      for (const listener of Array.from(entry.listeners)) {
+          listener(memberEvent);
+      }
     });
+}
+
+function createEntry(roomType: PresenceRoomType, roomId: string, role: PresenceRoomRole) {
+  const connectionId = createConnectionId();
+  const channel = setupChannel(roomType, roomId, connectionId);
 
   const entry: PresenceRoomEntry = {
     roomType,
@@ -255,34 +377,78 @@ function createEntry(roomType: PresenceRoomType, roomId: string, role: PresenceR
     status: "connecting",
     latestStateEvent: null,
     lastTrackedUserId: null,
+    failureReported: false,
   };
 
   presenceEntries.set(getRoomKey(roomType, roomId), entry);
   emitHealthSnapshot();
 
-  channel.subscribe((status: RealtimeSubscribeStatus) => {
-    if (status === REALTIME_SUBSCRIBE_STATES.SUBSCRIBED) {
-      updateStatus(entry, "connected");
-      if (role === "editor" || roomType === "user") {
-        void trackPresence(entry);
-      }
-      return;
-    }
-
-    if (
-      status === REALTIME_SUBSCRIBE_STATES.CHANNEL_ERROR ||
-      status === REALTIME_SUBSCRIBE_STATES.TIMED_OUT
-    ) {
-      updateStatus(entry, "error");
-      return;
-    }
-
-    if (status === REALTIME_SUBSCRIBE_STATES.CLOSED) {
-      updateStatus(entry, "disconnected");
-    }
-  });
-
+  void connectEntry(entry);
   return entry;
+}
+
+async function connectEntry(entry: PresenceRoomEntry) {
+  const supabase = createClient();
+  const { data, error } = await supabase.auth.getSession();
+  if (presenceEntries.get(getRoomKey(entry.roomType, entry.roomId)) !== entry) return;
+  const accessToken = data.session?.access_token;
+
+  if (error || !accessToken) {
+    updateStatus(entry, "error");
+    return;
+  }
+
+  try {
+    await supabase.realtime.setAuth(accessToken);
+  } catch (authError) {
+    if (presenceEntries.get(getRoomKey(entry.roomType, entry.roomId)) !== entry) return;
+    if (!entry.failureReported) {
+      entry.failureReported = true;
+      console.warn("[presence-client] failed to authorize Realtime", {
+        roomType: entry.roomType,
+        roomId: entry.roomId,
+        error: authError instanceof Error ? authError.message : String(authError),
+      });
+    }
+    updateStatus(entry, "error");
+    return;
+  }
+
+  if (presenceEntries.get(getRoomKey(entry.roomType, entry.roomId)) !== entry) return;
+
+  entry.channel.subscribe((status: RealtimeSubscribeStatus, subError?: Error) => {
+      if (status === REALTIME_SUBSCRIBE_STATES.SUBSCRIBED) {
+        entry.failureReported = false;
+        updateStatus(entry, "connected");
+        void trackPresence(entry);
+        return;
+      }
+
+      if (
+        status === REALTIME_SUBSCRIBE_STATES.CHANNEL_ERROR ||
+        status === REALTIME_SUBSCRIBE_STATES.TIMED_OUT
+      ) {
+        if (!entry.failureReported) {
+          entry.failureReported = true;
+          console.warn("[presence-client] private channel unavailable", {
+            roomType: entry.roomType,
+            roomId: entry.roomId,
+            status,
+            state: entry.channel.state,
+            error: subError?.message ?? null,
+          });
+        }
+        updateStatus(entry, "error");
+        if (subError?.message.includes("Unauthorized")) {
+          void supabase.removeChannel(entry.channel);
+        }
+        return;
+      }
+
+      if (status === REALTIME_SUBSCRIBE_STATES.CLOSED) {
+        updateStatus(entry, "disconnected");
+      }
+  });
 }
 
 function ensureEntry(roomType: PresenceRoomType, roomId: string, role: PresenceRoomRole) {
@@ -304,6 +470,9 @@ function cleanupEntry(roomKey: string) {
   if (entry.releaseTimer) {
     clearTimeout(entry.releaseTimer);
   }
+  if (entry._pendingTrackTimer) {
+    clearTimeout(entry._pendingTrackTimer);
+  }
   presenceEntries.delete(roomKey);
   createClient().removeChannel(entry.channel);
   emitHealthSnapshot();
@@ -316,6 +485,18 @@ export function subscribePresenceRoom(params: {
   onEvent?: PresenceListener;
   onStatus?: PresenceStatusListener;
 }) {
+  if (!isPrivateRealtimeAuthorizationEnabled()) {
+    params.onStatus?.("disconnected");
+    return {
+      send(_event: PresenceClientEvent) {
+        // Fail closed until private Realtime policies are deployed and verified.
+      },
+      unsubscribe() {
+        // No channel was opened.
+      },
+    };
+  }
+
   const entry = ensureEntry(params.roomType, params.roomId, params.role ?? "viewer");
   if (params.onEvent) {
     entry.listeners.add(params.onEvent);
@@ -331,7 +512,9 @@ export function subscribePresenceRoom(params: {
 
   return {
     send(event: PresenceClientEvent) {
-      if (event.type === "typing" || event.type === "cursor") {
+      if (event.type === "typing") {
+        void broadcastTyping(entry, event);
+      } else if (event.type === "cursor") {
         void trackPresence(entry, event);
       }
     },
