@@ -31,8 +31,11 @@ function isLocallyDebounced(key: string) {
         }
     }
 
-    localHeartbeatDebounce.set(key, now + DEBOUNCE_SECONDS * 1000);
     return false;
+}
+
+function markLocallyDebounced(key: string) {
+    localHeartbeatDebounce.set(key, Date.now() + DEBOUNCE_SECONDS * 1000);
 }
 
 export async function POST(request: NextRequest) {
@@ -54,8 +57,8 @@ export async function POST(request: NextRequest) {
         // Debounce: only update DB if last update was more than 5 minutes ago
         const debounceKey = `presence:heartbeat:${auth.userId}:${sessionId}`;
 
+        const redis = shouldUseRedisPresenceHeartbeat() ? getRedisClient() : null;
         if (shouldUseRedisPresenceHeartbeat()) {
-            const redis = getRedisClient();
             if (!redis) {
                 return jsonSuccess({ updated: false });
             }
@@ -63,8 +66,6 @@ export async function POST(request: NextRequest) {
             if (already) {
                 return jsonSuccess({ updated: false });
             }
-            // Set debounce key with TTL
-            await redis.set(debounceKey, '1', { ex: DEBOUNCE_SECONDS });
         } else if (isLocallyDebounced(debounceKey)) {
             return jsonSuccess({ updated: false });
         }
@@ -92,6 +93,19 @@ export async function POST(request: NextRequest) {
                 return jsonSuccess({ updated: false, skipped: "transient_db" });
             }
             throw error;
+        }
+
+        if (redis) {
+            await redis.set(debounceKey, '1', { ex: DEBOUNCE_SECONDS }).catch((error) => {
+                logger.warn("presence.heartbeat_debounce_commit_failed", {
+                    module: "presence",
+                    userId,
+                    sessionId,
+                    error: error instanceof Error ? error.message : String(error),
+                });
+            });
+        } else {
+            markLocallyDebounced(debounceKey);
         }
 
         return jsonSuccess({ updated: true });
