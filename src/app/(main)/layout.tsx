@@ -1,17 +1,17 @@
 import { MainLayout } from '@/components/layout/MainLayout';
 import { MainRuntimeProviders } from '@/components/providers/MainRuntimeProviders';
 import { AuthRouteProviders } from '@/components/providers/AuthRouteProviders';
-import { getViewerAuthContext } from '@/lib/server/viewer-context';
+import { getViewerProfileContext } from '@/lib/server/viewer-context';
 
 async function ResolvedProviders({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const { user } = await getViewerAuthContext();
+  const { user, profile } = await getViewerProfileContext();
 
   return (
-    <AuthRouteProviders initialUser={user} initialProfile={null}>
+    <AuthRouteProviders initialUser={user} initialProfile={profile}>
       <MainRuntimeProviders>
         <MainLayout>{children}</MainLayout>
       </MainRuntimeProviders>
