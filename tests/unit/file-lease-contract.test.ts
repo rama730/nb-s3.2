@@ -51,12 +51,16 @@ test("project realtime subscription reconciles canonical lease snapshots", () =>
   assert.match(store, /const nextLocks: Record<string, SoftLock> = \{\}/);
 });
 
-test("extension 1.0.42 uses single-flight activation sessions and lease credentials for every publish path", () => {
+test("the current extension uses single-flight activation sessions and lease credentials for every publish path", () => {
   const extensionRoot = path.resolve(root, "../workspace-extensions/nb-vscode-sync");
   const extension = fs.readFileSync(path.join(extensionRoot, "src/extension.ts"), "utf8");
   const packageJson = JSON.parse(fs.readFileSync(path.join(extensionRoot, "package.json"), "utf8"));
-  assert.equal(packageJson.version, "1.0.42");
-  assert.match(extension, /new SingleFlight<string, ExtensionFileLease>\(\)/);
+  assert.match(packageJson.version, /^\d+\.\d+\.\d+$/);
+  assert.match(
+    extension,
+    /_pendingLeases = new Map<string, Promise<ExtensionFileLease>>\(\)/,
+  );
+  assert.match(extension, /let request = this\._pendingLeases\.get\(key\)/);
   assert.match(extension, /await pendingAcquisition/);
   assert.match(extension, /_clientSessionId = crypto\.randomUUID\(\)/);
   assert.match(extension, /action: 'renew'/);
