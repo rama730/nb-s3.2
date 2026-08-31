@@ -13,8 +13,8 @@ function write(filePath: string, content: string) {
 
 const requiredFiles = [
   "src/components/layout/header/NavLink.tsx",
-  "src/components/layout/Sidebar.tsx",
-  "src/components/layout/MobileNav.tsx",
+  "src/components/layout/header/TopNav.tsx",
+  "src/components/layout/header/MobileMenu.tsx",
   "src/components/hub/HubHeader.tsx",
   "src/components/chat/v2/ChatPopupV2.tsx",
   "src/components/chat/v2/MessageComposerV2.tsx",
