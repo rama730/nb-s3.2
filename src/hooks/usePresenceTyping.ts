@@ -46,8 +46,9 @@ export function usePresenceTyping({
     isEligibleRoomId,
     shouldTrackMember = DEFAULT_SHOULD_TRACK,
 }: UsePresenceTypingParams) {
-    const { user, profile } = useAuth();
+    const { user, profile, session, isLoading } = useAuth();
     const currentUserId = user?.id ?? null;
+    const realtimeReady = Boolean(currentUserId && session?.access_token && !isLoading);
     const [typingMembers, setTypingMembers] = useState<PresenceMemberState[]>([]);
     const [presenceStatus, setPresenceStatus] = useState<PresenceStatus>('disconnected');
     const [isVisible, setIsVisible] = useState(() => (typeof document === 'undefined' ? true : !document.hidden));
@@ -56,6 +57,7 @@ export function usePresenceTyping({
     const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
     const lastBroadcastRef = useRef(0);
     const requestedTypingStateRef = useRef<RequestedTypingState>(null);
+    const pendingTypingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const currentUserProfile = useMemo<PresenceMemberProfile | null>(() => (
         currentUserId
@@ -66,6 +68,11 @@ export function usePresenceTyping({
             }
             : null
     ), [currentUserId, profile?.avatarUrl, profile?.fullName, profile?.username, user?.user_metadata]);
+    const currentUserProfileRef = useRef(currentUserProfile);
+
+    useEffect(() => {
+        currentUserProfileRef.current = currentUserProfile;
+    }, [currentUserProfile]);
 
     const rebuildTypingMembers = useCallback(() => {
         setTypingMembers(Array.from(memberStatesRef.current.values()));
@@ -103,15 +110,16 @@ export function usePresenceTyping({
     }, []);
 
     const sendPresenceTyping = useCallback((state: RequestedTypingState) => {
-        if (!subscriptionRef.current || !currentUserProfile) return;
+        const profileSnapshot = currentUserProfileRef.current;
+        if (!subscriptionRef.current || !profileSnapshot) return;
         subscriptionRef.current.send({
             type: 'typing',
             userId: currentUserId ?? undefined,
             isTyping: state?.isTyping ?? false,
-            profile: currentUserProfile,
+            profile: profileSnapshot,
             context: state?.context ?? null,
         });
-    }, [currentUserId, currentUserProfile]);
+    }, [currentUserId]);
 
     useEffect(() => {
         if (typeof document === 'undefined') return;
@@ -137,7 +145,7 @@ export function usePresenceTyping({
 
     useEffect(() => {
         const roomIsEligible = Boolean(roomId && (!isEligibleRoomId || isEligibleRoomId(roomId)));
-        if (!enabled || !roomId || !roomIsEligible || (requireCurrentUser && !currentUserId)) {
+        if (!enabled || !realtimeReady || !isVisible || !roomId || !roomIsEligible || (requireCurrentUser && !currentUserId)) {
             requestedTypingStateRef.current = null;
             clearTrackedMembers();
             setPresenceStatus('disconnected');
@@ -188,12 +196,17 @@ export function usePresenceTyping({
         subscriptionRef.current = subscription;
 
         return () => {
-            if (requestedTypingStateRef.current?.isTyping && currentUserProfile) {
+            if (pendingTypingTimeoutRef.current) {
+                clearTimeout(pendingTypingTimeoutRef.current);
+                pendingTypingTimeoutRef.current = null;
+            }
+            const profileSnapshot = currentUserProfileRef.current;
+            if (requestedTypingStateRef.current?.isTyping && profileSnapshot) {
                 subscription.send({
                     type: 'typing',
                     userId: currentUserId ?? undefined,
                     isTyping: false,
-                    profile: currentUserProfile,
+                    profile: profileSnapshot,
                     context: null,
                 });
             }
@@ -206,11 +219,12 @@ export function usePresenceTyping({
     }, [
         clearTrackedMembers,
         currentUserId,
-        currentUserProfile,
         enabled,
         isEligibleRoomId,
+        isVisible,
         listen,
         rebuildTypingMembers,
+        realtimeReady,
         removeMember,
         requireCurrentUser,
         roomId,
@@ -223,7 +237,7 @@ export function usePresenceTyping({
     useEffect(() => {
         if (
             !subscriptionRef.current
-            || !currentUserProfile
+            || !currentUserProfileRef.current
             || presenceStatus !== 'connected'
             || !requestedTypingStateRef.current?.isTyping
         ) {
@@ -231,27 +245,42 @@ export function usePresenceTyping({
         }
 
         sendPresenceTyping(requestedTypingStateRef.current);
-    }, [currentUserProfile, presenceStatus, sendPresenceTyping]);
+    }, [presenceStatus, sendPresenceTyping]);
 
     const sendTyping = useCallback(async ({ isTyping, context = null }: SendPresenceTypingParams) => {
         const roomIsEligible = Boolean(roomId && (!isEligibleRoomId || isEligibleRoomId(roomId)));
-        if (!enabled || !roomId || !roomIsEligible || !isVisible || (requireCurrentUser && !currentUserId)) return;
-        if (!currentUserProfile) return;
+        if (!enabled || !realtimeReady || !roomId || !roomIsEligible || !isVisible || (requireCurrentUser && !currentUserId)) return;
+        if (!currentUserProfileRef.current) return;
 
-        if (isTyping) {
-            const now = Date.now();
-            if (now - lastBroadcastRef.current < 500) return;
-            lastBroadcastRef.current = now;
+        const state: RequestedTypingState = { isTyping, context: isTyping ? context : null };
+        requestedTypingStateRef.current = state;
+
+        if (pendingTypingTimeoutRef.current) {
+            clearTimeout(pendingTypingTimeoutRef.current);
+            pendingTypingTimeoutRef.current = null;
         }
 
-        requestedTypingStateRef.current = { isTyping, context: isTyping ? context : null };
-        sendPresenceTyping(requestedTypingStateRef.current);
+        const now = Date.now();
+        const elapsed = now - lastBroadcastRef.current;
+        const MIN_INTERVAL = 800;
+
+        if (elapsed < MIN_INTERVAL) {
+            const delay = MIN_INTERVAL - elapsed;
+            pendingTypingTimeoutRef.current = setTimeout(() => {
+                pendingTypingTimeoutRef.current = null;
+                lastBroadcastRef.current = Date.now();
+                sendPresenceTyping(requestedTypingStateRef.current);
+            }, delay);
+        } else {
+            lastBroadcastRef.current = now;
+            sendPresenceTyping(state);
+        }
     }, [
         currentUserId,
-        currentUserProfile,
         enabled,
         isEligibleRoomId,
         isVisible,
+        realtimeReady,
         requireCurrentUser,
         roomId,
         sendPresenceTyping,
