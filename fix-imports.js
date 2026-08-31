@@ -78,19 +78,9 @@ const replacements = [
     to: 'import { getTaskAttachments } from "@/app/actions/files/links";'
   },
   {
-    file: 'src/hooks/useTaskCounts.ts',
-    from: 'import { countTaskAttachments } from "@/app/actions/files";',
-    to: 'import { countTaskAttachments } from "@/app/actions/files/links";'
-  },
-  {
     file: 'src/hooks/useTaskFileMutations.ts',
     from: 'import {\n  linkNodeToTask,\n  unlinkNodeFromTask,\n  updateTaskNodeLinksOrder,\n} from "@/app/actions/files";',
     to: 'import {\n  linkNodeToTask,\n  unlinkNodeFromTask,\n  updateTaskNodeLinksOrder,\n} from "@/app/actions/files/links";'
-  },
-  {
-    file: 'src/hooks/useTaskPanelResource.ts',
-    from: 'import { countTaskAttachments, getTaskAttachments } from "@/app/actions/files";',
-    to: 'import { countTaskAttachments, getTaskAttachments } from "@/app/actions/files/links";'
   }
 ];
 
