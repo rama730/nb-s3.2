@@ -9,6 +9,7 @@ import type { ConversationCapabilityV2 } from '@/app/actions/messaging/v2';
 import { canSendFromCapability } from '@/lib/chat/composer-workflow';
 import { formatDraftWithCodeSnippet } from '@/lib/messages/code-snippets';
 import { upsertThreadConversation } from '@/lib/messages/v2-cache';
+import { recordMessagesDraftLifecycle } from '@/lib/messages/observability';
 import { refreshConversationCache } from '@/lib/messages/v2-refresh';
 import { useMessagesActions } from '@/hooks/useMessagesV2';
 import { useMessagesV2OutboxStore } from '@/stores/messagesV2OutboxStore';
@@ -25,7 +26,7 @@ interface UseMessageComposerActionsParams {
     draft: string;
     clearDraft: (conversationId: string) => void;
     attachments: PendingAttachment[];
-    clearAttachments: () => void;
+    clearAttachments: (keepBackendUploads?: boolean) => void;
     onClearReply: () => void;
     inputRef: RefObject<HTMLTextAreaElement | null>;
     clearTypingIdleTimer: () => void;
@@ -89,7 +90,7 @@ export function useMessageComposerActions({
     }, [conversationId, replyTarget?.id, targetUserId, upsertOutboxItem]);
 
     const refreshMessagingState = useCallback(async () => {
-        await refreshConversationCache(queryClient, conversationId, { includeUnread: true });
+        await refreshConversationCache(queryClient, conversationId);
     }, [conversationId, queryClient]);
 
     const beginSendAnimation = useCallback(() => {
@@ -121,7 +122,7 @@ export function useMessageComposerActions({
 
         clearDraft(conversationId);
         onClearReply();
-        clearAttachments();
+        clearAttachments(true);
         if (inputRef.current) inputRef.current.style.height = 'auto';
 
         queueOutgoingMessage({
@@ -149,6 +150,7 @@ export function useMessageComposerActions({
             }
             // Transition from draft to real conversation after first message send
             if (conversationId.startsWith('draft:') && result.conversationId && result.conversationId !== conversationId) {
+                recordMessagesDraftLifecycle('first_message_sent');
                 setSelectedConversationId(result.conversationId);
             }
         } catch (error) {
