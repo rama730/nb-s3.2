@@ -50,12 +50,8 @@ export async function refreshConversationSummaryCache(
 export async function refreshConversationCache(
     queryClient: QueryClient,
     conversationId: string,
-    options?: { includeUnread?: boolean },
 ) {
-    const [threadResult, unreadResult] = await Promise.all([
-        getConversationThreadPageV2(conversationId, undefined, 30),
-        options?.includeUnread ? getUnreadCount() : Promise.resolve(null),
-    ]);
+    const threadResult = await getConversationThreadPageV2(conversationId, undefined, 30);
 
     if (threadResult.success && threadResult.page) {
         replaceThreadSnapshot(queryClient, conversationId, threadResult.page);
@@ -65,10 +61,6 @@ export async function refreshConversationCache(
         );
     } else {
         await refreshConversationSummaryCache(queryClient, conversationId, { syncThread: true });
-    }
-
-    if (unreadResult?.success && typeof unreadResult.count === 'number') {
-        setUnreadSummary(queryClient, unreadResult.count);
     }
 
     return threadResult.success && Boolean(threadResult.page);
