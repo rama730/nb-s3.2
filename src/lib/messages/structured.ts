@@ -452,30 +452,46 @@ export function getMessagePreviewText(params: {
     content?: string | null;
     type?: string | null;
     metadata?: Record<string, unknown> | null;
+    deletedAt?: Date | string | null;
+    replyToMessageId?: string | null;
 }): string {
+    if (params.deletedAt) {
+        return 'This message was deleted';
+    }
+
     const structured = getStructuredMessageFromMetadata(params.metadata);
     if (structured) {
-        return getStructuredMessagePreview(structured);
+        const preview = getStructuredMessagePreview(structured);
+        return params.replyToMessageId ? `↩ ${preview}` : preview;
+    }
+
+    const previewKind = typeof params.metadata?.previewKind === 'string'
+        ? params.metadata.previewKind
+        : params.type;
+    const mediaPreview = (() => {
+        switch (previewKind) {
+            case 'image': return 'Photo';
+            case 'video': return 'Video';
+            case 'voice': return 'Voice message';
+            case 'file': return 'File';
+            case 'system': return 'System update';
+            default: return null;
+        }
+    })();
+
+    // ponytail: media wins over an optional caption so every surface describes
+    // the same message kind without loading the attachment.
+    if (mediaPreview) {
+        return `${params.replyToMessageId ? '↩ ' : ''}${mediaPreview}`;
     }
 
     if (typeof params.content === 'string' && params.content.trim().length > 0) {
         const normalized = params.content.replace(/\s+/g, ' ').trim();
-        if (normalized.includes('```')) return 'Code snippet';
-        return clampText(normalized, 160);
+        const preview = normalized.includes('```') ? 'Code snippet' : clampText(normalized, 160);
+        return params.replyToMessageId ? `↩ ${preview}` : preview;
     }
 
-    switch (params.type) {
-        case 'image':
-            return 'Photo';
-        case 'video':
-            return 'Video';
-        case 'file':
-            return 'Attachment';
-        case 'system':
-            return 'System update';
-        default:
-            return 'Message';
-    }
+    return `${params.replyToMessageId ? '↩ ' : ''}Message`;
 }
 
 export function getStructuredMessageSearchKind(rawValue: string): StructuredMessageKind | null {
