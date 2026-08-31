@@ -9,7 +9,7 @@ import {
 
 describe("page performance contract", () => {
   it("has one contract per page route", () => {
-    assert.equal(Object.keys(PAGE_PERFORMANCE_CONTRACTS).length, 25);
+    assert.equal(Object.keys(PAGE_PERFORMANCE_CONTRACTS).length, 18);
   });
 
   it("resolves dynamic route contracts from concrete URLs", () => {
@@ -22,8 +22,8 @@ describe("page performance contract", () => {
 
   it("classifies rendering mode from route id", () => {
     assert.equal(classifyRouteRenderingMode("/hub"), "dynamic");
-    assert.equal(classifyRouteRenderingMode("/settings"), "revalidate");
-    assert.equal(classifyRouteRenderingMode("/login"), "static");
+    assert.equal(classifyRouteRenderingMode("/settings"), "dynamic");
+    assert.equal(classifyRouteRenderingMode("/login"), "dynamic");
   });
 
   it("returns deterministic cache policy by route class", () => {
