@@ -27,44 +27,44 @@ export const TASK_STATUS_PRESENTATION: Record<TaskWorkflowStatus, TaskWorkflowSt
     label: "To Do",
     description: "Work that is ready to start.",
     columnTitle: "To Do",
-    emptyTitle: "No tasks ready",
-    emptyDescription: "New or unstarted work will appear here.",
+    emptyTitle: "Tasks will appear here...",
+    emptyDescription: "Tasks that are ready to start will appear here. Drag and drop your tasks here.",
     badgeClassName:
       "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300",
-    accentClassName: "bg-zinc-500",
+    accentClassName: "zinc",
   },
   in_progress: {
     id: "in_progress",
     label: "In Progress",
     description: "Work that is actively moving.",
     columnTitle: "In Progress",
-    emptyTitle: "Nothing in flight",
-    emptyDescription: "Active work will appear here as soon as it starts.",
+    emptyTitle: "Tasks will appear here...",
+    emptyDescription: "Items will appear here as soon as they start. Drag and drop your tasks here.",
     badgeClassName:
       "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
-    accentClassName: "bg-blue-500",
+    accentClassName: "blue",
   },
   blocked: {
     id: "blocked",
-    label: "Blocked",
+    label: "Issues",
     description: "Work waiting on an external dependency or decision.",
-    columnTitle: "Blocked",
-    emptyTitle: "No blocked tasks",
-    emptyDescription: "Tasks waiting on blockers will appear here.",
+    columnTitle: "Issues",
+    emptyTitle: "Tasks will appear here...",
+    emptyDescription: "Tasks waiting on blockers will appear here. Drag and drop your tasks here.",
     badgeClassName:
       "bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400",
-    accentClassName: "bg-rose-500",
+    accentClassName: "rose",
   },
   done: {
     id: "done",
     label: "Done",
     description: "Work that has been completed.",
     columnTitle: "Done",
-    emptyTitle: "Nothing completed yet",
-    emptyDescription: "Finished work will appear here once it is done.",
+    emptyTitle: "Tasks will appear here...",
+    emptyDescription: "Finished work will appear here. Drag and drop your tasks here.",
     badgeClassName:
       "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400",
-    accentClassName: "bg-emerald-500",
+    accentClassName: "emerald",
   },
 };
 
@@ -73,25 +73,25 @@ export const TASK_PRIORITY_PRESENTATION: Record<TaskPriority, TaskPriorityPresen
     id: "low",
     label: "Low",
     badgeClassName:
-      "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400",
+      "bg-rose-50 text-rose-500 dark:bg-rose-950/20 dark:text-rose-300",
   },
   medium: {
     id: "medium",
     label: "Medium",
     badgeClassName:
-      "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
+      "bg-rose-100 text-rose-600 dark:bg-rose-900/30 dark:text-rose-300",
   },
   high: {
     id: "high",
     label: "High",
     badgeClassName:
-      "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400",
+      "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300",
   },
   urgent: {
     id: "urgent",
     label: "Urgent",
     badgeClassName:
-      "bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400",
+      "bg-red-600 text-white dark:bg-red-700 dark:text-white",
   },
 };
 
@@ -124,4 +124,3 @@ export function getTaskStatusPresentation(status: string | null | undefined): Ta
 export function getTaskPriorityPresentation(priority: string | null | undefined): TaskPriorityPresentation {
   return TASK_PRIORITY_PRESENTATION[isTaskPriority(priority) ? priority : "medium"];
 }
-
