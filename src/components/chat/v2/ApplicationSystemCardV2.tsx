@@ -33,7 +33,6 @@ import {
 import { formatDistanceToNow } from 'date-fns';
 import { getStructuredMessageFromMetadata } from '@/lib/messages/structured';
 import { useAuth } from '@/hooks/useAuth';
-import { profileHref } from '@/lib/routing/identifiers';
 
 type RequestAction = 'accept' | 'reject' | 'withdraw' | 'reopen' | 'accept_proposed' | 'decline_proposed';
 
@@ -458,14 +457,6 @@ export function ApplicationSystemCardV2({
                         </Link>
                     ) : null}
 
-                    <Link
-                        href={isInvite && structured?.entityRefs?.profileId
-                            ? profileHref({ id: structured.entityRefs.profileId })
-                            : `/people?tab=requests#app-${baseApplicationId}`}
-                        className="inline-flex h-7 items-center rounded-md border border-black/10 dark:border-white/10 px-3 text-[11px] font-medium text-zinc-600 transition-colors hover:bg-black/5 dark:text-zinc-300 dark:hover:bg-white/5"
-                    >
-                        View Profile
-                    </Link>
                 </div>
             </div>
 
