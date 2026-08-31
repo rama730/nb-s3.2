@@ -1,10 +1,10 @@
 "use client";
 
 import { toast } from "sonner";
-import { useId, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import dynamic from "next/dynamic";
-import { Loader2, Camera, Plus, X, Trash2, CheckCircle2, AlertTriangle, Briefcase, Calendar, Link as LinkIcon, Code, Github, ChevronDown } from "lucide-react";
+import { Loader2, Camera, Plus, X, Trash2, CheckCircle2, AlertTriangle, Briefcase, Calendar, Link as LinkIcon, Code, Github, ChevronDown, Pencil } from "lucide-react";
 import { createProfileImageUploadUrlAction, finalizeProfileImageUploadAction } from "@/app/actions/profile";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,7 @@ import { sanitizeUsernameInput } from "@/lib/validations/username";
 import { useUsernameAvailability } from "@/hooks/useUsernameAvailability";
 import { PROFILE_LIMITS } from "@/lib/validations/profile";
 import { uploadToSupabaseSignedUrl } from "@/lib/upload/supabase-signed-upload-client";
+import { compressAvatarOffMainThread } from "@/lib/services/avatar-worker-client";
 import {
     EXPERIENCE_LEVEL_OPTIONS,
     ROLE_PREFERENCE_OPTIONS,
@@ -26,6 +27,15 @@ import {
     createExternalContributionDraft,
     type ContributionEditorEntry,
 } from "@/lib/profile/contribution-editor";
+import {
+    resolveSocialPresence,
+    socialLinkItemsFromStorage,
+    type SocialLinkItem,
+    type SocialLinkStorage,
+    validateSocialLinkCollection,
+} from "@/lib/profile/normalization";
+import { SocialPresenceIcon } from "@/components/profile/SocialPresenceIcon";
+import { SortableLinkList } from "@/components/links/SortableLinkList";
 
 const SkillPicker = dynamic(() => import("@/components/skills/SkillPicker").then((mod) => mod.SkillPicker), {
     ssr: false,
@@ -80,16 +90,20 @@ export function EditProfileTabs({
         setAvatarUploading(true);
 
         try {
+            if (file.size > 10 * 1024 * 1024) {
+                throw new Error("Image must be less than 10MB");
+            }
+            const preparedAvatar = await compressAvatarOffMainThread(file);
             const uploadSession = await createProfileImageUploadUrlAction({
-                mimeType: file.type || "application/octet-stream",
-                sizeBytes: file.size,
+                mimeType: "image/jpeg",
+                sizeBytes: preparedAvatar.size,
                 kind: "avatar",
             });
             if (!uploadSession.success) {
                 throw new Error(uploadSession.error || "Failed to prepare image upload");
             }
 
-            await uploadToSupabaseSignedUrl(uploadSession, file);
+            await uploadToSupabaseSignedUrl(uploadSession, preparedAvatar, { cacheProfile: "immutable" });
 
             const finalized = await finalizeProfileImageUploadAction({
                 uploadIntentId: uploadSession.uploadIntentId,
@@ -98,8 +112,7 @@ export function EditProfileTabs({
                 throw new Error(finalized.error || "Failed to finalize image upload");
             }
 
-            const cacheBustedUrl = `${finalized.publicUrl}?t=${Date.now()}`;
-            updateForm("avatarUrl", cacheBustedUrl);
+            updateForm("avatarUrl", finalized.publicUrl);
             toast.success("Avatar updated");
         } catch (error: any) {
             const message = error?.message || "Unknown error";
@@ -158,7 +171,7 @@ export function EditProfileTabs({
                                         <label className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex flex-col items-center justify-center cursor-pointer transition-opacity text-white">
                                             {avatarUploading ? <Loader2 className="w-6 h-6 animate-spin mb-1" /> : <Camera className="w-6 h-6 mb-1" />}
                                             <span className="text-xs font-medium">{avatarUploading ? "Uploading..." : "Change"}</span>
-                                            <input type="file" accept="image/*" className="hidden" onChange={handleImageUpload} disabled={avatarUploading} />
+                                            <input type="file" accept="image/jpeg,image/png,image/webp" className="hidden" onChange={handleImageUpload} disabled={avatarUploading} />
                                         </label>
                                     </div>
                                     <div className="flex flex-col">
@@ -324,6 +337,7 @@ export function EditProfileTabs({
                         <h2 className="text-xl font-semibold text-zinc-900 dark:text-white">Social Presence</h2>
                         <SocialLinksEditor
                             links={profile.socialLinks ?? {}}
+                            metadata={profile.socialLinkMetadata ?? {}}
                             onChange={(links) => updateForm("socialLinks", links)}
                         />
                     </TabsContent>
@@ -552,17 +566,52 @@ function ProjectContributionsList({
     onLoadMore?: () => void;
 }) {
     const [expandedKey, setExpandedKey] = useState<string | null>(null);
+    const [announcement, setAnnouncement] = useState("");
+    const [focusRequest, setFocusRequest] = useState(0);
+    const focusDraftRef = useRef<string | null>(null);
+    const projectInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
     const accordionId = useId().replace(/:/g, "");
     const originalById = new Map(originalItems.map((item) => [item.draftId, item]));
+    const incompleteExternalDraft = items.find((item) =>
+        item.kind === "external" && !item.contributionId && !item.projectTitle.trim(),
+    );
+    const unsavedDrafts = items.filter((item) => item.kind === "external" && !item.contributionId);
+    const persistedItems = items.filter((item) => item.contributionId);
+    const displayItems = [...unsavedDrafts, ...persistedItems];
+
+    useEffect(() => {
+        const firstError = Object.keys(errors)[0];
+        if (firstError) setExpandedKey(firstError);
+    }, [errors]);
+
+    useEffect(() => {
+        const draftId = focusDraftRef.current;
+        if (!draftId || expandedKey !== draftId) return;
+        const input = projectInputRefs.current[draftId];
+        if (!input) return;
+        input.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        input.focus();
+        focusDraftRef.current = null;
+    }, [displayItems, expandedKey, focusRequest]);
 
     const updateItem = (draftId: string, updates: Partial<ContributionEditorEntry>) => {
         onChange(items.map((item) => item.draftId === draftId ? { ...item, ...updates } : item));
     };
 
     const handleAddExternal = () => {
+        if (incompleteExternalDraft) {
+            setExpandedKey(incompleteExternalDraft.draftId);
+            focusDraftRef.current = incompleteExternalDraft.draftId;
+            setFocusRequest((current) => current + 1);
+            setAnnouncement("Finish or remove the current external-project draft before adding another.");
+            return;
+        }
         const draft = createExternalContributionDraft();
-        onChange([...items, draft]);
+        focusDraftRef.current = draft.draftId;
+        onChange([draft, ...items]);
         setExpandedKey(draft.draftId);
+        setFocusRequest((current) => current + 1);
+        setAnnouncement("External project added. Enter its project name to continue.");
     };
 
     const handleDeleteExternal = (draftId: string) => {
@@ -572,15 +621,17 @@ function ProjectContributionsList({
 
     return (
         <div className="space-y-6">
+            <p className="sr-only" role="status" aria-live="polite">{announcement}</p>
             <div className="flex items-center justify-between gap-4">
                 <div>
                     <h3 className="text-sm font-medium text-zinc-900 dark:text-zinc-100">Your contributions</h3>
                     <p className="mt-1 text-xs text-zinc-500">
                         Open one project at a time. Platform project names and roles come from the project team.
-                        {total > 0 ? ` Showing ${Math.min(items.length, total)} of ${total}.` : ""}
+                        {total > 0 ? ` Showing ${Math.min(persistedItems.length, total)} of ${total} saved.` : ""}
+                        {unsavedDrafts.length > 0 ? ` ${unsavedDrafts.length} unsaved external ${unsavedDrafts.length === 1 ? "project" : "projects"}.` : ""}
                     </p>
                 </div>
-                <Button type="button" variant="outline" size="sm" onClick={handleAddExternal}>
+                <Button type="button" variant="outline" size="sm" onClick={handleAddExternal} disabled={saving}>
                     <Plus className="mr-1 h-4 w-4" /> Add external project
                 </Button>
             </div>
@@ -593,14 +644,19 @@ function ProjectContributionsList({
             ) : null}
 
             <div className="space-y-3">
-                {items.map((item) => {
+                {unsavedDrafts.length > 0 ? (
+                    <p className="text-xs font-medium uppercase tracking-wide text-amber-700 dark:text-amber-400">
+                        Unsaved external projects
+                    </p>
+                ) : null}
+                {displayItems.map((item) => {
                     const isPublic = item.visibility === "public";
                     const isExpanded = expandedKey === item.draftId;
                     const panelId = `${accordionId}-contribution-${item.draftId}`;
                     const isDirty = contributionEntryChanged(item, originalById.get(item.draftId));
                     const itemError = errors[item.draftId];
                     return (
-                        <div key={item.draftId} className="overflow-hidden rounded-2xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950/40">
+                        <div key={item.draftId} data-contribution-draft-id={item.draftId} className="overflow-hidden rounded-2xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950/40">
                             <button
                                 type="button"
                                 aria-expanded={isExpanded}
@@ -616,6 +672,7 @@ function ProjectContributionsList({
                                     {itemError ? <span className="text-xs font-medium text-red-600 dark:text-red-400">Needs attention</span> : null}
                                     {!itemError && saving && isDirty ? <span className="text-xs font-medium text-indigo-600 dark:text-indigo-400">Saving…</span> : null}
                                     {!itemError && !saving && isDirty ? <span className="text-xs font-medium text-amber-600 dark:text-amber-400">Unsaved</span> : null}
+                                    {item.kind === "external" ? <span className="text-xs text-zinc-500">External</span> : null}
                                     {!isPublic ? <span className="text-xs text-zinc-500">Private</span> : null}
                                     <ChevronDown className={`h-4 w-4 text-zinc-500 transition-transform ${isExpanded ? "rotate-180" : ""}`} aria-hidden="true" />
                                 </span>
@@ -662,7 +719,7 @@ function ProjectContributionsList({
                                         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                                             <div>
                                                 <label htmlFor={`${panelId}-project`} className="flex items-center gap-1.5 text-zinc-600 dark:text-zinc-400"><Briefcase className="h-3.5 w-3.5" /> Project name</label>
-                                                <Input id={`${panelId}-project`} maxLength={120} value={item.projectTitle} onChange={(event) => updateItem(item.draftId, { projectTitle: event.target.value })} className="mt-1.5 h-10" />
+                                                <Input ref={(node) => { projectInputRefs.current[item.draftId] = node; }} id={`${panelId}-project`} maxLength={120} aria-required="true" value={item.projectTitle} onChange={(event) => updateItem(item.draftId, { projectTitle: event.target.value })} className="mt-1.5 h-10" />
                                             </div>
                                             <div>
                                                 <label htmlFor={`${panelId}-role`} className="flex items-center gap-1.5 text-zinc-600 dark:text-zinc-400"><Code className="h-3.5 w-3.5" /> Your role</label>
@@ -724,61 +781,184 @@ function SkillsEditor({ skills, onChange }: { skills: string[]; onChange: (skill
     return <SkillPicker value={skills} onChange={onChange} maxSkills={25} />;
 }
 
-function SocialLinksEditor({ links, onChange }: { links: Record<string, string>; onChange: (links: Record<string, string>) => void }) {
-    const entries = Object.entries(links);
-    const platforms = ["Twitter", "GitHub", "LinkedIn", "Instagram", "Website", "Portfolio", "Other"];
-    const [newPlatform, setNewPlatform] = useState(platforms[0]!);
-    const [newUrl, setNewUrl] = useState("");
-    const isValidSocialUrl = (url: string) => /^https?:\/\/.+/.test(url);
-    const trimmedNewUrl = newUrl.trim();
-    const canAddSocialLink = Boolean(trimmedNewUrl) && isValidSocialUrl(trimmedNewUrl);
+type SocialLinkEditorEntry = {
+    id: string;
+    item: SocialLinkItem;
+    presence: ReturnType<typeof resolveSocialPresence>;
+    name: string;
+};
 
-    const handleAdd = () => {
-        if (!canAddSocialLink) return;
-        onChange({ ...links, [newPlatform.toLowerCase()]: trimmedNewUrl });
+function SortableSocialLinkCard({ entry, unavailable, onEdit, onRemove }: {
+    entry: SocialLinkEditorEntry;
+    unavailable: boolean;
+    onEdit: (key: string, item: SocialLinkItem) => void;
+    onRemove: (key: string) => void;
+}) {
+    const { id, item, presence, name } = entry;
+
+    return (
+        <>
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-zinc-100 text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300">
+                {presence?.iconKey ? <SocialPresenceIcon iconKey={presence.iconKey} className="h-4 w-4" /> : <LinkIcon className="h-4 w-4" aria-hidden="true" />}
+            </span>
+            <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">{name}</p>
+                {unavailable ? <p className="mt-1 text-xs font-medium text-amber-600 dark:text-amber-400">Needs update — this link was unavailable when opened.</p> : null}
+            </div>
+            <div className="flex shrink-0 items-center gap-1">
+                <Button type="button" variant="ghost" size="icon" onClick={() => onEdit(id, item)} aria-label={`Edit ${name}`}>
+                    <Pencil className="h-4 w-4" aria-hidden="true" />
+                </Button>
+                <Button type="button" variant="ghost" size="icon" onClick={() => onRemove(id)} aria-label={`Remove ${name}`} className="text-zinc-500 hover:text-red-600 dark:hover:text-red-400">
+                    <Trash2 className="h-4 w-4" aria-hidden="true" />
+                </Button>
+            </div>
+        </>
+    );
+}
+
+function SocialLinksEditor({ links, metadata, onChange }: { links: SocialLinkStorage; metadata: Record<string, { health?: string; checkedAt?: string }>; onChange: (links: SocialLinkItem[]) => void }) {
+    const [newUrl, setNewUrl] = useState("");
+    const [customLabel, setCustomLabel] = useState("");
+    const [editingKey, setEditingKey] = useState<string | null>(null);
+    const [linkError, setLinkError] = useState<string | null>(null);
+    const trimmedNewUrl = newUrl.trim();
+    const items = useMemo(() => socialLinkItemsFromStorage(links), [links]);
+    const entries = useMemo(() => items
+        .map((item) => {
+            const presence = resolveSocialPresence(item.platform, item.url);
+            const isGenericWebsite = ['website', 'portfolio', 'other'].includes(presence?.platform || '');
+            return {
+                id: item.id,
+                item,
+                presence,
+                name: isGenericWebsite ? (item.label || presence?.accountLabel || 'Website') : (presence?.platformLabel || item.platform || 'Link'),
+            };
+        }), [items]);
+    const candidate = useMemo(
+        () => trimmedNewUrl ? validateSocialLinkCollection([{ id: 'draft-link', platform: 'website', url: trimmedNewUrl }]) : null,
+        [trimmedNewUrl],
+    );
+    const previewItem = candidate?.success ? candidate.links[0] : null;
+    const preview = previewItem ? resolveSocialPresence(previewItem.platform, previewItem.url) : null;
+    const previewIsGenericWebsite = ['website', 'portfolio', 'other'].includes(preview?.platform || '');
+    const previewName = previewIsGenericWebsite ? (customLabel.trim() || preview?.accountLabel) : preview?.platformLabel;
+
+    const resetDraft = () => {
         setNewUrl("");
+        setCustomLabel("");
+        setEditingKey(null);
+        setLinkError(null);
+    };
+
+    const handleSave = () => {
+        if (!candidate?.success || !preview) {
+            setLinkError(candidate?.success === false ? candidate.error : 'Enter a valid public web address.');
+            return;
+        }
+        const next = items.filter((item) => item.id !== editingKey);
+        const draftId = editingKey || `link-${Date.now().toString(36)}`;
+        const resolved = candidate.links[0]!;
+        // Custom labels are meaningful only for unrecognised/public sites. Known
+        // services retain their official service name for consistent display.
+        next.push({
+            ...resolved,
+            id: draftId,
+            order: next.length,
+            ...(previewIsGenericWebsite && customLabel.trim() ? { label: customLabel.trim() } : {}),
+        });
+        onChange(next.map((item, index) => ({ ...item, order: index })));
+        resetDraft();
     };
 
     const remove = (key: string) => {
-        const next = { ...links };
-        delete next[key];
-        onChange(next);
+        onChange(items.filter((item) => item.id !== key).map((item, index) => ({ ...item, order: index })));
+        if (editingKey === key) resetDraft();
+    };
+
+    const edit = (key: string, item: SocialLinkItem) => {
+        setEditingKey(key);
+        setNewUrl(item.url);
+        setCustomLabel(item.label || "");
+        setLinkError(null);
     };
 
     return (
-        <div className="space-y-4">
-            <div className="space-y-3">
-                {entries.map(([key, url]) => (
-                    <div key={key} className="flex items-center gap-2">
-                        <div className="w-24 shrink-0 text-sm font-medium capitalize text-zinc-700 dark:text-zinc-300">{key}</div>
-                        <Input value={url} readOnly className="flex-1 bg-zinc-50 dark:bg-zinc-900/50" />
-                        <Button type="button" variant="ghost" size="sm" onClick={() => remove(key)} className="px-2">
-                            <Trash2 className="w-4 h-4 text-zinc-400" />
-                        </Button>
-                    </div>
-                ))}
+        <div className="space-y-5">
+            <div className="flex flex-wrap items-end justify-between gap-2">
+                <div>
+                    <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">Your public links</p>
+                    <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">Show people where they can verify your work and follow you.</p>
+                </div>
+                <span className="rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">{entries.length} {entries.length === 1 ? "link" : "links"}</span>
             </div>
 
-            <div className="flex gap-2 pt-4 border-t border-zinc-100 dark:border-zinc-800">
-                <select
-                    value={newPlatform}
-                    onChange={(e) => setNewPlatform(e.target.value)}
-                    className="h-10 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent px-3 text-sm outline-none"
+            {entries.length ? (
+                <SortableLinkList
+                    items={entries}
+                    layout="grid"
+                    className="grid gap-2 sm:grid-cols-2"
+                    itemClassName="flex min-w-0 items-center gap-1.5 rounded-xl border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-950"
+                    handleClassName="-mr-1"
+                    getItemLabel={(entry) => entry.name}
+                    onReorder={(next) => onChange(next.map((entry, order) => ({ ...entry.item, order })))}
                 >
-                    {platforms.map((platform) => <option key={platform} value={platform}>{platform}</option>)}
-                </select>
-                <Input
-                    id="profile-social-url"
-                    name="socialUrl"
-                    type="url"
-                    pattern="https?://.*"
-                    maxLength={PROFILE_LIMITS.websiteMax}
-                    placeholder="https://"
-                    value={newUrl}
-                    onChange={(e) => setNewUrl(e.target.value)}
-                    className="flex-1"
-                />
-                <Button type="button" onClick={handleAdd} disabled={!canAddSocialLink}>Add</Button>
+                    {(entry) => <SortableSocialLinkCard entry={entry} unavailable={metadata[entry.id]?.health === 'unavailable'} onEdit={edit} onRemove={remove} />}
+                </SortableLinkList>
+            ) : (
+                <div className="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 px-4 py-5 text-sm text-zinc-500 dark:border-zinc-700 dark:bg-zinc-900/50 dark:text-zinc-400">
+                    Add a public profile, portfolio, or website to get started.
+                </div>
+            )}
+
+            <div className="rounded-2xl border border-zinc-200 bg-zinc-50/70 p-4 dark:border-zinc-800 dark:bg-zinc-900/50">
+                <div className="flex items-start justify-between gap-4">
+                    <div>
+                        <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">{editingKey ? "Edit link" : "Add a link"}</p>
+                        <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">Paste any public address. Familiar services are named automatically; other sites use their domain name.</p>
+                    </div>
+                    {editingKey ? <Button type="button" variant="ghost" size="sm" onClick={resetDraft}>Cancel edit</Button> : null}
+                </div>
+
+                <div className="mt-4">
+                    <label htmlFor="profile-social-url" className="text-xs font-medium text-zinc-700 dark:text-zinc-300">Public link</label>
+                    <Input
+                        id="profile-social-url"
+                        name="socialUrl"
+                        type="url"
+                        pattern="https?://.*"
+                        maxLength={PROFILE_LIMITS.websiteMax}
+                        placeholder="Paste a profile, portfolio, or website link"
+                        value={newUrl}
+                        onChange={(e) => { setNewUrl(e.target.value); setLinkError(null); }}
+                        className="mt-1.5 bg-white dark:bg-zinc-950"
+                    />
+                </div>
+
+                {previewIsGenericWebsite ? (
+                    <div className="mt-3">
+                        <label htmlFor="profile-social-label" className="text-xs font-medium text-zinc-700 dark:text-zinc-300">Display name <span className="font-normal text-zinc-500">(optional)</span></label>
+                        <Input id="profile-social-label" value={customLabel} maxLength={80} onChange={(e) => setCustomLabel(e.target.value)} placeholder={preview?.accountLabel || "My portfolio"} className="mt-1.5 bg-white dark:bg-zinc-950" />
+                    </div>
+                ) : null}
+
+                {preview ? (
+                    <div aria-live="polite" className="mt-3 flex items-center gap-2 rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm dark:border-zinc-800 dark:bg-zinc-950">
+                        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-zinc-100 text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300">
+                            {preview.iconKey ? <SocialPresenceIcon iconKey={preview.iconKey} className="h-3.5 w-3.5" /> : <LinkIcon className="h-3.5 w-3.5" aria-hidden="true" />}
+                        </span>
+                        <span className="min-w-0 flex-1 truncate text-zinc-700 dark:text-zinc-200"><strong>{previewName}</strong>{!previewIsGenericWebsite ? <span className="text-zinc-500 dark:text-zinc-400"> · {preview.accountLabel}</span> : null}</span>
+                        <span className="shrink-0 text-xs text-zinc-500 dark:text-zinc-400">Detected from URL</span>
+                    </div>
+                ) : trimmedNewUrl ? (
+                    <p role="status" className="mt-3 text-xs text-amber-600 dark:text-amber-400">{candidate?.success === false ? candidate.error : 'Enter a valid public http(s) URL.'}</p>
+                ) : null}
+                {linkError ? <p role="alert" className="mt-3 text-xs text-red-600 dark:text-red-400">{linkError}</p> : null}
+
+                <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+                    <p className="max-w-md text-xs text-zinc-500 dark:text-zinc-400">Only public http(s) links can be saved. Links are checked again when someone opens them.</p>
+                    <Button type="button" onClick={handleSave} disabled={!preview}>{editingKey ? "Save link" : "Add link"}</Button>
+                </div>
             </div>
         </div>
     );
