@@ -26,7 +26,7 @@ test('reject application decision notifications are best-effort after persistenc
     assert.match(rejectAction, /await enqueueApplicationDecisionBestEffort\(\{[\s\S]*status:\s*'rejected'/);
     assert.match(rejectAction, /actorUserId:\s*user\.id/);
     assert.match(rejectAction, /traceId/);
-    assert.match(enqueueBestEffort, /try\s*\{\s*await enqueueProjectNotificationEvent\(\{/);
+    assert.match(enqueueBestEffort, /try\s*\{[\s\S]*await enqueueProjectNotificationEvent\(\{/);
     assert.match(enqueueBestEffort, /catch \(notificationError\) \{[\s\S]*Failed to enqueue application decision notification/);
 
     const notificationStart = rejectAction.indexOf('await enqueueApplicationDecisionBestEffort');
@@ -34,4 +34,12 @@ test('reject application decision notifications are best-effort after persistenc
     assert.notEqual(notificationStart, -1);
     assert.notEqual(successStart, -1);
     assert.ok(notificationStart < successStart, 'notification enqueue must finish before the success result');
+});
+
+test('application notifications do not create message-specific links', () => {
+    const source = readProjectFile('src/app/actions/applications/internal.ts');
+
+    assert.doesNotMatch(source, /getApplicationMessageTarget/);
+    assert.doesNotMatch(source, /buildMessageSourceHref/);
+    assert.doesNotMatch(source, /sourceMessageId:/);
 });
