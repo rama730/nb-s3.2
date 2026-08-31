@@ -20,6 +20,7 @@ import { FILE_REVISION_MODES, normalizeRevisionComment, parseFileRevisionMode } 
 import { logger } from "@/lib/logger";
 import { createAdminClient } from "@/lib/supabase/server";
 import { createUploadIntent } from "@/lib/upload/upload-intents";
+import { validateCsrf } from "@/lib/security/csrf";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -370,6 +371,8 @@ async function handleFinalize(userId: string, body: z.infer<typeof finalizeSchem
 }
 
 export async function POST(request: Request) {
+  const csrfError = validateCsrf(request);
+  if (csrfError) return csrfError;
   const limitResponse = await enforceRouteLimit(request, "api:v1:extension:file-upload", 60, 60);
   if (limitResponse) return limitResponse;
 
