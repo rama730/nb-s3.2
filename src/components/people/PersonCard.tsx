@@ -73,9 +73,11 @@ export default function PersonCard({ profile, onConnect, onDismiss, priority = f
     connectionState: "none",
     latestConnectionId: null,
   } : null).relationshipBadgeText;
-  const viewerSkillKeys = new Set((viewerSkills ?? []).map(canonicalSkillKey));
-  const hasMatchingSkills = matchingSkillLabels(profile.skills ?? [], viewerSkills ?? []).length > 0;
-  const skills = (profile.skills ?? []).slice(0, 3);
+  const matchingSkills = matchingSkillLabels(profile.skills ?? [], viewerSkills ?? []);
+  const matchingSkillKeys = new Set(matchingSkills.map(canonicalSkillKey));
+  const skills = [...(profile.skills ?? [])]
+    .sort((left, right) => Number(matchingSkillKeys.has(canonicalSkillKey(right))) - Number(matchingSkillKeys.has(canonicalSkillKey(left))))
+    .slice(0, 3);
   const interests = skills.length ? (profile.interests ?? []).slice(0, 1) : (profile.interests ?? []).slice(0, 3);
 
   const connect = async () => {
