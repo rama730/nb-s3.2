@@ -33,7 +33,6 @@ export function ProjectDocCommandBlock({
     code,
     language,
     id,
-    editorTargetId,
     highlighted,
     highlightedTargetId,
     highlightToken,
@@ -65,7 +64,7 @@ export function ProjectDocCommandBlock({
         () => lineTargets.find((target) => target.id === highlightedTargetId) ?? null,
         [highlightedTargetId, lineTargets],
     );
-    const rootEditorTargetId = editorTargetId ?? projectDocEditorTargetId("command", sourceLine ?? null, sourceOffset ?? null);
+    const rootEditorTargetId = projectDocEditorTargetId("command", sourceLine ?? null, sourceOffset ?? null);
 
     const handleCopy = async () => {
         if (id) onCopied?.(id);
