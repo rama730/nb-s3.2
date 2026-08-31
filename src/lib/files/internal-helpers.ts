@@ -38,11 +38,34 @@ export async function assertProjectFileReadAccess(projectId: string, userId: str
     return access;
 }
 
+/** Files visibility does not implicitly publish task-only attachments. */
+export function canReadProjectTaskFiles(access: ExistingProjectAccess): boolean {
+    return isProjectTabVisibleToViewer({
+        tabId: "tasks",
+        isOwnerOrMember: access.isOwner || access.isMember,
+        publicTabVisibility: access.project.publicTabVisibility,
+    });
+}
+
+export function assertTaskFileNodeVisible(access: ExistingProjectAccess, node: { taskId?: string | null; path?: string | null; deletedAt?: unknown }) {
+    if (node.deletedAt) throw new Error("File not found");
+    if ((node.taskId || node.path?.startsWith("/.system/")) && !canReadProjectTaskFiles(access)) {
+        throw new Error("Task files are not available to this viewer.");
+    }
+}
+
 export async function assertProjectWriteAccess(projectId: string, userId: string) {
     const access = await getProjectAccess(projectId, userId);
     if (!access.canWrite) throw new Error("Forbidden");
     await requireProjectCapability(projectId, userId, "upload_files");
     return { ...access, canWrite: true };
+}
+
+export async function assertProjectManageFilesAccess(projectId: string, userId: string) {
+    const access = await getProjectAccess(projectId, userId);
+    if (!access.canWrite) throw new Error("Forbidden");
+    await requireProjectCapability(projectId, userId, "manage_files");
+    return { ...access, canManageFiles: true };
 }
 
 export async function assertProjectUploadAccess(projectId: string, userId: string) {
@@ -105,6 +128,46 @@ export async function assertProjectWriteAccessTx(
         throw new Error("Forbidden");
     }
 
+    return {
+        project: { id: project.id, ownerId: project.owner_id, visibility: project.visibility },
+        isOwner: false,
+    };
+}
+
+export async function assertProjectManageFilesAccessTx(
+    tx: DbTransaction,
+    projectId: string,
+    userId: string,
+): Promise<{ project: { id: string; ownerId: string; visibility: string | null }; isOwner: boolean }> {
+    const projectResult = await tx.execute<{
+        id: string;
+        owner_id: string;
+        visibility: string | null;
+        deleted_at: Date | string | null;
+    }>(sql`
+        SELECT id, owner_id, visibility, deleted_at
+        FROM projects
+        WHERE id = ${projectId}
+        FOR UPDATE
+    `);
+    const project = Array.from(projectResult)[0];
+    if (!project || project.deleted_at) throw new Error("Forbidden");
+    if (project.owner_id === userId) {
+        return {
+            project: { id: project.id, ownerId: project.owner_id, visibility: project.visibility },
+            isOwner: true,
+        };
+    }
+
+    const memberResult = await tx.execute<{ role: string | null }>(sql`
+        SELECT role
+        FROM project_members
+        WHERE project_id = ${projectId}
+          AND user_id = ${userId}
+        FOR UPDATE
+    `);
+    const member = Array.from(memberResult)[0];
+    if (!member || !projectMemberCan(member.role, "manage_files")) throw new Error("Forbidden");
     return {
         project: { id: project.id, ownerId: project.owner_id, visibility: project.visibility },
         isOwner: false,
@@ -208,12 +271,12 @@ export async function assertNodeNotLockedByAnotherUser(
     userId: string,
     tx: { query: typeof db.query } = db
 ) {
-    void userId;
     const now = new Date();
     const lock = await tx.query.projectNodeLocks.findFirst({
         where: and(
             eq(projectNodeLocks.projectId, projectId),
             eq(projectNodeLocks.nodeId, nodeId),
+            ne(projectNodeLocks.lockedBy, userId),
             gt(projectNodeLocks.expiresAt, now)
         ),
         columns: { lockedBy: true, expiresAt: true },
@@ -232,10 +295,31 @@ export async function assertValidParentFolder(projectId: string, parentId: strin
             eq(projectNodes.projectId, projectId),
             isNull(projectNodes.deletedAt)
         ),
-        columns: { id: true, type: true, parentId: true }
+        columns: { id: true, type: true, parentId: true, path: true, taskId: true, metadata: true }
     });
     if (!parent) throw new Error("Destination folder not found");
     if (parent.type !== 'folder') throw new Error("Destination must be a folder");
+    return parent;
+}
+
+export async function assertValidMoveDestination(
+    projectId: string,
+    parentId: string | null,
+    sourceTaskId: string | null,
+    tx: { query: typeof db.query } = db,
+) {
+    if (sourceTaskId) {
+        throw new Error("Task working files must be published to Project Files before they can be relocated");
+    }
+    const parent = await assertValidParentFolder(projectId, parentId, tx);
+    if (!parent) return null;
+    const isSystem =
+        parent.path === "/.system" ||
+        parent.path.startsWith("/.system/") ||
+        (parent.metadata as { isSystem?: unknown } | null)?.isSystem === true;
+    if (isSystem || parent.taskId) {
+        throw new Error("The internal task workspace cannot be used as a destination");
+    }
     return parent;
 }
 
@@ -273,15 +357,24 @@ export async function assertNotMovingIntoDescendant(
     tx: { query: typeof db.query } = db
 ) {
     let cursor = targetParentId;
-    for (let depth = 0; cursor && depth < 256; depth++) {
+    const visited = new Set<string>();
+    for (let depth = 0; cursor; depth++) {
+        if (depth >= 256 || visited.has(cursor)) {
+            throw new Error("Folder hierarchy is inconsistent; move cancelled");
+        }
+        visited.add(cursor);
         if (cursor === nodeId) {
             throw new Error("Cannot move a folder into itself or its descendant");
         }
         const next = await tx.query.projectNodes.findFirst({
-            where: and(eq(projectNodes.id, cursor), eq(projectNodes.projectId, projectId)),
+            where: and(
+                eq(projectNodes.id, cursor),
+                eq(projectNodes.projectId, projectId),
+                isNull(projectNodes.deletedAt),
+            ),
             columns: { parentId: true },
         });
-        if (!next) break;
+        if (!next) throw new Error("Destination folder not found");
         cursor = next.parentId;
     }
 }
