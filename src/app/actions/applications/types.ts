@@ -39,6 +39,9 @@ export type ApplicationStatusResult = {
     status: ApplicationCoreStatus;
     roleId?: string;
     roleTitle?: string;
+    /** Durable project invitations include guidance appointments without a role id. */
+    invitationKind?: 'ordinary_role' | 'guidance_appointment';
+    invitationId?: string;
     decisionReason?: ApplicationDecisionReasonCode | null;
     lifecycleStatus?: ApplicationLifecycleStatus | 'none';
     canReapply?: boolean;
