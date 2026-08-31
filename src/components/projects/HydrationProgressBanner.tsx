@@ -8,6 +8,8 @@ export interface HydrationProgressBannerProps {
 }
 
 type HydrationProgress = { status: string; completed: number; total: number };
+const REALTIME_MISSED_PROGRESS_MS = 30_000;
+const FALLBACK_POLL_MS = 15_000;
 
 export function HydrationProgressBanner({ projectId }: HydrationProgressBannerProps) {
   const [hydration, setHydration] = useState<HydrationProgress | null>(null);
@@ -15,6 +17,7 @@ export function HydrationProgressBanner({ projectId }: HydrationProgressBannerPr
   useEffect(() => {
     let active = true;
     let timeout: ReturnType<typeof setTimeout> | null = null;
+    let fallbackPolling = false;
     const supabase = createClient();
 
     const clearPoll = () => {
@@ -22,25 +25,41 @@ export function HydrationProgressBanner({ projectId }: HydrationProgressBannerPr
       timeout = null;
     };
 
-    const queuePoll = () => {
+    const queuePoll = (delay: number) => {
       clearPoll();
-      if (active) timeout = setTimeout(fetchProgress, 5000);
+      if (!active) return;
+      timeout = setTimeout(() => {
+        fallbackPolling = true;
+        void fetchProgress();
+      }, delay);
     };
 
     const fetchProgress = async () => {
       if (!active) return;
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from("projects")
         .select("import_source")
         .eq("id", projectId)
         .single();
+
+      if (error) {
+        fallbackPolling = true;
+        queuePoll(FALLBACK_POLL_MS);
+        return;
+      }
       
       const meta = data?.import_source?.metadata?.hydration;
       if (meta && active) {
         setHydration(meta);
       }
-      if (meta?.status === "in_progress") queuePoll();
-      else clearPoll();
+      if (meta?.status === "in_progress") {
+        queuePoll(fallbackPolling ? FALLBACK_POLL_MS : REALTIME_MISSED_PROGRESS_MS);
+      }
+      else if (meta?.status) clearPoll();
+      else {
+        fallbackPolling = true;
+        queuePoll(FALLBACK_POLL_MS);
+      }
     };
 
     // Initial fetch
@@ -60,13 +79,21 @@ export function HydrationProgressBanner({ projectId }: HydrationProgressBannerPr
             const importSource = nextProject?.import_source;
             const meta = importSource?.metadata?.hydration;
             if (meta && active) {
+              fallbackPolling = false;
               setHydration(meta);
             }
-            if (meta?.status === "in_progress") queuePoll();
+            if (meta?.status === "in_progress") queuePoll(REALTIME_MISSED_PROGRESS_MS);
             else clearPoll();
           },
         },
       ],
+      onStatus: (status) => {
+        if (status === "SUBSCRIBED") return;
+        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+          fallbackPolling = true;
+          queuePoll(FALLBACK_POLL_MS);
+        }
+      },
     });
 
     return () => {
