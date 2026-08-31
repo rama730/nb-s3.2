@@ -11,6 +11,7 @@ import { db } from "@/lib/db";
 import { extensionRecoverySessions } from "@/lib/db/schema";
 import { recordExtensionMetric } from "@/lib/extension/observability";
 import { logger } from "@/lib/logger";
+import { validateCsrf } from "@/lib/security/csrf";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -33,6 +34,8 @@ const sessionSchema = z.discriminatedUnion("action", [
 ]);
 
 export async function POST(request: Request) {
+  const csrfError = validateCsrf(request);
+  if (csrfError) return csrfError;
   const limited = await enforceRouteLimit(request, "api:v1:extension:recovery-sessions:write", 180, 60);
   if (limited) return limited;
   const auth = await requireAuthenticatedUser();
