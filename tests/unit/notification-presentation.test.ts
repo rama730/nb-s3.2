@@ -38,6 +38,7 @@ function item(overrides: Partial<NotificationItem> & Pick<NotificationItem, "id"
     dismissedAt: null,
     snoozedUntil: null,
     createdAt: updatedAt,
+    activityAt: updatedAt,
     updatedAt,
     ...rest,
   };
@@ -51,23 +52,40 @@ test("getNotificationReason maps task attention status to blocked/done chips", (
 
 test("filterNotifications supports tray filters", () => {
   const unread = item({ id: "unread", updatedAt: "2026-04-21T08:00:00.000Z" });
-  const read = item({ id: "read", updatedAt: "2026-04-21T07:00:00.000Z", readAt: "2026-04-21T07:01:00.000Z" });
+  const read = item({ id: "read", updatedAt: "2026-04-21T07:00:00.000Z", readAt: "2026-04-21T07:01:00.000Z", seenAt: "2026-04-21T07:01:00.000Z" });
   const more = item({ id: "more", updatedAt: "2026-04-21T06:00:00.000Z", importance: "more" });
 
   assert.deepEqual(filterNotifications([unread, read, more], "unread").map((entry) => entry.id), ["unread", "more"]);
   assert.equal(filterNotifications([unread, read, more], "all").length, 3);
 });
 
-test("groupNotificationsByTime keeps unseen unread rows in New", () => {
+test("groupNotificationsByTime keeps every unseen row in New and groups history by event activity", () => {
   const grouped = groupNotificationsByTime([
     item({ id: "new", updatedAt: "2026-04-21T08:00:00.000Z" }),
-    item({ id: "today", updatedAt: "2026-04-21T07:00:00.000Z", seenAt: "2026-04-21T07:01:00.000Z" }),
-    item({ id: "earlier", updatedAt: "2026-04-20T07:00:00.000Z", seenAt: "2026-04-20T07:01:00.000Z" }),
+    item({ id: "today", updatedAt: "2026-04-21T07:00:00.000Z", readAt: "2026-04-21T07:01:00.000Z", seenAt: "2026-04-21T07:01:00.000Z" }),
+    item({ id: "earlier", updatedAt: "2026-04-20T07:00:00.000Z", readAt: "2026-04-20T07:01:00.000Z", seenAt: "2026-04-20T07:01:00.000Z" }),
   ], new Date("2026-04-21T12:00:00.000Z"));
 
   assert.deepEqual(grouped.new.map((entry) => entry.id), ["new"]);
   assert.deepEqual(grouped.today.map((entry) => entry.id), ["today"]);
   assert.deepEqual(grouped.earlier.map((entry) => entry.id), ["earlier"]);
+});
+
+test("the New filter follows notification seen state, not linked-content read state", () => {
+  const contentReadButUnseen = item({
+    id: "content-read",
+    updatedAt: "2026-04-21T08:00:00.000Z",
+    readAt: "2026-04-21T08:01:00.000Z",
+    seenAt: null,
+  });
+  const seenWithoutConsumingContent = item({
+    id: "seen",
+    updatedAt: "2026-04-21T07:00:00.000Z",
+    readAt: null,
+    seenAt: "2026-04-21T07:01:00.000Z",
+  });
+
+  assert.deepEqual(filterNotifications([contentReadButUnseen, seenWithoutConsumingContent], "unread").map((entry) => entry.id), ["content-read"]);
 });
 
 test("notificationMatchesMuteScope matches the narrow app scopes", () => {
@@ -88,6 +106,41 @@ test("buildNotificationHref only accepts in-app destinations", () => {
   assert.equal(buildNotificationHref(item({ id: "external", updatedAt: "2026-04-21T08:00:00.000Z", href: "https://example.com" })), null);
   assert.equal(buildNotificationHref(item({ id: "protocol", updatedAt: "2026-04-21T08:00:00.000Z", href: "//example.com" })), null);
   assert.equal(buildNotificationHref(item({ id: "missing", updatedAt: "2026-04-21T08:00:00.000Z", href: null })), null);
+});
+
+test("message notification targets prefer their durable source-message reference", () => {
+  const notification = item({
+    id: "message-target",
+    updatedAt: "2026-04-21T08:00:00.000Z",
+    href: "/messages?conversationId=conversation-1",
+    entityRefs: {
+      conversationId: "conversation-1",
+      sourceMessageId: "message-1",
+    },
+  });
+
+  assert.equal(
+    buildNotificationHref(notification),
+    "/messages?conversationId=conversation-1&messageId=message-1",
+  );
+});
+
+test("application notifications never retain a message-specific destination", () => {
+  const notification = item({
+    id: "application-target",
+    updatedAt: "2026-04-21T08:00:00.000Z",
+    href: "/messages?conversationId=conversation-1&messageId=message-1",
+    entityRefs: {
+      applicationId: "application-1",
+      conversationId: "conversation-1",
+      sourceMessageId: "message-1",
+    },
+  });
+
+  assert.equal(
+    buildNotificationHref(notification),
+    "/messages?conversationId=conversation-1",
+  );
 });
 
 test("getNarrowestNotificationMuteScope prefers the most specific available scope", () => {
@@ -126,6 +179,7 @@ test("getAggregateLabel returns null for count <= 1 and plural noun otherwise", 
   assert.equal(getAggregateLabel("task_comment_reply", 3), "3 new replies");
   assert.equal(getAggregateLabel("task_comment_mention", 5), "5 new mentions");
   assert.equal(getAggregateLabel("message_burst", 2), "2 new messages");
+  assert.equal(getAggregateLabel("message_reaction", 2), "2 new reactions");
   assert.equal(getAggregateLabel("task_file_version", 4), "4 new versions");
   assert.equal(getAggregateLabel("connection_request_received", 7), "7 new requests");
 });
@@ -200,6 +254,21 @@ test("shouldSuppressNotificationToast suppresses active destinations", () => {
     pathname: "/projects/network",
     search: "?drawerId=task-1&panelTab=comments",
     trayOpen: false,
+  }), true);
+
+  assert.equal(shouldSuppressNotificationToast({
+    item: item({
+      id: "active-reaction",
+      kind: "message_reaction",
+      reason: "message",
+      updatedAt: "2026-04-21T08:00:00.000Z",
+      href: "/messages?conversationId=conversation-1",
+      entityRefs: { conversationId: "conversation-1", sourceMessageId: "message-1", reactionEmoji: "👍" },
+    }),
+    pathname: "/hub",
+    search: "",
+    trayOpen: false,
+    activeConversationId: "conversation-1",
   }), true);
 
   assert.equal(shouldSuppressNotificationToast({
