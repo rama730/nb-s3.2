@@ -4,19 +4,20 @@ import { db } from '@/lib/db';
 import {
     messageReactions,
     messageReports,
-    messageReadReceipts,
     messageDeliveryReceipts,
+    messageHiddenForUsers,
     conversationParticipants,
     messages,
+    profiles,
 } from '@/lib/db/schema';
 import { getAuthUser } from '@/lib/supabase/auth-user';
 import { eq, and, inArray, sql } from 'drizzle-orm';
 import { consumeRateLimit } from '@/lib/security/rate-limit';
 import {
     buildReactionSummaryByMessage,
-    toPersistedReactionSummary,
     type MessageReactionSummary,
 } from '@/lib/messages/reactions';
+import { emitMessageReactionNotification } from '@/lib/notifications/emitters';
 
 async function listAccessibleMessages(messageIds: string[], userId: string) {
     const uniqueIds = Array.from(new Set(messageIds.filter(Boolean)));
@@ -26,6 +27,7 @@ async function listAccessibleMessages(messageIds: string[], userId: string) {
         .select({
             id: messages.id,
             conversationId: messages.conversationId,
+            senderId: messages.senderId,
         })
         .from(messages)
         .innerJoin(
@@ -35,7 +37,15 @@ async function listAccessibleMessages(messageIds: string[], userId: string) {
                 eq(conversationParticipants.userId, userId),
             ),
         )
-        .where(inArray(messages.id, uniqueIds));
+        .where(and(
+            inArray(messages.id, uniqueIds),
+            sql`NOT EXISTS (
+                SELECT 1
+                FROM ${messageHiddenForUsers} hidden
+                WHERE hidden.message_id = ${messages.id}
+                  AND hidden.user_id = ${userId}
+            )`,
+        ));
 }
 
 async function assertMessageAccess(messageId: string, userId: string) {
@@ -71,84 +81,126 @@ export async function toggleReaction(
             return { success: false, error: 'Invalid emoji' };
         }
 
-        // Check message exists
-        const [messageRow] = await db
-            .select({
-                id: messages.id,
-                conversationId: messages.conversationId,
-                deletedAt: messages.deletedAt,
-            })
-            .from(messages)
-            .where(eq(messages.id, messageId))
-            .limit(1);
-
-        if (!messageRow || messageRow.deletedAt) {
-            return { success: false, error: 'Message not found' };
-        }
-
-        // Verify user is a participant in this conversation
-        const [membership] = await db
-            .select({ id: conversationParticipants.id })
-            .from(conversationParticipants)
-            .where(
-                and(
-                    eq(conversationParticipants.conversationId, messageRow.conversationId),
-                    eq(conversationParticipants.userId, user.id)
+        return await db.transaction(async (tx) => {
+            await tx.execute(sql`
+                SELECT pg_advisory_xact_lock(
+                    hashtextextended(${`${messageId}:${user.id}`}, 0)
                 )
-            )
-            .limit(1);
+            `);
 
-        if (!membership) {
-            return { success: false, error: 'Not authorized' };
-        }
+            const [messageRow] = await tx
+                .select({
+                    id: messages.id,
+                    conversationId: messages.conversationId,
+                    senderId: messages.senderId,
+                    deletedAt: messages.deletedAt,
+                })
+                .from(messages)
+                .innerJoin(
+                    conversationParticipants,
+                    and(
+                        eq(conversationParticipants.conversationId, messages.conversationId),
+                        eq(conversationParticipants.userId, user.id),
+                    ),
+                )
+                .where(and(
+                    eq(messages.id, messageId),
+                    sql`NOT EXISTS (
+                        SELECT 1
+                        FROM ${messageHiddenForUsers} hidden
+                        WHERE hidden.message_id = ${messages.id}
+                          AND hidden.user_id = ${user.id}
+                    )`,
+                ))
+                .limit(1);
 
-        // Check if reaction already exists
-        const [existing] = await db
-            .select({ id: messageReactions.id })
-            .from(messageReactions)
-            .where(
-                and(
+            if (!messageRow || messageRow.deletedAt) {
+                return { success: false, error: 'Message not found' };
+            }
+
+            const [existingReaction] = await tx
+                .select({ id: messageReactions.id, emoji: messageReactions.emoji })
+                .from(messageReactions)
+                .where(and(
                     eq(messageReactions.messageId, messageId),
                     eq(messageReactions.userId, user.id),
-                    eq(messageReactions.emoji, normalizedEmoji)
-                )
-            )
-            .limit(1);
+                ))
+                .limit(1);
 
-        if (existing) {
-            // Remove reaction
-            await db.delete(messageReactions).where(eq(messageReactions.id, existing.id));
-        } else {
-            // Add reaction
-            await db.insert(messageReactions).values({
-                messageId,
-                conversationId: messageRow.conversationId,
-                userId: user.id,
-                emoji: normalizedEmoji,
-            });
-        }
+            const added = existingReaction?.emoji !== normalizedEmoji;
+            if (existingReaction?.emoji === normalizedEmoji) {
+                await tx
+                    .delete(messageReactions)
+                    .where(eq(messageReactions.id, existingReaction.id));
+            } else if (existingReaction) {
+                await tx
+                    .update(messageReactions)
+                    .set({ emoji: normalizedEmoji, createdAt: new Date() })
+                    .where(eq(messageReactions.id, existingReaction.id));
+            } else {
+                await tx.insert(messageReactions).values({
+                    messageId,
+                    conversationId: messageRow.conversationId,
+                    userId: user.id,
+                    emoji: normalizedEmoji,
+                });
+            }
 
-        const rows = await db
-            .select({
-                messageId: messageReactions.messageId,
-                emoji: messageReactions.emoji,
-                userId: messageReactions.userId,
-            })
-            .from(messageReactions)
-            .where(eq(messageReactions.messageId, messageId));
+            if (added && messageRow.senderId && messageRow.senderId !== user.id) {
+                const now = new Date();
+                const [[recipient], [actor]] = await Promise.all([
+                    tx
+                        .select({ muted: conversationParticipants.muted })
+                        .from(conversationParticipants)
+                        .where(and(
+                            eq(conversationParticipants.conversationId, messageRow.conversationId),
+                            eq(conversationParticipants.userId, messageRow.senderId),
+                        ))
+                        .limit(1),
+                    tx
+                        .select({ fullName: profiles.fullName, username: profiles.username, avatarUrl: profiles.avatarUrl })
+                        .from(profiles)
+                        .where(eq(profiles.id, user.id))
+                        .limit(1),
+                ]);
 
-        const reactionSummary = buildReactionSummaryByMessage(rows, user.id)[messageId] || [];
-        await db.update(messages)
-            .set({
-                metadata: reactionSummary.length > 0
-                    ? sql`coalesce(${messages.metadata}, '{}'::jsonb) || ${JSON.stringify({
-                        reactionSummary: toPersistedReactionSummary(reactionSummary),
-                    })}::jsonb`
-                    : sql`coalesce(${messages.metadata}, '{}'::jsonb) - 'reactionSummary'`,
-            })
-            .where(eq(messages.id, messageId));
+                await tx
+                    .update(conversationParticipants)
+                    .set({
+                        lastReactionAt: now,
+                        lastReactionMessageId: messageRow.id,
+                        lastReactionEmoji: normalizedEmoji,
+                        lastReactionActorId: user.id,
+                    })
+                    .where(and(
+                        eq(conversationParticipants.conversationId, messageRow.conversationId),
+                        eq(conversationParticipants.userId, messageRow.senderId),
+                    ));
 
-        return { success: true, added: !existing, reactionSummary };
+                await emitMessageReactionNotification({
+                    recipientUserId: messageRow.senderId,
+                    recipientMuted: recipient?.muted,
+                    actorUserId: user.id,
+                    actorName: actor?.fullName || actor?.username || null,
+                    actorAvatarUrl: actor?.avatarUrl ?? null,
+                    conversationId: messageRow.conversationId,
+                    sourceMessageId: messageRow.id,
+                    emoji: normalizedEmoji,
+                }, tx);
+            }
+
+            const rows = await tx
+                .select({
+                    messageId: messageReactions.messageId,
+                    emoji: messageReactions.emoji,
+                    userId: messageReactions.userId,
+                })
+                .from(messageReactions)
+                .where(eq(messageReactions.messageId, messageId));
+            const reactionSummary = buildReactionSummaryByMessage(rows, user.id)[messageId] || [];
+
+            return { success: true, added, reactionSummary };
+        });
     } catch (error) {
         console.error('Error toggling reaction:', error);
         return { success: false, error: 'Failed to toggle reaction' };
@@ -248,6 +300,7 @@ export async function reportMessage(
         // Insert report (unique constraint handles duplicates)
         await db.insert(messageReports).values({
             messageId,
+            conversationId: messageRow.conversationId,
             reporterId: user.id,
             reason,
             details: clampedDetails,
@@ -257,46 +310,6 @@ export async function reportMessage(
     } catch (error) {
         console.error('Error reporting message:', error);
         return { success: false, error: 'Failed to report message' };
-    }
-}
-
-// ============================================================================
-// READ RECEIPTS
-// ============================================================================
-
-/**
- * Record read receipts for a batch of message IDs.
- * Called when the user reads messages in a conversation.
- */
-export async function recordReadReceipts(
-    messageIds: string[]
-): Promise<{ success: boolean; error?: string }> {
-    try {
-        const user = await getAuthUser();
-        if (!user) return { success: false, error: 'Not authenticated' };
-
-        if (!messageIds.length) return { success: true };
-
-        // Clamp to 50 messages per batch
-        const batch = Array.from(new Set(messageIds.slice(0, 50).filter(Boolean)));
-        const accessibleMessages = await listAccessibleMessages(batch, user.id);
-        if (accessibleMessages.length !== batch.length) {
-            return { success: false, error: 'Not authorized' };
-        }
-
-        // Insert read receipts, ignoring duplicates
-        await db.insert(messageReadReceipts)
-            .values(accessibleMessages.map((message) => ({
-                messageId: message.id,
-                conversationId: message.conversationId,
-                userId: user.id,
-            })))
-            .onConflictDoNothing();
-
-        return { success: true };
-    } catch (error) {
-        console.error('Error recording read receipts:', error);
-        return { success: false, error: 'Failed to record read receipts' };
     }
 }
 
@@ -318,8 +331,10 @@ export async function recordDeliveryReceipts(
 
         if (!messageIds.length) return { success: true };
 
-        // Clamp to 100 messages per batch (delivery acks can arrive in bursts)
-        const batch = Array.from(new Set(messageIds.slice(0, 100).filter(Boolean)));
+        if (messageIds.length > 100) {
+            return { success: false, error: 'Too many receipt IDs; maximum is 100' };
+        }
+        const batch = Array.from(new Set(messageIds.filter(Boolean)));
 
         // Look up messages with sender IDs so we can filter out the caller's
         // own messages (you can't deliver a message to yourself) and confirm
@@ -340,6 +355,9 @@ export async function recordDeliveryReceipts(
             )
             .where(inArray(messages.id, batch));
 
+        if (accessibleRows.length !== batch.length) {
+            return { success: false, error: 'Not authorized' };
+        }
         const otherMessages = accessibleRows.filter((row) => row.senderId !== user.id);
         if (otherMessages.length === 0) return { success: true };
 
