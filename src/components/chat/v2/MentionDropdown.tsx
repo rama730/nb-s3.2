@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from 'react';
 import Image from 'next/image';
+import { buildIdentityPresentation } from '@/lib/ui/identity';
+import { cn } from '@/lib/utils';
 
 interface MentionParticipant {
     id: string;
@@ -57,31 +59,34 @@ export function MentionDropdown({ query, participants, onSelect, onClose }: Ment
 
     return (
         <div ref={listRef} className="absolute bottom-full left-0 z-30 mb-1 w-64 rounded-lg border border-zinc-200 bg-white py-1 shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
-            {filtered.map((participant, index) => (
-                <button
-                    key={participant.id}
-                    type="button"
-                    onMouseDown={(e) => {
-                        e.preventDefault();
-                        onSelect(participant);
-                    }}
-                    className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm ${
-                        index === selectedIndex ? 'bg-accent text-accent-foreground' : 'hover:bg-zinc-50 dark:hover:bg-zinc-800'
-                    }`}
-                >
-                    <div className="flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-700">
-                        {participant.avatarUrl ? (
-                            <Image src={participant.avatarUrl} alt="" width={24} height={24} unoptimized className="h-full w-full object-cover" />
-                        ) : (
-                            <span className="text-[10px] font-medium">{(participant.fullName || participant.username || '?')[0]!.toUpperCase()}</span>
-                        )}
-                    </div>
-                    <div className="min-w-0">
-                        <div className="truncate font-medium text-zinc-900 dark:text-zinc-100">{participant.fullName || participant.username}</div>
-                        {participant.username && <div className="truncate text-xs text-zinc-500">@{participant.username}</div>}
-                    </div>
-                </button>
-            ))}
+            {filtered.map((participant, index) => {
+                const identity = buildIdentityPresentation(participant);
+                return (
+                    <button
+                        key={participant.id}
+                        type="button"
+                        onMouseDown={(e) => {
+                            e.preventDefault();
+                            onSelect(participant);
+                        }}
+                        className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm ${
+                            index === selectedIndex ? 'bg-accent text-accent-foreground' : 'hover:bg-zinc-50 dark:hover:bg-zinc-800'
+                        }`}
+                    >
+                        <div className={cn("flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-full", identity.avatarUrl ? "bg-zinc-200 dark:bg-zinc-700" : identity.gradientClass)}>
+                            {identity.avatarUrl ? (
+                                <Image src={identity.avatarUrl} alt={identity.alt} width={24} height={24} unoptimized className="h-full w-full object-cover" />
+                            ) : (
+                                <span className="text-[10px] font-medium text-white">{identity.initials}</span>
+                            )}
+                        </div>
+                        <div className="min-w-0">
+                            <div className="truncate font-medium text-zinc-900 dark:text-zinc-100">{identity.displayName}</div>
+                            {identity.usernameLabel && <div className="truncate text-xs text-zinc-500">{identity.usernameLabel}</div>}
+                        </div>
+                    </button>
+                );
+            })}
         </div>
     );
 }
