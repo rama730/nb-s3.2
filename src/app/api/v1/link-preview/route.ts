@@ -7,6 +7,7 @@ import {
 } from '@/lib/security/outbound-url';
 import { isSafeHttpUrl } from '@/lib/security/urls';
 import { logger } from '@/lib/logger';
+import { normalizeLinkDestinationTitle } from '@/lib/links/destination-title';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -31,6 +32,18 @@ interface LinkPreviewData {
     image: string | null;
     domain: string;
     url: string;
+    titleSource: 'provider' | 'open_graph' | 'html_title' | 'url' | null;
+    health: 'unknown' | 'active' | 'unavailable';
+    checkedAt: string;
+    resolvedHost: string;
+    contentType: string | null;
+}
+
+const PRIVATE_PREVIEW_CACHE_HEADERS = { 'Cache-Control': 'private, max-age=300' };
+
+function previewHealth(status: number): LinkPreviewData['health'] {
+    if (status === 404 || status === 410) return 'unavailable';
+    return status >= 200 && status < 500 ? 'active' : 'unknown';
 }
 
 function clampForRegex(html: string): string {
@@ -65,6 +78,61 @@ function extractTitle(html: string): string | null {
     return match?.[1]?.trim() || null;
 }
 
+function isYouTubeUrl(url: URL) {
+    const host = url.hostname.toLowerCase().replace(/^www\./, '');
+    return host === 'youtube.com' || host.endsWith('.youtube.com') || host === 'youtu.be';
+}
+
+function isGoogleScholarUrl(url: URL) {
+    const host = url.hostname.toLowerCase().replace(/^www\./, '');
+    return host === 'scholar.google.com' || host.endsWith('.scholar.google.com');
+}
+
+async function fetchYouTubeOEmbed(url: string): Promise<LinkPreviewData | null> {
+    const endpoint = new URL('https://www.youtube.com/oembed');
+    endpoint.searchParams.set('format', 'json');
+    endpoint.searchParams.set('url', url);
+
+    try {
+        const { response } = await fetchPublicUrlWithRedirectValidation({
+            url: endpoint,
+            timeoutMs: FETCH_TIMEOUT_MS,
+            maxRedirects: 2,
+            init: {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (compatible; LinkPreviewBot/1.0)',
+                    'Accept': 'application/json',
+                },
+            },
+        });
+        if (!response.ok) return null;
+        const contentLength = Number(response.headers.get('content-length') || 0);
+        if (contentLength > MAX_META_CONTENT_LENGTH * 4) return null;
+        const body = await response.text();
+        if (body.length > MAX_META_CONTENT_LENGTH * 4) return null;
+        const payload = JSON.parse(body) as Record<string, unknown>;
+        const title = normalizeLinkDestinationTitle(payload.title, 'youtube');
+        if (!title) return null;
+        const thumbnail = typeof payload.thumbnail_url === 'string' && isSafeHttpUrl(payload.thumbnail_url)
+            ? payload.thumbnail_url.slice(0, 2000)
+            : null;
+        return {
+            title,
+            description: normalizeLinkDestinationTitle(payload.author_name)?.slice(0, 500) || null,
+            image: thumbnail,
+            domain: new URL(url).hostname,
+            url,
+            titleSource: 'provider',
+            health: 'active',
+            checkedAt: new Date().toISOString(),
+            resolvedHost: new URL(url).hostname,
+            contentType: 'application/json',
+        };
+    } catch {
+        return null;
+    }
+}
+
 export async function GET(request: NextRequest) {
     try {
         const rlResponse = await enforceRouteLimit(request, 'api:v1:link-preview:get', 60, 60);
@@ -83,6 +151,18 @@ export async function GET(request: NextRequest) {
             parsedUrl = new URL(url);
         } catch {
             return jsonError('Invalid URL', 400, 'BAD_REQUEST');
+        }
+
+        // YouTube watch URLs contain only the route name (`watch`) locally.
+        // oEmbed is the provider-supported, keyless source for the exact video
+        // title and is both more stable and cheaper than parsing the full page.
+        if (isYouTubeUrl(parsedUrl)) {
+            const youtubePreview = await fetchYouTubeOEmbed(url);
+            if (youtubePreview) {
+                return jsonSuccess(youtubePreview, undefined, {
+                    headers: PRIVATE_PREVIEW_CACHE_HEADERS,
+                });
+            }
         }
 
         let html: string;
@@ -107,7 +187,12 @@ export async function GET(request: NextRequest) {
                     image: null,
                     domain: parsedUrl.hostname,
                     url,
-                });
+                    titleSource: null,
+                    health: previewHealth(res.status),
+                    checkedAt: new Date().toISOString(),
+                    resolvedHost: parsedUrl.hostname,
+                    contentType: res.headers.get('content-type'),
+                }, undefined, { headers: PRIVATE_PREVIEW_CACHE_HEADERS });
             }
 
             // Only process HTML responses
@@ -119,7 +204,12 @@ export async function GET(request: NextRequest) {
                     image: null,
                     domain: parsedUrl.hostname,
                     url,
-                });
+                    titleSource: null,
+                    health: 'active',
+                    checkedAt: new Date().toISOString(),
+                    resolvedHost: parsedUrl.hostname,
+                    contentType,
+                }, undefined, { headers: PRIVATE_PREVIEW_CACHE_HEADERS });
             }
 
             // Read limited amount of HTML
@@ -131,7 +221,12 @@ export async function GET(request: NextRequest) {
                     image: null,
                     domain: parsedUrl.hostname,
                     url,
-                });
+                    titleSource: null,
+                    health: 'active',
+                    checkedAt: new Date().toISOString(),
+                    resolvedHost: parsedUrl.hostname,
+                    contentType,
+                }, undefined, { headers: PRIVATE_PREVIEW_CACHE_HEADERS });
             }
 
             const chunks: Uint8Array[] = [];
@@ -149,7 +244,7 @@ export async function GET(request: NextRequest) {
                 logger.warn('link-preview.outbound_url_blocked', {
                     module: 'api',
                     userId: user?.id ?? undefined,
-                    requestedUrl: url,
+                    requestedHost: parsedUrl.hostname,
                     error: error.message,
                 });
                 return jsonError('URL is not allowed', 400, 'BAD_REQUEST');
@@ -161,7 +256,12 @@ export async function GET(request: NextRequest) {
                 image: null,
                 domain: parsedUrl.hostname,
                 url,
-            });
+                titleSource: null,
+                health: 'unknown',
+                checkedAt: new Date().toISOString(),
+                resolvedHost: parsedUrl.hostname,
+                contentType: null,
+            }, undefined, { headers: PRIVATE_PREVIEW_CACHE_HEADERS });
         }
 
         // Parse OG tags
@@ -169,7 +269,13 @@ export async function GET(request: NextRequest) {
         const ogDescription = extractMetaContent(html, 'og:description');
         const ogImage = extractMetaContent(html, 'og:image');
         const metaDescription = extractMetaContent(html, 'description');
-        const title = ogTitle || extractTitle(html);
+        const platform = isYouTubeUrl(parsedUrl)
+            ? 'youtube'
+            : isGoogleScholarUrl(parsedUrl)
+                ? 'google-scholar'
+                : null;
+        const htmlTitle = extractTitle(html);
+        const title = normalizeLinkDestinationTitle(ogTitle || htmlTitle, platform);
         const description = ogDescription || metaDescription;
 
         // Resolve relative image URL and re-validate it. SEC-C6: a malicious
@@ -188,16 +294,21 @@ export async function GET(request: NextRequest) {
         }
 
         const preview: LinkPreviewData = {
-            title: title?.slice(0, 300) || null,
+            title,
             description: description?.slice(0, 500) || null,
             image: image ? image.slice(0, 2000) : null,
             domain: parsedUrl.hostname,
             url,
+            titleSource: title ? (ogTitle ? 'open_graph' : 'html_title') : 'url',
+            health: 'active',
+            checkedAt: new Date().toISOString(),
+            resolvedHost: parsedUrl.hostname,
+            contentType: 'text/html',
         };
 
         return jsonSuccess(preview, undefined, {
             headers: {
-                'Cache-Control': 'public, max-age=3600, s-maxage=3600',
+                ...PRIVATE_PREVIEW_CACHE_HEADERS,
             },
         });
     } catch (error) {
