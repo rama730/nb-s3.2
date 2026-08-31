@@ -124,11 +124,11 @@ describe("V3AttachmentPicker — navigate-only tree (Req 6.1)", () => {
 // ─── Req 6.2: Right pane shows search results / recents ──────────────
 
 describe("V3AttachmentPicker — right pane content (Req 6.2)", () => {
-  it("uses rankFuzzyResults for search results", () => {
+  it("uses authoritative server search", () => {
     assert.match(
       SRC,
-      /rankFuzzyResults/,
-      "Must use rankFuzzyResults for search results",
+      /getProjectNodes\(projectId, folder\?\.id \?\? null, query, 100, pageParam\)/,
+      "Search must query the server and include its cursor",
     );
   });
 
@@ -237,14 +237,14 @@ describe("V3AttachmentPicker — interface contract", () => {
   });
 });
 
-// ─── Structural: uses computeVisibleIdsForSearch for tree filtering ──
+// ─── Structural: retains explicit pagination ──
 
 describe("V3AttachmentPicker — tree filtering (Req 6.1)", () => {
-  it("uses computeVisibleIdsForSearch for tree filtering", () => {
+  it("retains explicit pagination", () => {
     assert.match(
       SRC,
-      /computeVisibleIdsForSearch/,
-      "Must use computeVisibleIdsForSearch for tree filtering",
+      /getNextPageParam: \(?page\)? => page.nextCursor/,
+      "Picker must not silently discard the server cursor",
     );
   });
 });
