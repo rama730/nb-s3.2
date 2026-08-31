@@ -32,6 +32,11 @@ function main() {
 
     if (target === 'production') {
         commandPlan.push({
+            label: 'check:db:runtime-role',
+            command: npmExecutable(),
+            args: ['run', 'check:db:runtime-role'],
+        })
+        commandPlan.push({
             label: 'check:hardening-rollout',
             command: npmExecutable(),
             args: ['run', 'check:hardening-rollout'],
