@@ -2,11 +2,23 @@
 
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { useShallow } from "zustand/react/shallow";
 
 import type { ProjectNode } from "@/lib/db/schema";
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
+import {
+  getTaskWorkingFilesDisplayName,
+  isProjectSystemRoot,
+} from "@/lib/files/task-working-files";
 
 import { useNavigateTo } from "../hooks/useNavigateTo";
 
@@ -40,14 +52,19 @@ export function buildNodePathMap(
     if (cached !== undefined) return cached;
     const node = nodesById[nodeId];
     if (!node) return "";
-    if (seen.has(nodeId)) return node.name; // defensive: cycle guard
+    const displayName = getTaskWorkingFilesDisplayName(node);
+    if (seen.has(nodeId)) return displayName; // defensive: cycle guard
     seen.add(nodeId);
+    if (isProjectSystemRoot(node)) {
+      cache.set(nodeId, "");
+      return "";
+    }
     if (!node.parentId) {
-      cache.set(nodeId, node.name);
-      return node.name;
+      cache.set(nodeId, displayName);
+      return displayName;
     }
     const parentPath = resolve(node.parentId, seen);
-    const path = parentPath ? `${parentPath}/${node.name}` : node.name;
+    const path = parentPath ? `${parentPath}/${displayName}` : displayName;
     cache.set(nodeId, path);
     return path;
   };
@@ -144,44 +161,45 @@ export function QuickOpenDialog({
   }, [query]);
 
   // ── Derived collections ────────────────────────────────────────────
-  const fileNodes = useMemo(
-    () =>
-      Object.values(nodesById).filter(
-        (n): n is ProjectNode => !!n && n.type === "file",
-      ),
-    [nodesById],
-  );
   const nodePathById = useMemo(() => buildNodePathMap(nodesById), [nodesById]);
-
   const rawQuery = debouncedQuery.trim();
-  const rawQueryLower = rawQuery.toLowerCase();
-  const showRecents = rawQueryLower.length === 0;
-
-  // ── Results ────────────────────────────────────────────────────────
-  const results: ProjectNode[] = useMemo(() => {
-    if (showRecents) {
-      // Req 9.2: up to 20 Recents, most-recent first, files only.
-      // Drop ids that no longer resolve (cache-evicted / deleted node).
-      const seen = new Set<string>();
-      const out: ProjectNode[] = [];
-      for (const id of recents) {
-        if (seen.has(id)) continue;
-        seen.add(id);
-        const node = nodesById[id];
-        if (node && node.type === "file") out.push(node);
-        if (out.length >= MAX_RECENTS) break;
-      }
-      return out;
-    }
-    return rankFuzzyResults(fileNodes, nodePathById, rawQueryLower, MAX_RESULTS);
-  }, [
-    showRecents,
-    rawQueryLower,
-    recents,
-    nodesById,
-    fileNodes,
-    nodePathById,
-  ]);
+  const showRecents = rawQuery.length === 0;
+  const search = useInfiniteQuery({
+    queryKey: ["files-quick-open", projectId, rawQuery],
+    enabled: open && rawQuery.length >= 2,
+    initialPageParam: undefined as string | undefined,
+    queryFn: async ({ pageParam }) => {
+      const { getProjectNodes } = await import("@/app/actions/files/nodes");
+      return getProjectNodes(projectId, null, rawQuery, MAX_RESULTS, pageParam);
+    },
+    getNextPageParam: page => page.nextCursor ?? undefined,
+    staleTime: 30_000,
+  });
+  const recentIds = recents.slice(0, MAX_RECENTS);
+  const recentFiles = useQuery({
+    queryKey: ["files-quick-open-recent", projectId, recentIds.join(",")],
+    enabled: open && showRecents,
+    queryFn: async () => {
+      if (!recentIds.length) return [];
+      const { getNodeMetadataBatch } = await import("@/app/actions/files/nodes");
+      const result = await getNodeMetadataBatch(projectId, recentIds);
+      if (!result.success) throw new Error(result.message);
+      const order = new Map(recentIds.map((id, index) => [id, index]));
+      return result.data.nodes.sort((a, b) => order.get(a.id)! - order.get(b.id)!);
+    },
+    staleTime: 30_000,
+  });
+  const source = showRecents ? recentFiles : search;
+  const isSearchingServer = (showRecents || rawQuery.length >= 2) && source.isPending || query.trim() !== rawQuery;
+  const searchError = source.error?.message;
+  // Search results come only from the authorized server page, never stale cache hits.
+  const results = useMemo(() => {
+    const nodes = showRecents ? recentFiles.data ?? [] : rawQuery.length < 2 ? [] : search.data?.pages.flatMap(page => page.nodes) ?? [];
+    return nodes.filter(node => node.type === "file" && !node.deletedAt);
+  }, [showRecents, recentFiles.data, search.data, rawQuery]);
+  useEffect(() => {
+    useFilesWorkspaceStore.getState().upsertNodes(projectId, results);
+  }, [results, projectId]);
 
   // ── Active (focused) result index + scroll into view (Req 9.4) ────
   const [activeIndex, setActiveIndex] = useState(0);
@@ -227,9 +245,7 @@ export function QuickOpenDialog({
       // server-side delete may have removed the node since the memoized
       // `results` array was last computed. Req 9.6: show inline error,
       // leave `currentLocationId` alone.
-      const fresh = useFilesWorkspaceStore
-        .getState()
-        .byProjectId[projectId]?.nodesById[candidate.id];
+      const fresh = useFilesWorkspaceStore.getState().byProjectId[projectId]?.nodesById[candidate.id];
       if (!fresh || fresh.type !== "file") {
         setMissingNodeError(
           `"${candidate.name}" is no longer available. It may have been deleted or moved.`,
@@ -275,24 +291,14 @@ export function QuickOpenDialog({
 
   if (!open) return null;
 
-  const emptyRecents = showRecents && results.length === 0;
-  const noMatches = !showRecents && results.length === 0;
+  const emptyRecents = showRecents && results.length === 0 && !isSearchingServer && !searchError;
+  const noMatches = !showRecents && results.length === 0 && !isSearchingServer && !searchError;
   const activeResult = results[safeActiveIndex];
 
   return (
-    <div
-      // Fixed full-viewport backdrop — matches the mini-IDE host's overlay
-      // rendering. `onMouseDown` on the backdrop fires `close()` so clicks
-      // landing on the scrim (not the dialog surface) dismiss the dialog.
-      className="fixed inset-0 z-50 bg-black/30 flex items-start justify-center p-4 pt-16"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Quick open"
-      data-testid="files-tab-quick-open"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) close();
-      }}
-    >
+    <Dialog open={open} onOpenChange={value => { if (!value) close(); }}>
+      <DialogContent showCloseButton={false} aria-describedby={undefined} data-testid="files-tab-quick-open" className="block max-w-2xl overflow-hidden p-0">
+        <DialogTitle className="sr-only">Quick open</DialogTitle>
       <div
         className="w-full max-w-2xl rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 shadow-2xl overflow-hidden"
         onMouseDown={(e) => {
@@ -319,7 +325,9 @@ export function QuickOpenDialog({
             aria-expanded="true"
             aria-controls="files-tab-quick-open-listbox"
             aria-activedescendant={
-              activeResult ? `files-tab-quick-open-item-${activeResult.id}` : undefined
+              activeResult
+                ? `files-tab-quick-open-item-${activeResult.id}`
+                : undefined
             }
           />
         </div>
@@ -330,6 +338,15 @@ export function QuickOpenDialog({
             className="px-4 py-2 text-sm text-red-600 dark:text-red-400 border-b border-zinc-200 dark:border-zinc-800"
           >
             {missingNodeError}
+          </div>
+        ) : null}
+        {searchError ? (
+          <div role="alert" className="border-b border-zinc-200 px-4 py-2 text-sm text-red-600 dark:border-zinc-800 dark:text-red-400">
+            {searchError} <button type="button" onClick={() => void source.refetch()} className="underline">Retry</button>
+          </div>
+        ) : isSearchingServer ? (
+          <div role="status" aria-live="polite" className="border-b border-zinc-200 px-4 py-2 text-xs text-zinc-500 dark:border-zinc-800">
+            Searching the full project…
           </div>
         ) : null}
         <div
@@ -349,7 +366,7 @@ export function QuickOpenDialog({
               data-testid="files-tab-quick-open-no-results"
               className="px-4 py-3 text-sm text-zinc-500"
             >
-              No matching files
+              {rawQuery.length < 2 ? "Type at least two characters to search." : "No matching files"}
             </div>
           ) : (
             results.map((node, idx) => {
@@ -377,23 +394,26 @@ export function QuickOpenDialog({
                   <div className="text-sm font-medium text-zinc-900 dark:text-zinc-100 truncate">
                     {node.name}
                   </div>
-                  <div className="text-xs text-zinc-500 truncate">{fullPath}</div>
+                  <div className="text-xs text-zinc-500 truncate">
+                    {fullPath}
+                  </div>
                 </button>
               );
             })
           )}
         </div>
+        {!showRecents && search.hasNextPage && <button type="button" disabled={search.isFetchingNextPage} onClick={() => void search.fetchNextPage()} className="m-3 min-h-10 rounded border px-3 text-sm">{search.isFetchingNextPage ? "Loading…" : "Load more results"}</button>}
       </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
 // Stable empty values so the shallow selector does not treat `{}`/`[]`
 // literals as fresh on every render.
-const EMPTY_NODES_BY_ID: Record<string, ProjectNode> = Object.freeze({}) as Record<
-  string,
-  ProjectNode
->;
+const EMPTY_NODES_BY_ID: Record<string, ProjectNode> = Object.freeze(
+  {},
+) as Record<string, ProjectNode>;
 const EMPTY_RECENTS: readonly string[] = Object.freeze([]) as readonly string[];
 
 export default QuickOpenDialog;
