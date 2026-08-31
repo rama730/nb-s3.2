@@ -31,6 +31,7 @@ import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 import type { FileVersion } from "@/lib/db/schema";
 import { VersionPill } from "../VersionPill";
 import { FileInspectorPanelHeader } from "./FileInspectorPanelHeader";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 
 type FileVersionWithUploader = FileVersion & {
   uploadedByName?: string | null;
@@ -74,6 +75,8 @@ export interface FileVersionHistoryPanelProps {
   /** Optional uploader display names keyed by user id. */
   uploaderNames?: Record<string, string>;
   onCompareClick?: (versionNumber: number) => void;
+  onVersionChangeStart?: () => void;
+  onVersionChanged?: (versionNumber: number | null) => void;
   onClose: () => void;
 }
 
@@ -88,12 +91,16 @@ export function FileVersionHistoryPanel({
   isDeleted = false,
   uploaderNames,
   onCompareClick,
+  onVersionChangeStart,
+  onVersionChanged,
   onClose,
 }: FileVersionHistoryPanelProps): React.JSX.Element {
   const { versions, isLoading, error, listVersions, restoreVersion, deleteVersion } =
     useFileVersions(projectId, nodeId);
 
   const [pendingAction, setPendingAction] = React.useState<string | null>(null);
+  const [pendingDeleteVersion, setPendingDeleteVersion] =
+    React.useState<FileVersion | null>(null);
 
   // ── Fetch versions on mount ────────────────────────────────────────
   React.useEffect(() => {
@@ -120,13 +127,7 @@ export function FileVersionHistoryPanel({
 
       const actionKey = `restore:${version.id}`;
       setPendingAction(actionKey);
-      if (typeof window !== "undefined") {
-        window.dispatchEvent(
-          new CustomEvent("file:version-changed-start", {
-            detail: { nodeId },
-          }),
-        );
-      }
+      onVersionChangeStart?.();
       try {
         const result = await restoreVersion(version.version);
         if (result.success) {
@@ -134,14 +135,6 @@ export function FileVersionHistoryPanel({
           
           if ((result as any).node) {
             useFilesWorkspaceStore.getState().setNodes(projectId, [(result as any).node]);
-          }
-
-          if (typeof window !== "undefined") {
-            window.dispatchEvent(
-              new CustomEvent("file:version-changed", {
-                detail: { nodeId, version: version.version },
-              }),
-            );
           }
 
           // Emit telemetry (Req 16.4) — Task 7.5 wires this
@@ -163,9 +156,10 @@ export function FileVersionHistoryPanel({
         toast.error(message);
       } finally {
         setPendingAction(null);
+        onVersionChanged?.(null);
       }
     },
-    [canEdit, isDeleted, projectId, nodeId, restoreVersion, listVersions],
+    [canEdit, isDeleted, projectId, nodeId, restoreVersion, listVersions, onVersionChangeStart, onVersionChanged],
   );
 
   // ── Download handler ────────────────────────────────────────────────
@@ -204,20 +198,9 @@ export function FileVersionHistoryPanel({
       if (isDeleted) return;
       if (!canEdit) return;
 
-      const confirmDelete = window.confirm(
-        `Are you sure you want to permanently delete version ${version.version}? This will also delete its bytes from S3 and cannot be undone.`
-      );
-      if (!confirmDelete) return;
-
       const actionKey = `delete:${version.id}`;
       setPendingAction(actionKey);
-      if (typeof window !== "undefined") {
-        window.dispatchEvent(
-          new CustomEvent("file:version-changed-start", {
-            detail: { nodeId },
-          }),
-        );
-      }
+      onVersionChangeStart?.();
       try {
         const result = await deleteVersion(version.version);
         if (result.success) {
@@ -225,13 +208,6 @@ export function FileVersionHistoryPanel({
           
           if ((result as any).node) {
             useFilesWorkspaceStore.getState().setNodes(projectId, [(result as any).node]);
-            if (typeof window !== "undefined") {
-              window.dispatchEvent(
-                new CustomEvent("file:version-changed", {
-                  detail: { nodeId, version: (result as any).nextActiveVersion },
-                }),
-              );
-            }
           }
           await listVersions();
         } else {
@@ -242,9 +218,10 @@ export function FileVersionHistoryPanel({
         toast.error(message);
       } finally {
         setPendingAction(null);
+        onVersionChanged?.(null);
       }
     },
-    [canEdit, isDeleted, projectId, nodeId, deleteVersion, listVersions]
+    [canEdit, isDeleted, projectId, nodeId, deleteVersion, listVersions, onVersionChangeStart, onVersionChanged]
   );
 
   // ── Uploader label helper ───────────────────────────────────────────
@@ -276,6 +253,7 @@ export function FileVersionHistoryPanel({
 
   // ── Render ─────────────────────────────────────────────────────────
   return (
+    <>
     <div
       data-testid="file-version-history-panel"
       className={cn(
@@ -426,7 +404,7 @@ export function FileVersionHistoryPanel({
                         <button
                           type="button"
                           disabled={pendingAction === `delete:${version.id}`}
-                          onClick={() => void handleDelete(version)}
+                          onClick={() => setPendingDeleteVersion(version)}
                           aria-label={`Delete version ${version.version}`}
                           className="inline-flex items-center justify-center gap-0.5 rounded border border-red-200 bg-red-50 px-1.5 py-0.5 text-[10px] font-medium text-red-700 transition-colors hover:bg-red-100 disabled:opacity-50 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-200 dark:hover:bg-red-500/20"
                         >
@@ -453,6 +431,25 @@ export function FileVersionHistoryPanel({
         </p>
       </div>
     </div>
+    <ConfirmDialog
+      open={Boolean(pendingDeleteVersion)}
+      onOpenChange={(open) => !open && setPendingDeleteVersion(null)}
+      title="Delete file version"
+      description={
+        pendingDeleteVersion
+          ? `Permanently delete version ${pendingDeleteVersion.version}? Its stored bytes will also be deleted and this cannot be undone.`
+          : "This version will be permanently deleted."
+      }
+      confirmLabel="Delete version"
+      variant="destructive"
+      onConfirm={async () => {
+        const version = pendingDeleteVersion;
+        if (!version) return;
+        await handleDelete(version);
+        setPendingDeleteVersion(null);
+      }}
+    />
+    </>
   );
 }
 
