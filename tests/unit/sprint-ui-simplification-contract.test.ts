@@ -16,163 +16,117 @@ const sprintHeaderSource = readSource(
 const sprintLeftRailSource = readSource(
   "src/components/projects/tabs/sprint/SprintLeftRail.tsx",
 );
-const sprintTimelineContentSource = readSource(
+const sprintTimelineSource = readSource(
   "src/components/projects/tabs/sprint/SprintTimelineContent.tsx",
 );
-const sprintDetailDrawerSource = readSource(
-  "src/components/projects/tabs/sprint/SprintDetailDrawer.tsx",
+const sprintLifecycleModalsSource = readSource(
+  "src/components/projects/tabs/sprint/SprintLifecycleModals.tsx",
 );
-const projectActionsSource = readSource("src/app/actions/project/_all.ts");
+const sprintEditorSource = readSource(
+  "src/components/projects/v2/sprints/CreateSprintModal.tsx",
+);
+const sprintActionsSource = readSource("src/app/actions/project/_all.ts");
 
-describe("sprint tab simplified interface contract", () => {
-  it("keeps filter counts inside the compact more menu", () => {
+describe("sprint tab target architecture contract", () => {
+  it("keeps canonical Sprint and task references in URLs", () => {
+    assert.match(sprintPlanningSource, /selectedSprint\.code/);
+    assert.match(sprintPlanningSource, /params\.delete\("sprintId"\)/);
     assert.match(
-      sprintHeaderSource,
-      /DropdownMenu/,
-      "sprint filters should be exposed through a dropdown menu",
+      sprintPlanningSource,
+      /params\.set\("sprint", selectedSprint\.code\)/,
     );
-    assert.match(
-      sprintHeaderSource,
-      /MoreHorizontal/,
-      "the sprint header should use a three-dot options trigger",
-    );
-    for (const label of [
-      "All work items",
-      "Work items",
-      "Blocked",
-      "Complete",
-      "Files",
-    ]) {
-      assert.match(
-        sprintHeaderSource,
-        new RegExp(label),
-        `${label} should live inside the sprint options menu`,
-      );
+    assert.match(sprintTimelineSource, /projectKey\?\.trim\(\) \|\| "Task"/);
+    assert.match(sprintTimelineSource, /drawerId: taskReference \?\? task\.id/);
+    assert.doesNotMatch(sprintTimelineSource, /`NB-\$\{task\.taskNumber\}`/);
+  });
+
+  it("shows the compact authoritative Sprint header", () => {
+    assert.match(sprintHeaderSource, /\{sprint\.code\}/);
+    assert.match(sprintHeaderSource, /SPRINT_STATUS_PRESENTATION/);
+    assert.match(sprintHeaderSource, /formatSprintDateRange/);
+    assert.match(sprintHeaderSource, /\{sprint\.name\}/);
+    assert.doesNotMatch(sprintHeaderSource, /Progress|Activity|Baseline/);
+  });
+
+  it("implements the schedule-owned lifecycle instead of a manual status toggle", () => {
+    for (const control of ["Close sprint", "Cancel sprint", "Archive sprint"]) {
+      assert.match(sprintHeaderSource, new RegExp(control));
     }
-    assert.match(
-      sprintPlanningSource,
-      /visibleCounts=\{timelineView\.visibleCounts\}/,
-      "the header menu should receive the filtered count model",
-    );
-    assert.match(
-      sprintPlanningSource,
-      /onFilterChange=\{handleFilterChange\}/,
-      "the header menu should own filter changes after removing the toolbar",
+    assert.match(sprintHeaderSource, /Starts automatically on schedule/);
+    assert.doesNotMatch(sprintHeaderSource, /Start sprint|Reopen sprint/);
+    assert.match(sprintLifecycleModalsSource, /unfinishedChoice/);
+    assert.match(sprintLifecycleModalsSource, /Move to backlog/);
+    assert.match(sprintLifecycleModalsSource, /Move to a Planning Sprint/);
+    assert.match(sprintLifecycleModalsSource, /DialogContent/);
+    assert.match(sprintLifecycleModalsSource, /DialogTitle/);
+    assert.doesNotMatch(sprintLifecycleModalsSource, /role="alertdialog"/);
+  });
+
+  it("uses compact lifecycle and health summaries with explicit pagination", () => {
+    assert.match(sprintTimelineSource, /aria-label="Sprint summary"/);
+    assert.match(sprintTimelineSource, /aria-label="Sprint lifecycle"/);
+    assert.match(sprintTimelineSource, /Assign tasks from the Task board/);
+    assert.match(sprintTimelineSource, /hasMore && onLoadMore/);
+    assert.match(sprintTimelineSource, /Load more tasks/);
+    assert.doesNotMatch(sprintTimelineSource, /IntersectionObserver/);
+  });
+
+  it("categorizes linked files and keeps discussion owned by the Task panel", () => {
+    assert.match(sprintTimelineSource, /role === "deliverable"/);
+    assert.match(sprintTimelineSource, /role === "working"/);
+    assert.match(sprintTimelineSource, /role === "reference"/);
+    assert.match(sprintTimelineSource, /Final Deliverables/);
+    assert.match(sprintTimelineSource, /Task References/);
+    assert.match(sprintTimelineSource, /TASK_WORKING_FILES_TITLE/);
+    assert.doesNotMatch(
+      sprintTimelineSource,
+      /getProjectTaskActivityAction|includeComments|animate-pulse/,
     );
   });
 
-  it("removes the noisy main-area controls and status summaries", () => {
-    assert.doesNotMatch(
-      sprintPlanningSource,
-      /SprintTimelineToolbar/,
-      "the timeline toolbar should not render",
+  it("uses accessible disclosure and motion behavior without the blue task outline", () => {
+    assert.match(sprintTimelineSource, /aria-expanded=\{isExpanded\}/);
+    assert.match(sprintTimelineSource, /aria-controls=/);
+    assert.match(
+      sprintTimelineSource,
+      /aria-label=\{`\$\{isExpanded \? "Collapse" : "Expand"\}/,
     );
-    assert.doesNotMatch(
-      sprintPlanningSource,
-      /useSprintViewPreferences/,
-      "local mode preferences should not drive this page",
-    );
-    assert.doesNotMatch(
-      sprintHeaderSource,
-      /SPRINT_STATUS_PRESENTATION/,
-      "the main header should not show sprint status badges",
-    );
-    assert.doesNotMatch(
-      sprintHeaderSource,
-      /Progress|Activity|Baseline/,
-      "progress, activity, and baseline cards should be removed",
-    );
-    assert.doesNotMatch(
-      sprintTimelineContentSource,
-      /SPRINT_STATUS_PRESENTATION/,
-      "timeline closeout should not reintroduce planning or active status labels",
+    assert.match(sprintTimelineSource, /focus-visible:outline/);
+    assert.doesNotMatch(sprintTimelineSource, /ring-blue|outline-blue/);
+  });
+
+  it("groups current and historical Sprints and removes the obsolete drawer", () => {
+    assert.match(sprintLeftRailSource, /Current/);
+    assert.match(sprintLeftRailSource, /Upcoming/);
+    assert.match(sprintLeftRailSource, /Completed/);
+    assert.match(sprintLeftRailSource, /Cancelled/);
+    assert.match(sprintLeftRailSource, /Archived/);
+    assert.equal(
+      fs.existsSync(
+        path.join(
+          process.cwd(),
+          "src/components/projects/tabs/sprint/SprintDetailDrawer.tsx",
+        ),
+      ),
+      false,
     );
   });
 
-  it("uses one canonical chronological view while cleaning legacy mode query state", () => {
+  it("keeps date handling, editor state, and time-based lifecycle ownership deterministic", () => {
+    assert.match(sprintTimelineSource, /completedAt/);
+    assert.match(sprintEditorSource, /initializedDraftKeyRef/);
     assert.match(
-      sprintPlanningSource,
-      /mode:\s*"chronological"/,
-      "the page should render the timeline as one stable chronological view",
+      sprintActionsSource,
+      /a read must not mutate Sprint lifecycle state/,
     );
-    assert.match(
-      sprintPlanningSource,
-      /params\.delete\("mode"\)/,
-      "legacy grouped/files mode query parameters should be removed from sprint URLs",
-    );
-    assert.doesNotMatch(
-      sprintPlanningSource,
-      /resolvedViewState/,
-      "the removed view-state abstraction should not remain as page-level mode plumbing",
-    );
+    assert.doesNotMatch(sprintActionsSource, /await startDueSprints\(/);
   });
 
-  it("places the date next to the sprint name and moves copy below the divider", () => {
-    const nameIndex = sprintHeaderSource.indexOf("{sprint.name}");
-    const dateIndex = sprintHeaderSource.indexOf("{dateRange}");
-    const dividerIndex = sprintHeaderSource.indexOf("border-t");
-    const goalIndex = sprintHeaderSource.indexOf("{goal ||");
-
-    assert.ok(nameIndex >= 0, "sprint name should be rendered in the header");
-    assert.ok(
-      dateIndex > nameIndex,
-      "date range should render immediately after the sprint name",
-    );
-    assert.ok(
-      dividerIndex > dateIndex,
-      "the header copy area should be separated by a divider",
-    );
-    assert.ok(
-      goalIndex > dividerIndex,
-      "sprint title/description copy should live under the divider",
-    );
-  });
-
-  it("keeps the sprint navigation rail sticky while the detail pane scrolls", () => {
+  it("does not query a non-existent task completion timestamp", () => {
+    assert.doesNotMatch(sprintActionsSource, /\bt\.completed_at\b/);
     assert.match(
-      sprintLeftRailSource,
-      /lg:sticky/,
-      "the sprint sidebar should stay visible on larger screens while the timeline scrolls",
-    );
-    assert.match(
-      sprintPlanningSource,
-      /overflow-y-auto app-scroll app-scroll-y app-scroll-gutter/,
-      "only the detail timeline body should own the vertical scroll",
-    );
-  });
-
-  it("uses a compact continuous timeline rail", () => {
-    assert.match(sprintTimelineContentSource, /function TimelineNode/);
-    assert.match(sprintTimelineContentSource, /bottom-\[-1\.5rem\] top-7 w-px/);
-    assert.match(sprintTimelineContentSource, /<div className="space-y-6">/);
-    assert.doesNotMatch(sprintTimelineContentSource, /bottom-\[-2\.5rem\]/);
-    assert.doesNotMatch(sprintTimelineContentSource, /space-y-10/);
-  });
-
-  it("routes files directly to the Files workspace without a sprint file drawer", () => {
-    assert.match(
-      sprintTimelineContentSource,
-      /new URLSearchParams\(\{ tab: "files", fileId: nodeId \}\)/,
-    );
-    assert.doesNotMatch(
-      sprintTimelineContentSource,
-      /onOpenDrawer\(\{ type: "file"/,
-    );
-    assert.doesNotMatch(sprintDetailDrawerSource, /File detail/);
-    assert.doesNotMatch(sprintDetailDrawerSource, /getNodeMetadataBatch/);
-  });
-
-  it("hydrates and describes task file version activity", () => {
-    assert.match(projectActionsSource, /ROW_NUMBER\(\) OVER/);
-    assert.match(projectActionsSource, /ranked\.version_rank <= 3/);
-    assert.match(projectActionsSource, /versionEvents,/);
-    assert.match(
-      sprintTimelineContentSource,
-      /updated\{" "\}/,
-    );
-    assert.match(
-      sprintTimelineContentSource,
-      /to V\{row\.versionEvent\.versionNumber\} for \{taskLabel\}/,
+      sprintActionsSource,
+      /tasks persist status and updated_at, not a completed_at/,
     );
   });
 });
