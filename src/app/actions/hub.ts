@@ -2,9 +2,10 @@
 
 import { FILTER_VIEWS, type FilterView } from '@/constants/hub';
 import { consumeRateLimit } from '@/lib/security/rate-limit';
-import { getHubProjects } from '@/lib/data/hub';
+import { getHubProjects, InvalidHubCursorError } from '@/lib/data/hub';
 import { getCachedData, cacheData } from '@/lib/redis';
 import { HUB_RANKING_SCHEMA_VERSION } from '@/lib/hub/ranking-config';
+import { buildHubSnapshotKey } from '@/lib/hub/snapshot-cache';
 import { getViewerAuthContext } from '@/lib/server/viewer-context';
 import { HubFilters } from '@/types/hub';
 import { headers } from 'next/headers';
@@ -96,6 +97,9 @@ export async function fetchHubProjectsAction(
             tech: Array.isArray(filters.tech) ? filters.tech : [],
             sort: filters.sort || 'newest',
             search: normalizedSearch || undefined,
+            includedIds: filters.includedIds?.length
+                ? Array.from(new Set(filters.includedIds)).sort()
+                : undefined,
             hideOpened: filters.hideOpened || false,
         };
 
@@ -120,8 +124,8 @@ export async function fetchHubProjectsAction(
             };
         }
 
-        const cacheKey = surface === 'preview' && normalizedSearch
-            ? `search:preview:hub:${viewerKey}:${normalizedFilters.sort}:${normalizedSearch.toLowerCase()}`
+        const cacheKey = surface === 'preview' && normalizedSearch && !normalizedCursor
+            ? `search:preview:hub:${viewerKey}:${buildHubSnapshotKey({ normalizedFilters, normalizedView, normalizedLimit })}`
             : null;
 
         if (cacheKey) {
@@ -175,6 +179,16 @@ export async function fetchHubProjectsAction(
         });
     } catch (error) {
         recordPreview('error', 0);
+        if (error instanceof InvalidHubCursorError) {
+            return {
+                success: false as const,
+                schemaVersion: HUB_RANKING_SCHEMA_VERSION,
+                projects: [],
+                hasMore: false,
+                code: 'VALIDATION' as const,
+                error: error.message,
+            };
+        }
         console.error('Error fetching hub projects:', error);
         return {
             success: false as const,
