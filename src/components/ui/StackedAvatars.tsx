@@ -29,7 +29,6 @@ export function StackedAvatars({ avatars, max = 3, size = 24 }: StackedAvatarsPr
                         username: avatar.name ?? avatar.initials,
                     }}
                     size={size}
-                    unoptimized
                     className="border-2 border-white dark:border-zinc-950"
                     fallbackDisplayName={avatar.name ?? avatar.initials}
                     fallbackInitials={avatar.initials}
