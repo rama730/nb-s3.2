@@ -3,14 +3,9 @@
 import { useCallback, useMemo } from 'react';
 
 import { usePresenceTyping } from './usePresenceTyping';
-import type { PresenceMemberState } from '@/lib/realtime/presence-types';
+import { toPresenceTypingUser, type PresenceTypingUser } from '@/lib/realtime/presence-types';
 
-export interface TypingUser {
-    id: string;
-    username: string | null;
-    fullName: string | null;
-    avatarUrl: string | null;
-}
+export type TypingUser = PresenceTypingUser;
 
 interface UseTypingChannelReturn {
     typingUsers: TypingUser[];
@@ -19,15 +14,6 @@ interface UseTypingChannelReturn {
 
 function isPresenceEligibleConversationId(conversationId: string): boolean {
     return conversationId !== 'new' && !conversationId.startsWith('draft:');
-}
-
-function toTypingUser(member: PresenceMemberState): TypingUser {
-    return {
-        id: member.userId,
-        username: member.profile?.username ?? null,
-        fullName: member.profile?.fullName ?? member.userName ?? null,
-        avatarUrl: member.profile?.avatarUrl ?? null,
-    };
 }
 
 export function useTypingChannel(
@@ -43,7 +29,7 @@ export function useTypingChannel(
         isEligibleRoomId: isPresenceEligibleConversationId,
     });
 
-    const typingUsers = useMemo(() => typingMembers.map(toTypingUser), [typingMembers]);
+    const typingUsers = useMemo(() => typingMembers.map(toPresenceTypingUser), [typingMembers]);
     const sendTyping = useCallback(async (isTyping: boolean) => {
         await sendPresenceTyping({
             isTyping,
