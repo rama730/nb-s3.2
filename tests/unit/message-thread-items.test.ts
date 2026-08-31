@@ -42,7 +42,6 @@ test('message thread model groups messages by day and marks unread messages with
         'unread-divider',
         'message',
         'message',
-        'bottom-sentinel',
     ]);
     assert.equal(model.items.find((item) => item.type === 'unread-divider')?.id, 'unread-divider-conversation-1');
 });
