@@ -34,7 +34,7 @@ describe("github unavailable-account end-to-end contract", () => {
 
     assert.match(preview, /githubAccess\.source !== "app"/);
     assert.match(preview, /accountCannotAuthorize \? undefined : githubAccess\.token/);
-    assert.match(retry, /access\.source !== 'app'/);
+    assert.match(retry, /access\.source !== ["']app["']/);
     assert.match(retry, /accountCannotAuthorize \? undefined : access\.token/);
     assert.match(retry, /githubRepoPrivate: accessCheck\.isPrivate/);
     assert.match(gitActions, /GITHUB_ACCOUNT_UNAVAILABLE_MESSAGE/);
