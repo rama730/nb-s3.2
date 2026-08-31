@@ -1,5 +1,7 @@
 # Ponytail Supabase and Rendering Audit
 
+> Historical snapshot from 2026-07-11. Its green checks do not represent current migration lineage, catalog, quota, or runtime state; use the 2026-08-13 complete SQL/Supabase audit and a fresh verification run.
+
 Date: 2026-07-11
 Workspace: `/Users/chrama/Downloads/nb-s3`
 Supabase project: `iutauehhgdymtpzrnzcy`
