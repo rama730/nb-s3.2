@@ -19,6 +19,9 @@ function isReceiptEligibleConversationId(conversationId: string | null): convers
     return Boolean(conversationId && !conversationId.startsWith('draft:'));
 }
 
+const globalFlushedReceipts = new Set<string>();
+const globalInFlightReceipts = new Set<string>();
+
 export function useMessageReceiptBuffer({
     viewerId,
     conversationId,
@@ -27,8 +30,9 @@ export function useMessageReceiptBuffer({
     recordReceipts,
 }: UseMessageReceiptBufferOptions) {
     const bufferRef = useRef<Set<string>>(new Set());
-    const flushedRef = useRef<Set<string>>(new Set());
-    const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const flushedRef = useRef<Set<string>>(globalFlushedReceipts);
+    const inFlightRef = useRef<Set<string>>(globalInFlightReceipts);
+    const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const flush = useCallback(async () => {
         if (bufferRef.current.size === 0) return;
@@ -36,14 +40,22 @@ export function useMessageReceiptBuffer({
 
         const ids = Array.from(bufferRef.current);
         bufferRef.current.clear();
+        for (const id of ids) {
+            inFlightRef.current.add(id);
+        }
 
         try {
-            await recordReceipts(ids);
+            const result = await recordReceipts(ids);
+            if (!result.success) {
+                throw new Error(result.error || 'Receipt write failed');
+            }
             for (const id of ids) {
                 flushedRef.current.add(id);
+                inFlightRef.current.delete(id);
             }
         } catch {
             for (const id of ids) {
+                inFlightRef.current.delete(id);
                 bufferRef.current.add(id);
             }
         }
@@ -53,31 +65,39 @@ export function useMessageReceiptBuffer({
         if (!viewerId || !isReceiptEligibleConversationId(conversationId)) return;
 
         bufferRef.current.clear();
-        flushedRef.current.clear();
-        timerRef.current = setInterval(flush, flushIntervalMs);
         return () => {
             if (timerRef.current) {
-                clearInterval(timerRef.current);
+                clearTimeout(timerRef.current);
                 timerRef.current = null;
             }
-            if (bufferRef.current.size > 0) {
-                const ids = Array.from(bufferRef.current);
-                bufferRef.current.clear();
-                void recordReceipts(ids).catch(() => {});
-            }
+            bufferRef.current.clear();
         };
-    }, [conversationId, flush, flushIntervalMs, recordReceipts, viewerId]);
+    }, [conversationId, viewerId]);
 
     const enqueueReceipts = useCallback(
         (messages: MessageReceiptTarget[]) => {
             if (!viewerId) return;
             for (const message of messages) {
                 if (message.senderId === viewerId) continue;
-                if (flushedRef.current.has(message.id) || bufferRef.current.has(message.id)) continue;
+                if (
+                    flushedRef.current.has(message.id)
+                    || inFlightRef.current.has(message.id)
+                    || bufferRef.current.has(message.id)
+                ) continue;
                 bufferRef.current.add(message.id);
             }
+            if (bufferRef.current.size > 0 && flushIntervalMs <= 0) {
+                void flush();
+                return;
+            }
+            if (bufferRef.current.size > 0 && !timerRef.current) {
+                timerRef.current = setTimeout(() => {
+                    timerRef.current = null;
+                    void flush();
+                }, flushIntervalMs);
+            }
         },
-        [viewerId],
+        [flush, flushIntervalMs, viewerId],
     );
 
     return { enqueueReceipts };
