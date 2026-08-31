@@ -36,7 +36,7 @@ import {
     projectUpdates,
     tasks,
 } from "@/lib/db/schema";
-import { getProjectAccessById } from "@/lib/data/project-access";
+import { computeProjectReadAccess } from "@/lib/data/project-access";
 import { enqueueProjectNotificationEvent } from "@/lib/notifications/project-events";
 import { consumeRateLimit } from "@/lib/security/rate-limit";
 import { getViewerAuthContext, getViewerProfileContext } from "@/lib/server/viewer-context";
@@ -661,28 +661,36 @@ async function resolveProjectUpdateAccess(projectId: string, viewerId: string | 
         };
     }
 
-    const access = await getProjectAccessById(projectId, viewerId);
-    const memberRole = access.isOwner
+    const isOwner = Boolean(viewerId && viewerId === project.ownerId);
+    const [membership] = viewerId && !isOwner
+        ? await db
+            .select({ role: projectMembers.role })
+            .from(projectMembers)
+            .where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, viewerId)))
+            .limit(1)
+        : [];
+    const isMember = Boolean(membership);
+    const memberRole = isOwner
         ? "owner"
-        : access.isMember
-            ? normalizeProjectMemberRole(access.memberRole, "member")
+        : membership
+            ? normalizeProjectMemberRole(membership.role, "member")
             : null;
-    const isOwnerOrMember = access.isOwner || access.isMember;
-    const canRead = access.canRead && isProjectTabVisibleToViewer({
+    const isOwnerOrMember = isOwner || isMember;
+    const canRead = computeProjectReadAccess(project.visibility, project.status, isOwner, isMember) && isProjectTabVisibleToViewer({
         tabId: "updates",
         isOwnerOrMember,
-        canManageSettings: access.isOwner,
+        canManageSettings: isOwner,
         publicTabVisibility: project.publicTabVisibility,
     });
     const effectiveAccess = {
         project,
         viewerId,
-        isOwner: access.isOwner,
-        isMember: access.isMember,
+        isOwner,
+        isMember,
         memberRole,
         canRead,
-        canCreate: canRead && canCreateForRole({ isOwner: access.isOwner, memberRole, memberUpdatesEnabled: project.memberUpdatesEnabled }),
-        canManage: canRead && isModerator({ isOwner: access.isOwner, memberRole }),
+        canCreate: canRead && canCreateForRole({ isOwner, memberRole, memberUpdatesEnabled: project.memberUpdatesEnabled }),
+        canManage: canRead && isModerator({ isOwner, memberRole }),
     };
     return effectiveAccess;
 }
