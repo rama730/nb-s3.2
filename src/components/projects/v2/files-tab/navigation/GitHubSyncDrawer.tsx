@@ -1,5 +1,6 @@
 'use client';
 
+import { FileInspectorContainer } from "../file/FileInspectorContainer";
 import { toast } from "sonner";
 import React, { useEffect, useState } from 'react';
 import {
@@ -17,20 +18,23 @@ import {
     getProjectConflictsAction,
     resolveConflictAction
 } from '@/app/actions/files/gitActions';
-import { pushToGitHub, pullFromGitHub } from '@/app/actions/git';
+import { pushToGitHub, pullFromGitHub, getProjectGitConnection } from '@/app/actions/git';
 
 interface GitHubSyncDrawerProps {
     projectId: string;
     onClose: () => void;
 }
 
-const TARGET_BRANCH = 'main';
+
 
 export function GitHubSyncDrawer({ projectId, onClose }: GitHubSyncDrawerProps): React.JSX.Element {
     const [pendingDeltas, setPendingDeltas] = useState<any[]>([]);
     const [conflicts, setConflicts] = useState<any[]>([]);
     const [commitMessage, setCommitMessage] = useState('');
     const [isLoading, setIsLoading] = useState(false);
+    const [isFetching, setIsFetching] = useState(true);
+    const [loadError, setLoadError] = useState<string | null>(null);
+    const [connection, setConnection] = useState<Awaited<ReturnType<typeof getProjectGitConnection>> | null>(null);
     
     // Resolution states per conflict
     const [selectedResolution, setSelectedResolution] = useState<Record<string, 'keep_mine' | 'keep_remote' | 'merge'>>({});
@@ -38,12 +42,23 @@ export function GitHubSyncDrawer({ projectId, onClose }: GitHubSyncDrawerProps):
     const [resolvingId, setResolvingId] = useState<string | null>(null);
 
     const fetchSyncData = React.useCallback(async () => {
-            const deltasRes = await getPendingDeltasAction(projectId, TARGET_BRANCH);
+        setIsFetching(true);
+        setLoadError(null);
+        try {
+            const nextConnection = await getProjectGitConnection(projectId);
+            setConnection(nextConnection);
+            if (!nextConnection.repository || !nextConnection.branch) return;
+            const [deltasRes, conflictsRes] = await Promise.all([
+                getPendingDeltasAction(projectId, nextConnection.branch),
+                getProjectConflictsAction(projectId, nextConnection.branch),
+            ]);
+            if (!deltasRes.success) throw new Error(deltasRes.error || 'Could not load changes');
+            if (!conflictsRes.success) throw new Error(conflictsRes.error || 'Could not load conflicts');
             if (deltasRes.success && deltasRes.deltas) {
                 setPendingDeltas(deltasRes.deltas);
             }
 
-            const conflictsRes = await getProjectConflictsAction(projectId, TARGET_BRANCH);
+
             if (conflictsRes.success && conflictsRes.conflicts) {
                 setConflicts(conflictsRes.conflicts);
                 // Initialize default resolutions and contents
@@ -56,6 +71,8 @@ export function GitHubSyncDrawer({ projectId, onClose }: GitHubSyncDrawerProps):
                 setSelectedResolution(resolutions);
                 setCustomMergeContent(contents);
             }
+        } catch (error) { setLoadError(error instanceof Error ? error.message : 'Could not load GitHub status'); }
+        finally { setIsFetching(false); }
     }, [projectId]);
 
     useEffect(() => {
@@ -122,10 +139,7 @@ export function GitHubSyncDrawer({ projectId, onClose }: GitHubSyncDrawerProps):
     };
 
     return (
-        <aside
-            className="w-80 border-l border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 h-full flex flex-col select-none transition-all duration-300 ease-in-out shadow-lg"
-            aria-label="GitHub Synchronization Panel"
-        >
+        <FileInspectorContainer title="GitHub" testId="files-github-inspector" onClose={onClose}>
             {/* Header */}
             <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950">
                 <div className="flex items-center gap-2">
@@ -135,7 +149,8 @@ export function GitHubSyncDrawer({ projectId, onClose }: GitHubSyncDrawerProps):
                 <button
                     type="button"
                     onClick={onClose}
-                    className="p-1 rounded-md text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+                    aria-label="Close GitHub panel"
+                    className="flex size-10 items-center justify-center focus-visible:ring-2 rounded-md text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
                 >
                     <X className="w-4 h-4" />
                 </button>
@@ -143,12 +158,16 @@ export function GitHubSyncDrawer({ projectId, onClose }: GitHubSyncDrawerProps):
 
             {/* Scrollable Content */}
             <div className="flex-1 overflow-y-auto p-4 space-y-5">
+                {isFetching && <p role="status" className="text-sm">Loading GitHub status…</p>}
+                {loadError && <p role="alert" className="text-sm text-red-600">{loadError} <button type="button" onClick={() => void fetchSyncData()} className="underline">Retry</button></p>}
+                {!isFetching && !loadError && !connection?.repository && <p className="text-sm">No repository connected. Connect GitHub in project settings.</p>}
+                {connection?.repository && <p className="break-all text-xs text-zinc-500">{connection.repository}</p>}
                 {/* Branch Info */}
                 <div className="space-y-2">
                     <label className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">Sync Branch</label>
                     <div className="flex items-center gap-2 bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg p-2.5 shadow-sm">
                         <GitBranch className="w-4 h-4 text-zinc-500" />
-                        <span className="text-xs font-medium text-zinc-800 dark:text-zinc-200">{TARGET_BRANCH}</span>
+                        <span className="text-xs font-medium text-zinc-800 dark:text-zinc-200">{connection?.branch || 'Not configured'}</span>
                     </div>
                 </div>
 
@@ -275,14 +294,14 @@ export function GitHubSyncDrawer({ projectId, onClose }: GitHubSyncDrawerProps):
                         <textarea
                             value={commitMessage}
                             onChange={(e) => setCommitMessage(e.target.value)}
-                            disabled={isLoading || conflicts.length > 0}
+                            disabled={isLoading || isFetching || !!loadError || !connection?.branch || conflicts.length > 0}
                             placeholder="Enter commit message..."
                             className="w-full text-xs p-2.5 border border-zinc-200 dark:border-zinc-800 rounded-lg bg-white dark:bg-zinc-950 text-zinc-800 dark:text-zinc-200 focus:outline-none   transition-all resize-none disabled:opacity-50"
                             rows={3}
                         />
                         <button
                             type="button"
-                            disabled={isLoading || pendingDeltas.length === 0 || conflicts.length > 0}
+                            disabled={isLoading || isFetching || !!loadError || !connection?.branch || pendingDeltas.length === 0 || conflicts.length > 0}
                             onClick={handlePush}
                             className="w-full flex items-center justify-center gap-2 py-2 px-4 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-medium hover:shadow-md hover:shadow-indigo-500/10 transition-all text-xs disabled:opacity-50"
                         >
@@ -300,7 +319,7 @@ export function GitHubSyncDrawer({ projectId, onClose }: GitHubSyncDrawerProps):
                 <div className="border-t border-zinc-200 dark:border-zinc-800 pt-4">
                     <button
                         type="button"
-                        disabled={isLoading || conflicts.length > 0}
+                        disabled={isLoading || isFetching || !!loadError || !connection?.branch || conflicts.length > 0}
                         onClick={handlePull}
                         className="w-full flex items-center justify-center gap-2 py-2 px-4 rounded-lg bg-white dark:bg-zinc-950 hover:bg-zinc-50 dark:hover:bg-zinc-900 text-zinc-700 dark:text-zinc-300 font-medium border border-zinc-200 dark:border-zinc-800 hover:shadow transition-all text-xs disabled:opacity-50"
                     >
@@ -313,6 +332,6 @@ export function GitHubSyncDrawer({ projectId, onClose }: GitHubSyncDrawerProps):
                     </button>
                 </div>
             </div>
-        </aside>
+        </FileInspectorContainer>
     );
 }
