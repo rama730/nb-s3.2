@@ -41,3 +41,21 @@ test("project detail header scroll behavior stays route-owned outside contained 
     );
     assert.match(source, /isScrolled && "shadow-sm"/, "sticky header shadow should apply to all scroll sources");
 });
+
+test("Files workspace scroll panes drive the project header state", () => {
+    const layoutSource = fs.readFileSync(
+        path.join(process.cwd(), "src/components/projects/dashboard/ProjectLayout.tsx"),
+        "utf8",
+    );
+    const filesRootSource = fs.readFileSync(
+        path.join(process.cwd(), "src/components/projects/v2/files-tab/FilesTabRoot.tsx"),
+        "utf8",
+    );
+
+    assert.match(layoutSource, /const FILES_WORKSPACE_SCROLL_EVENT = "project:files-workspace-scroll"/);
+    assert.match(layoutSource, /if \(isFilesTab\)/, "Files should subscribe to its contained workspace scroll source");
+    assert.match(layoutSource, /window\.addEventListener\(FILES_WORKSPACE_SCROLL_EVENT, handleFilesWorkspaceScroll\)/);
+    assert.match(layoutSource, /latestScrollTop > 10/, "Files should use the same collapse threshold as route scrolling");
+    assert.match(filesRootSource, /onScrollCapture=\{handleWorkspaceScroll\}/, "Both Files panes should report scrolling through their shared root");
+    assert.match(filesRootSource, /window\.dispatchEvent\(new CustomEvent\(FILES_WORKSPACE_SCROLL_EVENT/);
+});
