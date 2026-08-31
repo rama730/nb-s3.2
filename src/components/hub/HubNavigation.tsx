@@ -4,7 +4,6 @@ import { memo } from 'react';
 import { LayoutGrid, TrendingUp, Sparkles, FolderKanban, Users } from 'lucide-react';
 import { FilterView } from '@/constants/hub';
 import { User } from '@/types/hub';
-import { useUserFollowedProjects } from '@/hooks/hub/useUserInteractions';
 
 interface HubNavigationProps {
     currentUser: User | null;
@@ -17,9 +16,6 @@ const HubNavigation = memo(function HubNavigation({
     activeView,
     onSelectView,
 }: HubNavigationProps) {
-    const { data: myFollowedProjects } = useUserFollowedProjects(currentUser?.id);
-    const hasFollowedProjects = myFollowedProjects && myFollowedProjects.size > 0;
-
     const navItems: Array<{ id: FilterView; label: string; icon: React.ElementType }> = [
         { id: 'all', label: 'All Projects', icon: LayoutGrid },
         { id: 'trending', label: 'Trending', icon: TrendingUp },
@@ -27,7 +23,7 @@ const HubNavigation = memo(function HubNavigation({
         { id: 'my_projects', label: 'My Projects', icon: FolderKanban },
     ];
 
-    if (hasFollowedProjects) {
+    if (currentUser) {
         navItems.push({ id: 'following', label: 'Following', icon: Users });
     }
 
@@ -40,8 +36,10 @@ const HubNavigation = memo(function HubNavigation({
 
                     return (
                         <button
+                            type="button"
                             key={item.id}
                             onClick={() => onSelectView(item.id)}
+                            aria-current={isActive ? "page" : undefined}
                             className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 ${isActive
                                     ? 'bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400'
                                     : 'text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 hover:text-zinc-900 dark:hover:text-zinc-100'
