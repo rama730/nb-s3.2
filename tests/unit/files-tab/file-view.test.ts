@@ -130,6 +130,19 @@ describe("FileView / isAssetKind (Req 13.1-13.4)", () => {
   });
 });
 
+describe("AssetPreview PDF delivery", () => {
+  it("uses the same-origin inline preview endpoint instead of a storage URL", () => {
+    const source = readFileSync(
+      path.join(process.cwd(), "src/components/projects/v2/preview/AssetPreview.tsx"),
+      "utf8",
+    );
+    assert.match(source, /\/api\/v1\/projects\/\$\{encodeURIComponent\(node\.projectId\)\}\/files\/\$\{encodeURIComponent\(node\.id\)\}\/preview/);
+    assert.match(source, /fetch\(previewUrl/);
+    assert.match(source, /URL\.createObjectURL/);
+    assert.match(source, /<iframe title=\{name\} src=\{objectUrl\}/);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Integration with fileKind — Req 13.1–13.5
 // ---------------------------------------------------------------------------
