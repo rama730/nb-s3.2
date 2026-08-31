@@ -7,7 +7,7 @@ async function readWorkspaceFile(relativePath: string) {
 
 async function main() {
   const [
-    projectActions,
+    taskActions,
     messagingActions,
     changePasswordRoute,
     gitSyncWorker,
@@ -15,7 +15,7 @@ async function main() {
     profileData,
     connectionsActions,
   ] = await Promise.all([
-    readWorkspaceFile("src/app/actions/project/_all.ts"),
+    readWorkspaceFile("src/app/actions/task.ts"),
     readWorkspaceFile("src/app/actions/messaging/_all.ts"),
     readWorkspaceFile("src/app/api/v1/auth/change-password/route.ts"),
     readWorkspaceFile("src/inngest/functions/git-sync.ts"),
@@ -27,7 +27,9 @@ async function main() {
   const checks: Array<[string, boolean]> = [
     [
       "task mutations are scoped to the supplied project",
-      projectActions.includes(".where(and(eq(tasks.id, taskId), eq(tasks.projectId, projectId)))"),
+      taskActions.includes("const locked = await lockTaskForWrite(tx, taskId, user.id)") &&
+        taskActions.includes("if (locked.projectId !== projectId)") &&
+        taskActions.includes(".where(and(eq(tasks.id, taskId), eq(tasks.projectId, projectId)))"),
     ],
     [
       "message attachments use authenticated access URLs instead of raw signed storage URLs",
