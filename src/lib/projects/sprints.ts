@@ -168,14 +168,18 @@ export function buildSprintDeleteImpact(input: {
   sprint: Pick<SprintListItem, "id" | "name" | "status">;
   affectedTaskCount: number;
 }): SprintDeleteImpact {
-  const canDelete = input.sprint.status !== "active";
+  const canDelete = input.sprint.status === "planning" && input.affectedTaskCount === 0;
   return {
     sprintId: input.sprint.id,
     sprintName: input.sprint.name,
     sprintStatus: input.sprint.status,
     affectedTaskCount: Math.max(0, input.affectedTaskCount),
     canDelete,
-    reason: canDelete ? null : "Active sprints must be completed before they can be deleted.",
+    reason: canDelete
+      ? null
+      : input.affectedTaskCount > 0
+        ? "Sprints with work history are archived instead of deleted."
+        : "Only an empty Planning sprint can be deleted.",
   };
 }
 
