@@ -10,6 +10,8 @@ import { revalidatePath } from "next/cache";
 import { parseProjectFileKey } from "@/lib/storage/project-file-key";
 import {
     assertProjectFileReadAccess,
+    assertProjectReadAccess,
+    assertTaskFileNodeVisible,
     assertProjectWriteAccess,
     assertProjectWriteAccessTx,
     assertNodeNotLockedByAnotherUser,
@@ -21,6 +23,15 @@ import {
     type FilesActionResult,
 } from "./_constants";
 
+class FileContentUnavailableError extends Error {
+    readonly code = "FILE_CONTENT_UNAVAILABLE";
+
+    constructor(message = "File content is unavailable. It has not been replaced with an empty file.") {
+        super(message);
+        this.name = "FileContentUnavailableError";
+    }
+}
+
 export async function getProjectFileContent(
     projectId: string,
     nodeId: string,
@@ -29,26 +40,24 @@ export async function getProjectFileContent(
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
     const actorId = user?.id ?? null;
-    return await runInFlightDeduped(`files:content:${projectId}:${nodeId}:${actorId ?? "anon"}`, async () => {
+    return await runInFlightDeduped(`files:content:${projectId}:${nodeId}:${!!options?.skipFileTabCheck}:${actorId ?? "anon"}`, async () => {
         // Verify read access (works for public projects too)
         // When called from the doc system for linked-node content, skip the
         // Files-tab visibility gate — the doc layer already verified doc-level
         // permissions so we only need basic project read access here.
-        if (options?.skipFileTabCheck) {
-            const { assertProjectReadAccess } = await import("@/lib/files/internal-helpers");
-            await assertProjectReadAccess(projectId, actorId);
-        } else {
-            await assertProjectFileReadAccess(projectId, actorId);
-        }
+        const access = options?.skipFileTabCheck
+            ? await assertProjectReadAccess(projectId, actorId)
+            : await assertProjectFileReadAccess(projectId, actorId);
 
         const node = await db.query.projectNodes.findFirst({
             where: and(eq(projectNodes.id, nodeId), eq(projectNodes.projectId, projectId)),
-            columns: { s3Key: true, size: true, gitHash: true, path: true }
+            columns: { s3Key: true, size: true, gitHash: true, path: true, taskId: true, deletedAt: true }
         });
 
         if (!node) {
             throw new Error("File not found");
         }
+        assertTaskFileNodeVisible(access, node);
 
         // --- VIRTUAL FS LAZY LOADING ---
         if (!node.s3Key && node.gitHash) {
@@ -64,7 +73,7 @@ export async function getProjectFileContent(
                 const ownerName = urlParts.pop();
                 const apiUrl = `https://api.github.com/repos/${ownerName}/${repoName}/git/blobs/${node.gitHash}`;
 
-                let headers: Record<string, string> = { 'Accept': 'application/vnd.github.v3+json' };
+                const headers: Record<string, string> = { 'Accept': 'application/vnd.github.v3+json' };
                 const token = importSource.metadata?.importAuth || importSource.metadata?.githubToken;
                 if (token) headers['Authorization'] = `Bearer ${token}`;
 
@@ -108,22 +117,10 @@ export async function getProjectFileContent(
             // Try to recover from GitHub contents by path
             const recoveredText = await tryRecoverFromGitHub(projectId, node.path);
             if (recoveredText !== null) {
-                try {
-                    const adminClient = await createAdminClient();
-                    const buffer = Buffer.from(recoveredText, 'utf8');
-                    await adminClient.storage.from('project-files').upload(node.s3Key, buffer, {
-                        contentType: 'text/plain',
-                        upsert: true
-                    });
-                    console.log(`[getProjectFileContent] Successfully healed missing storage file for key ${node.s3Key}`);
-                } catch (uploadErr) {
-                    console.error("[getProjectFileContent] Healing S3 upload failed:", uploadErr);
-                }
                 return recoveredText;
             }
             
-            // Recovery failed/unavailable — return empty string to prevent blocking UI editor
-            return "";
+            throw new FileContentUnavailableError();
         }
 
         const actualSize =
@@ -140,77 +137,23 @@ export async function getProjectFileSignedUrl(projectId: string, nodeId: string,
     const { data: { user } } = await supabase.auth.getUser();
     const actorId = user?.id ?? null;
     const clampedTtl = Math.max(30, Math.min(3600, ttlSeconds));
-    return await runInFlightDeduped(`files:signed-url:${projectId}:${nodeId}:${clampedTtl}:${actorId ?? "anon"}`, async () => {
+    return await runInFlightDeduped(`files:signed-url:${projectId}:${nodeId}:${clampedTtl}:${download}:${actorId ?? "anon"}`, async () => {
         // Verify read access (works for public projects too)
-        await assertProjectFileReadAccess(projectId, actorId);
+        const access = await assertProjectFileReadAccess(projectId, actorId);
 
         const node = await db.query.projectNodes.findFirst({
             where: and(eq(projectNodes.id, nodeId), eq(projectNodes.projectId, projectId)),
-            columns: { s3Key: true, gitHash: true, mimeType: true }
+            columns: { s3Key: true, path: true, taskId: true, deletedAt: true }
         });
 
         if (!node) {
             throw new Error("File not found");
         }
 
-        let currentS3Key = node.s3Key;
-
-        // --- VIRTUAL FS HYDRATION ON READ ---
-        if (!currentS3Key && node.gitHash) {
-            const { projects, projectNodes } = await import("@/lib/db/schema");
-            const project = await db.query.projects.findFirst({
-                where: eq(projects.id, projectId),
-                columns: { importSource: true }
-            });
-            const importSource = project?.importSource as any;
-            if (importSource && importSource.type === "github" && importSource.repoUrl) {
-                const urlParts = importSource.repoUrl.replace(/\/$/, '').split('/');
-                const repoName = urlParts.pop();
-                const ownerName = urlParts.pop();
-                const apiUrl = `https://api.github.com/repos/${ownerName}/${repoName}/git/blobs/${node.gitHash}`;
-
-                let headers: Record<string, string> = { 'Accept': 'application/vnd.github.v3+json' };
-                const token = importSource.metadata?.importAuth || importSource.metadata?.githubToken;
-                if (token) headers['Authorization'] = `Bearer ${token}`;
-
-                const res = await fetch(apiUrl, { headers });
-                if (res.ok) {
-                    const data = await res.json();
-                    let buffer: Buffer;
-                    if (data.encoding === 'base64') {
-                        buffer = Buffer.from(data.content, 'base64');
-                    } else {
-                        buffer = Buffer.from(data.content, 'utf8');
-                    }
-
-                    const adminClient = await createAdminClient();
-                    const { buildProjectFileKey } = await import("@/lib/storage/project-file-key");
-                    // We need the file's path for buildProjectFileKey.
-                    // Wait, `node` doesn't have path selected! Let's just use the nodeId as a fallback.
-                    // Or we just fetch the path!
-                    const fullNode = await db.query.projectNodes.findFirst({
-                        where: eq(projectNodes.id, nodeId),
-                        columns: { path: true }
-                    });
-                    const s3Key = buildProjectFileKey(projectId, fullNode?.path || `virtual/${nodeId}`);
-
-                    const { error: uploadError } = await adminClient.storage
-                        .from('project-files')
-                        .upload(s3Key, buffer, {
-                            contentType: node.mimeType || 'application/octet-stream',
-                            upsert: true
-                        });
-
-                    if (!uploadError) {
-                        currentS3Key = s3Key;
-                        await db.update(projectNodes).set({ s3Key }).where(eq(projectNodes.id, nodeId));
-                    }
-                }
-            }
-        }
-
+        const currentS3Key = node.s3Key;
+        assertTaskFileNodeVisible(access, node);
         if (!currentS3Key) {
-            throw new Error("File content not available yet");
+            throw new FileContentUnavailableError();
         }
         const parsedKey = parseProjectFileKey(currentS3Key);
         if (!parsedKey || parsedKey.projectId !== projectId) {
@@ -246,11 +189,11 @@ export async function getProjectFileSignedUrlBatch(
     const clampedTtl = Math.max(30, Math.min(3600, ttlSeconds));
 
     return await runInFlightDeduped(`files:signed-url-batch:${projectId}:${stableIdsKey}:${clampedTtl}:${actorId ?? "anon"}`, async () => {
-        await assertProjectFileReadAccess(projectId, actorId);
+        const access = await assertProjectFileReadAccess(projectId, actorId);
 
         const nodes = await db.query.projectNodes.findMany({
             where: and(eq(projectNodes.projectId, projectId), inArray(projectNodes.id, unique)),
-            columns: { id: true, s3Key: true, gitHash: true, mimeType: true, path: true },
+            columns: { id: true, s3Key: true, path: true, taskId: true, deletedAt: true },
         });
 
         const adminClient = await createAdminClient();
@@ -258,54 +201,8 @@ export async function getProjectFileSignedUrlBatch(
 
         const entries = await Promise.all(
             nodes.map(async (node) => {
-                let currentS3Key = node.s3Key;
-
-                // --- VIRTUAL FS HYDRATION ---
-                if (!currentS3Key && node.gitHash) {
-                    const { projects, projectNodes } = await import("@/lib/db/schema");
-                    const project = await db.query.projects.findFirst({
-                        where: eq(projects.id, projectId),
-                        columns: { importSource: true }
-                    });
-                    const importSource = project?.importSource as any;
-                    if (importSource && importSource.type === "github" && importSource.repoUrl) {
-                        const urlParts = importSource.repoUrl.replace(/\/$/, '').split('/');
-                        const repoName = urlParts.pop();
-                        const ownerName = urlParts.pop();
-                        const apiUrl = `https://api.github.com/repos/${ownerName}/${repoName}/git/blobs/${node.gitHash}`;
-
-                        let headers: Record<string, string> = { 'Accept': 'application/vnd.github.v3+json' };
-                        const token = importSource.metadata?.importAuth || importSource.metadata?.githubToken;
-                        if (token) headers['Authorization'] = `Bearer ${token}`;
-
-                        const res = await fetch(apiUrl, { headers });
-                        if (res.ok) {
-                            const data = await res.json();
-                            let buffer: Buffer;
-                            if (data.encoding === 'base64') {
-                                buffer = Buffer.from(data.content, 'base64');
-                            } else {
-                                buffer = Buffer.from(data.content, 'utf8');
-                            }
-
-                            const { buildProjectFileKey } = await import("@/lib/storage/project-file-key");
-                            const s3Key = buildProjectFileKey(projectId, node.path || `virtual/${node.id}`);
-
-                            const { error: uploadError } = await adminClient.storage
-                                .from('project-files')
-                                .upload(s3Key, buffer, {
-                                    contentType: node.mimeType || 'application/octet-stream',
-                                    upsert: true
-                                });
-
-                            if (!uploadError) {
-                                currentS3Key = s3Key;
-                                await db.update(projectNodes).set({ s3Key }).where(eq(projectNodes.id, node.id));
-                            }
-                        }
-                    }
-                }
-
+                try { assertTaskFileNodeVisible(access, node); } catch { return null; }
+                const currentS3Key = node.s3Key;
                 if (!currentS3Key) return null;
                 const parsedKey = parseProjectFileKey(currentS3Key);
                 if (!parsedKey || parsedKey.projectId !== projectId) return null;
@@ -439,7 +336,7 @@ async function tryRecoverFromGitHub(projectId: string, nodePath: string | null):
             const cleanPath = nodePath.startsWith("/") ? nodePath.slice(1) : nodePath;
             const apiUrl = `https://api.github.com/repos/${ownerName}/${repoName}/contents/${encodeURIComponent(cleanPath)}?ref=${branch}`;
 
-            let headers: Record<string, string> = { 'Accept': 'application/vnd.github.v3+json' };
+            const headers: Record<string, string> = { 'Accept': 'application/vnd.github.v3+json' };
             const token = importSource.metadata?.importAuth || importSource.metadata?.githubToken;
             if (token) headers['Authorization'] = `Bearer ${token}`;
 
