@@ -25,6 +25,7 @@ export interface SingleAttachmentPickerProps {
   isOpen: boolean;
   onClose: () => void;
   existingAttachments: ProjectNode[];
+  onLinked?: () => Promise<unknown> | void;
 }
 
 // ─── Component ───────────────────────────────────────────────────────
@@ -35,6 +36,7 @@ export function SingleAttachmentPicker({
   isOpen,
   onClose,
   existingAttachments,
+  onLinked,
 }: SingleAttachmentPickerProps): React.JSX.Element | null {
   const [isLinking, setIsLinking] = useState(false);
 
@@ -50,8 +52,9 @@ export function SingleAttachmentPicker({
       // Immediately link the node to the task
       setIsLinking(true);
       try {
-        await linkNodeToTask(taskId, newNode.id);
-        toast.success(`Attached "${newNode.name}" to task.`);
+        await linkNodeToTask(taskId, newNode.id, { role: "reference" });
+        toast.success(`Added "${newNode.name}" as a task reference.`);
+        await onLinked?.();
         onClose();
       } catch (err) {
         const message =
@@ -62,7 +65,7 @@ export function SingleAttachmentPicker({
         setIsLinking(false);
       }
     },
-    [existingIds, isLinking, taskId,onClose],
+    [existingIds, isLinking, onClose, onLinked, taskId],
   );
 
   if (!isOpen) return null;
@@ -72,7 +75,9 @@ export function SingleAttachmentPicker({
       projectId={projectId}
       isOpen={isOpen}
       onClose={onClose}
-      initialSelection={existingAttachments}
+      initialSelection={[]}
+      selectionMode="single"
+      excludedNodeIds={existingAttachments.map((node) => node.id)}
       onSelectionChange={handleSelectionChange}
     />
   );
