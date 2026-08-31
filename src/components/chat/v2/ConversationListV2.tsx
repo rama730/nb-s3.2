@@ -4,7 +4,6 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { formatDistanceToNow } from 'date-fns';
 import { Archive, Bell, BellOff, MessageSquare } from 'lucide-react';
 import { Virtuoso } from 'react-virtuoso';
-import { useDebounce } from 'use-debounce';
 import { useSwipeAction } from '@/hooks/useSwipeAction';
 import { useAuth } from '@/hooks/useAuth';
 import { useOnlineUsers } from '@/hooks/useOnlineUsers';
@@ -18,8 +17,8 @@ import { useMessagesV2UiStore } from '@/stores/messagesV2UiStore';
 import type { MessageAttentionState } from '@/lib/messages/attention';
 import { cn } from '@/lib/utils';
 import { getLastMessageDeliveryState } from '@/lib/messages/delivery-state';
-import { areConversationPreviewStatesEqual } from '@/lib/messages/v2-render-state';
-import { formatMessagePreview } from '@/lib/messages/preview';
+import { formatConversationPreview, shouldShowConversationReactionPreview } from '@/lib/messages/preview';
+import { buildConversationDisplay } from '@/lib/messages/conversation-display';
 import { DeliveryIndicator } from './MessageBubbleV2';
 import { InboxListSkeletonV2 } from './MessagesSurfaceSkeletons';
 
@@ -28,18 +27,20 @@ interface ConversationListV2Props {
     conversations: InboxConversationV2[];
     selectedConversationId: string | null;
     loading: boolean;
+    isFetchingNextPage?: boolean;
+    nextPageError?: string | null;
     error?: string | null;
     hasMore: boolean;
     typingUsersByConversation?: Record<string, TypingUser[]>;
-    searchQuery?: string;
     onSelectConversation: (conversationId: string) => void;
     onLoadMore: () => void;
+    onRetry?: () => void;
+    onRetryNextPage?: () => void;
     onVisibleConversationIdsChange?: (conversationIds: string[]) => void;
     onMuteConversation?: (conversationId: string) => void;
     onArchiveConversation?: (conversationId: string) => void;
-    archivedCount?: number;
-    onOpenArchive?: () => void;
-    onPrefetchConversation?: (conversationId: string) => void;
+    archivedView?: boolean;
+    onToggleArchivedView?: () => void;
 }
 
 const EMPTY_TYPING_USERS: TypingUser[] = [];
@@ -61,26 +62,28 @@ export function ConversationListV2({
     conversations,
     selectedConversationId,
     loading,
+    isFetchingNextPage = false,
+    nextPageError,
     error,
     hasMore,
     typingUsersByConversation,
-    searchQuery,
     onSelectConversation,
     onLoadMore,
+    onRetry,
+    onRetryNextPage,
     onVisibleConversationIdsChange,
     onMuteConversation,
     onArchiveConversation,
-    archivedCount,
-    onOpenArchive,
-    onPrefetchConversation,
+    archivedView = false,
+    onToggleArchivedView,
 }: ConversationListV2Props) {
     const { user } = useAuth();
     const highlightedConversationId = useMessagesV2UiStore((state) => state.highlightedConversationId);
     const setHighlightedConversationId = useMessagesV2UiStore((state) => state.setHighlightedConversationId);
     const isPopup = surface === 'popup';
-    const effectiveSearch = searchQuery ?? '';
-    const [debouncedSearch] = useDebounce(effectiveSearch, 300);
     const visibleKeyRef = useRef('');
+    const [nowMinute, setNowMinute] = useState(() => Date.now());
+    const [selectedAttentionAnchor, setSelectedAttentionAnchor] = useState<string | null>(null);
     const [visibleRange, setVisibleRange] = useState(() => ({
         startIndex: 0,
         endIndex: DEFAULT_VISIBLE_WINDOW - 1,
@@ -89,29 +92,41 @@ export function ConversationListV2({
     const filteredConversations = useMemo(() => {
         // Client-side safety net: exclude conversations without a last message
         // Guards against race conditions where server filter hasn't applied yet
-        let result = conversations.filter((conversation) => conversation.lastMessage != null);
-        // Search filter
-        const normalized = debouncedSearch.trim().toLowerCase();
-        if (normalized) {
-            result = result.filter((conversation) => {
-                const participant = conversation.participants[0];
-                return (
-                    participant?.fullName?.toLowerCase().includes(normalized)
-                    || participant?.username?.toLowerCase().includes(normalized)
-                    || conversation.lastMessage?.content?.toLowerCase().includes(normalized)
-                );
-            });
-        }
-        return result;
-    }, [conversations, debouncedSearch]);
+        return conversations.filter((conversation) => conversation.lastMessage != null);
+    }, [conversations]);
     const {
         attentionByConversation,
         attentionConversations,
         normalConversations,
     } = useMessageAttentionState(filteredConversations, user?.id ?? null);
 
+    useEffect(() => {
+        const timer = window.setInterval(() => setNowMinute(Date.now()), 60_000);
+        return () => window.clearInterval(timer);
+    }, []);
+
+    useEffect(() => {
+        setSelectedAttentionAnchor((current) => {
+            if (!selectedConversationId) return null;
+            if (attentionConversations.some((conversation) => conversation.id === selectedConversationId)) {
+                return selectedConversationId;
+            }
+            return current === selectedConversationId ? current : null;
+        });
+    }, [attentionConversations, selectedConversationId]);
+
     const listRows = useMemo<ConversationListRow[]>(() => {
-        if (attentionConversations.length === 0) {
+        const stickyConversation = selectedAttentionAnchor
+            ? normalConversations.find((conversation) => conversation.id === selectedAttentionAnchor) ?? null
+            : null;
+        const visibleAttentionConversations = stickyConversation
+            ? [...attentionConversations, stickyConversation]
+            : attentionConversations;
+        const visibleNormalConversations = stickyConversation
+            ? normalConversations.filter((conversation) => conversation.id !== stickyConversation.id)
+            : normalConversations;
+
+        if (visibleAttentionConversations.length === 0) {
             return filteredConversations.map((conversation) => ({
                 type: 'conversation' as const,
                 conversation,
@@ -121,16 +136,16 @@ export function ConversationListV2({
 
         const rows: ConversationListRow[] = [
             { type: 'section', id: 'new', label: 'New messages' },
-            ...attentionConversations.map((conversation) => ({
+            ...visibleAttentionConversations.map((conversation) => ({
                 type: 'conversation' as const,
                 conversation,
                 attention: attentionByConversation.get(conversation.id) ?? null,
             })),
         ];
 
-        if (normalConversations.length > 0) {
+        if (visibleNormalConversations.length > 0) {
             rows.push({ type: 'section', id: 'recent', label: 'Recent' });
-            rows.push(...normalConversations.map((conversation) => ({
+            rows.push(...visibleNormalConversations.map((conversation) => ({
                 type: 'conversation' as const,
                 conversation,
                 attention: attentionByConversation.get(conversation.id) ?? null,
@@ -138,7 +153,13 @@ export function ConversationListV2({
         }
 
         return rows;
-    }, [attentionByConversation, attentionConversations, filteredConversations, normalConversations]);
+    }, [
+        attentionByConversation,
+        attentionConversations,
+        filteredConversations,
+        normalConversations,
+        selectedAttentionAnchor,
+    ]);
 
     useEffect(() => {
         if (!highlightedConversationId) return;
@@ -155,13 +176,10 @@ export function ConversationListV2({
     // filtered popup rows directly keeps the green dot consistent with the
     // messages page.
     const visiblePeerUserIds = useMemo(() => {
-        const visibleConversations = isPopup
-            ? filteredConversations
-            : listRows.slice(
-                visibleRange.startIndex,
-                visibleRange.endIndex + 1,
-            )
-                .flatMap((row) => row.type === 'conversation' ? [row.conversation] : []);
+        const visibleConversations = listRows.slice(
+            Math.max(0, visibleRange.startIndex - 3),
+            visibleRange.endIndex + 4,
+        ).flatMap((row) => row.type === 'conversation' ? [row.conversation] : []);
         const ids: string[] = [];
         for (const conversation of visibleConversations) {
             if (conversation.type !== 'dm') continue;
@@ -169,7 +187,7 @@ export function ConversationListV2({
             if (peer?.id) ids.push(peer.id);
         }
         return ids;
-    }, [filteredConversations, isPopup, listRows, visibleRange.startIndex, visibleRange.endIndex]);
+    }, [listRows, visibleRange.startIndex, visibleRange.endIndex]);
     const onlineMap = useOnlineUsers(visiblePeerUserIds);
 
     useEffect(() => {
@@ -182,14 +200,7 @@ export function ConversationListV2({
         onVisibleConversationIdsChange?.(visibleConversationIds);
     }, [listRows, onVisibleConversationIdsChange, visibleRange.endIndex, visibleRange.startIndex]);
 
-    const [idbWait, setIdbWait] = useState(true);
-    useEffect(() => {
-        const timer = setTimeout(() => setIdbWait(false), 50);
-        return () => clearTimeout(timer);
-    }, []);
-
     if (loading && conversations.length === 0) {
-        if (idbWait) return null;
         return <InboxListSkeletonV2 surface={surface} />;
     }
 
@@ -215,11 +226,22 @@ export function ConversationListV2({
                         <MessageSquare className="h-8 w-8 text-primary" />
                     </div>
                     <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-                        {effectiveSearch.trim() ? 'No conversations match your search' : 'No conversations yet'}
+                        {archivedView ? 'No archived conversations' : 'No conversations yet'}
                     </p>
                     <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-                        {effectiveSearch.trim() ? 'Try a different name or keyword.' : 'Open a chat to start building your inbox.'}
+                        {archivedView
+                            ? 'Archived conversations will appear here.'
+                            : 'Open a chat to start building your inbox.'}
                     </p>
+                    {onToggleArchivedView ? (
+                        <button
+                            type="button"
+                            onClick={onToggleArchivedView}
+                            className="mt-4 rounded-lg border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted"
+                        >
+                            {archivedView ? 'Back to inbox' : 'View archived'}
+                        </button>
+                    ) : null}
                 </div>
             </div>
         );
@@ -227,6 +249,29 @@ export function ConversationListV2({
 
     return (
         <div className="flex h-full min-h-0 flex-col overflow-hidden bg-white dark:bg-zinc-950">
+            {onToggleArchivedView ? (
+                <div className="flex items-center justify-between border-b border-zinc-100 px-3 py-2 dark:border-zinc-800">
+                    <span className="text-xs font-semibold text-zinc-600 dark:text-zinc-300">
+                        {archivedView ? 'Archived conversations' : 'Inbox'}
+                    </span>
+                    <button
+                        type="button"
+                        onClick={onToggleArchivedView}
+                        className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-medium text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
+                    >
+                        <Archive className="h-3.5 w-3.5" />
+                        {archivedView ? 'Back to inbox' : 'Archived'}
+                    </button>
+                </div>
+            ) : null}
+            {error && conversations.length > 0 ? (
+                <div className="flex items-center justify-between gap-3 border-b border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-200">
+                    <span>Showing saved conversations. Refresh failed.</span>
+                    <button type="button" onClick={onRetry} className="font-semibold underline underline-offset-2">
+                        Retry
+                    </button>
+                </div>
+            ) : null}
             <div className="min-h-0 flex-1">
                 <Virtuoso
                     style={{ height: '100%' }}
@@ -241,25 +286,23 @@ export function ConversationListV2({
                         );
                     }}
                     endReached={() => {
-                        if (hasMore && !loading) onLoadMore();
+                        if (hasMore && !isFetchingNextPage) onLoadMore();
                     }}
                     components={{
                         Footer: () => (
                             <div>
-                                {hasMore ? (
+                                {nextPageError ? (
+                                    <button
+                                        type="button"
+                                        onClick={onRetryNextPage}
+                                        className="w-full px-4 py-3 text-center text-xs font-medium text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/30"
+                                    >
+                                        Couldn&apos;t load more. Retry
+                                    </button>
+                                ) : isFetchingNextPage ? (
                                     <div className="px-4 py-3 text-center text-xs text-zinc-400">
                                         Loading more conversations…
                                     </div>
-                                ) : null}
-                                {archivedCount && archivedCount > 0 && onOpenArchive ? (
-                                    <button
-                                        type="button"
-                                        onClick={onOpenArchive}
-                                        className="flex w-full items-center gap-2 px-6 py-3 text-sm text-zinc-500 hover:bg-zinc-50 dark:hover:bg-zinc-900"
-                                    >
-                                        <Archive className="h-4 w-4" />
-                                        <span>Archived ({archivedCount})</span>
-                                    </button>
                                 ) : null}
                                 <div className="h-3" />
                             </div>
@@ -284,7 +327,8 @@ export function ConversationListV2({
                                 peerOnline={peerId ? onlineMap[peerId] === true : false}
                                 onMute={onMuteConversation}
                                 onArchive={onArchiveConversation}
-                                onPrefetch={onPrefetchConversation}
+                                nowMinute={nowMinute}
+                                archivedView={archivedView}
                             />
                         );
                     }}
@@ -342,7 +386,8 @@ interface ConversationItemV2Props {
     peerOnline?: boolean;
     onMute?: (conversationId: string) => void;
     onArchive?: (conversationId: string) => void;
-    onPrefetch?: (conversationId: string) => void;
+    nowMinute: number;
+    archivedView: boolean;
 }
 
 export const ConversationItemV2 = React.memo(function ConversationItemV2({
@@ -357,52 +402,70 @@ export const ConversationItemV2 = React.memo(function ConversationItemV2({
     peerOnline = false,
     onMute,
     onArchive,
-    onPrefetch,
+    nowMinute,
+    archivedView,
 }: ConversationItemV2Props) {
     const draft = useMessagesV2UiStore((state) => state.draftsByConversation[conversation.id] || '');
     const participant = conversation.participants[0];
-    const relativeLastMessageTime = conversation.lastMessage
-        ? safeFormatRelativeTime(conversation.lastMessage.createdAt)
+    const display = buildConversationDisplay({
+        type: conversation.type,
+        participants: conversation.participants,
+        configuredTitle: conversation.displayTitle,
+        configuredAvatarUrl: conversation.displayAvatarUrl,
+        projectTitle: conversation.type === 'project_group' ? conversation.displayTitle : null,
+    });
+    const avatarIdentity = conversation.type === 'dm'
+        ? participant
+        : {
+            fullName: display.title,
+            username: null,
+            avatarUrl: display.avatarUrl,
+        };
+    const reactionActor = conversation.reactionPreview
+        ? conversation.participants.find((candidate) => candidate.id === conversation.reactionPreview?.actorUserId) ?? null
+        : null;
+    const showingReactionPreview = shouldShowConversationReactionPreview(
+        conversation.lastMessage,
+        conversation.reactionPreview,
+    );
+    const activityAt = showingReactionPreview
+        ? conversation.reactionPreview?.createdAt
+        : conversation.lastMessage?.createdAt;
+    const relativeLastMessageTime = activityAt && nowMinute
+        ? safeFormatRelativeTime(activityAt)
         : null;
     const { offsetX, isRevealed, handlers, close } = useSwipeAction();
-    const prefetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-    useEffect(() => () => {
-        if (prefetchTimerRef.current) {
-            clearTimeout(prefetchTimerRef.current);
-            prefetchTimerRef.current = null;
-        }
-    }, []);
-
+    const hasSwipeActions = Boolean(onArchive || onMute);
     return (
         <div className="border-b border-zinc-100 dark:border-zinc-800/50">
-            <div className="relative overflow-hidden" {...handlers}>
+            <div className="relative overflow-hidden" {...(hasSwipeActions ? handlers : {})}>
                 {/* Swipe action buttons behind */}
-                <div className="absolute inset-y-0 right-0 flex items-stretch">
-                    <button type="button" onClick={() => { onArchive?.(conversation.id); close(); }} className="flex w-16 items-center justify-center bg-blue-500 text-white" aria-label="Archive">
-                        <Archive className="h-5 w-5" />
-                    </button>
-                    <button type="button" onClick={() => { onMute?.(conversation.id); close(); }} className="flex w-16 items-center justify-center bg-amber-500 text-white" aria-label="Mute">
-                        {conversation.muted ? <Bell className="h-5 w-5" /> : <BellOff className="h-5 w-5" />}
-                    </button>
-                </div>
+                {hasSwipeActions ? (
+                    <div className="absolute inset-y-0 right-0 flex items-stretch">
+                        {onArchive ? (
+                            <button
+                                type="button"
+                                onClick={() => { onArchive(conversation.id); close(); }}
+                                className="flex w-16 items-center justify-center bg-blue-500 text-white"
+                                aria-label={archivedView ? 'Unarchive conversation' : 'Archive conversation'}
+                            >
+                                <Archive className="h-5 w-5" />
+                            </button>
+                        ) : null}
+                        {onMute ? (
+                            <button type="button" onClick={() => { onMute(conversation.id); close(); }} className="flex w-16 items-center justify-center bg-amber-500 text-white" aria-label={conversation.muted ? 'Unmute conversation' : 'Mute conversation'}>
+                                {conversation.muted ? <Bell className="h-5 w-5" /> : <BellOff className="h-5 w-5" />}
+                            </button>
+                        ) : null}
+                    </div>
+                ) : null}
                 {/* The actual row content slides left */}
-                <div style={{ transform: `translateX(-${offsetX}px)`, transition: isRevealed || offsetX === 0 ? 'transform 200ms ease-out' : 'none' }} className="relative bg-white dark:bg-zinc-950">
+                <div style={{ transform: `translateX(-${hasSwipeActions ? offsetX : 0}px)`, transition: isRevealed || offsetX === 0 ? 'transform 200ms ease-out' : 'none' }} className="relative bg-white dark:bg-zinc-950">
                     <button
                         type="button"
                         onClick={() => onClick(conversation.id)}
                         data-testid={`conversation-row-${conversation.id}`}
-                        onMouseEnter={() => {
-                            if (onPrefetch) {
-                                prefetchTimerRef.current = setTimeout(() => onPrefetch(conversation.id), 200);
-                            }
-                        }}
-                        onMouseLeave={() => {
-                            if (prefetchTimerRef.current) {
-                                clearTimeout(prefetchTimerRef.current);
-                                prefetchTimerRef.current = null;
-                            }
-                        }}
+                        data-message-attention={attention?.hasNewMessages && !attention.clearing ? 'new' : 'none'}
                         className={cn(
                             'relative w-full text-left transition-colors app-density-list-row outline-none focus:outline-none',
                             isPopup ? 'min-h-[52px] px-3 py-1.5' : 'min-h-[56px] px-4 py-2',
@@ -417,7 +480,7 @@ export const ConversationItemV2 = React.memo(function ConversationItemV2({
                         <div className="flex items-center gap-3">
                             <div className="relative shrink-0">
                                 <UserAvatar
-                                    identity={participant}
+                                    identity={avatarIdentity}
                                     className={isPopup ? 'h-9 w-9' : 'h-10 w-10'}
                                     fallbackClassName="text-sm font-medium"
                                 />
@@ -433,7 +496,7 @@ export const ConversationItemV2 = React.memo(function ConversationItemV2({
                                                 ? "font-bold text-zinc-950 dark:text-white"
                                                 : "font-semibold text-zinc-900 dark:text-zinc-100"
                                         )}>
-                                            {participant?.fullName || participant?.username || 'Unknown'}
+                                            {display.title}
                                         </span>
                                         {conversation.muted ? (
                                             <BellOff className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
@@ -449,7 +512,10 @@ export const ConversationItemV2 = React.memo(function ConversationItemV2({
                                             </span>
                                         ) : null}
                                         {relativeLastMessageTime ? (
-                                            <span className="text-[11px] text-zinc-400">
+                                            <span
+                                                className="text-[11px] text-zinc-400"
+                                                title={new Date(activityAt!).toLocaleString()}
+                                            >
                                                 {relativeLastMessageTime}
                                             </span>
                                         ) : null}
@@ -461,7 +527,7 @@ export const ConversationItemV2 = React.memo(function ConversationItemV2({
                                         ? "text-zinc-800 dark:text-zinc-300 font-medium"
                                         : "text-zinc-500 dark:text-zinc-400"
                                 )}>
-                                    {!typingUsers.length && !draft.trim() && conversation.lastMessage && conversation.lastMessage.senderId === viewerUserId && (
+                                    {!typingUsers.length && !draft.trim() && !showingReactionPreview && conversation.lastMessage && conversation.lastMessage.senderId === viewerUserId && (
                                         <DeliveryIndicator deliveryState={getLastMessageDeliveryState(conversation.lastMessage) ?? 'sent'} />
                                     )}
                                     <span className="truncate">
@@ -470,7 +536,12 @@ export const ConversationItemV2 = React.memo(function ConversationItemV2({
                                             : draft.trim()
                                                 ? <span className="italic"><span className="font-semibold not-italic text-red-500">Draft: </span>{draft.replace(/\n/g, ' ').slice(0, 100)}</span>
                                                 : conversation.lastMessage
-                                                    ? formatMessagePreview(conversation.lastMessage)
+                                                    ? formatConversationPreview(
+                                                        conversation.lastMessage,
+                                                        viewerUserId,
+                                                        conversation.reactionPreview,
+                                                        reactionActor?.fullName || reactionActor?.username || null,
+                                                    )
                                                     : capabilityText(conversation)}
                                     </span>
                                 </div>
@@ -481,28 +552,4 @@ export const ConversationItemV2 = React.memo(function ConversationItemV2({
             </div>
         </div>
     );
-}, areConversationItemPropsEqual);
-
-export function areConversationItemPropsEqual(
-    prev: Readonly<ConversationItemV2Props>,
-    next: Readonly<ConversationItemV2Props>,
-) {
-    return (
-        prev.conversation.id === next.conversation.id &&
-        prev.conversation.muted === next.conversation.muted &&
-        areConversationPreviewStatesEqual(prev.conversation.lastMessage, next.conversation.lastMessage) &&
-        prev.selected === next.selected &&
-        prev.highlighted === next.highlighted &&
-        prev.attention?.hasNewMessages === next.attention?.hasNewMessages &&
-        prev.attention?.clearing === next.attention?.clearing &&
-        prev.attention?.latestNewMessageId === next.attention?.latestNewMessageId &&
-        prev.typingUsers === next.typingUsers &&
-        prev.onClick === next.onClick &&
-        prev.isPopup === next.isPopup &&
-        prev.viewerUserId === next.viewerUserId &&
-        prev.peerOnline === next.peerOnline &&
-        prev.onMute === next.onMute &&
-        prev.onArchive === next.onArchive &&
-        prev.onPrefetch === next.onPrefetch
-    );
-}
+});
