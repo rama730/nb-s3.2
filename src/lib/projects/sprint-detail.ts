@@ -1,25 +1,7 @@
-import { z } from "zod";
-
-export const SPRINT_TIMELINE_FILTERS = [
-  "all",
-  "work",
-  "blocked",
-  "completed",
-  "files",
-] as const;
-
-export type SprintTimelineFilter = (typeof SPRINT_TIMELINE_FILTERS)[number];
-
-export type SprintTimelineMode = "chronological";
-
-export const SPRINT_DRAWER_TYPES = ["task"] as const;
-export type SprintDrawerType = (typeof SPRINT_DRAWER_TYPES)[number];
-
-export type SprintStatus = "planning" | "active" | "completed";
+export type SprintStatus = "planning" | "active" | "completed" | "archived" | "cancelled";
 export type SprintMemberRole = "owner" | "admin" | "member" | "viewer" | null;
 export type SprintTaskStatus = "todo" | "in_progress" | "done" | "blocked";
 export type SprintTaskPriority = "low" | "medium" | "high" | "urgent";
-export type SprintFileNodeType = "file" | "folder";
 
 export type SprintTimelinePerson = {
   id: string;
@@ -30,12 +12,18 @@ export type SprintTimelinePerson = {
 export type SprintListItem = {
   id: string;
   projectId: string;
+  sprintNumber: number;
+  code: string;
   name: string;
   goal: string | null;
   description: string | null;
   startDate: string | null;
   endDate: string | null;
   status: SprintStatus;
+  startedAt: string | null;
+  completedAt: string | null;
+  archivedAt: string | null;
+  cancelledAt: string | null;
   createdAt: string | null;
   updatedAt: string | null;
   creator?: {
@@ -67,9 +55,6 @@ export type SprintHealthSummary = {
   completionPercentage: number;
 };
 
-export type SprintFilterCounts = Record<SprintTimelineFilter, number>;
-export type SprintVisibleCounts = Partial<Record<SprintTimelineFilter, number>>;
-
 export type SprintTaskTimelineEntity = {
   id: string;
   projectId: string;
@@ -83,35 +68,30 @@ export type SprintTaskTimelineEntity = {
   dueDate: string | null;
   createdAt: string | null;
   updatedAt: string | null;
+  completedAt: string | null;
   activityAt: string | null;
   linkedFileCount: number;
+  isDeleted: boolean;
+  membershipState: "committed" | "historical";
+  addedAt: string | null;
+  removedAt: string | null;
+  linkedFiles: Array<{
+    nodeId: string;
+    name: string;
+    latestVersion: number | null;
+    latestUploader: SprintTimelinePerson;
+    annotation: string | null;
+    tags: string[];
+    role: "working" | "deliverable" | "reference";
+  }>;
+  subtasks: Array<{
+    id: string;
+    title: string;
+    completed: boolean;
+    position: number;
+  }>;
   assignee: SprintTimelinePerson;
   creator: SprintTimelinePerson;
-};
-
-export type SprintFileTimelineEntity = {
-  id: string;
-  taskId: string;
-  nodeId: string;
-  nodeName: string;
-  nodePath: string;
-  nodeType: SprintFileNodeType;
-  annotation: string | null;
-  linkedAt: string | null;
-  lastEventType: string | null;
-  lastEventAt: string | null;
-  lastEventBy: string | null;
-  versionEvents?: SprintFileVersionEvent[];
-};
-
-export type SprintFileVersionEvent = {
-  id: string;
-  nodeId: string;
-  versionNumber: number;
-  createdAt: string;
-  createdBy: string | null;
-  createdByName: string | null;
-  comment: string | null;
 };
 
 export type SprintTimelineRow =
@@ -129,21 +109,6 @@ export type SprintTimelineRow =
     }
   | {
       id: string;
-      kind: "file";
-      occurredAt: string | null;
-      task: Pick<SprintTaskTimelineEntity, "id" | "title" | "taskNumber" | "status" | "priority">;
-      file: SprintFileTimelineEntity;
-    }
-  | {
-      id: string;
-      kind: "file_version";
-      occurredAt: string | null;
-      task: Pick<SprintTaskTimelineEntity, "id" | "title" | "taskNumber" | "status" | "priority">;
-      file: Pick<SprintFileTimelineEntity, "id" | "nodeId" | "nodeName" | "nodePath" | "nodeType">;
-      versionEvent: SprintFileVersionEvent;
-    }
-  | {
-      id: string;
       kind: "closeout";
       occurredAt: string | null;
       sprint: SprintListItem;
@@ -156,69 +121,11 @@ export type SprintDetailPayload = {
   sprints: SprintListItem[];
   selectedSprintId: string | null;
   permissions: SprintPermissionSet;
-  timelineMode: SprintTimelineMode;
   summary: SprintHealthSummary | null;
-  compareSummary: SprintCompareSummary | null;
-  filterCounts: SprintFilterCounts;
   rows: SprintTimelineRow[];
-  drawerPreviews: SprintDrawerPreview[];
   nextCursor: string | null;
   hasMore: boolean;
 };
-
-export type SprintDrawerState =
-  | {
-      type: "none";
-      id: null;
-    }
-  | {
-      type: SprintDrawerType;
-      id: string;
-    };
-
-export type SprintDrawerPreview =
-  {
-    type: "task";
-    id: string;
-    title: string;
-    subtitle: string;
-    occurredAt: string | null;
-    badgeText: string;
-  };
-
-export type SprintCompareMetric = {
-  current: number;
-  previous: number | null;
-  delta: number | null;
-  direction: "up" | "down" | "flat" | "none";
-  isPositive: boolean | null;
-};
-
-export type SprintCompareSummary = {
-  baselineKind: "previous_sprint" | "first_sprint";
-  baselineSprintId: string | null;
-  baselineSprintName: string | null;
-  completionRate: SprintCompareMetric;
-  blockedTasks: SprintCompareMetric;
-  linkedFiles: SprintCompareMetric;
-  completedStoryPoints: SprintCompareMetric;
-};
-
-export type SprintRouteState = {
-  filter: SprintTimelineFilter;
-  drawer: SprintDrawerState;
-  hasExplicitFilter: boolean;
-};
-
-type SearchParamsReader = {
-  get(name: string): string | null;
-};
-
-function isSearchParamsReader(
-  input: URLSearchParams | SearchParamsReader | Record<string, string | string[] | undefined>,
-): input is SearchParamsReader {
-  return "get" in input && typeof input.get === "function";
-}
 
 export const SPRINT_STATUS_PRESENTATION: Record<
   SprintStatus,
@@ -246,6 +153,17 @@ export const SPRINT_STATUS_PRESENTATION: Record<
     toneClassName:
       "border-zinc-200 bg-zinc-100 text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300",
   },
+  archived: {
+    label: "Archived",
+    toneClassName: "bg-zinc-100 text-zinc-600 border-zinc-200/60 dark:bg-zinc-800/60 dark:text-zinc-400 dark:border-zinc-700/60",
+    dotClassName: "bg-zinc-400 dark:bg-zinc-500",
+  },
+  cancelled: {
+    label: "Cancelled",
+    dotClassName: "bg-rose-500/70",
+    toneClassName:
+      "border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900/60 dark:bg-rose-950/30 dark:text-rose-300",
+  },
 };
 
 export const SPRINT_TASK_STATUS_PRESENTATION: Record<
@@ -256,38 +174,26 @@ export const SPRINT_TASK_STATUS_PRESENTATION: Record<
   }
 > = {
   todo: {
-    label: "Queued",
+    label: "To Do",
     toneClassName:
       "border-zinc-200 bg-zinc-100 text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300",
   },
   in_progress: {
-    label: "In progress",
+    label: "In Progress",
     toneClassName:
       "border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-900/60 dark:bg-blue-950/30 dark:text-blue-300",
   },
   done: {
-    label: "Completed",
+    label: "Done",
     toneClassName:
       "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300",
   },
   blocked: {
-    label: "Blocked",
+    label: "Issues",
     toneClassName:
       "border-red-200 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300",
   },
 };
-
-export const SPRINT_FILTER_LABELS: Record<SprintTimelineFilter, string> = {
-  all: "All",
-  work: "Work items",
-  blocked: "Blocked",
-  completed: "Completed",
-  files: "Files",
-};
-
-const sprintRouteFilterSchema = z.enum(SPRINT_TIMELINE_FILTERS);
-const sprintRouteDrawerTypeSchema = z.enum(SPRINT_DRAWER_TYPES);
-const sprintRouteDrawerIdSchema = z.string().trim().min(1);
 
 function clampPercentage(value: number) {
   if (!Number.isFinite(value)) return 0;
@@ -304,17 +210,24 @@ export function formatSprintDateRange(startDate: string | null | undefined, endD
   const start = isValidSprintDate(startDate) ? new Date(startDate as string) : null;
   const end = isValidSprintDate(endDate) ? new Date(endDate as string) : null;
 
+  // Sprint dates are calendar dates. Rendering them in UTC keeps an end date
+  // from moving to the previous day for collaborators west of UTC.
+  const formatCalendarDate = (date: Date, includeYear: boolean) =>
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: "UTC",
+      month: "short",
+      day: "numeric",
+      ...(includeYear ? { year: "numeric" } : {}),
+    }).format(date);
+
   if (start && end) {
-    return `${start.toLocaleDateString("en-US", { month: "short", day: "numeric" })} - ${end.toLocaleDateString(
-      "en-US",
-      { month: "short", day: "numeric", year: "numeric" },
-    )}`;
+    return `${formatCalendarDate(start, false)} - ${formatCalendarDate(end, true)}`;
   }
   if (start) {
-    return `Starts ${start.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`;
+    return `Starts ${formatCalendarDate(start, true)}`;
   }
   if (end) {
-    return `Ends ${end.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`;
+    return `Ends ${formatCalendarDate(end, true)}`;
   }
   return "Dates not set";
 }
@@ -366,10 +279,11 @@ export function buildSprintPermissionSet(input: {
   isMember: boolean;
   memberRole: SprintMemberRole;
 }): SprintPermissionSet {
-  const canManage = input.canWrite;
+  // ponytail: use the existing project authority level at both boundaries.
+  const canManage = input.isOwner || input.memberRole === "admin";
   return {
     canRead: input.canRead,
-    canWrite: input.canWrite,
+    canWrite: canManage,
     canCreate: canManage,
     canStart: canManage,
     canComplete: canManage,
@@ -401,115 +315,42 @@ export function buildSprintHealthSummary(input: {
   };
 }
 
-export function buildSprintFilterCounts(input: {
-  totalTasks: number;
-  completedTasks: number;
-  blockedTasks: number;
-  linkedFileCount: number;
-}): SprintFilterCounts {
-  const workCount = Math.max(0, input.totalTasks);
-  const fileCount = Math.max(0, input.linkedFileCount);
-  return {
-    all: workCount + fileCount,
-    work: workCount,
-    blocked: Math.max(0, input.blockedTasks),
-    completed: Math.max(0, input.completedTasks),
-    files: fileCount,
-  };
-}
-
-export function filterSprintTimelineRows(rows: SprintTimelineRow[], filter: SprintTimelineFilter) {
-  if (filter === "all") return rows;
-
-  return rows.filter((row) => {
-    if (row.kind === "kickoff" || row.kind === "closeout") return true;
-    if (filter === "files") return row.kind === "file" || row.kind === "file_version";
-    if (filter === "work") return row.kind === "task";
-    if (filter === "blocked") return row.kind === "task" && row.task.status === "blocked";
-    if (filter === "completed") return row.kind === "task" && row.task.status === "done";
-    return true;
-  });
-}
-
-export function parseSprintRouteState(input: URLSearchParams | SearchParamsReader | Record<string, string | string[] | undefined>) {
-  const source =
-    input instanceof URLSearchParams
-      ? {
-          filter: input.get("filter") ?? undefined,
-          drawerType: input.get("drawerType") ?? undefined,
-          drawerId: input.get("drawerId") ?? undefined,
-        }
-      : isSearchParamsReader(input)
-        ? {
-            filter: input.get("filter") ?? undefined,
-            drawerType: input.get("drawerType") ?? undefined,
-            drawerId: input.get("drawerId") ?? undefined,
-          }
-        : {
-            filter: Array.isArray(input.filter) ? input.filter[0] : input.filter,
-            drawerType: Array.isArray(input.drawerType) ? input.drawerType[0] : input.drawerType,
-            drawerId: Array.isArray(input.drawerId) ? input.drawerId[0] : input.drawerId,
-          };
-
-  const parsedFilter = sprintRouteFilterSchema.safeParse(source.filter);
-  const parsedDrawerType = sprintRouteDrawerTypeSchema.safeParse(source.drawerType);
-  const parsedDrawerId = sprintRouteDrawerIdSchema.safeParse(source.drawerId);
-  const filter = parsedFilter.success ? parsedFilter.data : "all";
-  const drawer =
-    parsedDrawerType.success && parsedDrawerId.success
-      ? ({ type: parsedDrawerType.data, id: parsedDrawerId.data } as SprintDrawerState)
-      : ({ type: "none", id: null } as SprintDrawerState);
-
-  return {
-    filter,
-    drawer,
-    hasExplicitFilter: parsedFilter.success,
-  };
-}
-
-export function buildSprintRouteQuery(input: {
-  filter?: SprintTimelineFilter;
-  drawer?: SprintDrawerState;
-  preserveTab?: boolean;
-}) {
-  const params = new URLSearchParams();
-  if (input.preserveTab) {
-    params.set("tab", "sprints");
-  }
-  if (input.filter && input.filter !== "all") {
-    params.set("filter", input.filter);
-  }
-  if (input.drawer && input.drawer.type !== "none") {
-    params.set("drawerType", input.drawer.type);
-    params.set("drawerId", input.drawer.id);
-  }
-  return params;
-}
-
-export function buildProjectSprintTabHref(projectSlug: string, input?: {
-  filter?: SprintTimelineFilter;
-  drawer?: SprintDrawerState;
-}) {
-  const encodedSlug = encodeURIComponent(projectSlug);
-  const query = buildSprintRouteQuery({
-    preserveTab: true,
-    filter: input?.filter,
-    drawer: input?.drawer,
-  }).toString();
-  return query ? `/projects/${encodedSlug}?${query}` : `/projects/${encodedSlug}?tab=sprints`;
+export function buildProjectSprintTabHref(projectSlug: string) {
+  return `/projects/${encodeURIComponent(projectSlug)}?tab=sprints`;
 }
 
 export function buildProjectSprintDetailHref(projectSlug: string, sprintId: string, input?: {
-  filter?: SprintTimelineFilter;
-  drawer?: SprintDrawerState;
+  sprintCode?: string;
 }) {
   const encodedSlug = encodeURIComponent(projectSlug);
-  const queryParams = buildSprintRouteQuery({
-    filter: input?.filter,
-    drawer: input?.drawer,
-  });
+  const queryParams = new URLSearchParams();
   queryParams.set('tab', 'sprints');
-  queryParams.set('sprintId', sprintId);
+  if (input?.sprintCode) {
+    queryParams.set('sprint', input.sprintCode);
+  } else {
+    queryParams.set('sprintId', sprintId);
+  }
   const query = queryParams.toString();
   return `/projects/${encodedSlug}?${query}`;
+}
+
+export function computeSprintStatus(sprint: SprintListItem): SprintStatus {
+  // Schedule reconciliation owns activation. The UI only presents the
+  // persisted transition and never derives a conflicting local state.
+  return sprint.status;
+}
+
+export function isSprintReadyToClose(sprint: SprintListItem, now = new Date()) {
+  if (sprint.status !== "active" || !sprint.endDate) return false;
+  const endDate = new Date(sprint.endDate);
+  if (!Number.isFinite(endDate.getTime())) return false;
+
+  // A sprint scheduled through a calendar day remains active for that whole
+  // day. This avoids exposing close-out early for users behind UTC.
+  const inclusiveEnd = Date.UTC(
+    endDate.getUTCFullYear(),
+    endDate.getUTCMonth(),
+    endDate.getUTCDate() + 1,
+  ) - 1;
+  return now.getTime() >= inclusiveEnd;
 }
