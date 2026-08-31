@@ -6,6 +6,7 @@ import { skillProposals } from '@/lib/db/schema'
 import { normalizeSkillInputList } from '@/lib/skills/normalization'
 import { resolveSkillsForWrite } from '@/lib/skills/service'
 import { logger } from '@/lib/logger'
+import { validateCsrf } from '@/lib/security/csrf'
 
 export async function GET(request: Request) {
     const limited = await enforceRouteLimit(request, 'skills:proposals:read', 30, 60)
@@ -33,6 +34,8 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+    const csrfError = validateCsrf(request)
+    if (csrfError) return csrfError
     const limited = await enforceRouteLimit(request, 'skills:proposals:create', 10, 60)
     if (limited) return limited
     const auth = await requireAuthenticatedUser()
