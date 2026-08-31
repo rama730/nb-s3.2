@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { Ban, Briefcase, Check, ExternalLink, FolderOpen, Loader2, MessageSquare, Pencil, X } from "lucide-react";
+import { Ban, Briefcase, ExternalLink, FolderOpen, Loader2, MessageSquare, Pencil } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { acceptApplicationAction, editPendingApplicationAction, rejectApplicationAction } from "@/app/actions/applications";
@@ -12,9 +12,11 @@ import { resolveMessageWorkflowActionV2 } from "@/app/actions/messaging";
 import ApplicationReviewModal from "@/components/people/ApplicationReviewModal";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { UserAvatar } from "@/components/ui/UserAvatar";
+import {
+  IncomingProjectApplicationRow,
+  type IncomingProjectApplication,
+} from "@/components/people/IncomingProjectApplicationRow";
 import { PROJECT_MEMBERS_QUERY_KEY } from "@/hooks/hub/useProjectMembers";
-import { profileHref } from "@/lib/routing/identifiers";
 import { getLifecycleStatusStyle } from "@/lib/ui/status-config";
 import { queryKeys } from "@/lib/query-keys";
 
@@ -40,14 +42,7 @@ export interface MyApplication {
   waitTime?: string;
 }
 
-export interface IncomingApplication {
-  id: string;
-  isWorkflowItem?: boolean;
-  projectId: string | null;
-  projectTitle: string;
-  projectSlug?: string | null;
-  roleTitle: string;
-  applicant: { id: string; username?: string | null; fullName?: string | null; avatarUrl?: string | null };
+export interface IncomingApplication extends IncomingProjectApplication {
   status: string;
   createdAt: Date;
 }
@@ -66,16 +61,20 @@ function ProjectAvatar({ app }: { app: MyApplication }) {
 }
 
 function ApplicationRow(props: ApplicationRowProps) {
+  if (props.kind === "incoming") {
+    return (
+      <IncomingProjectApplicationRow
+        app={props.app}
+        busy={props.busy}
+        onAccept={props.onAccept}
+        onReject={props.onReject}
+      />
+    );
+  }
+
   const app = props.app;
   const projectHref = `/projects/${app.projectSlug || app.projectId}`;
-  const view = props.kind === "incoming" ? {
-    avatar: <Link href={profileHref(props.app.applicant)}><UserAvatar identity={props.app.applicant} size={40} /></Link>,
-    title: props.app.applicant.fullName || props.app.applicant.username || "User",
-    titleHref: profileHref(props.app.applicant),
-    relation: props.app.isWorkflowItem ? "invited you as" : "applied for",
-    status: null,
-    actions: <><Button size="sm" onClick={props.onAccept} disabled={props.busy}>{props.busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}Accept</Button><Button size="sm" variant="outline" onClick={props.onReject} disabled={props.busy}><X className="h-3.5 w-3.5" />Reject</Button></>,
-  } : (() => {
+  const view = (() => {
     const lifecycle = props.app.lifecycleStatus || props.app.status;
     const status = getLifecycleStatusStyle(lifecycle);
     return {
@@ -87,7 +86,7 @@ function ApplicationRow(props: ApplicationRowProps) {
       actions: <>
         {lifecycle === "pending" && !props.app.isWorkflowItem ? <Button size="icon" variant="ghost" onClick={props.onEdit} disabled={!props.app.canEdit || props.busy} aria-label="Edit application"><Pencil className="h-4 w-4" /></Button> : null}
         {lifecycle === "pending" && props.app.isWorkflowItem ? <Button size="icon" variant="ghost" onClick={props.onCancelInvite} disabled={props.busy} aria-label="Cancel invitation"><Ban className="h-4 w-4 text-red-500" /></Button> : null}
-        {props.app.conversationId ? <Button size="icon" variant="ghost" asChild><Link href={`/messages?conversationId=${props.app.conversationId}&applicationId=${props.app.id}`} aria-label="Open application chat"><MessageSquare className="h-4 w-4" /></Link></Button> : null}
+        {props.app.conversationId ? <Button size="icon" variant="ghost" asChild><Link href={`/messages?conversationId=${props.app.conversationId}`} aria-label="Open application chat"><MessageSquare className="h-4 w-4" /></Link></Button> : null}
         <Button size="icon" variant="ghost" asChild><Link href={projectHref} aria-label="View project"><ExternalLink className="h-4 w-4" /></Link></Button>
       </>,
     };
