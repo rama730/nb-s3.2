@@ -1,0 +1,56 @@
+- generic [active] [ref=f3e1]:
+  - generic [ref=f3e2]:
+    - banner [ref=f3e3]:
+      - generic [ref=f3e4]:
+        - link "Navigate to home" [ref=f3e7] [cursor=pointer]:
+          - /url: /
+          - generic [ref=f3e14]: NB
+        - navigation "Main navigation" [ref=f3e16]:
+          - link "Hub" [ref=f3e17] [cursor=pointer]:
+            - /url: /hub
+          - link "Connections" [ref=f3e24] [cursor=pointer]:
+            - /url: /people
+          - link "Messages" [ref=f3e31] [cursor=pointer]:
+            - /url: /messages
+          - link "Settings" [ref=f3e35] [cursor=pointer]:
+            - /url: /settings
+        - generic [ref=f3e40]:
+          - button "Theme (loading)" [disabled]
+    - main [ref=f3e44]:
+      - generic [ref=f3e46]:
+        - generic [ref=f3e49]:
+          - generic [ref=f3e50]:
+            - link "Hub" [ref=f3e51] [cursor=pointer]:
+              - /url: /hub
+            - generic [ref=f3e54]:
+              - heading "DeepScope AI" [level=1] [ref=f3e55]
+              - generic "Project links" [ref=f3e56]:
+                - link "Open Behance · pavankumard732 · Design & prototype" [ref=f3e57] [cursor=pointer]:
+                  - /url: /go/project/0adb0049-a58e-44d3-bcb3-db2ee4abdfc6/link-mteqhhtu
+                - link "Open Google Scholar · Dr. Yesudasu Vasimalla · Research & publication" [ref=f3e59] [cursor=pointer]:
+                  - /url: /go/project/0adb0049-a58e-44d3-bcb3-db2ee4abdfc6/link-ece8db52-bf75-483d-a6ef-21fc128fce61
+                - 'link "Open Recent progress in surface plasmon resonance based sensors: A comprehensive revi · cell.com · Documentation" [ref=f3e61] [cursor=pointer]':
+                  - /url: /go/project/0adb0049-a58e-44d3-bcb3-db2ee4abdfc6/link-75581e55-1ef0-4597-b14c-7206291191e2
+                - 'link "Open GitHub · rama730/Frontend: Design of patient details · Source code" [ref=f3e63] [cursor=pointer]':
+                  - /url: /go/project/0adb0049-a58e-44d3-bcb3-db2ee4abdfc6/link-8848f0e4-be54-4be6-acd9-593553f03553
+                - button "Open 2 more project links" [ref=f3e67] [cursor=pointer]: "+2"
+              - generic [ref=f3e68]:
+                - generic [ref=f3e69]: Created by
+                - link "Ramanayudu CH" [ref=f3e70] [cursor=pointer]:
+                  - /url: /u/ramanayudu_ch
+            - generic [ref=f3e72]:
+              - generic "Total Views" [ref=f3e73]: "810"
+              - generic "Followers" [ref=f3e78]: "0"
+          - generic [ref=f3e85]:
+            - button "Follow" [ref=f3e86] [cursor=pointer]
+            - button "Share Project" [ref=f3e92] [cursor=pointer]
+        - tablist "Project sections" [ref=f3e101]:
+          - tab "Dashboard" [ref=f3e102] [cursor=pointer]
+          - tab "Docs" [ref=f3e108] [cursor=pointer]
+          - tab "Updates" [ref=f3e111] [cursor=pointer]
+          - tab "Files" [selected] [ref=f3e115] [cursor=pointer]
+        - tabpanel "Files" [ref=f3e119]:
+          - complementary [ref=f3e124]
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=f3e219] [cursor=pointer]
+  - alert [ref=f3e223]
