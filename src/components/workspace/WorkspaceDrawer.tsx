@@ -1,228 +1,130 @@
 "use client";
 
-import React, { useEffect, useState, useRef } from "react";
-import { useSearchParams, usePathname } from "next/navigation";
-import { motion, AnimatePresence } from "framer-motion";
-import { X, Briefcase, Loader2 } from "lucide-react";
+import React from "react";
+import { Inbox, ListChecks, X } from "lucide-react";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { useUIStore } from "@/lib/stores/ui-store";
-import { useAuth } from "@/hooks/useAuth";
-import { getWorkspaceTaskInfoAction } from "@/app/actions/workspace";
-import { toast } from "sonner";
-import dynamic from "next/dynamic";
+import { cn } from "@/lib/utils";
+import { useQuery } from "@tanstack/react-query";
+import { queryKeys } from "@/lib/query-keys";
+import { getWorkspaceSummaryAction } from "@/app/actions/workspace";
+import { usePeopleNotifications } from "@/hooks/usePeopleNotifications";
 
-// Consolidated Unified Overview Tab
-import WorkspaceOverviewTab from "./WorkspaceOverviewTab";
-
-type WorkspaceTask = Extract<Awaited<ReturnType<typeof getWorkspaceTaskInfoAction>>, { success: true }>['task'];
-
-// Dynamic loading of Workspace Task Details View to keep initial bundle size minimal
-const WorkspaceTaskDetailView = dynamic(() => import("./WorkspaceTaskDetailView"), {
-    ssr: false,
-    loading: () => (
-        <div className="flex flex-col items-center justify-center h-full py-20 space-y-3 bg-white dark:bg-zinc-950">
-            <Loader2 className="w-8 h-8 text-blue-500 animate-spin" />
-            <span className="text-sm text-zinc-500 dark:text-zinc-400">Loading task details...</span>
-        </div>
-    )
-});
+import WorkspaceTasksTab from "./WorkspaceTasksTab";
+import WorkspaceRequestsTab from "./WorkspaceRequestsTab";
 
 export default function WorkspaceDrawer() {
-    const searchParams = useSearchParams();
-    const pathname = usePathname();
-    const { user } = useAuth();
+  const isWorkspaceOpen = useUIStore((s) => s.isWorkspaceOpen);
+  const setWorkspaceOpen = useUIStore((s) => s.setWorkspaceOpen);
+  const activeTab = useUIStore((s) => s.workspaceTab);
+  const setActiveTab = useUIStore((s) => s.setWorkspaceTab);
+  const { pendingConnections } = usePeopleNotifications();
 
-    const isWorkspaceOpen = useUIStore((s) => s.isWorkspaceOpen);
-    const workspaceTaskId = useUIStore((s) => s.workspaceTaskId);
+  const { data: summary } = useQuery({
+    queryKey: queryKeys.workspace.summary(),
+    queryFn: getWorkspaceSummaryAction,
+    enabled: isWorkspaceOpen,
+    staleTime: 30_000,
+  });
+  const taskCount = summary?.success ? summary.taskCount : 0;
+  // Project invitations are already included in the workspace summary; only
+  // add connection requests from the shared Connections attention source.
+  const requestCount = (summary?.success ? summary.requestCount : 0) + pendingConnections;
+  const tabs = [
+    { id: "tasks" as const, label: "Tasks", icon: ListChecks, count: taskCount },
+    { id: "requests" as const, label: "Requests", icon: Inbox, count: requestCount },
+  ];
 
-    const setWorkspaceOpen = useUIStore((s) => s.setWorkspaceOpen);
-    const setWorkspaceTaskId = useUIStore((s) => s.setWorkspaceTaskId);
+  const onTabKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const nextIndex = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+    const next = tabs[nextIndex]!;
+    setActiveTab(next.id);
+    document.getElementById(`workspace-${next.id}-tab`)?.focus();
+  };
 
-    const [selectedTask, setSelectedTask] = useState<WorkspaceTask | null>(null);
-    const [loadingTask, setLoadingTask] = useState(false);
-    const firstRenderRef = useRef(true);
+  return (
+    <Dialog open={isWorkspaceOpen} onOpenChange={setWorkspaceOpen}>
+      <DialogContent
+        data-testid="workspace-drawer"
+        id="workspace-drawer"
+        presentation="right-drawer"
+        showCloseButton={false}
+        overlayClassName="z-[200] bg-zinc-900/40 backdrop-blur-md dark:bg-black/50"
+        onCloseAutoFocus={(event) => {
+          const launcher = document.getElementById("workspace-launcher");
+          if (!launcher) return;
+          event.preventDefault();
+          launcher.focus();
+        }}
+        className="z-[201] h-full gap-0 border-zinc-200 bg-white p-0 shadow-2xl dark:border-zinc-800 dark:bg-zinc-950 lg:w-[40vw] lg:max-w-[42rem]"
+      >
+        <div className="flex-shrink-0 border-b border-zinc-200 dark:border-zinc-800">
+          <div className="flex items-center justify-between px-6 py-4">
+            <div className="flex items-center gap-2">
+              <DialogTitle className="text-base font-bold text-zinc-900 dark:text-zinc-50">
+                Workspace
+              </DialogTitle>
+              <DialogDescription className="sr-only">
+                Review open work and pending project requests.
+              </DialogDescription>
+            </div>
+            <DialogClose
+              aria-label="Close workspace"
+              className="min-h-10 min-w-10 rounded-md p-2 text-zinc-500 transition-colors hover:bg-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary dark:hover:bg-zinc-800"
+            >
+              <X className="h-4 w-4" />
+            </DialogClose>
+          </div>
 
-    // Escape key listener to close drawer or go back
-    useEffect(() => {
-        const handleKeyDown = (e: KeyboardEvent) => {
-            if (e.key === "Escape") {
-                if (workspaceTaskId) {
-                    setWorkspaceTaskId(null);
-                } else if (isWorkspaceOpen) {
-                    setWorkspaceOpen(false);
-                }
-            }
-        };
-        window.addEventListener("keydown", handleKeyDown);
-        return () => window.removeEventListener("keydown", handleKeyDown);
-    }, [isWorkspaceOpen, workspaceTaskId, setWorkspaceOpen, setWorkspaceTaskId]);
-
-    // Handle deep-linking parameters from URL on mount
-    useEffect(() => {
-        const type = searchParams?.get("drawerType");
-        const id = searchParams?.get("drawerId");
-
-        if (type === "workspace") {
-            setWorkspaceOpen(true);
-            if (id) {
-                setWorkspaceTaskId(id);
-            }
-        }
-    }, [searchParams, setWorkspaceOpen, setWorkspaceTaskId]);
-
-    // Shallow Sync UI State back to URL
-    useEffect(() => {
-        if (!searchParams) return;
-        
-        // Skip run on first mount to let mount sync handler
-        if (firstRenderRef.current) {
-            firstRenderRef.current = false;
-            return;
-        }
-
-        const params = new URLSearchParams(searchParams.toString());
-        
-        if (isWorkspaceOpen) {
-            params.set("drawerType", "workspace");
-            if (workspaceTaskId) {
-                params.set("drawerId", workspaceTaskId);
-            } else {
-                params.delete("drawerId");
-            }
-            // Keep drawerTab removed or clean to simplify
-            params.delete("drawerTab");
-        } else {
-            if (params.get("drawerType") === "workspace") {
-                params.delete("drawerType");
-                params.delete("drawerId");
-                params.delete("drawerTab");
-            }
-        }
-
-        const newQuery = params.toString();
-        const currentQuery = searchParams.toString();
-        if (newQuery === currentQuery) return;
-
-        const nextUrl = newQuery ? `${pathname}?${newQuery}` : pathname;
-        window.history.replaceState(null, "", nextUrl);
-    }, [isWorkspaceOpen, workspaceTaskId, pathname, searchParams]);
-
-    // Resolve task details on deep-linking reload
-    useEffect(() => {
-        if (workspaceTaskId) {
-            if (selectedTask?.id === workspaceTaskId) return;
-
-            setLoadingTask(true);
-            getWorkspaceTaskInfoAction(workspaceTaskId).then((res) => {
-                if (res.success && res.task) {
-                    setSelectedTask(res.task);
-                } else {
-                    toast.error(res.error || "Failed to retrieve task details");
-                    setWorkspaceTaskId(null);
-                }
-                setLoadingTask(false);
-            }).catch(() => {
-                toast.error("Failed to retrieve task details");
-                setWorkspaceTaskId(null);
-                setLoadingTask(false);
-            });
-        } else {
-            setSelectedTask(null);
-        }
-    }, [workspaceTaskId, setWorkspaceTaskId, selectedTask?.id]);
-
-    if (!user) return null;
-
-    const showTaskDetails = workspaceTaskId && (selectedTask || loadingTask);
-
-    return (
-        <>
-            <AnimatePresence>
-                {isWorkspaceOpen && (
-                    <>
-                        {/* Backdrop overlay */}
-                        <motion.div
-                            initial={{ opacity: 0 }}
-                            animate={{ opacity: 1 }}
-                            exit={{ opacity: 0 }}
-                            transition={{ duration: 0.2 }}
-                            onClick={() => setWorkspaceOpen(false)}
-                            className="fixed inset-0 top-[var(--ui-topnav-height,56px)] z-[200] bg-zinc-950/35 backdrop-blur-[2px]"
-                            data-testid="workspace-drawer-backdrop"
-                        />
-
-                        {/* Slide-over panel */}
-                        <motion.div
-                            initial={{ x: "100%" }}
-                            animate={{ x: 0 }}
-                            exit={{ x: "100%" }}
-                            transition={{ type: "spring", damping: 26, stiffness: 220 }}
-                            className="fixed right-0 top-[var(--ui-topnav-height,56px)] z-[201] flex h-[calc(100vh-var(--ui-topnav-height,56px))] w-full max-w-[92%] sm:max-w-xl md:max-w-2xl flex-col border-l border-zinc-200 bg-white shadow-[-20px_0_50px_-10px_rgba(0,0,0,0.15)] dark:border-zinc-800 dark:bg-zinc-950 dark:shadow-[-20px_0_50px_-10px_rgba(0,0,0,0.5)]"
-                            id="workspace-drawer"
-                            role="dialog"
-                            aria-modal="true"
-                            aria-labelledby="workspace-drawer-title"
-                        >
-                            {/* Drawer Header */}
-                            <div className="flex-shrink-0 border-b border-zinc-200 dark:border-zinc-800/80 px-6 py-4 flex items-center justify-between">
-                                <div className="flex items-center gap-2">
-                                    <Briefcase className="w-5 h-5 text-blue-500" />
-                                    <h2 id="workspace-drawer-title" className="text-base font-bold text-zinc-900 dark:text-zinc-50">
-                                        Personal Workspace
-                                    </h2>
-                                </div>
-                                <button
-                                    onClick={() => setWorkspaceOpen(false)}
-                                    className="p-1.5 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-900 text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 transition-colors"
-                                    aria-label="Close workspace drawer"
-                                >
-                                    <X className="w-4 h-4" />
-                                </button>
-                            </div>
-
-                            {/* Main Viewport Container */}
-                            <div className="flex-1 overflow-y-auto bg-zinc-50/20 dark:bg-zinc-950/20 flex flex-col min-h-0 relative">
-                                <AnimatePresence mode="wait">
-                                    {!showTaskDetails ? (
-                                        <motion.div
-                                            key="overview"
-                                            initial={{ opacity: 0, x: -15 }}
-                                            animate={{ opacity: 1, x: 0 }}
-                                            exit={{ opacity: 0, x: 15 }}
-                                            transition={{ duration: 0.2 }}
-                                            className="p-6 flex-1 overflow-y-auto"
-                                        >
-                                            <WorkspaceOverviewTab />
-                                        </motion.div>
-                                    ) : (
-                                        <motion.div
-                                            key="task-details"
-                                            initial={{ opacity: 0, x: 15 }}
-                                            animate={{ opacity: 1, x: 0 }}
-                                            exit={{ opacity: 0, x: -15 }}
-                                            transition={{ duration: 0.2 }}
-                                            className="flex-1 overflow-y-auto flex flex-col min-h-0 h-full"
-                                        >
-                                            {loadingTask ? (
-                                                <div className="flex flex-col items-center justify-center h-full py-20 space-y-3">
-                                                    <Loader2 className="w-6 h-6 text-blue-500 animate-spin" />
-                                                    <span className="text-xs text-zinc-500 dark:text-zinc-400">Loading task details...</span>
-                                                </div>
-                                            ) : (
-                                                selectedTask && (
-                                                    <WorkspaceTaskDetailView
-                                                        task={selectedTask}
-                                                        onBack={() => setWorkspaceTaskId(null)}
-                                                    />
-                                                )
-                                            )}
-                                        </motion.div>
-                                    )}
-                                </AnimatePresence>
-                            </div>
-                        </motion.div>
-                    </>
+          <div
+            role="tablist"
+            className="flex w-full items-center gap-4 px-6 pb-0"
+          >
+            {tabs.map((tab, index) => {
+              const Icon = tab.icon;
+              const selected = activeTab === tab.id;
+              const needsAttention = tab.count > 0;
+              return <button
+                key={tab.id}
+                id={`workspace-${tab.id}-tab`}
+                data-testid={`workspace-tab-${tab.id}`}
+                type="button"
+                onClick={() => setActiveTab(tab.id)}
+                onKeyDown={(event) => onTabKeyDown(event, index)}
+                role="tab"
+                tabIndex={selected ? 0 : -1}
+                aria-selected={selected}
+                aria-controls={`workspace-${tab.id}-panel`}
+                className={cn(
+                  "flex items-center gap-2 border-b-2 px-1 pb-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
+                  selected ? "border-primary text-primary" : "border-transparent text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300",
                 )}
-            </AnimatePresence>
-        </>
-    );
+              >
+                <Icon className={cn(
+                  "h-4 w-4 transition-colors duration-300",
+                  needsAttention
+                    ? "text-rose-500 drop-shadow-[0_0_3px_rgba(244,63,94,0.3)] dark:text-rose-400"
+                    : selected ? "text-primary" : "",
+                )} />
+                <span>{tab.label}</span>
+                {tab.count > 0 && <span aria-label={tab.id === "tasks" ? `${tab.count} tasks assigned to you` : `${tab.count} pending requests`} className="ml-1 inline-flex min-w-5 items-center justify-center rounded-full bg-rose-100 px-1.5 py-0.5 text-xs font-semibold text-rose-700 dark:bg-rose-950/40 dark:text-rose-300">{tab.count > 99 ? "99+" : tab.count}</span>}
+              </button>;
+            })}
+          </div>
+        </div>
+
+        <div className={cn(
+          "relative flex-1 overflow-y-auto bg-zinc-50/20 px-6 pb-6 pt-2 dark:bg-zinc-950/20",
+        )}>
+          {activeTab === "tasks" ? (
+            <WorkspaceTasksTab isActive={activeTab === "tasks"} />
+          ) : (
+            <WorkspaceRequestsTab isActive={activeTab === "requests"} />
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
 }
