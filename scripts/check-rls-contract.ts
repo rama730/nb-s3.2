@@ -17,7 +17,10 @@ async function main() {
     const setupSource = await readFile(path.join(root, 'scripts/setup-database.ts'), 'utf8')
 
     const checks: Array<[string, boolean]> = [
-        ['schema defines private profile security table', schemaSource.includes('export const profileSecurityStates = pgTable(\'profile_security_states\'' )],
+        [
+            'schema defines private profile security table',
+            /export const profileSecurityStates\s*=\s*pgTable\(\s*["']profile_security_states["']/.test(schemaSource),
+        ],
         ['migration creates profile security table', migrationSource.includes('CREATE TABLE IF NOT EXISTS "profile_security_states"')],
         ['migration drops legacy profile recovery-code columns', migrationSource.includes('ALTER TABLE "profiles" DROP COLUMN IF EXISTS "security_recovery_codes"')],
         ['migration creates upload intents table', uploadMigrationSource.includes('CREATE TABLE IF NOT EXISTS "upload_intents"')],
