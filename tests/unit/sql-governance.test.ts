@@ -31,6 +31,7 @@ function writeManifest(rootDir: string, existingMigrationFiles: string[], allowe
         policyVersion: 1,
         defaultChangeKind: "append_only",
         migrationDirectory: "drizzle",
+        strictLineageFromIndex: 0,
         existingMigrationFiles,
         allowedUtilitySqlFiles,
         breakGlassExceptions: [],
@@ -44,9 +45,9 @@ function writeManifest(rootDir: string, existingMigrationFiles: string[], allowe
 describe("check-sql-governance script", () => {
   it("passes when SQL files match the governance manifest", () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sql-governance-pass-"));
-    write(path.join(tmp, "drizzle/0001_initial.sql"), "-- migration");
+    write(path.join(tmp, "drizzle/0001_initial_schema.sql"), "-- migration");
     write(path.join(tmp, "scripts/setup.sql"), "-- utility");
-    writeManifest(tmp, ["drizzle/0001_initial.sql"], ["scripts/setup.sql"]);
+    writeManifest(tmp, ["drizzle/0001_initial_schema.sql"], ["scripts/setup.sql"]);
 
     const result = validateSqlGovernance(tmp);
     assert.equal(result.errors.length, 0, `Expected no violations, got: ${result.errors.join("\n")}`);
@@ -54,9 +55,9 @@ describe("check-sql-governance script", () => {
 
   it("fails when a new migration file is added outside the manifest", () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sql-governance-fail-"));
-    write(path.join(tmp, "drizzle/0001_initial.sql"), "-- migration");
-    write(path.join(tmp, "drizzle/0002_new.sql"), "-- migration");
-    writeManifest(tmp, ["drizzle/0001_initial.sql"]);
+    write(path.join(tmp, "drizzle/0001_initial_schema.sql"), "-- migration");
+    write(path.join(tmp, "drizzle/0002_new_change.sql"), "-- migration");
+    writeManifest(tmp, ["drizzle/0001_initial_schema.sql"]);
 
     const result = validateSqlGovernance(tmp);
     assert.ok(result.errors.length > 0, "Expected violations but none were reported");
