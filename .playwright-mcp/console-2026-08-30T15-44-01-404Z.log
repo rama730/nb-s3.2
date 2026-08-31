@@ -1,0 +1,427 @@
+[     835ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[     896ms] [LOG] [HMR] connected @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[    1009ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[    1254ms] [LOG] [Fast Refresh] done in 346ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[    1466ms] [ERROR] Failed to load resource: the server responded with a status of 401 (Unauthorized) @ http://localhost:3000/api/v1/appearance:0
+[    2498ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[    2687ms] [LOG] [Fast Refresh] done in 291ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[   31102ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[   31183ms] [LOG] [Fast Refresh] done in 184ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[   32402ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[   32449ms] [LOG] [Fast Refresh] done in 150ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  181345ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  181426ms] [LOG] [Fast Refresh] done in 182ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  225866ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  225984ms] [LOG] [Fast Refresh] done in 219ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  292270ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  292398ms] [LOG] [Fast Refresh] done in 229ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  296521ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  296585ms] [LOG] [Fast Refresh] done in 165ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  382978ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  383129ms] [LOG] [Fast Refresh] done in 253ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  433599ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  433756ms] [LOG] [Fast Refresh] done in 257ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  460071ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  460180ms] [LOG] [Fast Refresh] done in 210ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  462794ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  462794ms] [LOG] [Fast Refresh] done in 107ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  464139ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  464272ms] [LOG] [Fast Refresh] done in 235ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  468637ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  468858ms] [LOG] [Fast Refresh] done in 323ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  495730ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  495931ms] [LOG] [Fast Refresh] done in 303ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  741669ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  741677ms] [LOG] [Fast Refresh] done in 109ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  890327ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  891174ms] [LOG] [Fast Refresh] done in 793ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  891352ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  891368ms] [LOG] [Fast Refresh] done in 116ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  973372ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  973587ms] [LOG] [Fast Refresh] done in 318ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1125308ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1125751ms] [LOG] [Fast Refresh] done in 530ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1200782ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1203121ms] [ERROR] ./src/components/projects/v2/files-tab/FilesTabMain.tsx:19:1
+Module not found: Can't resolve './SavedFilesCollection'
+  17 | import { useFilesWorkspaceView } from "./FilesWorkspaceViews";
+  18 | import { TaskFilesCollection } from "./TaskFilesCollection";
+> 19 | import { SavedFilesCollection } from "./SavedFilesCollection";
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  20 |
+  21 | // ---------------------------------------------------------------------------
+  22 | // Props
+
+Import traces:
+  Client Component Browser:
+    ./src/components/projects/v2/files-tab/FilesTabMain.tsx [Client Component Browser]
+    ./src/components/projects/v2/files-tab/FilesTabRoot.tsx [Client Component Browser]
+    ./src/components/projects/dashboard/ProjectDashboardClient.tsx [Client Component Browser]
+    ./src/components/projects/dashboard/ProjectDashboardClient.tsx [Server Component]
+    ./src/app/(main)/projects/[slug]/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./src/components/projects/v2/files-tab/FilesTabMain.tsx [Client Component SSR]
+    ./src/components/projects/v2/files-tab/FilesTabRoot.tsx [Client Component SSR]
+    ./src/components/projects/dashboard/ProjectDashboardClient.tsx [Client Component SSR]
+    ./src/components/projects/dashboard/ProjectDashboardClient.tsx [Server Component]
+    ./src/app/(main)/projects/[slug]/page.tsx [Server Component]
+
+https://nextjs.org/docs/messages/module-not-found @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:3318
+[ 1203250ms] [ERROR] ./src/components/projects/v2/files-tab/FilesTabMain.tsx:19:1
+Module not found: Can't resolve './SavedFilesCollection'
+  17 | import { useFilesWorkspaceView } from "./FilesWorkspaceViews";
+  18 | import { TaskFilesCollection } from "./TaskFilesCollection";
+> 19 | import { SavedFilesCollection } from "./SavedFilesCollection";
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  20 |
+  21 | // ---------------------------------------------------------------------------
+  22 | // Props
+
+Import traces:
+  Client Component Browser:
+    ./src/components/projects/v2/files-tab/FilesTabMain.tsx [Client Component Browser]
+    ./src/components/projects/v2/files-tab/FilesTabRoot.tsx [Client Component Browser]
+    ./src/components/projects/dashboard/ProjectDashboardClient.tsx [Client Component Browser]
+    ./src/components/projects/dashboard/ProjectDashboardClient.tsx [Server Component]
+    ./src/app/(main)/projects/[slug]/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./src/components/projects/v2/files-tab/FilesTabMain.tsx [Client Component SSR]
+    ./src/components/projects/v2/files-tab/FilesTabRoot.tsx [Client Component SSR]
+    ./src/components/projects/dashboard/ProjectDashboardClient.tsx [Client Component SSR]
+    ./src/components/projects/dashboard/ProjectDashboardClient.tsx [Server Component]
+    ./src/app/(main)/projects/[slug]/page.tsx [Server Component]
+
+https://nextjs.org/docs/messages/module-not-found @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:3318
+[ 1203352ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1204581ms] [ERROR] ./src/components/projects/v2/files-tab/FilesTabMain.tsx:19:1
+Module not found: Can't resolve './SavedFilesCollection'
+  17 | import { useFilesWorkspaceView } from "./FilesWorkspaceViews";
+  18 | import { TaskFilesCollection } from "./TaskFilesCollection";
+> 19 | import { SavedFilesCollection } from "./SavedFilesCollection";
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  20 |
+  21 | // ---------------------------------------------------------------------------
+  22 | // Props
+
+Import traces:
+  Client Component Browser:
+    ./src/components/projects/v2/files-tab/FilesTabMain.tsx [Client Component Browser]
+    ./src/components/projects/v2/files-tab/FilesTabRoot.tsx [Client Component Browser]
+    ./src/components/projects/dashboard/ProjectDashboardClient.tsx [Client Component Browser]
+    ./src/components/projects/dashboard/ProjectDashboardClient.tsx [Server Component]
+    ./src/app/(main)/projects/[slug]/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./src/components/projects/v2/files-tab/FilesTabMain.tsx [Client Component SSR]
+    ./src/components/projects/v2/files-tab/FilesTabRoot.tsx [Client Component SSR]
+    ./src/components/projects/dashboard/ProjectDashboardClient.tsx [Client Component SSR]
+    ./src/components/projects/dashboard/ProjectDashboardClient.tsx [Server Component]
+    ./src/app/(main)/projects/[slug]/page.tsx [Server Component]
+
+https://nextjs.org/docs/messages/module-not-found @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:3318
+[ 1204586ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/projects/deepscope-ai?tab=files&_rsc=LPmwyHfmjNBttvsj:0
+[ 1204642ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/projects/deepscope-ai?tab=files&_rsc=LPmwyHfmjNBttvsj:0
+[ 1204661ms] [ERROR] ./src/components/projects/v2/files-tab/FilesTabMain.tsx:19:1
+Module not found: Can't resolve './SavedFilesCollection'
+  17 | import { useFilesWorkspaceView } from "./FilesWorkspaceViews";
+  18 | import { TaskFilesCollection } from "./TaskFilesCollection";
+> 19 | import { SavedFilesCollection } from "./SavedFilesCollection";
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  20 |
+  21 | // ---------------------------------------------------------------------------
+  22 | // Props
+
+Import traces:
+  Client Component Browser:
+    ./src/components/projects/v2/files-tab/FilesTabMain.tsx [Client Component Browser]
+    ./src/components/projects/v2/files-tab/FilesTabRoot.tsx [Client Component Browser]
+    ./src/components/projects/dashboard/ProjectDashboardClient.tsx [Client Component Browser]
+    ./src/components/projects/dashboard/ProjectDashboardClient.tsx [Server Component]
+    ./src/app/(main)/projects/[slug]/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./src/components/projects/v2/files-tab/FilesTabMain.tsx [Client Component SSR]
+    ./src/components/projects/v2/files-tab/FilesTabRoot.tsx [Client Component SSR]
+    ./src/components/projects/dashboard/ProjectDashboardClient.tsx [Client Component SSR]
+    ./src/components/projects/dashboard/ProjectDashboardClient.tsx [Server Component]
+    ./src/app/(main)/projects/[slug]/page.tsx [Server Component]
+
+https://nextjs.org/docs/messages/module-not-found @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:3318
+[ 1204687ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/projects/deepscope-ai?tab=files&_rsc=LPmwyHfmjNBttvsj:0
+[ 1204777ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1204910ms] [ERROR] ./src/components/projects/v2/files-tab/FilesTabMain.tsx:19:1
+Module not found: Can't resolve './SavedFilesCollection'
+  17 | import { useFilesWorkspaceView } from "./FilesWorkspaceViews";
+  18 | import { TaskFilesCollection } from "./TaskFilesCollection";
+> 19 | import { SavedFilesCollection } from "./SavedFilesCollection";
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  20 |
+  21 | // ---------------------------------------------------------------------------
+  22 | // Props
+
+Import traces:
+  Client Component Browser:
+    ./src/components/projects/v2/files-tab/FilesTabMain.tsx [Client Component Browser]
+    ./src/components/projects/v2/files-tab/FilesTabRoot.tsx [Client Component Browser]
+    ./src/components/projects/dashboard/ProjectDashboardClient.tsx [Client Component Browser]
+    ./src/components/projects/dashboard/ProjectDashboardClient.tsx [Server Component]
+    ./src/app/(main)/projects/[slug]/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./src/components/projects/v2/files-tab/FilesTabMain.tsx [Client Component SSR]
+    ./src/components/projects/v2/files-tab/FilesTabRoot.tsx [Client Component SSR]
+    ./src/components/projects/dashboard/ProjectDashboardClient.tsx [Client Component SSR]
+    ./src/components/projects/dashboard/ProjectDashboardClient.tsx [Server Component]
+    ./src/app/(main)/projects/[slug]/page.tsx [Server Component]
+
+https://nextjs.org/docs/messages/module-not-found @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:3318
+[ 1204956ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/projects/deepscope-ai?tab=files&_rsc=LPmwyHfmjNBttvsj:0
+[ 1204993ms] [ERROR] ./src/components/projects/v2/files-tab/FilesTabMain.tsx:19:1
+Module not found: Can't resolve './SavedFilesCollection'
+  17 | import { useFilesWorkspaceView } from "./FilesWorkspaceViews";
+  18 | import { TaskFilesCollection } from "./TaskFilesCollection";
+> 19 | import { SavedFilesCollection } from "./SavedFilesCollection";
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  20 |
+  21 | // ---------------------------------------------------------------------------
+  22 | // Props
+
+Import traces:
+  Client Component Browser:
+    ./src/components/projects/v2/files-tab/FilesTabMain.tsx [Client Component Browser]
+    ./src/components/projects/v2/files-tab/FilesTabRoot.tsx [Client Component Browser]
+    ./src/components/projects/dashboard/ProjectDashboardClient.tsx [Client Component Browser]
+    ./src/components/projects/dashboard/ProjectDashboardClient.tsx [Server Component]
+    ./src/app/(main)/projects/[slug]/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./src/components/projects/v2/files-tab/FilesTabMain.tsx [Client Component SSR]
+    ./src/components/projects/v2/files-tab/FilesTabRoot.tsx [Client Component SSR]
+    ./src/components/projects/dashboard/ProjectDashboardClient.tsx [Client Component SSR]
+    ./src/components/projects/dashboard/ProjectDashboardClient.tsx [Server Component]
+    ./src/app/(main)/projects/[slug]/page.tsx [Server Component]
+
+https://nextjs.org/docs/messages/module-not-found @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:3318
+[ 1205023ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/projects/deepscope-ai?tab=files:0
+[ 1205140ms] [ERROR] Refused to execute script from 'http://localhost:3000/_next/static/development/_clientMiddlewareManifest.js' because its MIME type ('application/json') is not executable, and strict MIME type checking is enabled. @ http://localhost:3000/projects/deepscope-ai?tab=files:0
+[ 1205171ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://localhost:3000/_next/static/chunks/node_modules_react-dom_0bruynb._.js:15305
+[ 1205226ms] Error: ./src/components/projects/v2/files-tab/FilesTabMain.tsx:19:1
+Module not found: Can't resolve './SavedFilesCollection'
+  17 | import { useFilesWorkspaceView } from "./FilesWorkspaceViews";
+  18 | import { TaskFilesCollection } from "./TaskFilesCollection";
+> 19 | import { SavedFilesCollection } from "./SavedFilesCollection";
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  20 |
+  21 | // ---------------------------------------------------------------------------
+  22 | // Props
+
+
+
+Import traces:
+  Client Component Browser:
+    ./src/components/projects/v2/files-tab/FilesTabMain.tsx [Client Component Browser]
+    ./src/components/projects/v2/files-tab/FilesTabRoot.tsx [Client Component Browser]
+    ./src/components/projects/dashboard/ProjectDashboardClient.tsx [Client Component Browser]
+    ./src/components/projects/dashboard/ProjectDashboardClient.tsx [Server Component]
+    ./src/app/(main)/projects/[slug]/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./src/components/projects/v2/files-tab/FilesTabMain.tsx [Client Component SSR]
+    ./src/components/projects/v2/files-tab/FilesTabRoot.tsx [Client Component SSR]
+    ./src/components/projects/dashboard/ProjectDashboardClient.tsx [Client Component SSR]
+    ./src/components/projects/dashboard/ProjectDashboardClient.tsx [Server Component]
+    ./src/app/(main)/projects/[slug]/page.tsx [Server Component]
+
+https://nextjs.org/docs/messages/module-not-found
+
+
+    at <unknown> (Error: ./src/components/projects/v2/files-tab/FilesTabMain.tsx:19:1)
+    at <unknown> (https://nextjs.org/docs/messages/module-not-found)
+    at Object.getCompilationErrors (file:///Users/chrama/Downloads/nb-s3/node_modules/next/dist/server/dev/hot-reloader-turbopack.js:1186:59)
+    at DevBundlerService.getCompilationError (file:///Users/chrama/Downloads/nb-s3/node_modules/next/dist/server/lib/dev-bundler-service.js:44:55)
+    at DevServer.getCompilationError (file:///Users/chrama/Downloads/nb-s3/node_modules/next/dist/server/dev/next-dev-server.js:720:42)
+    at DevServer.findPageComponents (file:///Users/chrama/Downloads/nb-s3/node_modules/next/dist/server/dev/next-dev-server.js:690:43)
+    at async DevServer.renderErrorToResponseImpl (file:///Users/chrama/Downloads/nb-s3/node_modules/next/dist/server/base-server.js:1753:26)
+[ 1205249ms] [LOG] [HMR] connected @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_0u_w_5s._.js:1226
+[ 1205294ms] [ERROR] ./src/components/projects/v2/files-tab/FilesTabMain.tsx:19:1
+Module not found: Can't resolve './SavedFilesCollection'
+  17 | import { useFilesWorkspaceView } from "./FilesWorkspaceViews";
+  18 | import { TaskFilesCollection } from "./TaskFilesCollection";
+> 19 | import { SavedFilesCollection } from "./SavedFilesCollection";
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  20 |
+  21 | // ---------------------------------------------------------------------------
+  22 | // Props
+
+Import traces:
+  Client Component Browser:
+    ./src/components/projects/v2/files-tab/FilesTabMain.tsx [Client Component Browser]
+    ./src/components/projects/v2/files-tab/FilesTabRoot.tsx [Client Component Browser]
+    ./src/components/projects/dashboard/ProjectDashboardClient.tsx [Client Component Browser]
+    ./src/components/projects/dashboard/ProjectDashboardClient.tsx [Server Component]
+    ./src/app/(main)/projects/[slug]/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./src/components/projects/v2/files-tab/FilesTabMain.tsx [Client Component SSR]
+    ./src/components/projects/v2/files-tab/FilesTabRoot.tsx [Client Component SSR]
+    ./src/components/projects/dashboard/ProjectDashboardClient.tsx [Client Component SSR]
+    ./src/components/projects/dashboard/ProjectDashboardClient.tsx [Server Component]
+    ./src/app/(main)/projects/[slug]/page.tsx [Server Component]
+
+https://nextjs.org/docs/messages/module-not-found @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_0u_w_5s._.js:1945
+[ 1205309ms] [ERROR] ./src/components/projects/v2/files-tab/FilesTabMain.tsx:19:1
+Module not found: Can't resolve './SavedFilesCollection'
+  17 | import { useFilesWorkspaceView } from "./FilesWorkspaceViews";
+  18 | import { TaskFilesCollection } from "./TaskFilesCollection";
+> 19 | import { SavedFilesCollection } from "./SavedFilesCollection";
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  20 |
+  21 | // ---------------------------------------------------------------------------
+  22 | // Props
+
+Import traces:
+  Client Component Browser:
+    ./src/components/projects/v2/files-tab/FilesTabMain.tsx [Client Component Browser]
+    ./src/components/projects/v2/files-tab/FilesTabRoot.tsx [Client Component Browser]
+    ./src/components/projects/dashboard/ProjectDashboardClient.tsx [Client Component Browser]
+    ./src/components/projects/dashboard/ProjectDashboardClient.tsx [Server Component]
+    ./src/app/(main)/projects/[slug]/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./src/components/projects/v2/files-tab/FilesTabMain.tsx [Client Component SSR]
+    ./src/components/projects/v2/files-tab/FilesTabRoot.tsx [Client Component SSR]
+    ./src/components/projects/dashboard/ProjectDashboardClient.tsx [Client Component SSR]
+    ./src/components/projects/dashboard/ProjectDashboardClient.tsx [Server Component]
+    ./src/app/(main)/projects/[slug]/page.tsx [Server Component]
+
+https://nextjs.org/docs/messages/module-not-found @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_0u_w_5s._.js:1945
+[ 1205396ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_0u_w_5s._.js:1226
+[ 1205448ms] [ERROR] ./src/components/projects/v2/files-tab/FilesTabMain.tsx:19:1
+Module not found: Can't resolve './SavedFilesCollection'
+  17 | import { useFilesWorkspaceView } from "./FilesWorkspaceViews";
+  18 | import { TaskFilesCollection } from "./TaskFilesCollection";
+> 19 | import { SavedFilesCollection } from "./SavedFilesCollection";
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  20 |
+  21 | // ---------------------------------------------------------------------------
+  22 | // Props
+
+Import traces:
+  Client Component Browser:
+    ./src/components/projects/v2/files-tab/FilesTabMain.tsx [Client Component Browser]
+    ./src/components/projects/v2/files-tab/FilesTabRoot.tsx [Client Component Browser]
+    ./src/components/projects/dashboard/ProjectDashboardClient.tsx [Client Component Browser]
+    ./src/components/projects/dashboard/ProjectDashboardClient.tsx [Server Component]
+    ./src/app/(main)/projects/[slug]/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./src/components/projects/v2/files-tab/FilesTabMain.tsx [Client Component SSR]
+    ./src/components/projects/v2/files-tab/FilesTabRoot.tsx [Client Component SSR]
+    ./src/components/projects/dashboard/ProjectDashboardClient.tsx [Client Component SSR]
+    ./src/components/projects/dashboard/ProjectDashboardClient.tsx [Server Component]
+    ./src/app/(main)/projects/[slug]/page.tsx [Server Component]
+
+https://nextjs.org/docs/messages/module-not-found @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_0u_w_5s._.js:1945
+[ 1369157ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_0u_w_5s._.js:1226
+[ 1371455ms] [LOG] [Fast Refresh] done in 744ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_0u_w_5s._.js:1226
+[ 1372192ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_0u_w_5s._.js:1226
+[ 1372199ms] [LOG] [Fast Refresh] done in 110ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_0u_w_5s._.js:1226
+[ 1372302ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_0u_w_5s._.js:1226
+[ 1372341ms] [LOG] [Fast Refresh] done in 141ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_0u_w_5s._.js:1226
+[ 1372517ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_0u_w_5s._.js:1226
+[ 1373216ms] [LOG] [Fast Refresh] done in 801ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_0u_w_5s._.js:1226
+[ 1373523ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1373586ms] [LOG] [HMR] connected @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1373703ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1373898ms] [LOG] [Fast Refresh] done in 300ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1374245ms] [ERROR] Failed to load resource: the server responded with a status of 401 (Unauthorized) @ http://localhost:3000/api/v1/appearance:0
+[ 1374738ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1374763ms] [LOG] [Fast Refresh] done in 126ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1375417ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1375562ms] [LOG] [Fast Refresh] done in 248ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1376571ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1376773ms] [LOG] [Fast Refresh] done in 303ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1406918ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1407379ms] [LOG] [Fast Refresh] done in 549ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1407533ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1408452ms] [LOG] [Fast Refresh] done in 1019ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1467809ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1469257ms] [LOG] [Fast Refresh] done in 1481ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1471533ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1471699ms] [LOG] [Fast Refresh] done in 267ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1543409ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1546393ms] [LOG] [Fast Refresh] done in 2093ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1546999ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1548210ms] [LOG] [Fast Refresh] done in 1311ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1549784ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1549835ms] [LOG] [Fast Refresh] done in 152ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1549945ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1550295ms] [LOG] [Fast Refresh] done in 452ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1611455ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1612671ms] [LOG] [Fast Refresh] done in 682ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1614051ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1614225ms] [LOG] [Fast Refresh] done in 275ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1888870ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1890331ms] [LOG] [Fast Refresh] done in 753ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1890571ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1891334ms] [LOG] [Fast Refresh] done in 864ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1893568ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1893677ms] [LOG] [Fast Refresh] done in 211ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1896374ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1896554ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/projects/deepscope-ai?tab=files:0
+[ 1896555ms] [LOG] [Fast Refresh] done in 282ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1896674ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1896760ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/projects/deepscope-ai?tab=files:0
+[ 1896761ms] [LOG] [Fast Refresh] done in 189ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1939500ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1939917ms] [LOG] [Fast Refresh] done in 398ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1941490ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1941677ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/projects/deepscope-ai?tab=files:0
+[ 1941678ms] [LOG] [Fast Refresh] done in 289ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1941786ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 1941951ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/projects/deepscope-ai?tab=files:0
+[ 1941952ms] [LOG] [Fast Refresh] done in 268ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 2008780ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 2009481ms] [LOG] [Fast Refresh] done in 760ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 2009827ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 2010968ms] [LOG] [Fast Refresh] done in 1241ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 2011172ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 2011265ms] [LOG] [Fast Refresh] done in 193ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 2011673ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 2011702ms] [LOG] [Fast Refresh] done in 131ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 2011880ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 2012052ms] [LOG] [Fast Refresh] done in 275ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 2013977ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/projects/deepscope-ai?tab=files:0
+[ 2014091ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 2014231ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/projects/deepscope-ai?tab=files:0
+[ 2014232ms] [LOG] [Fast Refresh] done in 243ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 2014844ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/projects/deepscope-ai?tab=files:0
+[ 2014848ms] [LOG] [files-tab] deep-link resolve failed {reason: not_found, segments: Array(1)} @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 2102577ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 2103287ms] [LOG] [Fast Refresh] done in 576ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 2103477ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 2104087ms] [LOG] [Fast Refresh] done in 711ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 2104814ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 2105013ms] [LOG] [Fast Refresh] done in 300ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 2162879ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 2163612ms] [LOG] [Fast Refresh] done in 823ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 2163825ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 2164439ms] [LOG] [Fast Refresh] done in 714ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 2164623ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 2164643ms] [LOG] [Fast Refresh] done in 121ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 2164841ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 2164841ms] [LOG] [Fast Refresh] done in 119ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 2165196ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 2165341ms] [LOG] [Fast Refresh] done in 246ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 2210221ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 2210405ms] [LOG] [Fast Refresh] done in 262ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 2384470ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 2385660ms] [LOG] [Fast Refresh] done in 563ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 2385885ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 2385893ms] [LOG] [Fast Refresh] done in 110ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 2387322ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 2387738ms] [LOG] [Fast Refresh] done in 517ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 2431311ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[ 2431855ms] [LOG] [Fast Refresh] done in 427ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
