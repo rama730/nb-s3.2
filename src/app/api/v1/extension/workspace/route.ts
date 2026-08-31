@@ -11,7 +11,7 @@ import {
   projectNodes,
   taskNodeLinks,
 } from "@/lib/db/schema";
-import { desc, eq, and, inArray, isNull, sql, or } from "drizzle-orm";
+import { eq, and, inArray, isNull, sql } from "drizzle-orm";
 import { logger } from "@/lib/logger";
 import {
   getProjectTaskCountMap,
@@ -53,7 +53,7 @@ export async function GET(request: Request) {
       });
     }
 
-    const [taskRowsResult, rootNodeRows, taskFileCountMap, projectTaskCountMap] =
+    const [taskRowsResult, rootNodeIdRowsResult, taskFileCountMap, projectTaskCountMap] =
       await Promise.all([
         db.execute(sql`
           SELECT * FROM (
@@ -66,7 +66,28 @@ export async function GET(request: Request) {
             WHERE ${tasks.projectId} IN (${sql.join(projectIds.map(id => sql`${id}`), sql`, `)}) AND ${tasks.deletedAt} IS NULL
           ) t WHERE t.rn <= 50
         `),
-        db
+        db.execute(sql`
+          SELECT id FROM (
+            SELECT ${projectNodes.id} AS id,
+                   row_number() OVER (
+                     PARTITION BY ${projectNodes.projectId}
+                     ORDER BY ${projectNodes.type}, ${projectNodes.name}, ${projectNodes.id}
+                   ) AS rn
+            FROM ${projectNodes}
+            WHERE ${projectNodes.projectId} IN (${sql.join(projectIds.map(id => sql`${id}`), sql`, `)})
+              AND ${projectNodes.parentId} IS NULL
+              AND ${projectNodes.deletedAt} IS NULL
+          ) ranked
+          WHERE ranked.rn <= 100
+        `),
+        getProjectTaskFileCountMap(projectIds),
+        getProjectTaskCountMap(projectIds),
+      ]);
+
+    const rootNodeIds = (rootNodeIdRowsResult as unknown as Array<{ id: string }>).map((row) => row.id);
+    const rootNodeRows = rootNodeIds.length === 0
+      ? []
+      : await db
           .select({
             node: projectNodes,
             linkedTaskId: tasks.id,
@@ -75,20 +96,9 @@ export async function GET(request: Request) {
           })
           .from(projectNodes)
           .leftJoin(taskNodeLinks, eq(projectNodes.id, taskNodeLinks.nodeId))
-          .leftJoin(tasks, eq(taskNodeLinks.taskId, tasks.id))
-          .where(
-            and(
-              inArray(projectNodes.projectId, projectIds),
-              isNull(projectNodes.parentId),
-              isNull(projectNodes.deletedAt),
-              or(isNull(tasks.id), isNull(tasks.deletedAt))
-            ),
-          )
-          .orderBy(projectNodes.projectId, projectNodes.type, projectNodes.name)
-          .limit(Math.max(100, projectIds.length * 100)),
-        getProjectTaskFileCountMap(projectIds),
-        getProjectTaskCountMap(projectIds),
-      ]);
+          .leftJoin(tasks, and(eq(taskNodeLinks.taskId, tasks.id), isNull(tasks.deletedAt)))
+          .where(inArray(projectNodes.id, rootNodeIds))
+          .orderBy(projectNodes.projectId, projectNodes.type, projectNodes.name, projectNodes.id);
 
     const taskRows = taskRowsResult as unknown as Array<{
       id: string;
