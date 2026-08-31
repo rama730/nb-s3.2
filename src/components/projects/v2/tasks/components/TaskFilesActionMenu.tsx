@@ -65,7 +65,7 @@ export function TaskFilesActionMenu({
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="z-[300] w-56">
         <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-zinc-500">
-          Add to task
+          Add task files
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
         <DropdownMenuItem
@@ -105,8 +105,8 @@ export function TaskFilesActionMenu({
         >
           <Link2 className="mr-2 h-4 w-4" />
           <div className="flex flex-col">
-            <span>Attach existing</span>
-            <span className="text-[10px] text-zinc-500">Link a file or folder already in this project</span>
+            <span>Add task reference</span>
+            <span className="text-[10px] text-zinc-500">Link an existing project file as task input</span>
           </div>
         </DropdownMenuItem>
       </DropdownMenuContent>
