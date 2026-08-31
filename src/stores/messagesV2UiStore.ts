@@ -9,18 +9,19 @@ import {
 } from '@/lib/messages/attention';
 
 type InboxTab = 'chats' | 'applications' | 'projects';
+export type MessagesPopupState = 'closed' | 'open' | 'minimized';
 
 interface MessagesV2UiState {
-    popupOpen: boolean;
-    popupMinimized: boolean;
+    popupState: MessagesPopupState;
+    messageSearchOpen: boolean;
     activeTab: InboxTab;
     selectedConversationId: string | null;
     highlightedConversationId: string | null;
     messageAttentionByConversation: Record<string, MessageAttentionState>;
     messageAttentionSuppressedUntilByConversation: Record<string, number>;
     draftsByConversation: Record<string, string>;
-    setPopupOpen: (open: boolean) => void;
-    setPopupMinimized: (minimized: boolean) => void;
+    setPopupState: (popupState: MessagesPopupState) => void;
+    setMessageSearchOpen: (open: boolean) => void;
     setActiveTab: (tab: InboxTab) => void;
     setSelectedConversationId: (conversationId: string | null) => void;
     setHighlightedConversationId: (conversationId: string | null) => void;
@@ -36,22 +37,21 @@ const attentionClearTimers = new Map<string, ReturnType<typeof setTimeout>>();
 export const useMessagesV2UiStore = create<MessagesV2UiState>()(
     persist(
         (set) => ({
-            popupOpen: false,
-            popupMinimized: false,
+            popupState: 'closed',
+            messageSearchOpen: false,
             activeTab: 'chats',
             selectedConversationId: null,
             highlightedConversationId: null,
             messageAttentionByConversation: {},
             messageAttentionSuppressedUntilByConversation: {},
             draftsByConversation: {},
-            setPopupOpen: (popupOpen) => set({ popupOpen }),
-            setPopupMinimized: (popupMinimized) => set({ popupMinimized }),
+            setPopupState: (popupState) => set({ popupState }),
+            setMessageSearchOpen: (messageSearchOpen) => set({ messageSearchOpen }),
             setActiveTab: (activeTab) => set({ activeTab }),
             setSelectedConversationId: (selectedConversationId) => set({ selectedConversationId }),
             setHighlightedConversationId: (highlightedConversationId) => set({ highlightedConversationId }),
             openPopupConversationList: (options) => set({
-                popupOpen: true,
-                popupMinimized: false,
+                popupState: 'open',
                 activeTab: 'chats',
                 selectedConversationId: null,
                 highlightedConversationId: options?.highlightConversationId ?? null,
@@ -142,12 +142,12 @@ export const useMessagesV2UiStore = create<MessagesV2UiState>()(
         }),
         {
             name: 'messages-v2-ui',
-            version: 1,
-            migrate: (persisted: unknown, version: number) => {
-                if (version === 0 || !persisted || typeof persisted !== 'object') {
+            version: 3,
+            migrate: (persisted: unknown) => {
+                if (!persisted || typeof persisted !== 'object') {
                     return {
-                        popupOpen: false,
-                        popupMinimized: false,
+                        popupState: 'closed',
+                        messageSearchOpen: false,
                         activeTab: 'chats',
                         highlightedConversationId: null,
                         messageAttentionByConversation: {},
@@ -155,11 +155,15 @@ export const useMessagesV2UiStore = create<MessagesV2UiState>()(
                         draftsByConversation: {},
                     };
                 }
-                return persisted as Partial<MessagesV2UiState>;
+                return {
+                    ...(persisted as Partial<MessagesV2UiState>),
+                    popupState: 'closed',
+                    messageSearchOpen: false,
+                };
             },
             partialize: (state) => ({
-                popupOpen: state.popupOpen,
-                popupMinimized: state.popupMinimized,
+                popupState: 'closed' as const,
+                messageSearchOpen: false,
                 activeTab: state.activeTab,
                 draftsByConversation: state.draftsByConversation,
             }),
