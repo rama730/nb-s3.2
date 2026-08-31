@@ -17,7 +17,8 @@ type SuiteName =
     | 'auth-entry-pages'
     | 'authenticated-shells'
     | 'workspace-bootstrap'
-    | 'messages-reconnect-storm'
+    | 'messages-route-entry-churn'
+    | 'realtime-reconnect'
     | 'worker-isolation'
     | 'extension-sync'
 
@@ -53,10 +54,17 @@ const SUITE_CONFIG: Record<SuiteName, {
         requiresAuthCookie: true,
         thresholds: { p95Ms: 900, failedRate: 0.02, checksRate: 0.99 },
     },
-    'messages-reconnect-storm': {
-        script: repoPath('qa', 'load', 'messages-reconnect-storm.k6.js'),
+    'messages-route-entry-churn': {
+        script: repoPath('qa', 'load', 'messages-route-entry-churn.k6.js'),
         requiresAuthCookie: true,
         thresholds: { p95Ms: 900, failedRate: 0.03, checksRate: 0.99 },
+    },
+    'realtime-reconnect': {
+        script: repoPath('qa', 'load', 'realtime-reconnect.k6.js'),
+        requiresAuthCookie: false,
+        requiredEnv: ['SUPABASE_REALTIME_URL', 'SUPABASE_ANON_KEY', 'SUPABASE_ACCESS_TOKEN', 'REALTIME_TOPIC'],
+        thresholds: { p95Ms: 1500, failedRate: 0.01, checksRate: 0.99, extraTrendP95Ms: 1500 },
+        extraTrendMetric: 'realtime_join_ms',
     },
     'worker-isolation': {
         script: repoPath('qa', 'load', 'worker-isolation.k6.js'),
