@@ -1,9 +1,13 @@
 import { cache } from "react";
 import type { User } from "@supabase/supabase-js";
+import { and, eq, isNull } from "drizzle-orm";
 import type { AuthSnapshot, AuthSnapshotResolution } from "@/lib/auth/snapshot";
 import { resolveAuthSnapshot } from "@/lib/auth/snapshot";
+import { db } from "@/lib/db";
+import { profiles } from "@/lib/db/schema";
 import { createClient } from "@/lib/supabase/server";
 import { getUserProfile } from "@/lib/data/profile";
+import { logger } from "@/lib/logger";
 
 /**
  * SEC-M6: `ViewerAuthContext` is SERVER-ONLY. It holds the raw Supabase
@@ -30,6 +34,17 @@ export type ViewerAuthContext = {
 
 export type ViewerProfileContext = ViewerAuthContext & {
   profile: Awaited<ReturnType<typeof getUserProfile>> | null;
+};
+
+/** The three profile fields that are safe and sufficient for a project shell. */
+type ViewerIdentityProfile = {
+  username: string | null;
+  fullName: string | null;
+  avatarUrl: string | null;
+};
+
+export type ViewerIdentityContext = ViewerAuthContext & {
+  profile: ViewerIdentityProfile | null;
 };
 
 /**
@@ -84,6 +99,36 @@ export const getViewerProfileContext = cache(async (): Promise<ViewerProfileCont
 });
 
 /**
+ * Project pages only render the viewer's name and avatar. Avoid loading the
+ * complete profile bootstrap record on their critical route path.
+ */
+export const getViewerIdentityContext = cache(async (): Promise<ViewerIdentityContext> => {
+  const auth = await getViewerAuthContext();
+  if (!auth.userId) return { ...auth, profile: null };
+
+  try {
+    const [profile] = await db
+      .select({
+        username: profiles.username,
+        fullName: profiles.fullName,
+        avatarUrl: profiles.avatarUrl,
+      })
+      .from(profiles)
+      .where(and(eq(profiles.id, auth.userId), isNull(profiles.deletedAt)))
+      .limit(1);
+
+    return { ...auth, profile: profile ?? null };
+  } catch (error) {
+    logger.error("[viewer.identity] failed to fetch project shell identity", {
+      module: "viewer-context",
+      userId: auth.userId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return { ...auth, profile: null };
+  }
+});
+
+/**
  * SEC-M6: project the server-only viewer context into the client-safe
  * `ClientViewer` shape. Callers that need to ship viewer data down to a
  * `"use client"` boundary MUST use this (or re-derive from its output)
@@ -96,7 +141,7 @@ export const getViewerProfileContext = cache(async (): Promise<ViewerProfileCont
  * satisfied by a malformed snapshot.
  */
 export function toClientViewer(
-  context: ViewerAuthContext | ViewerProfileContext,
+  context: ViewerAuthContext | ViewerProfileContext | ViewerIdentityContext,
 ): ClientViewer {
   const profile = 'profile' in context ? context.profile : null;
   const rawAal = (context.snapshot as unknown as { aal?: unknown })?.aal;
