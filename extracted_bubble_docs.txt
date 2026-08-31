@@ -1,0 +1,138 @@
+=== H1 ===
+Bubble
+
+=== H2 ===
+Installation#
+
+=== H2 ===
+Usage#
+
+=== CODE ===
+import { Bubble, BubbleContent, BubbleReactions } from "@/components/ui/bubble"
+
+=== CODE ===
+<Bubble>
+  <BubbleContent>
+    I checked the registry output and removed the stale route.
+  </BubbleContent>
+  <BubbleReactions>
+    <span>👍</span>
+  </BubbleReactions>
+</Bubble>
+
+=== H2 ===
+Composition#
+
+=== CODE ===
+BubbleGroup
+├── Bubble
+│   └── BubbleContent
+└── Bubble
+    └── BubbleContent
+
+=== H2 ===
+Features#
+
+=== H2 ===
+Variants#
+
+=== CODE ===
+import { Markdown } from "@/components/markdown"
+import {
+  Bubble,
+
+=== H2 ===
+Alignment#
+
+=== CODE ===
+import { Bubble, BubbleContent } from "@/components/ui/bubble"
+
+export function BubbleAlignmentDemo() {
+
+=== H2 ===
+Bubble Group#
+
+=== CODE ===
+BubbleGroup
+├── Bubble
+│   └── BubbleContent
+└── Bubble
+    └── BubbleContent
+
+=== H2 ===
+Links and Buttons#
+
+=== CODE ===
+import { Bubble, BubbleContent } from "@/components/ui/bubble"
+ 
+export function BubbleLinkDemo() {
+  return (
+    <Bubble variant="muted">
+      <BubbleContent render={<button />}>Click here</BubbleContent>
+    </Bubble>
+  )
+}
+
+=== H2 ===
+Reactions#
+
+=== H2 ===
+Show More / Collapsible#
+
+=== H2 ===
+Tooltip#
+
+=== H2 ===
+Popover#
+
+=== H2 ===
+Accessibility#
+
+=== H3 ===
+Labeling Reactions#
+
+=== CODE ===
+<BubbleReactions role="img" aria-label="Reactions: thumbs up, fire, and 8 more">
+  <span>👍</span>
+  <span>🔥</span>
+  <span>+8</span>
+</BubbleReactions>
+
+=== CODE ===
+<BubbleReactions>
+  <Button aria-label="Thumbs up" variant="secondary" size="icon-xs">
+    <ThumbsUpIcon />
+  </Button>
+</BubbleReactions>
+
+=== H3 ===
+Interactive Bubbles#
+
+=== CODE ===
+<Bubble variant="muted" align="end">
+  <BubbleContent render={<button type="button" onClick={onReply} />}>
+    I forgot my password
+  </BubbleContent>
+</Bubble>
+
+=== H3 ===
+Meaning Beyond Color#
+
+=== H2 ===
+API Reference#
+
+=== H3 ===
+Bubble#
+
+=== CODE ===
+"default" | "secondary" | "muted" | "tinted" | "outline" | "ghost" | "destructive"
+
+=== H3 ===
+BubbleContent#
+
+=== H3 ===
+BubbleReactions#
+
+=== H3 ===
+BubbleGroup#
+
