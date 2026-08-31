@@ -1,8 +1,10 @@
 "use client";
 
 import { AlertTriangle, CheckCircle2, FileText, FolderOpen, ListTodo, Timer, Users } from "lucide-react";
+import Image from "next/image";
 
 import type { ProjectDocReferenceOption, ProjectDocSmartBlockPreview } from "@/lib/projects/doc-blocks";
+import { getTaskTitlePresentation } from "@/lib/projects/task-presentation";
 import { cn } from "@/lib/utils";
 
 const KIND_ICON = {
@@ -28,10 +30,13 @@ export function ProjectDocReferenceOptionCard({
     onSelect?: () => void;
 }) {
     const Icon = KIND_ICON[option.kind] ?? FileText;
+    const titlePresentation = option.kind === "tasks"
+        ? getTaskTitlePresentation(option)
+        : null;
     const content = (
         <div className="flex min-w-0 items-center gap-2.5">
             {option.avatarUrl ? (
-                <img src={option.avatarUrl} alt="" className="h-8 w-8 rounded-full object-cover" />
+                <Image src={option.avatarUrl} alt="" width={32} height={32} sizes="32px" className="h-8 w-8 rounded-full object-cover" />
             ) : (
                 <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-500/10 text-blue-500">
                     <Icon className="h-3.5 w-3.5" />
@@ -39,7 +44,12 @@ export function ProjectDocReferenceOptionCard({
             )}
             <div className="min-w-0 flex-1">
                 <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-                    <p className="truncate text-xs font-semibold text-zinc-950 dark:text-zinc-50">{option.title}</p>
+                    <p
+                        className={cn("truncate text-xs font-semibold text-zinc-950 dark:text-zinc-50", titlePresentation?.className)}
+                        aria-label={titlePresentation?.ariaLabel}
+                    >
+                        {option.title}
+                    </p>
                     {option.status ? (
                         <span className="rounded-full bg-zinc-100 px-1.5 py-0.5 text-[10px] font-semibold text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300">
                             {option.status}
