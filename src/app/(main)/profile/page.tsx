@@ -1,15 +1,34 @@
 import { redirect } from 'next/navigation'
 import type { ReactNode } from 'react'
-import { Suspense } from 'react'
-import { getProfileDetails, getUserProfile } from '@/lib/data/profile'
+import { cache, Suspense } from 'react'
+import { getProfileDetails } from '@/lib/data/profile'
 import { ProfileV2Client } from '@/components/profile/v2/ProfileV2Client'
 import { getViewerAuthContext } from '@/lib/server/viewer-context'
 import { buildRouteMetadata } from '@/lib/metadata/route-metadata'
 import { logger } from '@/lib/logger'
 import { buildOwnerProfileTitle, buildProfileMetadataDescription } from '@/lib/profile/display'
 
-export async function generateMetadata() {
+// ponytail: metadata derives from the same required profile projection as the page body.
+const readOwnerProfileRoute = cache(async () => {
     const { user } = await getViewerAuthContext()
+    if (!user) return { user: null, profileData: null }
+    try {
+        return {
+            user,
+            profileData: await getProfileDetails(undefined, { viewerUser: user }),
+        }
+    } catch (error) {
+        logger.error('[profile.page] failed to load profile shell', {
+            module: 'profile',
+            userId: user.id,
+            error: error instanceof Error ? error.message : String(error),
+        })
+        return { user, profileData: null }
+    }
+})
+
+export async function generateMetadata() {
+    const { user, profileData } = await readOwnerProfileRoute()
     if (!user) {
         return buildRouteMetadata({
             title: 'Your Profile | Edge',
@@ -18,16 +37,7 @@ export async function generateMetadata() {
         })
     }
 
-    let profile: Awaited<ReturnType<typeof getUserProfile>> | null = null
-    try {
-        profile = await getUserProfile(user.id)
-    } catch (error) {
-        logger.warn('[profile.page] failed to load profile metadata', {
-            module: 'profile',
-            userId: user.id,
-            error: error instanceof Error ? error.message : String(error),
-        })
-    }
+    const profile = profileData?.profile ?? null
 
     return buildRouteMetadata({
         title: buildOwnerProfileTitle({
@@ -47,7 +57,7 @@ export async function generateMetadata() {
 }
 
 async function ResolvedProfile() {
-    const { user } = await getViewerAuthContext()
+    const { user, profileData } = await readOwnerProfileRoute()
 
     if (!user) {
         redirect('/login')
@@ -64,21 +74,6 @@ async function ResolvedProfile() {
             </div>
         </div>
     )
-    let profileData: Awaited<ReturnType<typeof getProfileDetails>> | null = null
-    try {
-        profileData = await getProfileDetails(undefined, {
-            viewerUser: user,
-        })
-    } catch (error) {
-        logger.error('[profile.page] failed to load profile shell', {
-            module: 'profile',
-            userId: user.id,
-            error: error instanceof Error ? error.message : String(error),
-            stack: error instanceof Error ? error.stack : undefined,
-        })
-        content = fallbackContent
-    }
-
     if (profileData === null) {
         logger.error('[profile.page] getProfileDetails returned null', {
             module: 'profile',
