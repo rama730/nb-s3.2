@@ -423,28 +423,13 @@ describe("QuickOpen — 20-Recents cap (Req 9.2, source-level)", () => {
     );
   });
 
-  it("breaks out of the Recents loop when the 20-cap is reached", () => {
-    assert.match(
-      DIALOG_SOURCE,
-      /if\s*\(out\.length\s*>=\s*MAX_RECENTS\)\s*break\s*;/,
-      "the empty-query branch must stop appending after 20 Recents",
-    );
+  it("bounds the authoritative recent metadata read to 20 IDs", () => {
+    assert.match(DIALOG_SOURCE, /recents\.slice\(0, MAX_RECENTS\)/);
+    assert.match(DIALOG_SOURCE, /getNodeMetadataBatch\(projectId, recentIds\)/);
   });
-
-  it("filters Recents to files only and skips ids that no longer resolve", () => {
-    // Req 9.2 — "up to 20 Recents ... files only" — plus resilience
-    // against cache eviction (the `if (node && node.type === "file")`
-    // guard in QuickOpenDialog.tsx).
-    assert.match(
-      DIALOG_SOURCE,
-      /const\s+node\s*=\s*nodesById\[id\]\s*;/,
-      "Recents branch must look up each id against the current cache",
-    );
-    assert.match(
-      DIALOG_SOURCE,
-      /if\s*\(node\s*&&\s*node\.type\s*===\s*"file"\)\s*out\.push\(node\)/,
-      "unresolved or folder-typed Recents must be skipped silently",
-    );
+  it("excludes deleted files and folders from authorized results", () => {
+    assert.match(DIALOG_SOURCE, /nodes\.filter\(node => node\.type === "file" && !node\.deletedAt\)/);
+    assert.doesNotMatch(DIALOG_SOURCE, /rankFuzzyResults\(fileNodes/);
   });
 
   it("renders the empty-Recents indicator when Recents is empty", () => {
@@ -467,12 +452,10 @@ describe("QuickOpen — 50-result cap (Req 9.3, source-level)", () => {
     );
   });
 
-  it("passes MAX_RESULTS into rankFuzzyResults", () => {
-    assert.match(
-      DIALOG_SOURCE,
-      /rankFuzzyResults\(fileNodes,\s*nodePathById,\s*rawQueryLower,\s*MAX_RESULTS\)/,
-      "the component must feed the 50-result cap into the ranker",
-    );
+  it("pages authoritative search in batches of 50 instead of silently truncating", () => {
+    assert.match(DIALOG_SOURCE, /getProjectNodes\(projectId, null, rawQuery, MAX_RESULTS, pageParam\)/);
+    assert.match(DIALOG_SOURCE, /getNextPageParam: page => page.nextCursor/);
+    assert.match(DIALOG_SOURCE, /search.fetchNextPage\(\)/);
   });
 
   it("declares a 200ms debounce for the fuzzy search (Req 9.3)", () => {
@@ -711,7 +694,7 @@ describe("QuickOpen — Escape closes + discards input (Req 9.7, source-level)",
   it("the backdrop click also routes through close() so discards match Escape", () => {
     assert.match(
       DIALOG_SOURCE,
-      /onMouseDown=\{\(e\)\s*=>\s*\{\s*if\s*\(e\.target\s*===\s*e\.currentTarget\)\s*close\(\)/,
+      /onOpenChange=\{value => \{ if \(!value\) close\(\); \}\}/,
       "backdrop clicks must converge on the same close() path as Escape",
     );
   });
