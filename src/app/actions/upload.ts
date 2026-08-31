@@ -53,7 +53,7 @@ export async function getUploadPresignedUrl(
     contentType: string,
     sizeBytes: number,
     options?: { sessionId?: string | null }
-): Promise<{ url: string; uploadIntentId: string; storageKey: string } | { error: string; code?: string }> {
+): Promise<{ url: string; token: string; uploadIntentId: string; storageKey: string } | { error: string; code?: string }> {
     const startedAt = Date.now();
     try {
         const authClient = await createClient();
@@ -99,7 +99,12 @@ export async function getUploadPresignedUrl(
             durationMs: Date.now() - startedAt,
         });
 
-        return { url: data.signedUrl, uploadIntentId: intent.id, storageKey: key };
+        return {
+            url: data.signedUrl,
+            token: data.token,
+            uploadIntentId: intent.id,
+            storageKey: key
+        };
     } catch (e) {
         if (e instanceof Error && e.message === UPLOAD_ERROR_CODES.KEY_FORMAT_INVALID) {
             return { error: 'Invalid upload key format', code: UPLOAD_ERROR_CODES.KEY_FORMAT_INVALID };
