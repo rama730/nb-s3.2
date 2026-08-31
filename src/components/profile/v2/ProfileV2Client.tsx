@@ -2,12 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
+import dynamic from 'next/dynamic'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { ProfilePageData, ProfilePrivacyRelationship, ProfileTabKey } from './types'
 import type { ProfileCollaborationSummary, ProfileInviteProjectOption } from '@/lib/profile/collaboration'
 import { ProfileShell } from './ProfileShell'
-import { ProfileHeader } from './ProfileHeader'
-import { ProfileRightRail } from './ProfileRightRail'
 import { ProfileTabs } from './ProfileTabs'
 import { toast } from 'sonner';
 import { useAuth } from '@/lib/hooks/use-auth';
@@ -17,13 +16,37 @@ import { logger } from '@/lib/logger';
 import { applyOptimisticUpdate as applyProfileOptimisticUpdate } from '@/lib/profile/normalization';
 import { queryKeys } from '@/lib/query-keys';
 
-// Section Imports (Kept static as they are usually in viewport)
+// Keep the first content card synchronous. The action-heavy header and secondary
+// rail cards remain server-rendered, but live in separate client chunks so every
+// profile navigation does not synchronously evaluate their menus and controls.
 import { AboutCard } from './sections/AboutCard'
-import { ProjectContributionsCard } from './sections/ProjectContributionsCard'
-import { SkillsCard } from './sections/SkillsCard'
-import { OpenToRolesCard } from './sections/OpenToRolesCard'
 import { ComponentErrorBoundary } from '@/components/ui/ComponentErrorBoundary'
-import { ProjectsGridCard } from './sections/ProjectsGridCard'
+
+const ProfileHeader = dynamic(
+    () => import('./ProfileHeader').then((module) => module.ProfileHeader),
+    { loading: () => <div className="min-h-64 animate-pulse rounded-3xl bg-zinc-200/50 dark:bg-zinc-800/50" /> },
+)
+const ProfileRightRail = dynamic(
+    () => import('./ProfileRightRail').then((module) => module.ProfileRightRail),
+    { loading: () => <div className="min-h-72 animate-pulse rounded-2xl bg-zinc-200/50 dark:bg-zinc-800/50" /> },
+)
+const SkillsCard = dynamic(
+    () => import('./sections/SkillsCard').then((module) => module.SkillsCard),
+    { loading: () => <div className="min-h-40 animate-pulse rounded-2xl bg-zinc-200/50 dark:bg-zinc-800/50" /> },
+)
+const OpenToRolesCard = dynamic(
+    () => import('./sections/OpenToRolesCard').then((module) => module.OpenToRolesCard),
+    { loading: () => <div className="min-h-40 animate-pulse rounded-2xl bg-zinc-200/50 dark:bg-zinc-800/50" /> },
+)
+
+const ProjectContributionsCard = dynamic(
+    () => import('./sections/ProjectContributionsCard').then((module) => module.ProjectContributionsCard),
+    { loading: () => <div className="min-h-48 animate-pulse rounded-2xl bg-zinc-200/50 dark:bg-zinc-800/50" /> },
+)
+const ProjectsGridCard = dynamic(
+    () => import('./sections/ProjectsGridCard').then((module) => module.ProjectsGridCard),
+    { loading: () => <div className="min-h-80 animate-pulse rounded-2xl bg-zinc-200/50 dark:bg-zinc-800/50" /> },
+)
 
 type EditProfileModalComponent = typeof import('@/components/profile/edit/EditProfileModal')['EditProfileModal'];
 type UserConnectionsModalComponent = typeof import('@/components/profile/v2/UserConnectionsModal')['UserConnectionsModal'];
@@ -34,7 +57,6 @@ interface ProfileClientProps extends Omit<ProfilePageData, 'stats'> {
     stats?: any;
     collaborationSummary?: ProfileCollaborationSummary;
     initialOpenRolesProjects?: any[];
-    viewerHasOpenRoles?: boolean;
 }
 
 type EditSection = "general" | "experience" | "skills" | "social";
@@ -118,7 +140,6 @@ export function ProfileV2Client({
     lockedShell: initialLockedShell = false,
     collaborationSummary: initialCollaborationSummary = EMPTY_COLLABORATION_SUMMARY,
     initialOpenRolesProjects = [],
-    viewerHasOpenRoles = false,
 }: ProfileClientProps) {
     const { user: authUser } = useAuth()
     const viewerUser = authUser ?? currentUser
@@ -172,12 +193,14 @@ export function ProfileV2Client({
         queryFn: () => fetchProfileProjects(profile.id),
         enabled: Boolean(profile?.id && !lockedShell && (activeTab === 'portfolio' || isEditModalOpen)),
         staleTime: 60_000,
+        refetchOnWindowFocus: false,
     })
     const inviteOptionsQuery = useQuery({
         queryKey: profile?.id ? queryKeys.profile.inviteOptions(profile.id) : queryKeys.profile.inviteOptions('unknown'),
         queryFn: () => fetchInviteOptions(profile.id),
         enabled: Boolean(profile?.id && inviteOpen && viewerUser && !isOwner),
         staleTime: 30_000,
+        refetchOnWindowFocus: false,
     })
     const portfolioProjects = portfolioQuery.data?.projects ?? []
     const overviewProjects = initialSummary.projects ?? []
@@ -588,7 +611,7 @@ export function ProfileV2Client({
                                 hoursPerWeek={safeProfile.hoursPerWeek}
                                 isOwner={isOwner}
                                 onEdit={isOwner ? () => openEditModal('skills') : undefined}
-                                onInvite={viewerUser && !isOwner && viewerHasOpenRoles ? handleOpenInvite : undefined}
+                                onInvite={viewerUser && !isOwner ? handleOpenInvite : undefined}
                                 onInviteIntent={prefetchInviteOptions}
                                 onApply={viewerUser && !isOwner ? handleOpenApplyModal : undefined}
                                 hasOpenRoles={openRolesProjects.length > 0}
