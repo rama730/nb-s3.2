@@ -18,6 +18,9 @@ import { useRouter } from "next/navigation";
 import { updateProject } from "@/app/actions/project";
 import { useReducedMotionPreference } from "@/components/providers/theme-provider";
 import { SkillPicker } from "@/components/skills/SkillPicker";
+import { ProjectLinkEditorFields, type ProjectLinkEditorHandle } from "@/components/projects/dashboard/ProjectSocialLinksCard";
+import { socialLinkItemsFromStorage } from "@/lib/profile/normalization";
+import { externalLinksSchema } from "@/lib/validations/project";
 
 // --- Types & Schema ---
 
@@ -41,6 +44,7 @@ const projectSchema = z.object({
     roles: z.array(roleSchema),
     lifecycleStages: z.array(z.string()),
     currentStageIndex: z.number(),
+    externalLinks: externalLinksSchema,
 });
 
 type ProjectFormValues = z.infer<typeof projectSchema>;
@@ -114,6 +118,7 @@ export default function EditProjectModal({ project, isOpen, onClose, onSaved }: 
     const [activeTab, setActiveTab] = useState("essentials");
     const [isPending, startTransition] = useTransition();
     const router = useRouter();
+    const projectLinksRef = useRef<ProjectLinkEditorHandle>(null);
 
     // Setup Form
     const { register, control, handleSubmit, watch, setValue, formState: { errors } } = useForm<ProjectFormValues>({
@@ -132,6 +137,7 @@ export default function EditProjectModal({ project, isOpen, onClose, onSaved }: 
             lifecycleStages: project.lifecycleStages ?? ["Concept", "Team Formation", "MVP", "Beta", "Launch"],
             currentStageIndex: project.currentStageIndex ?? 0,
             roles: normalizeProjectRoleFormValues(project.openRoles),
+            externalLinks: socialLinkItemsFromStorage(project.externalLinks ?? project.external_links),
         }
     });
 
@@ -176,7 +182,9 @@ export default function EditProjectModal({ project, isOpen, onClose, onSaved }: 
     const onSubmit = (data: ProjectFormValues) => {
         startTransition(async () => {
             try {
-                const dbPayload = { ...data, deletedRoleIds };
+                const preparedLinks = await projectLinksRef.current?.prepareForSave();
+                if (preparedLinks && !preparedLinks.success) return;
+                const dbPayload = { ...data, externalLinks: preparedLinks?.links ?? data.externalLinks, deletedRoleIds };
 
                 await updateProject(project.id, dbPayload);
                 toast.success("Project updated successfully");
@@ -342,20 +350,34 @@ export default function EditProjectModal({ project, isOpen, onClose, onSaved }: 
 
                                     {/* STACK & LINKS */}
                                     {activeTab === "stack" && (
-                                        <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                                        <div className="min-w-0 space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-300">
                                             {/* Tech Stack */}
                                             <div>
                                                 <SkillPicker value={technologies} onChange={(next) => setValue("skills", next, { shouldDirty: true, shouldValidate: true })} label="Project skills and technologies" />
+                                            </div>
+
+                                            <div>
+                                                <h3 className="mb-2 text-lg font-bold text-zinc-900 dark:text-zinc-100">Project links</h3>
+                                                <p className="mb-4 text-sm text-zinc-500">These icons appear beside the project title across every project tab.</p>
+                                                <ProjectLinkEditorFields
+                                                    ref={projectLinksRef}
+                                                    links={watch("externalLinks")}
+                                                    savedLinks={project.externalLinks ?? project.external_links}
+                                                    onChange={(links) => setValue("externalLinks", links, { shouldDirty: true, shouldValidate: true })}
+                                                    githubRepoUrl={project.githubRepoUrl ?? project.github_repo_url}
+                                                    health={project.externalLinkMetadata ?? project.external_link_metadata}
+                                                    projectType={project.category}
+                                                />
                                             </div>
 
                                             {/* Tags */}
                                             <div>
                                                 <label className="block text-sm font-medium mb-2">Tags</label>
                                                 <div className="p-4 rounded-xl border border-zinc-200 dark:border-zinc-700 min-h-[80px] bg-zinc-50/30 dark:bg-zinc-800/20">
-                                                    <div className="flex flex-wrap gap-2 mb-3">
+                                                    <div className="flex min-w-0 flex-wrap gap-2 mb-3">
                                                         {tags.map((tag) => (
-                                                            <span key={tag} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 text-sm border border-blue-100 dark:border-blue-800">
-                                                                #{tag}
+                                                            <span key={tag} className="inline-flex min-w-0 max-w-full items-center gap-1.5 px-3 py-1.5 rounded-full bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 text-sm border border-blue-100 dark:border-blue-800">
+                                                                <span className="truncate">#{tag}</span>
                                                                 <button
                                                                     type="button"
                                                                     onClick={() => setValue("tags", tags.filter(t => t !== tag))}
