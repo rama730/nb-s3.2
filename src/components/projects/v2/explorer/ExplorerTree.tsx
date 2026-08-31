@@ -88,6 +88,7 @@ interface FileGridItemProps {
   onDoubleClick: () => void;
   childrenCount?: number;
   onDropOnFolder?: (folderId: string, draggedId: string) => void;
+  canMove: boolean;
 }
 
 const FileGridItem = React.memo(function FileGridItem({
@@ -97,6 +98,7 @@ const FileGridItem = React.memo(function FileGridItem({
   onDoubleClick,
   childrenCount,
   onDropOnFolder,
+  canMove,
 }: FileGridItemProps) {
   const isFolder = node.type === "folder";
 
@@ -112,6 +114,7 @@ const FileGridItem = React.memo(function FileGridItem({
   }, []);
 
   const handleDragStart = (e: React.DragEvent) => {
+    if (!canMove) return;
     e.dataTransfer.setData("application/vnd.code-explorer-nodes", JSON.stringify([node.id]));
     e.dataTransfer.effectAllowed = "move";
   };
@@ -132,7 +135,7 @@ const FileGridItem = React.memo(function FileGridItem({
   };
 
   const handleDragOver = (e: React.DragEvent) => {
-    if (!isFolder) return;
+    if (!isFolder || !canMove || !onDropOnFolder) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
   };
@@ -177,7 +180,7 @@ const FileGridItem = React.memo(function FileGridItem({
       onDoubleClick={onDoubleClick}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
-      draggable
+      draggable={canMove}
       onDragStart={handleDragStart}
       onDragOver={handleDragOver}
       onDrop={handleDrop}
@@ -478,6 +481,13 @@ export function ExplorerTree({
   const [currentAssetFolderId, setCurrentAssetFolderId] = useState<string | null>(null);
   const [gridSize, setGridSize] = useState<"small" | "default" | "large">("default");
   const [isQuickLookOpen, setIsQuickLookOpen] = useState(false);
+  const safeRowsToRender = useMemo(
+    () =>
+      rowsToRender.filter(
+        (row) => row.kind !== "node" || Boolean(contextValue.nodesById[row.nodeId]),
+      ),
+    [contextValue.nodesById, rowsToRender],
+  );
 
   // Reset drill-down if we swap views entirely
   useEffect(() => {
@@ -507,7 +517,7 @@ export function ExplorerTree({
     );
   }
 
-  if (rowsToRender.length === 0) {
+  if (safeRowsToRender.length === 0) {
     return (
       <div
         role="status"
@@ -650,6 +660,7 @@ export function ExplorerTree({
                         }}
                         childrenCount={node.type === "folder" ? (childrenByParentId[filesParentKey(node.id)]?.length || 0) : undefined}
                         onDropOnFolder={onDropOnFolder}
+                        canMove={Boolean(onDropOnFolder)}
                       />
                     );
                   }}
@@ -725,10 +736,15 @@ export function ExplorerTree({
 
   return (
     <Virtuoso
-      data={rowsToRender}
+      data={safeRowsToRender}
       context={contextValue}
+      computeItemKey={(_, row) =>
+        row.kind === "node"
+          ? `${row.kind}:${row.nodeId}`
+          : `${row.kind}:${"parentId" in row ? row.parentId : "root"}`
+      }
       itemContent={(_, row, context) => (
-        <div className="px-2" role="none">
+        <div className="min-h-[22px] px-2" role="none">
           <FileTreeItem row={row} context={context} />
         </div>
       )}
