@@ -634,7 +634,7 @@ export function ProjectUpdateComposer({
                 storagePath: prepared.storagePath,
                 uploadToken: prepared.uploadToken,
                 contentType: prepared.contentType,
-            }, file);
+            }, file, { cacheProfile: "immutable" });
             updatePendingUpload(id, { phase: "finalizing", progress: 88 });
             const finalized = await finalizeProjectUpdateMediaUploadAction(projectId, {
                 uploadIntentId: prepared.uploadIntentId,
