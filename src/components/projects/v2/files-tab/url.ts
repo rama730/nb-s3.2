@@ -7,6 +7,9 @@
 // the same surface.
 
 import type { ProjectNode } from "@/lib/db/schema";
+import {
+  isInternalTaskWorkingFilesNode,
+} from "@/lib/files/task-working-files";
 
 /**
  * Maximum allowed length of the `?path=` value AFTER URL-decoding, per
@@ -34,6 +37,11 @@ export function encodePath(
   if (nodeId === null) return "";
   const start = nodesById[nodeId];
   if (!start) return "";
+  // Private task storage has no public path. The URL-sync owner emits the
+  // opaque fileId for these nodes.
+  if (isInternalTaskWorkingFilesNode(start)) {
+    return "";
+  }
 
   const parts: string[] = [];
   const seen = new Set<string>();
@@ -172,6 +180,12 @@ export interface PlanUrlSyncInput {
    * URL contract (NOT leave an empty `?path=`).
    */
   encodedPath: string;
+  /**
+   * Opaque identity used only for a task-scoped file. It takes precedence
+   * over `encodedPath`, which is intentionally empty for private task
+   * storage.
+   */
+  fileId?: string | null;
 }
 
 /**
@@ -190,7 +204,11 @@ export interface PlanUrlSyncInput {
  *   the raw query string by key.
  */
 export function planUrlSync(input: PlanUrlSyncInput): UrlSyncPlan {
-  const nextSearch = computeNextSearch(input.search, input.encodedPath);
+  const nextSearch = computeNextSearch(
+    input.search,
+    input.encodedPath,
+    input.fileId,
+  );
   if (nextSearch === input.search) return { action: "noop" };
   return {
     action: "replace",
@@ -203,7 +221,11 @@ export function planUrlSync(input: PlanUrlSyncInput): UrlSyncPlan {
  * Keeps non-path pairs in their original order; appends `path` at the end
  * when present. No re-encoding of values.
  */
-function computeNextSearch(currentSearch: string, encodedPath: string): string {
+function computeNextSearch(
+  currentSearch: string,
+  encodedPath: string,
+  fileId?: string | null,
+): string {
   const raw = currentSearch.startsWith("?")
     ? currentSearch.slice(1)
     : currentSearch;
@@ -229,7 +251,9 @@ function computeNextSearch(currentSearch: string, encodedPath: string): string {
   }
 
   const pairs = others.map((p) => (p.hasEquals ? `${p.key}=${p.value}` : p.key));
-  if (encodedPath !== "") {
+  if (fileId) {
+    pairs.push(`fileId=${encodeURIComponent(fileId)}`);
+  } else if (encodedPath !== "") {
     pairs.push(`path=${encodedPath}`);
   }
 
