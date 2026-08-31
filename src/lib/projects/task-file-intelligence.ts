@@ -36,12 +36,36 @@ export type TaskFileResolutionChoice =
 
 export type TaskFileRole = "reference" | "working" | "deliverable";
 
+const TASK_FILE_ROLE_TAGS = new Set([
+  "deliverable",
+  "initial_reference",
+  "working_file",
+]);
+
+export function replaceTaskFileRoleTag(
+  tags: readonly string[] | null | undefined,
+  role: TaskFileRole,
+) {
+  const roleTag =
+    role === "deliverable"
+      ? "deliverable"
+      : role === "reference"
+        ? "initial_reference"
+        : "working_file";
+  return [
+    ...(tags ?? []).filter((tag) => !TASK_FILE_ROLE_TAGS.has(tag)),
+    roleTag,
+  ];
+}
+
 export type TaskLinkedNode = {
   id: string;
   name: string;
   type: "file" | "folder";
   path: string | null;
   annotation?: string | null;
+  tags?: string[] | null;
+  canonicalNodeId?: string | null;
 };
 
 export type TaskFileIntentResolution = {
@@ -87,13 +111,14 @@ const DELIVERABLE_KEYWORDS = [
   "submission",
 ];
 
-const WORKING_KEYWORDS = [
-  "draft",
-  "temp",
-  "tmp",
-  "wip",
-  "working",
-];
+const WORKING_KEYWORDS = ["draft", "temp", "tmp", "wip", "working"];
+
+// Shared with the paged SQL collection projection; precedence stays identical.
+export const TASK_FILE_ROLE_KEYWORDS = {
+  reference: REFERENCE_KEYWORDS,
+  deliverable: DELIVERABLE_KEYWORDS,
+  working: WORKING_KEYWORDS,
+};
 
 function sanitizeWhitespace(value: string | null | undefined) {
   return typeof value === "string" ? value.trim() : "";
@@ -135,15 +160,20 @@ function hasKeyword(tokens: string[], keywords: string[]) {
 }
 
 function tokenize(value: string) {
-  return value
-    .toLowerCase()
-    // Strip file extension first so `.py` / `.md` don't leak into tokens.
-    .replace(/\.[a-z0-9]+$/i, "")
-    .split(/[^a-z0-9]+/i)
-    .filter(Boolean);
+  return (
+    value
+      .toLowerCase()
+      // Strip file extension first so `.py` / `.md` don't leak into tokens.
+      .replace(/\.[a-z0-9]+$/i, "")
+      .split(/[^a-z0-9]+/i)
+      .filter(Boolean)
+  );
 }
 
-function isDescendantPath(folderPath: string | null | undefined, candidatePath: string | null | undefined) {
+function isDescendantPath(
+  folderPath: string | null | undefined,
+  candidatePath: string | null | undefined,
+) {
   const folder = sanitizeWhitespace(folderPath);
   const candidate = sanitizeWhitespace(candidatePath);
   if (!folder || !candidate) return false;
@@ -188,13 +218,30 @@ export function normalizeTaskTitleDraft(value: string) {
  * fire for truly unclassified files, and the UI chip to claim certainty
  * the heuristic didn't actually have. "Working" is the honest neutral.
  */
-export function inferTaskFileRole(node: Pick<TaskLinkedNode, "name" | "type" | "path" | "annotation">): TaskFileRole {
-  const nameTokens = tokenize(sanitizeWhitespace(node.name));
-  const annotationTokens = tokenize(sanitizeWhitespace(node.annotation));
-  const tokens = [...nameTokens, ...annotationTokens];
+export function inferTaskFileRole(node: TaskLinkedNode): TaskFileRole {
+  const currentTags = node.tags ?? [];
+  if (currentTags.includes("deliverable")) return "deliverable";
+  if (currentTags.includes("initial_reference")) return "reference";
+  if (currentTags.includes("working_file")) return "working";
 
-  // Deliverable wins over reference: the user explicitly labelled it "final",
-  // "submission", etc., so that overrides any coincidental "notes" token.
+  const ann = node.annotation?.toLowerCase() || "";
+  if (ann.includes("#deliverable")) return "deliverable";
+  if (ann.includes("#initial_reference")) return "reference";
+  if (ann.includes("#working_file")) return "working";
+
+  if (node.annotation === "deliverable") return "deliverable";
+  if (node.annotation === "reference") return "reference";
+
+  const annotationTokens = tokenize(node.annotation ?? "");
+  if (hasKeyword(annotationTokens, DELIVERABLE_KEYWORDS)) return "deliverable";
+  if (hasKeyword(annotationTokens, REFERENCE_KEYWORDS)) return "reference";
+  if (hasKeyword(annotationTokens, WORKING_KEYWORDS)) return "working";
+
+  if (node.canonicalNodeId) return "deliverable";
+
+  // Otherwise infer by name and type
+  const tokens = normalizeToken(node.name).split(/[\s_.-]+/);
+
   if (hasKeyword(tokens, DELIVERABLE_KEYWORDS)) return "deliverable";
   if (hasKeyword(tokens, REFERENCE_KEYWORDS)) return "reference";
   if (hasKeyword(tokens, WORKING_KEYWORDS)) return "working";
@@ -213,6 +260,7 @@ const CLOSING_STATUSES = new Set<TaskWorkflowStatus>(["done"]);
 export function buildTaskFileReadinessWarnings(input: {
   status: TaskWorkflowStatus;
   attachments: TaskLinkedNode[];
+  fileCount?: number;
   unresolvedReplacement?: boolean;
   unclassifiedUpload?: boolean;
 }) {
@@ -224,23 +272,28 @@ export function buildTaskFileReadinessWarnings(input: {
   // close-the-loop checks. Surfacing them on a todo task is noise —
   // the user hasn't even started yet.
   if (isClosing) {
-    if (attachments.length === 0) {
-      warnings.push({
-        code: "warning_missing_deliverable",
-        message:
-          "No task files are linked yet, so there is no clear deliverable for this task.",
-      });
-    } else {
-      const roles = attachments.map(inferTaskFileRole);
-      const hasDeliverable = roles.includes("deliverable");
-      const onlyReference = roles.every((role) => role === "reference");
+    const isLazyLoading =
+      (input.fileCount ?? 0) > 0 && attachments.length === 0;
 
-      if (!hasDeliverable && onlyReference) {
+    if (!isLazyLoading) {
+      if (attachments.length === 0) {
         warnings.push({
-          code: "warning_only_reference_files",
+          code: "warning_missing_deliverable",
           message:
-            "Only reference-style files are linked. Add or classify a likely deliverable before closing the loop.",
+            "No task files are linked yet, so there is no clear deliverable for this task.",
         });
+      } else {
+        const roles = attachments.map(inferTaskFileRole);
+        const hasDeliverable = roles.includes("deliverable");
+        const onlyReference = roles.every((role) => role === "reference");
+
+        if (!hasDeliverable && onlyReference) {
+          warnings.push({
+            code: "warning_only_reference_files",
+            message:
+              "Only reference-style files are linked. Add or classify a likely deliverable before closing the loop.",
+          });
+        }
       }
     }
   }
@@ -272,6 +325,7 @@ export function buildTaskFileReadinessWarnings(input: {
 export function getTaskFileWarnings(input: {
   status: TaskWorkflowStatus;
   attachments: TaskLinkedNode[];
+  fileCount?: number;
   unresolvedReplacement?: boolean;
   unclassifiedUpload?: boolean;
 }) {
@@ -280,7 +334,9 @@ export function getTaskFileWarnings(input: {
   );
 }
 
-export function summarizeTaskFileWarnings(warnings: TaskFileReadinessWarning[]) {
+export function summarizeTaskFileWarnings(
+  warnings: TaskFileReadinessWarning[],
+) {
   if (warnings.length === 0) return null;
   const first = warnings[0];
   if (warnings.length === 1 && first) return first.message;
@@ -301,7 +357,9 @@ function resolveFolderCandidate(input: {
   attachments: TaskLinkedNode[];
 }): TaskFileIntentResolution {
   const candidateToken = normalizeToken(input.candidateName);
-  const linkedFolders = input.attachments.filter((attachment) => attachment.type === "folder");
+  const linkedFolders = input.attachments.filter(
+    (attachment) => attachment.type === "folder",
+  );
 
   // 1. Exact folder-name match → replace-existing recommendation.
   const exactFolderMatch = linkedFolders.find(
@@ -367,7 +425,8 @@ function resolveFolderCandidate(input: {
   return baseIntentResolution("attach_new", {
     confidence: "low",
     recommendedChoice: "attach_new",
-    reason: "No linked folders match this drop — we'll create it as a new folder attached to the task.",
+    reason:
+      "No linked folders match this drop — we'll create it as a new folder attached to the task.",
   });
 }
 
@@ -380,9 +439,15 @@ export function resolveTaskFileIntent(input: {
    * linked files. Extensions are part of the basename.
    */
   candidateChildNames?: string[];
-  candidateNode?: Pick<ProjectNode, "id" | "name" | "path" | "type" | "parentId"> | null;
+  candidateNode?: Pick<
+    ProjectNode,
+    "id" | "name" | "path" | "type" | "parentId"
+  > | null;
   attachments: TaskLinkedNode[];
-  searchMatches?: Pick<ProjectNode, "id" | "name" | "path" | "type" | "parentId">[];
+  searchMatches?: Pick<
+    ProjectNode,
+    "id" | "name" | "path" | "type" | "parentId"
+  >[];
 }) {
   const attachments = input.attachments ?? [];
 
@@ -398,10 +463,15 @@ export function resolveTaskFileIntent(input: {
 
   const candidateToken = normalizeToken(input.candidateName);
   const candidateExt = normalizedExtension(input.candidateName);
-  const linkedFolders = attachments.filter((attachment) => attachment.type === "folder");
+  const linkedFolders = attachments.filter(
+    (attachment) => attachment.type === "folder",
+  );
   const directFileMatches = attachments.filter((attachment) => {
     if (attachment.type !== "file") return false;
-    return normalizeToken(attachment.name) === candidateToken && normalizedExtension(attachment.name) === candidateExt;
+    return (
+      normalizeToken(attachment.name) === candidateToken &&
+      normalizedExtension(attachment.name) === candidateExt
+    );
   });
 
   const firstMatch = directFileMatches[0];
@@ -421,7 +491,8 @@ export function resolveTaskFileIntent(input: {
       confidence: "medium",
       requiresPrompt: true,
       recommendedChoice: "attach_new",
-      reason: "Multiple linked files look like possible matches for this upload.",
+      reason:
+        "Multiple linked files look like possible matches for this upload.",
     });
   }
 
@@ -437,7 +508,9 @@ export function resolveTaskFileIntent(input: {
       });
     }
 
-    const linkedFolder = linkedFolders.find((folder) => isDescendantPath(folder.path, candidateNode.path));
+    const linkedFolder = linkedFolders.find((folder) =>
+      isDescendantPath(folder.path, candidateNode.path),
+    );
     if (linkedFolder) {
       return baseIntentResolution("candidate_child_of_linked_folder", {
         confidence: "high",
@@ -456,15 +529,23 @@ export function resolveTaskFileIntent(input: {
   const searchMatches = input.searchMatches ?? [];
   const descendantMatches = searchMatches.filter((match) => {
     if (match.type !== "file") return false;
-    return linkedFolders.some((folder) => isDescendantPath(folder.path, match.path));
+    return linkedFolders.some((folder) =>
+      isDescendantPath(folder.path, match.path),
+    );
   });
   const exactDescendantMatches = descendantMatches.filter((match) => {
-    return normalizeToken(match.name) === candidateToken && normalizedExtension(match.name) === candidateExt;
+    return (
+      normalizeToken(match.name) === candidateToken &&
+      normalizedExtension(match.name) === candidateExt
+    );
   });
 
   const firstDescendantMatch = exactDescendantMatches[0];
   if (exactDescendantMatches.length === 1 && firstDescendantMatch) {
-    const linkedFolder = linkedFolders.find((folder) => isDescendantPath(folder.path, firstDescendantMatch.path)) ?? null;
+    const linkedFolder =
+      linkedFolders.find((folder) =>
+        isDescendantPath(folder.path, firstDescendantMatch.path),
+      ) ?? null;
     return baseIntentResolution("candidate_child_of_linked_folder", {
       confidence: "medium",
       requiresPrompt: true,
@@ -483,13 +564,17 @@ export function resolveTaskFileIntent(input: {
       confidence: "medium",
       requiresPrompt: true,
       recommendedChoice: "attach_new",
-      reason: "More than one file under linked folders looks like a possible match.",
+      reason:
+        "More than one file under linked folders looks like a possible match.",
     });
   }
 
-  return baseIntentResolution(candidateNode ? "attach_existing" : "attach_new", {
-    confidence: "low",
-    recommendedChoice: "attach_new",
-    reason: "No meaningful task-linked match was found.",
-  });
+  return baseIntentResolution(
+    candidateNode ? "attach_existing" : "attach_new",
+    {
+      confidence: "low",
+      recommendedChoice: "attach_new",
+      reason: "No meaningful task-linked match was found.",
+    },
+  );
 }
