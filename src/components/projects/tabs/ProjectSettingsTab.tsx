@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Image from "next/image";
 import { useFieldArray, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -17,6 +17,7 @@ import {
     Folder,
     Globe,
     KeyRound,
+    Link2,
     Loader2,
     Lock,
     RefreshCw,
@@ -120,6 +121,7 @@ import {
 } from "@/lib/projects/doc";
 import { LifecycleEditor as BaseLifecycleEditor } from "@/components/projects/LifecycleEditor";
 import { ProjectRolesEditor } from "@/components/projects/settings/ProjectRolesEditor";
+import { ProjectLinksManager } from "@/components/projects/dashboard/ProjectSocialLinksCard";
 import {
     normalizeProjectRoleFormValues,
     type ProjectRoleFormValue,
@@ -272,6 +274,7 @@ type ScrollSnapshot = {
 
 const SECTION_ICONS: Record<ProjectSettingsSectionId, React.ComponentType<{ className?: string }>> = {
     general: Settings,
+    links: Link2,
     access: Globe,
     collaborators: Users,
     "roles-applications": UserCog,
@@ -576,6 +579,7 @@ export default function ProjectSettingsTab({
     loadingMembers = false,
 }: ProjectSettingsTabProps) {
     const router = useRouter();
+    const searchParams = useSearchParams();
     const actorProjectRole = isProjectOwner ? "owner" : actorRole ?? "member";
     const canManageSettings = isProjectOwner || actorProjectRole === "admin";
     const sections = useMemo(() => {
@@ -583,6 +587,7 @@ export default function ProjectSettingsTab({
         if (isProjectOwner) return visible;
         if (actorProjectRole === "admin") {
             const adminSections: ProjectSettingsSectionId[] = [
+                "links",
                 "access",
                 "collaborators",
                 "roles-applications",
@@ -595,7 +600,11 @@ export default function ProjectSettingsTab({
         }
         return visible.filter((section) => section.id === "collaborators");
     }, [actorProjectRole, isProjectOwner]);
-    const [activeSection, setActiveSection] = useState<ProjectSettingsSectionId>(isProjectOwner ? "general" : "collaborators");
+    const [activeSection, setActiveSection] = useState<ProjectSettingsSectionId>(
+        canManageSettings && searchParams.get("settings") === "links"
+            ? "links"
+            : isProjectOwner ? "general" : "collaborators",
+    );
     const [advancedOpen, setAdvancedOpen] = useState<Partial<Record<ProjectSettingsSectionId, boolean>>>({});
     const [savingSettings, setSavingSettings] = useState(false);
     const [uploadingCoverImage, setUploadingCoverImage] = useState(false);
@@ -1611,7 +1620,7 @@ export default function ProjectSettingsTab({
                 throw new Error(uploadSession.error || "Failed to prepare project avatar upload");
             }
 
-            await uploadToSupabaseSignedUrl(uploadSession, preparedImage.blob);
+            await uploadToSupabaseSignedUrl(uploadSession, preparedImage.blob, { cacheProfile: "immutable" });
 
             const finalized = await finalizeProjectCoverImageUploadAction({
                 projectId,
@@ -2291,7 +2300,7 @@ export default function ProjectSettingsTab({
                             title="Tags and skills"
                             description="This uses the same chip-entry pattern as the Info phase of project creation."
                         >
-                            <div className="grid gap-6">
+                            <div className="grid min-w-0 gap-6">
                                 <ChipEditor
                                     label="Tags"
                                     values={tags}
@@ -2428,6 +2437,31 @@ export default function ProjectSettingsTab({
                                 ]}
                             />
                         </AdvancedDisclosure>
+                    </div>
+                )}
+
+                {activeSection === "links" && (
+                    <div className="space-y-5">
+                        <SummaryCard
+                            title="Project links"
+                            description="The same ordered links and connected repository shown beside the project title on every project tab."
+                            icon={Link2}
+                            meta={[["Display", "Project header"], ["Detection", "URL based"]]}
+                        />
+                        <SettingsCard
+                            title="Project links"
+                            description="Add, edit, reorder, or remove user-managed links. Connected repositories remain managed by their integration."
+                        >
+                            <ProjectLinksManager
+                                mode="inline"
+                                projectId={projectId}
+                                links={project?.externalLinks ?? project?.external_links}
+                                githubRepoUrl={project?.githubRepoUrl ?? project?.github_repo_url}
+                                health={project?.externalLinkMetadata ?? project?.external_link_metadata}
+                                projectType={project?.category}
+                                onSaved={() => onProjectUpdated()}
+                            />
+                        </SettingsCard>
                     </div>
                 )}
 
@@ -3258,7 +3292,7 @@ function SummaryCard({
 }) {
     return (
         <section className={cn(
-            "rounded-3xl border p-5 shadow-sm",
+            "min-w-0 rounded-3xl border p-5 shadow-sm",
             tone === "danger"
                 ? "border-red-200 bg-red-50/70 dark:border-red-900/60 dark:bg-red-950/20"
                 : "border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950",
@@ -3300,7 +3334,7 @@ function SettingsCard({
 }) {
     return (
         <section className={cn(
-            "rounded-3xl border p-5 shadow-sm",
+            "min-w-0 rounded-3xl border p-5 shadow-sm",
             danger
                 ? "border-red-200 bg-red-50/70 dark:border-red-900/60 dark:bg-red-950/20"
                 : "border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950",
@@ -3482,20 +3516,20 @@ function ChipEditor({
         : "border-indigo-100 bg-indigo-50 text-indigo-700 dark:border-indigo-800 dark:bg-indigo-900/20 dark:text-indigo-300";
 
     return (
-        <div>
+        <div className="min-w-0">
             <div className="flex items-center justify-between gap-3">
                 <label className="block text-sm font-semibold text-zinc-950 dark:text-zinc-50">{label}</label>
                 <span className="text-xs font-medium text-zinc-400">{values.length}/{limit}</span>
             </div>
             <div className="mt-2 rounded-xl border border-zinc-200 bg-zinc-50/30 p-4 dark:border-zinc-800 dark:bg-zinc-900/20">
                 {values.length > 0 ? (
-                    <div className="mb-3 flex flex-wrap gap-2">
+                    <div className="mb-3 flex min-w-0 flex-wrap gap-2">
                         {values.map((value) => (
                             <span
                                 key={value}
-                                className={cn("inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm", chipClass)}
+                                className={cn("inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm", chipClass)}
                             >
-                                {prefix}{value}
+                                <span className="truncate">{prefix}{value}</span>
                                 <button
                                     type="button"
                                     onClick={() => removeValue(value)}
