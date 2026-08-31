@@ -1,16 +1,18 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
+import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
 import type { ProjectNode } from "@/lib/db/schema";
 import {
-  bulkMoveNodes,
+  moveProjectNodes,
   bulkRestoreNodes,
   bulkTrashNodes,
   createFileNode,
   createFolder,
   renameNode,
   bulkCreateFolderTree,
+  getUploadCollisionSummary,
 } from "@/app/actions/files/mutations";
 import { getBatchUploadUrls, getUploadPresignedUrl } from "@/app/actions/upload";
 import { filesParentKey, useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
@@ -19,10 +21,12 @@ import { getErrorMessage } from "./explorerTypes";
 import { buildProjectFileKey } from "@/lib/storage/project-file-key";
 import { runWithConcurrency } from "@/lib/utils/concurrency";
 import { FILES_RUNTIME_BUDGETS } from "@/lib/files/runtime-budgets";
+import { confirmUploadCollisions, selectUploadFiles } from "@/lib/files/upload-collisions";
 
 interface UseExplorerMutationsOptions {
   projectId: string;
   canEdit: boolean;
+  canManageFiles?: boolean;
   selectedNode: ProjectNode | null;
   selectedFolderId: string | null | undefined;
   nodesById: Record<string, ProjectNode>;
@@ -44,6 +48,7 @@ interface UseExplorerMutationsOptions {
 export function useExplorerMutations({
   projectId,
   canEdit,
+  canManageFiles = canEdit,
   selectedNode,
   selectedFolderId,
   nodesById,
@@ -81,6 +86,9 @@ export function useExplorerMutations({
   }>({ nodeId: null, value: "", original: "" });
 
   const mutationQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const refreshAfterMutation = useCallback(async (parentId: string | null, mode: "append" | "refresh" = "refresh") => {
+    await loadFolderContent(parentId, mode).catch(() => showToast("Change saved. Folder refresh failed; the list will retry automatically.", "warning"));
+  }, [loadFolderContent, showToast]);
   const mutationInFlightKeysRef = useRef<Set<string>>(new Set());
   const supabaseRef = useRef<ReturnType<typeof createClient> | null>(null);
 
@@ -106,9 +114,10 @@ export function useExplorerMutations({
         return await runInMutationQueue(fn);
       } finally {
         mutationInFlightKeysRef.current.delete(key);
+        window.dispatchEvent(new CustomEvent("project:task-files-changed", { detail: { projectId } }));
       }
     },
-    [runInMutationQueue]
+    [runInMutationQueue, projectId]
   );
 
   const uploadWithPresignedUrl = useCallback(
@@ -240,155 +249,96 @@ export function useExplorerMutations({
     upsertNodes,
   ]);
 
-  const openUpload = useCallback(
-    (parentId: string | null) => {
-      if (!canEdit) return;
-      const input = document.createElement("input");
-      input.type = "file";
-      input.multiple = true;
-      input.onchange = async () => {
-        const files = Array.from(input.files || []);
-        if (files.length === 0) return;
-
-        const mutationKey = `upload:${projectId}:${parentId ?? "root"}:${files
-          .map((f) => f.name)
-          .sort()
-          .join(",")}`;
-        try {
-          const result = await runUniqueMutation(mutationKey, async () => {
-            const supabase = getSupabase();
-            const createdNodes: ProjectNode[] = [];
-            let failed = 0;
-            const uploadConcurrency = Math.max(1, FILES_RUNTIME_BUDGETS.saveAllConcurrency);
-            const uploadPlans = files.map((file) => {
-              const ext = file.name.split(".").pop() || "bin";
-              const fileName = `${Math.random().toString(36).slice(2)}.${ext}`;
-              return {
-                file,
-                filePath: buildProjectFileKey(projectId, fileName),
-                contentType: file.type || "application/octet-stream",
-                sizeBytes: file.size,
-              };
-            });
-
-            const presignedBatch = await getBatchUploadUrls(
-              uploadPlans.map((item) => ({
-                key: item.filePath,
-                contentType: item.contentType,
-                sizeBytes: item.sizeBytes,
-              }))
-            );
-
-            if ("error" in presignedBatch) {
-              throw new Error(presignedBatch.error || "Failed to prepare upload URLs");
-            }
-            const uploadUrlMap = presignedBatch.urls || {};
-            const uploadIntentIdMap = presignedBatch.uploadIntentIds || {};
-
-            await runWithConcurrency(uploadPlans, uploadConcurrency, async ({ file, filePath, contentType, sizeBytes }) => {
-              try {
-                const uploadSession =
-                  uploadUrlMap[filePath] ||
-                  (
-                    await getUploadPresignedUrl(filePath, contentType, sizeBytes)
-                  );
-
-                const resolvedUploadUrl =
-                  typeof uploadSession === "string"
-                    ? uploadSession
-                    : "error" in uploadSession
-                      ? null
-                      : uploadSession.url;
-                const resolvedUploadIntentId =
-                  typeof uploadSession === "string"
-                    ? uploadIntentIdMap[filePath] ?? null
-                    : "error" in uploadSession
-                      ? null
-                      : uploadSession.uploadIntentId;
-
-                if (!resolvedUploadUrl) {
-                  throw new Error("Failed to prepare upload URL");
-                }
-
-                const uploadResponse = await fetch(resolvedUploadUrl, {
-                  method: "PUT",
-                  headers: { "Content-Type": contentType },
-                  body: file,
-                });
-                if (!uploadResponse.ok) {
-                  throw new Error(`Upload failed (${uploadResponse.status})`);
-                }
-
-                const node = (await createFileNode(projectId, parentId, {
-                  name: file.name,
-                  s3Key: filePath,
-                  size: file.size,
-                  mimeType: contentType,
-                  uploadIntentId: resolvedUploadIntentId ?? undefined,
-                })) as ProjectNode;
-                createdNodes.push(node);
-              } catch {
-                await supabase.storage.from("project-files").remove([filePath]).catch(() => null);
-                failed += 1;
-              }
-            });
-
-            if (createdNodes.length > 0) {
-              upsertNodes(projectId, createdNodes);
-              const parentKey = filesParentKey(parentId);
-              const currentChildren = childrenByParentId[parentKey] || [];
-              const nextChildren = [...currentChildren];
-              for (const node of createdNodes) {
-                if (!nextChildren.includes(node.id)) nextChildren.push(node.id);
-              }
-              setChildren(projectId, parentId, nextChildren);
-
-              if (parentId) toggleExpanded(projectId, parentId, true);
-              await loadFolderContent(parentId, "refresh");
-            }
-
-            return { createdNodes, failed };
-          });
-
-          if (!result) return;
-          const { createdNodes, failed } = result;
-          if (createdNodes.length > 0) {
-            onOpenFile(createdNodes[0]!);
-            const msg =
-              failed > 0
-                ? `Uploaded ${createdNodes.length} file(s), ${failed} failed`
-                : `Uploaded ${createdNodes.length} file(s)`;
-            showToast(msg, failed > 0 ? "info" : "success");
-            recordOperation({
-              label: msg,
-              status: failed > 0 ? "error" : "success",
-            });
-          } else {
-            showToast("Upload failed", "error");
-            recordOperation({ label: "Upload failed", status: "error" });
+  // Picker and flat drag/drop uploads share collision, finalization, and retry behavior.
+  const uploadFiles = useCallback(async (files: File[], parentId: string | null) => {
+    if (!canEdit || !files.length) return;
+    const failed: File[] = [];
+    const createdNodes: ProjectNode[] = [];
+    const mutationKey = `upload:${projectId}:${parentId ?? "root"}:${files.map(file => file.name).sort().join(",")}`;
+    let progress: string | number | undefined;
+    try {
+      const outcome = await runUniqueMutation(mutationKey, async () => {
+        const collisions = await getUploadCollisionSummary(projectId, parentId, files.map(file => file.name));
+        if (!confirmUploadCollisions(collisions)) return null;
+        const eligible = selectUploadFiles(files, collisions.existingFiles);
+        const skipped = files.length - eligible.length;
+        if (!eligible.length) return skipped;
+        progress = toast.loading(`Uploading 0 of ${eligible.length} files…`);
+        let completed = 0;
+        // ponytail: bounded batches reuse the current presign endpoint; no separate queue service.
+        for (let offset = 0; offset < eligible.length; offset += 100) {
+          const plans = eligible.slice(offset, offset + 100).map(file => ({
+            file, key: buildProjectFileKey(projectId, crypto.randomUUID()),
+            contentType: file.type || "application/octet-stream", sizeBytes: file.size,
+          }));
+          const batch = await getBatchUploadUrls(plans.map(({ key, contentType, sizeBytes }) => ({ key, contentType, sizeBytes })));
+          if ("error" in batch) {
+            failed.push(...plans.map(plan => plan.file));
+            completed += plans.length;
+            continue;
           }
-        } catch (e: unknown) {
-          showToast(`Upload failed: ${getErrorMessage(e, "Unknown error")}`, "error");
-          recordOperation({ label: "Upload failed", status: "error" });
+          await runWithConcurrency(plans, Math.max(1, FILES_RUNTIME_BUDGETS.saveAllConcurrency), async ({ file, key, contentType }) => {
+            try {
+              const url = batch.urls?.[key];
+              if (!url) throw new Error("Upload URL unavailable");
+              const response = await fetch(url, { method: "PUT", headers: { "Content-Type": contentType }, body: file });
+              if (!response.ok) throw new Error(`Upload failed (${response.status})`);
+              const node = await createFileNode(projectId, parentId, {
+                name: file.name, s3Key: key, size: file.size, mimeType: contentType,
+                uploadIntentId: batch.uploadIntentIds?.[key] ?? undefined,
+              });
+              createdNodes.push(node as ProjectNode);
+            } catch {
+              // Never delete an object after an ambiguous finalization response: it may already be committed.
+              failed.push(file);
+            } finally {
+              completed += 1;
+              toast.loading(`Uploading ${completed} of ${eligible.length} files…`, { id: progress });
+            }
+          });
         }
-      };
-      input.click();
-    },
-    [
-      canEdit,
-      childrenByParentId,
-      getSupabase,
-      loadFolderContent,
-      onOpenFile,
-      projectId,
-      recordOperation,
-      runUniqueMutation,
-      setChildren,
-      showToast,
-      toggleExpanded,
-      upsertNodes,
-    ]
-  );
+        return skipped;
+      });
+      if (outcome === null) return;
+      if (createdNodes.length) {
+        upsertNodes(projectId, createdNodes);
+        const current = useFilesWorkspaceStore.getState().byProjectId[projectId]?.childrenByParentId[filesParentKey(parentId)] ?? [];
+        setChildren(projectId, parentId, [...new Set([...current, ...createdNodes.map(node => node.id)])]);
+        if (parentId) toggleExpanded(projectId, parentId, true);
+        await loadFolderContent(parentId, "refresh").catch(() => showToast("Files uploaded. Folder refresh failed; the list will retry automatically.", "warning"));
+        window.dispatchEvent(new CustomEvent("project:task-files-changed", { detail: { projectId } }));
+      }
+      if (progress !== undefined) toast.dismiss(progress);
+      if (failed.length) {
+        toast.error(`${createdNodes.length} uploaded; ${failed.length} need retry`, {
+          description: failed.map(file => file.name).join(", ").slice(0, 300),
+          duration: Infinity,
+          action: { label: "Retry failed", onClick: () => void uploadFiles(failed, parentId) },
+        });
+      } else {
+        showToast(`${createdNodes.length} file(s) uploaded${outcome ? `; ${outcome} existing or duplicate files skipped` : ""}`, createdNodes.length ? "success" : "info");
+      }
+      recordOperation({ label: `Uploaded ${createdNodes.length} file(s), ${failed.length} need retry`, status: failed.length ? "error" : "success" });
+      if (files.length === 1 && createdNodes.length === 1) onOpenFile(createdNodes[0]!);
+    } catch (error) {
+      if (progress !== undefined) toast.dismiss(progress);
+      // Retry checks collisions again, so a lost response cannot duplicate a committed file.
+      toast.error(`Upload interrupted: ${getErrorMessage(error, "Please retry")}`, {
+        duration: Infinity, action: { label: "Retry", onClick: () => void uploadFiles(files, parentId) },
+      });
+    } finally {
+      if (progress !== undefined) toast.dismiss(progress);
+    }
+  }, [canEdit, projectId, runUniqueMutation, upsertNodes, setChildren, toggleExpanded, loadFolderContent, showToast, recordOperation, onOpenFile]);
+
+  const openUpload = useCallback((parentId: string | null) => {
+    if (!canEdit) return;
+    const input = document.createElement("input");
+    input.type = "file";
+    input.multiple = true;
+    input.onchange = () => { void uploadFiles(Array.from(input.files || []), parentId); };
+    input.click();
+  }, [canEdit, uploadFiles]);
 
   const openFolderUpload = useCallback(
     (parentId: string | null) => {
@@ -420,14 +370,32 @@ export function useExplorerMutations({
 
           if (payloadNodes.length === 0) return;
 
+          const collisions = await getUploadCollisionSummary(
+            projectId,
+            parentId,
+            payloadNodes.map((node) => node.path),
+          );
+          if (!confirmUploadCollisions(collisions)) {
+            showToast("Folder upload cancelled", "info");
+            return;
+          }
+          const existingFiles = new Set(collisions.existingFiles);
+          const uploadPayloadNodes = payloadNodes.filter(
+            (node) => !existingFiles.has(node.path),
+          );
+          if (uploadPayloadNodes.length === 0) {
+            showToast("All selected files already exist and were skipped", "info");
+            return;
+          }
+
           // 1. O(depth) Bulk Upsert to build entire structure layout & reserve s3 keys
           // We chunk the payload to prevent Next.js 413 Payload Too Large errors
           const CHUNK_SIZE = 2000;
 
-          for (let i = 0; i < payloadNodes.length; i += CHUNK_SIZE) {
-            const chunk = payloadNodes.slice(i, i + CHUNK_SIZE);
-            if (payloadNodes.length > CHUNK_SIZE) {
-              showToast(`Registering database nodes ${i + 1} to ${Math.min(i + CHUNK_SIZE, payloadNodes.length)}...`, "info");
+          for (let i = 0; i < uploadPayloadNodes.length; i += CHUNK_SIZE) {
+            const chunk = uploadPayloadNodes.slice(i, i + CHUNK_SIZE);
+            if (uploadPayloadNodes.length > CHUNK_SIZE) {
+              showToast(`Registering database nodes ${i + 1} to ${Math.min(i + CHUNK_SIZE, uploadPayloadNodes.length)}...`, "info");
             }
             const mappedChunk = await bulkCreateFolderTree(projectId, parentId, chunk);
             if (mappedChunk) {
@@ -487,7 +455,7 @@ export function useExplorerMutations({
               ? crypto.randomUUID()
               : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
-          showToast(`Uploading ${uploadNodes.length} items in background UI daemon...`, "info");
+          showToast(`Uploading ${uploadNodes.length} files. Keep this page open until it finishes.`, "info");
 
           worker.postMessage({
             jobId: uploadJobId,
@@ -531,7 +499,8 @@ export function useExplorerMutations({
               // Let React refresh the entire directory tree safely
               loadFolderContent(parentId, "refresh").then(() => {
                 if (parentId) toggleExpanded(projectId, parentId, true);
-              });
+              }).catch(() => showToast("Folder uploaded. Refresh failed; the list will retry automatically.", "warning"));
+              window.dispatchEvent(new CustomEvent("project:task-files-changed", { detail: { projectId } }));
             }
           };
 
@@ -663,36 +632,18 @@ export function useExplorerMutations({
 
   const openMove = useCallback(
     (nodeOrNodes: ProjectNode | ProjectNode[]) => {
-      if (!canEdit) return;
+      if (!canManageFiles) return;
       const nodes = Array.isArray(nodeOrNodes) ? nodeOrNodes : [nodeOrNodes];
       setMoveDialog({ open: true, nodes, targetFolderId: null });
     },
-    [canEdit]
+    [canManageFiles]
   );
 
   const confirmMove = useCallback(async () => {
     const nodes = moveDialog.nodes;
-    if (!nodes.length || !canEdit) return;
+    if (!nodes.length || !canManageFiles) return;
 
     const target = moveDialog.targetFolderId;
-
-    for (const node of nodes) {
-      if (target === node.id) {
-        showToast(`Can't move ${node.name} into itself.`, "error");
-        return;
-      }
-      if (node.type === "folder" && target) {
-        let cur: string | null = target;
-        for (let i = 0; i < 50; i++) {
-          if (!cur) break;
-          if (cur === node.id) {
-            showToast(`Can't move ${node.name} into its own descendant.`, "error");
-            return;
-          }
-          cur = nodesById[cur]?.parentId ?? null;
-        }
-      }
-    }
 
     const nodeIds = nodes.map((n) => n.id).sort();
     const originalParentByNode = new Map<string, string | null>(
@@ -708,11 +659,12 @@ export function useExplorerMutations({
           if (oldParentId !== target) staleParents.add(oldParentId);
         }
 
-        const updatedNodes = (await bulkMoveNodes(nodeIds, target, projectId)) as ProjectNode[];
+        const moveResult = await moveProjectNodes(nodeIds, target, projectId);
+        const updatedNodes = moveResult.nodes;
         if (updatedNodes.length > 0) upsertNodes(projectId, updatedNodes);
 
-        await Promise.all(Array.from(staleParents).map((pid) => loadFolderContent(pid, "refresh")));
-        await loadFolderContent(target ?? null, "refresh");
+        await Promise.all(Array.from(staleParents).map((pid) => refreshAfterMutation(pid, "refresh")));
+        await refreshAfterMutation(target ?? null, "refresh");
         if (target) toggleExpanded(projectId, target, true);
         return updatedNodes;
       });
@@ -736,12 +688,14 @@ export function useExplorerMutations({
               for (const [parentKey, ids] of Object.entries(groupedByParent)) {
                 const parentId = parentKey === "__root__" ? null : parentKey;
                 if (ids.length > 0) {
-                  await bulkMoveNodes(ids, parentId, projectId);
-                  await loadFolderContent(parentId, "refresh");
+                  await moveProjectNodes(ids, parentId, projectId, {
+                    expectedParentByNode: Object.fromEntries(ids.map((id) => [id, target])),
+                  });
+                  await refreshAfterMutation(parentId, "refresh");
                 }
               }
-              if (target !== null) await loadFolderContent(target, "refresh");
-              else await loadFolderContent(null, "refresh");
+              if (target !== null) await refreshAfterMutation(target, "refresh");
+              else await refreshAfterMutation(null, "refresh");
             },
           }
           : undefined,
@@ -750,8 +704,9 @@ export function useExplorerMutations({
     } catch (e: unknown) {
       showToast(`Move failed: ${getErrorMessage(e, "Unknown error")}`, "error");
       recordOperation({ label: "Move failed", status: "error" });
+      throw e;
     }
-  }, [canEdit, loadFolderContent, moveDialog, nodesById, projectId, recordOperation, runUniqueMutation, showToast, toggleExpanded, upsertNodes]);
+  }, [canManageFiles, refreshAfterMutation, moveDialog, projectId, recordOperation, runUniqueMutation, showToast, toggleExpanded, upsertNodes]);
 
   const confirmDelete = useCallback(async () => {
     const nodes = deleteDialog.nodes;
@@ -773,7 +728,7 @@ export function useExplorerMutations({
           onNodeDeleted?.(nodeId);
         }
 
-        await Promise.all(Array.from(staleParents).map((pid) => loadFolderContent(pid, "refresh")));
+        await Promise.all(Array.from(staleParents).map((pid) => refreshAfterMutation(pid, "refresh")));
         return trashedIds.length;
       });
 
@@ -790,7 +745,7 @@ export function useExplorerMutations({
               const staleParents = new Set<string | null>();
               for (const node of nodes) staleParents.add(node.parentId ?? null);
               await Promise.all(
-                Array.from(staleParents).map((pid) => loadFolderContent(pid, "refresh"))
+                Array.from(staleParents).map((pid) => refreshAfterMutation(pid, "refresh"))
               );
             },
           }
@@ -801,7 +756,7 @@ export function useExplorerMutations({
       showToast(`Delete failed: ${getErrorMessage(e, "Unknown error")}`, "error");
       recordOperation({ label: "Move to trash failed", status: "error" });
     }
-  }, [canEdit, deleteDialog.nodes, loadFolderContent, onNodeDeleted, projectId, recordOperation, runUniqueMutation, showToast]);
+  }, [canEdit, deleteDialog.nodes, refreshAfterMutation, onNodeDeleted, projectId, recordOperation, runUniqueMutation, showToast]);
 
   const handleMoveFromMenu = useCallback(
     (node: ProjectNode) => {
@@ -959,6 +914,7 @@ export function useExplorerMutations({
   const uploadFilesDirectly = useCallback(
     async (files: File[], parentId: string | null) => {
       if (!canEdit || files.length === 0) return;
+      if (!files.some(file => file.webkitRelativePath?.includes("/"))) return uploadFiles(files, parentId);
 
       const mutationKey = `upload-direct:${projectId}:${parentId ?? "root"}:${files
         .map((f) => f.name)
@@ -980,10 +936,28 @@ export function useExplorerMutations({
 
           if (payloadNodes.length === 0) return;
 
+          const collisions = await getUploadCollisionSummary(
+            projectId,
+            parentId,
+            payloadNodes.map((node) => node.path),
+          );
+          if (!confirmUploadCollisions(collisions)) {
+            showToast("Upload cancelled", "info");
+            return;
+          }
+          const existingFiles = new Set(collisions.existingFiles);
+          const uploadPayloadNodes = payloadNodes.filter(
+            (node) => !existingFiles.has(node.path),
+          );
+          if (uploadPayloadNodes.length === 0) {
+            showToast("All selected files already exist and were skipped", "info");
+            return;
+          }
+
           const mappedFiles: { path: string; fileId: string; s3Key: string; name: string }[] = [];
           const CHUNK_SIZE = 2000;
-          for (let i = 0; i < payloadNodes.length; i += CHUNK_SIZE) {
-            const chunk = payloadNodes.slice(i, i + CHUNK_SIZE);
+          for (let i = 0; i < uploadPayloadNodes.length; i += CHUNK_SIZE) {
+            const chunk = uploadPayloadNodes.slice(i, i + CHUNK_SIZE);
             const mappedChunk = await bulkCreateFolderTree(projectId, parentId, chunk);
             if (mappedChunk) {
               mappedFiles.push(...mappedChunk);
@@ -1081,7 +1055,8 @@ export function useExplorerMutations({
 
               loadFolderContent(parentId, "refresh").then(() => {
                 if (parentId) toggleExpanded(projectId, parentId, true);
-              });
+              }).catch(() => showToast("Files uploaded. Refresh failed; the list will retry automatically.", "warning"));
+              window.dispatchEvent(new CustomEvent("project:task-files-changed", { detail: { projectId } }));
             }
           };
 
@@ -1104,6 +1079,7 @@ export function useExplorerMutations({
       recordOperation,
       loadFolderContent,
       toggleExpanded,
+      uploadFiles,
     ]
   );
 
