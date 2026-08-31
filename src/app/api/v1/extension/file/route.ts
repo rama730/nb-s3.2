@@ -14,6 +14,7 @@ import { getProjectAccessById } from "@/lib/data/project-access";
 import { logger } from "@/lib/logger";
 import { checkIdempotencyKey, saveIdempotencyResult } from "@/lib/security/idempotency";
 import { recordExtensionMetric } from "@/lib/extension/observability";
+import { validateCsrf } from "@/lib/security/csrf";
 import {
   assertNoExtensionWriteConflict,
   buildExtensionRevisionStorageKey,
@@ -22,6 +23,18 @@ import {
   parseExtensionLeaseHeaders,
   resolveWritableExtensionFile,
 } from "@/app/api/v1/extension/_file-revision";
+
+const EXTENSION_INLINE_DOWNLOAD_MAX_BYTES = 512 * 1024;
+
+function shouldUseSignedDownload(mimeType: string | null, size: number | null) {
+  const normalizedMime = mimeType?.trim().toLowerCase() || "";
+  const isText = normalizedMime.startsWith("text/")
+    || normalizedMime === "application/json"
+    || normalizedMime === "application/javascript"
+    || normalizedMime === "application/typescript"
+    || normalizedMime === "application/xml";
+  return !isText || (size ?? 0) > EXTENSION_INLINE_DOWNLOAD_MAX_BYTES;
+}
 
 export async function GET(request: Request) {
   try {
@@ -75,7 +88,9 @@ export async function GET(request: Request) {
       }),
     ]);
 
-    if (transfer === "signed" && node.s3Key) {
+    const useSignedTransfer = transfer === "signed"
+      || (transfer !== "inline" && shouldUseSignedDownload(node.mimeType, node.size ?? 0));
+    if (useSignedTransfer && node.s3Key) {
       const parsedKey = parseProjectFileKey(node.s3Key);
       if (!parsedKey || parsedKey.projectId !== projectId) {
         return jsonError("File key does not belong to this project", 409, "CONFLICT");
@@ -117,31 +132,55 @@ export async function GET(request: Request) {
       });
     }
 
+    const totalSize = Math.max(0, Number(node.size ?? 0));
+    const requestedRange = parseByteRange(request.headers.get("range"), totalSize);
+    const etag = version?.contentHash ? `"${version.contentHash}"` : null;
+    if (!requestedRange && etag && request.headers.get("if-none-match") === etag) {
+      return new Response(null, {
+        status: 304,
+        headers: { etag, "cache-control": "private, no-cache" },
+      });
+    }
+
     let contentBuffer: Buffer;
+    let rangeAlreadyApplied = false;
     if (node.s3Key) {
       const parsedKey = parseProjectFileKey(node.s3Key);
       if (!parsedKey || parsedKey.projectId !== projectId) {
         return jsonError("File key does not belong to this project", 409, "CONFLICT");
       }
       const adminClient = await createAdminClient();
-      const { data, error } = await adminClient.storage.from("project-files").download(node.s3Key);
-      if (error) {
-        throw error;
+      if (requestedRange) {
+        const { data: signedData, error: signedError } = await adminClient.storage
+          .from("project-files")
+          .createSignedUrl(node.s3Key, 5 * 60);
+        if (signedError || !signedData?.signedUrl) throw signedError ?? new Error("Failed to sign file range");
+        const upstream = await fetch(signedData.signedUrl, {
+          headers: { Range: `bytes=${requestedRange.start}-${requestedRange.end}` },
+        });
+        if (!upstream.ok) throw new Error(`Storage range failed (${upstream.status})`);
+        contentBuffer = Buffer.from(await upstream.arrayBuffer());
+        rangeAlreadyApplied = true;
+      } else {
+        const { data, error } = await adminClient.storage.from("project-files").download(node.s3Key);
+        if (error) throw error;
+        contentBuffer = Buffer.from(await data.arrayBuffer());
       }
-      contentBuffer = Buffer.from(await data.arrayBuffer());
     } else {
       const content = await getProjectFileContent(projectId, node.id);
       contentBuffer = Buffer.from(content, "utf8");
     }
 
-    const range = parseByteRange(request.headers.get("range"), contentBuffer.byteLength);
-    const sliced = range ? contentBuffer.subarray(range.start, range.end + 1) : contentBuffer;
+    const range = requestedRange;
+    const sliced = range && !rangeAlreadyApplied
+      ? contentBuffer.subarray(range.start, range.end + 1)
+      : contentBuffer;
     const body = JSON.stringify({
       success: true,
       data: {
         content: sliced.toString("base64"),
         encoding: "base64",
-        range: range ? { ...range, total: contentBuffer.byteLength } : null,
+        range: range ? { ...range, total: totalSize || contentBuffer.byteLength } : null,
         complete: !range,
         nodeId: node.id,
         size: node.size,
@@ -159,6 +198,8 @@ export async function GET(request: Request) {
         "content-type": "application/json",
         "accept-ranges": "bytes",
         "x-nb-content-encoding": "base64",
+        "cache-control": "private, no-cache",
+        ...(etag ? { etag } : {}),
       },
     });
   } catch (error) {
@@ -170,6 +211,8 @@ export async function GET(request: Request) {
 }
 
 export async function PUT(request: Request) {
+  const csrfError = validateCsrf(request);
+  if (csrfError) return csrfError;
   try {
     const authResult = await requireAuthenticatedUser();
     if (authResult.response) {
@@ -244,6 +287,7 @@ export async function PUT(request: Request) {
       .from("project-files")
       .upload(s3Key, savePayload.buffer, {
         contentType: mimeType,
+        cacheControl: "31536000",
         upsert: false
       });
 
