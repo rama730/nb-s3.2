@@ -3,7 +3,13 @@
 "use client";
 
 import * as React from "react";
-import { AlertTriangle, PanelLeftOpen, Loader2 } from "lucide-react";
+import {
+  AlertTriangle,
+  PanelLeftOpen,
+  Loader2,
+  ArrowLeft,
+  Search,
+} from "lucide-react";
 
 import type { ProjectNode } from "@/lib/db/schema";
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
@@ -14,6 +20,10 @@ import { FilesTabBootContext } from "./hooks/useFolderContents";
 import { BreadcrumbBar } from "./breadcrumb/BreadcrumbBar";
 import { FolderListView } from "./folder/FolderListView";
 import { FileView } from "./file/FileView";
+import { useFilesWorkspaceView } from "./FilesWorkspaceViews";
+import { TaskFilesCollection } from "./TaskFilesCollection";
+import { SavedFilesCollection } from "./SavedFilesCollection";
+import { TrashFilesCollection } from "./TrashFilesCollection";
 
 // ---------------------------------------------------------------------------
 // Props
@@ -21,7 +31,7 @@ import { FileView } from "./file/FileView";
 
 export interface FilesTabMainProps {
   projectId: string;
-  onToggleGitHubSync?: () => void;
+  canOpenGitHub?: boolean;
 }
 
 // Stable empty object used by selectors reading `nodesById` when the
@@ -36,10 +46,15 @@ const EMPTY_NODES = Object.freeze({}) as Record<string, ProjectNode>;
 
 export function FilesTabMain({
   projectId,
-  onToggleGitHubSync,
+  canOpenGitHub,
 }: FilesTabMainProps): React.JSX.Element {
-  const { canEdit } = useFilesTabRole();
+  const { canEdit, canManageFiles } = useFilesTabRole();
   const location = useCurrentLocation(projectId);
+  const workspaceView = useFilesWorkspaceView();
+  const isCollection =
+    workspaceView &&
+    workspaceView.view !== "project" &&
+    (!location || location.type === "root");
 
   // Read the booting state from the explorer context (injected via FilesTabRoot)
   const bootContext = React.useContext(FilesTabBootContext);
@@ -71,21 +86,83 @@ export function FilesTabMain({
       className="flex-1 flex flex-col min-w-0 h-full relative"
     >
       {/* Sidebar_Reopen_Control — Req 18.1–18.6 */}
-      {sidebarCollapsed && (
-        <button
-          type="button"
-          onClick={() => toggleSidebar(projectId)}
-          aria-label="Show sidebar"
-          title="Show sidebar"
-          data-testid="files-tab-sidebar-expand"
-          className="absolute left-0 top-1/2 -translate-y-1/2 z-10 flex items-center justify-center rounded-r-md border border-l-0 border-zinc-200 bg-white text-zinc-500 shadow-sm hover:bg-zinc-50 hover:text-zinc-900 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100 transition-colors"
-          style={{ width: 44, height: 44 }}
-        >
-          <PanelLeftOpen className="w-4 h-4" />
-        </button>
+      {(sidebarCollapsed ||
+        isCollection ||
+        workspaceView?.view !== "project") && (
+        <div className="flex min-h-12 shrink-0 flex-wrap items-center gap-3 border-b border-zinc-200 px-3 py-1 dark:border-zinc-800">
+          {sidebarCollapsed && (
+            <button
+              type="button"
+              onClick={() => toggleSidebar(projectId)}
+              aria-label="Show sidebar"
+              title="Show sidebar"
+              data-testid="files-tab-sidebar-expand"
+              className="flex shrink-0 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-100 focus-visible:ring-2 focus-visible:ring-blue-500 dark:hover:bg-zinc-800"
+              style={{ width: 44, height: 44 }}
+            >
+              <PanelLeftOpen className="w-4 h-4" />
+            </button>
+          )}
+          {workspaceView?.view !== "project" && currentLocationId ? (
+            <button
+              type="button"
+              onClick={workspaceView?.returnToCollection}
+              className="flex min-h-10 items-center gap-2 text-sm focus-visible:ring-2"
+            >
+              <ArrowLeft className="size-4" />
+              Back to{" "}
+              {workspaceView?.taskId ? "task files" : workspaceView?.view}
+            </button>
+          ) : (
+            <span className="text-sm font-medium">
+              {workspaceView?.view === "project" ? "Project files" : "Files"}
+            </span>
+          )}
+          {workspaceView && isCollection && (
+            <label className="ml-auto flex min-w-0 flex-1 items-center gap-2 rounded-md border border-zinc-200 px-3 sm:max-w-sm dark:border-zinc-700">
+              <Search
+                aria-hidden="true"
+                className="size-4 shrink-0 text-zinc-500"
+              />
+              <input
+                type="search"
+                value={workspaceView.query}
+                onChange={(event) => workspaceView.setQuery(event.target.value)}
+                aria-label={`Search ${workspaceView.view} files`}
+                placeholder={`Search ${workspaceView.view === "project" ? "project files" : workspaceView.view}…`}
+                className="h-9 w-full min-w-0 bg-transparent text-sm outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+              />
+            </label>
+          )}
+        </div>
       )}
-      <BreadcrumbBar projectId={projectId} location={location} onToggleGitHubSync={onToggleGitHubSync} />
-      {isBooting ? (
+      {!isCollection && (
+        <BreadcrumbBar
+          projectId={projectId}
+          location={location}
+          onToggleGitHubSync={
+            canOpenGitHub && workspaceView?.view === "project"
+              ? () =>
+                  workspaceView.setInspector((current) =>
+                    current === "github" ? null : "github",
+                  )
+              : undefined
+          }
+        />
+      )}
+      {isCollection ? (
+        workspaceView.view === "tasks" ||
+        workspaceView.view === "deliverables" ? (
+          <TaskFilesCollection
+            key={`${projectId}:${workspaceView.view}:${workspaceView.taskId ?? "all"}`}
+            projectId={projectId}
+          />
+        ) : workspaceView.view === "trash" ? (
+          <TrashFilesCollection projectId={projectId} />
+        ) : (
+          <SavedFilesCollection projectId={projectId} />
+        )
+      ) : isBooting ? (
         <div
           role="status"
           aria-busy="true"
@@ -103,10 +180,9 @@ export function FilesTabMain({
         location.type === "folder" ? (
         <FolderListView
           projectId={projectId}
-          folderId={
-            location && location.type === "folder" ? location.id : null
-          }
+          folderId={location && location.type === "folder" ? location.id : null}
           canEdit={canEdit}
+          canManageFiles={canManageFiles}
         />
       ) : (
         <FileView
@@ -138,10 +214,7 @@ function LocationNotFound(): React.JSX.Element {
       role="alert"
       className="flex flex-1 flex-col items-center justify-center gap-2 p-8 text-center"
     >
-      <AlertTriangle
-        className="h-6 w-6 text-amber-500"
-        aria-hidden="true"
-      />
+      <AlertTriangle className="h-6 w-6 text-amber-500" aria-hidden="true" />
       <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
         This location could not be found
       </p>
