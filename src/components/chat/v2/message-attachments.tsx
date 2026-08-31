@@ -1,17 +1,10 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { createPortal } from 'react-dom';
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
 import {
-    ChevronLeft,
-    ChevronRight,
-    Download,
     File,
     Image as ImageIcon,
-    Volume2,
-    VolumeX,
     Video,
-    X,
 } from 'lucide-react';
 import {
     fitMediaWithinBounds,
@@ -20,6 +13,7 @@ import {
     type MediaDimensions,
 } from '@/lib/messages/media-metadata';
 import { cn } from '@/lib/utils';
+import { MediaViewerModal } from '@/components/ui/media-viewer';
 
 export interface ChatAttachmentV2 {
     id: string;
@@ -31,6 +25,7 @@ export interface ChatAttachmentV2 {
     thumbnailUrl: string | null;
     width: number | null;
     height: number | null;
+    localUrl?: string;
 }
 
 export function MessageAttachmentsV2({
@@ -39,23 +34,53 @@ export function MessageAttachmentsV2({
 }: {
     attachments: ChatAttachmentV2[];
     onContentLoad?: () => void;
+    isOwn?: boolean;
+    hasReactions?: boolean;
 }) {
+    const normalizedAttachments = useMemo(() => {
+        return attachments.map(att => {
+            if (att.type === 'file') {
+                const ext = att.filename.split('.').pop()?.toLowerCase();
+                const isVideoExt = ext === 'mp4' || ext === 'webm' || ext === 'ogg' || ext === 'mov';
+                const isImageExt = ext === 'jpg' || ext === 'jpeg' || ext === 'png' || ext === 'gif' || ext === 'webp';
+                if (att.mimeType?.startsWith('video/') || isVideoExt) {
+                    return { ...att, type: 'video' as const };
+                }
+                if (att.mimeType?.startsWith('image/') || isImageExt) {
+                    return { ...att, type: 'image' as const };
+                }
+            }
+            return att;
+        });
+    }, [attachments]);
+
     const [activeAttachmentId, setActiveAttachmentId] = useState<string | null>(null);
+    const [originRect, setOriginRect] = useState<DOMRect | null>(null);
+    const [videoTime, setVideoTime] = useState<number>(0);
+    const [returnedVideoState, setReturnedVideoState] = useState<{ id: string; time: number } | null>(null);
     const mediaAttachments = useMemo(
-        () => attachments.filter((attachment) => attachment.type === 'image' || attachment.type === 'video'),
-        [attachments],
+        () => normalizedAttachments.filter((attachment) => attachment.type === 'image' || attachment.type === 'video'),
+        [normalizedAttachments],
     );
     const fileAttachments = useMemo(
-        () => attachments.filter((attachment) => attachment.type === 'file'),
-        [attachments],
+        () => normalizedAttachments.filter((attachment) => attachment.type === 'file'),
+        [normalizedAttachments],
     );
     const viewableAttachments = useMemo(
-        () => attachments.filter((attachment) => (
+        () => normalizedAttachments.filter((attachment) => (
             attachment.type === 'image'
             || attachment.type === 'video'
             || attachment.filename.toLowerCase().endsWith('.pdf')
         )),
-        [attachments],
+        [normalizedAttachments],
+    );
+    const viewerAttachments = useMemo(
+        () => viewableAttachments.map((attachment) => ({
+            ...attachment,
+            localUrl: attachment.localUrl || undefined,
+            thumbnailUrl: attachment.thumbnailUrl || undefined,
+        })),
+        [viewableAttachments],
     );
 
     if (attachments.length === 0) return null;
@@ -66,8 +91,14 @@ export function MessageAttachmentsV2({
                 {mediaAttachments.length > 0 ? (
                     <MediaAttachmentListV2
                         attachments={mediaAttachments}
-                        onOpenMedia={setActiveAttachmentId}
+                        onOpenMedia={(id, rect, time) => {
+                            setActiveAttachmentId(id);
+                            setOriginRect(rect);
+                            if (time !== undefined) setVideoTime(time);
+                            setReturnedVideoState(null); // Clear previous return state when opening
+                        }}
                         onContentLoad={onContentLoad}
+                        returnedVideoState={returnedVideoState}
                     />
                 ) : null}
 
@@ -78,7 +109,10 @@ export function MessageAttachmentsV2({
                                 key={attachment.id}
                                 attachment={attachment}
                                 onPreview={attachment.filename.toLowerCase().endsWith('.pdf')
-                                    ? () => setActiveAttachmentId(attachment.id)
+                                    ? () => {
+                                        setActiveAttachmentId(attachment.id);
+                                        setOriginRect(null);
+                                    }
                                     : undefined}
                             />
                         ))}
@@ -87,10 +121,19 @@ export function MessageAttachmentsV2({
             </div>
 
             {activeAttachmentId ? (
-                <MediaViewerModalV2
-                    attachments={viewableAttachments}
+                <MediaViewerModal
+                    attachments={viewerAttachments}
                     initialAttachmentId={activeAttachmentId}
-                    onClose={() => setActiveAttachmentId(null)}
+                    originRect={originRect}
+                    initialVideoTime={videoTime}
+                    onClose={(returnedState) => {
+                        setActiveAttachmentId(null);
+                        setOriginRect(null);
+                        setVideoTime(0);
+                        if (returnedState) {
+                            setReturnedVideoState(returnedState);
+                        }
+                    }}
                 />
             ) : null}
         </>
@@ -101,19 +144,25 @@ function MediaAttachmentListV2({
     attachments,
     onOpenMedia,
     onContentLoad,
+    returnedVideoState,
 }: {
     attachments: ChatAttachmentV2[];
-    onOpenMedia: (id: string) => void;
+    onOpenMedia: (id: string, rect: DOMRect, time?: number) => void;
     onContentLoad?: () => void;
+    returnedVideoState?: { id: string; time: number } | null;
 }) {
     return (
-        <div className="flex w-fit min-w-0 max-w-full flex-col items-start gap-2">
+        <div
+            className="msg-bento-grid gap-1.5"
+            data-count={Math.min(attachments.length, 4)}
+        >
             {attachments.map((attachment) => (
                 <MediaAttachmentTileV2
                     key={attachment.id}
                     attachment={attachment}
-                    onClick={() => onOpenMedia(attachment.id)}
+                    onClick={(rect, time) => onOpenMedia(attachment.id, rect, time)}
                     onContentLoad={onContentLoad}
+                    returnedVideoState={returnedVideoState}
                 />
             ))}
         </div>
@@ -124,10 +173,12 @@ function MediaAttachmentTileV2({
     attachment,
     onClick,
     onContentLoad,
+    returnedVideoState,
 }: {
     attachment: ChatAttachmentV2;
-    onClick: () => void;
+    onClick: (rect: DOMRect, time?: number) => void;
     onContentLoad?: () => void;
+    returnedVideoState?: { id: string; time: number } | null;
 }) {
     const initialDimensions = useMemo(
         () => normalizeMediaDimensions(attachment.width, attachment.height),
@@ -135,31 +186,20 @@ function MediaAttachmentTileV2({
     );
     const [dimensions, setDimensions] = useState<MediaDimensions | null>(initialDimensions);
     const [loaded, setLoaded] = useState(false);
-    const [muted, setMuted] = useState(true);
-    const [hasAudioTrack, setHasAudioTrack] = useState<boolean | null>(null);
-    const [retriedOriginal, setRetriedOriginal] = useState(false);
+    const [hasError, setHasError] = useState(false);
+    const [fallbackUrl, setFallbackUrl] = useState<string | null>(null);
+
     const previewUrl = attachment.type === 'image'
-        ? attachment.thumbnailUrl || attachment.url
-        : attachment.url;
-    const [currentUrl, setCurrentUrl] = useState(previewUrl);
-    const videoRef = useRef<HTMLVideoElement | null>(null);
+        ? attachment.localUrl || attachment.thumbnailUrl || attachment.url
+        : attachment.thumbnailUrl;
+    const displayUrl = fallbackUrl || previewUrl;
 
+    // Reset loaded/error states only if the underlying preview URL changes (e.g. optimistic -> remote)
     useEffect(() => {
-        setCurrentUrl(previewUrl);
-        setDimensions(initialDimensions);
         setLoaded(false);
-        setMuted(true);
-        setHasAudioTrack(null);
-        setRetriedOriginal(false);
-    }, [attachment.id, initialDimensions, previewUrl]);
-
-    useEffect(() => {
-        if (!videoRef.current) return;
-        videoRef.current.muted = muted;
-        if (!muted) {
-            void videoRef.current.play().catch(() => setMuted(true));
-        }
-    }, [muted]);
+        setHasError(false);
+        setFallbackUrl(null);
+    }, [previewUrl]);
 
     const fittedSize = dimensions
         ? fitMediaWithinBounds(dimensions, MESSAGE_MEDIA_INLINE_BOUNDS)
@@ -173,12 +213,6 @@ function MediaAttachmentTileV2({
             width: `${MESSAGE_MEDIA_INLINE_BOUNDS.maxWidth}px`,
             aspectRatio: '1 / 1',
         };
-
-    const updateAudioTrackState = useCallback(() => {
-        if (!videoRef.current) return;
-        const detected = detectVideoAudioTrack(videoRef.current);
-        if (detected !== null) setHasAudioTrack(detected);
-    }, []);
 
     const recordDimensions = useCallback((width: number, height: number) => {
         const nextDimensions = normalizeMediaDimensions(width, height);
@@ -194,91 +228,93 @@ function MediaAttachmentTileV2({
             style={frameStyle}
             data-media-orientation={getMediaOrientation(dimensions)}
         >
-            <button
-                type="button"
-                onClick={onClick}
-                aria-label={attachment.filename
-                    ? `Open media viewer for ${attachment.filename}`
-                    : 'Open media viewer'}
-                className="absolute inset-0 z-10 rounded-[inherit] border-0 focus:outline-none focus-visible:bg-black/5 dark:focus-visible:bg-white/5"
-            />
+            {!hasError ? (
+                <button
+                    type="button"
+                    onClick={(e) => {
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        const time = returnedVideoState?.id === attachment.id
+                            ? returnedVideoState.time
+                            : 0;
+                        onClick(rect, time);
+                    }}
+                    aria-label={attachment.filename
+                        ? `Open media viewer for ${attachment.filename}`
+                        : 'Open media viewer'}
+                    className="absolute inset-0 z-10 rounded-[inherit] border-0 focus:outline-none focus-visible:bg-black/5 dark:focus-visible:bg-white/5"
+                />
+            ) : null}
 
-            <div
-                className={cn(
-                    'pointer-events-none absolute inset-0 flex items-center justify-center bg-zinc-200 transition-opacity duration-200 dark:bg-zinc-800',
-                    loaded ? 'opacity-0' : 'animate-pulse opacity-100',
-                )}
-            >
-                {attachment.type === 'video' ? (
-                    <Video className="h-8 w-8 text-zinc-400/50 dark:text-zinc-500/50" />
-                ) : (
+            {attachment.type === 'image' ? (
+                <div
+                    className={cn(
+                        'pointer-events-none absolute inset-0 flex items-center justify-center bg-zinc-200 transition-opacity duration-200 dark:bg-zinc-800',
+                        loaded ? 'opacity-0' : 'animate-pulse opacity-100',
+                    )}
+                >
                     <ImageIcon className="h-8 w-8 text-zinc-400/50 dark:text-zinc-500/50" />
-                )}
-            </div>
+                </div>
+            ) : null}
 
             {attachment.type === 'video' ? (
-                <video
-                    ref={videoRef}
-                    src={attachment.url}
-                    autoPlay
-                    muted={muted}
-                    loop
-                    playsInline
-                    preload="metadata"
-                    poster={attachment.thumbnailUrl || undefined}
-                    onLoadedMetadata={(event) => {
-                        recordDimensions(event.currentTarget.videoWidth, event.currentTarget.videoHeight);
-                        updateAudioTrackState();
-                    }}
-                    onLoadedData={() => {
-                        updateAudioTrackState();
-                        setLoaded(true);
-                        onContentLoad?.();
-                    }}
-                    className={cn(
-                        'block h-full w-full rounded-[inherit] object-contain transition-opacity duration-200',
-                        loaded ? 'opacity-100' : 'opacity-0',
-                    )}
-                />
+                displayUrl ? (
+                    // Historical video tiles deliberately render only the stored thumbnail.
+                    // The selected viewer owns the first video-body request and playback.
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                        src={displayUrl}
+                        alt={attachment.filename || ''}
+                        onLoad={() => {
+                            setLoaded(true);
+                            onContentLoad?.();
+                        }}
+                        onError={() => {
+                            setHasError(true);
+                            setLoaded(true);
+                        }}
+                        className="absolute inset-0 block h-full w-full rounded-[inherit] object-cover"
+                    />
+                ) : (
+                    <div className="absolute inset-0 flex items-center justify-center bg-zinc-200 dark:bg-zinc-800">
+                        <Video className="h-8 w-8 text-zinc-400/70 dark:text-zinc-500/70" aria-hidden="true" />
+                    </div>
+                )
             ) : (
-                // Native image dimensions are authoritative when legacy rows do not include metadata.
+                // Native img is intentional: local object URLs and remote
+                // attachment fallbacks are not compatible with image loaders.
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
-                    src={currentUrl}
-                    alt={attachment.filename}
-                    loading="lazy"
+                    src={displayUrl || undefined}
+                    alt={attachment.filename || ''}
                     onLoad={(event) => {
-                        recordDimensions(event.currentTarget.naturalWidth, event.currentTarget.naturalHeight);
+                        const target = event.currentTarget as HTMLImageElement;
+                        recordDimensions(target.naturalWidth, target.naturalHeight);
                         setLoaded(true);
                         onContentLoad?.();
                     }}
                     onError={() => {
-                        if (!retriedOriginal && currentUrl !== attachment.url) {
-                            setRetriedOriginal(true);
-                            setCurrentUrl(attachment.url);
+                        if (!fallbackUrl && displayUrl !== attachment.url) {
+                            setFallbackUrl(attachment.url);
+                        } else {
+                            setHasError(true);
+                            setLoaded(true);
                         }
                     }}
                     className={cn(
-                        'block h-full w-full rounded-[inherit] object-contain transition-opacity duration-200',
-                        loaded ? 'opacity-100' : 'opacity-0',
+                        'absolute inset-0 h-full w-full block rounded-[inherit] object-cover transition-opacity duration-200',
+                        loaded && !hasError ? 'opacity-100' : 'opacity-0',
                     )}
                 />
             )}
 
-            {attachment.type === 'video' && hasAudioTrack !== false ? (
-                <button
-                    type="button"
-                    onClick={(event) => {
-                        event.stopPropagation();
-                        setMuted((current) => !current);
-                    }}
-                    className="absolute bottom-2 right-2 z-20 inline-flex h-7 w-7 items-center justify-center rounded-full border-0 bg-black/60 text-white backdrop-blur-sm hover:bg-black/75 focus:outline-none focus-visible:bg-black/85"
-                    aria-label={muted ? 'Turn audio on' : 'Turn audio off'}
-                    aria-pressed={!muted}
-                >
-                    {muted ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
-                </button>
+            {hasError ? (
+                <div className="absolute inset-0 flex flex-col items-center justify-center p-4 text-center bg-zinc-50 dark:bg-zinc-900 text-zinc-500 dark:text-zinc-400">
+                    <File className="h-6 w-6 mb-1 text-zinc-400" />
+                    <p className="text-[11px] font-semibold">Media unavailable</p>
+                    <p className="mt-0.5 max-w-full truncate px-2 text-[10px]">{attachment.filename}</p>
+                </div>
             ) : null}
+
         </div>
     );
 }
@@ -331,224 +367,48 @@ function FileAttachmentCardV2({
     );
 }
 
-function MediaViewerModalV2({
-    attachments,
-    initialAttachmentId,
-    onClose,
-}: {
-    attachments: ChatAttachmentV2[];
-    initialAttachmentId: string;
-    onClose: () => void;
-}) {
-    const videoRef = useRef<HTMLVideoElement | null>(null);
-    const initialIndex = useMemo(() => {
-        const index = attachments.findIndex((attachment) => attachment.id === initialAttachmentId);
-        return index === -1 ? 0 : index;
-    }, [attachments, initialAttachmentId]);
-    const [currentIndex, setCurrentIndex] = useState(initialIndex);
-    const [zoomLevel, setZoomLevel] = useState(1);
-    const [videoSpeed, setVideoSpeed] = useState(1);
-    const [viewerMuted, setViewerMuted] = useState(true);
-    const [viewerHasAudioTrack, setViewerHasAudioTrack] = useState<boolean | null>(null);
-    const [mounted, setMounted] = useState(false);
-    const currentAttachment = attachments[currentIndex] ?? null;
-    const currentAttachmentId = currentAttachment?.id ?? null;
-    const hasMultiple = attachments.length > 1;
-
-    useEffect(() => setMounted(true), []);
+export function PdfViewerV2({ attachment }: { attachment: { localUrl?: string; url: string; filename: string } }) {
+    const [sourceUrl, setSourceUrl] = useState(attachment.localUrl || attachment.url);
+    const [error, setError] = useState(false);
 
     useEffect(() => {
-        setCurrentIndex(initialIndex);
-        setZoomLevel(1);
-    }, [initialIndex]);
+        setSourceUrl(attachment.localUrl || attachment.url);
+        setError(false);
+    }, [attachment.localUrl, attachment.url]);
 
-    useEffect(() => {
-        setViewerMuted(true);
-        setViewerHasAudioTrack(null);
-        setZoomLevel(1);
-    }, [currentAttachmentId]);
-
-    useEffect(() => {
-        if (!videoRef.current) return;
-        videoRef.current.playbackRate = videoSpeed;
-        videoRef.current.muted = viewerMuted;
-    }, [currentAttachmentId, videoSpeed, viewerMuted]);
-
-    const moveNext = useCallback(() => {
-        if (attachments.length === 0) return;
-        setCurrentIndex((previous) => (previous + 1) % attachments.length);
-    }, [attachments.length]);
-
-    const movePrevious = useCallback(() => {
-        if (attachments.length === 0) return;
-        setCurrentIndex((previous) => (previous - 1 + attachments.length) % attachments.length);
-    }, [attachments.length]);
-
-    useEffect(() => {
-        const handleKeyDown = (event: KeyboardEvent) => {
-            if (event.key === 'Escape') onClose();
-            if (!hasMultiple) return;
-            if (event.key === 'ArrowRight') moveNext();
-            if (event.key === 'ArrowLeft') movePrevious();
-        };
-
-        window.addEventListener('keydown', handleKeyDown);
-        return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [hasMultiple, moveNext, movePrevious, onClose]);
-
-    const updateViewerAudioTrackState = useCallback(() => {
-        if (!videoRef.current) return;
-        const detected = detectVideoAudioTrack(videoRef.current);
-        if (detected !== null) setViewerHasAudioTrack(detected);
-    }, []);
-
-    if (!currentAttachment || !mounted) return null;
-
-    return createPortal(
-        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/85 p-4 backdrop-blur-sm">
-            <button type="button" onClick={onClose} aria-label="Close media viewer" className="absolute inset-0" />
-
-            <div className="relative z-10 flex max-h-[92vh] w-full max-w-6xl flex-col">
-                <div className="mb-3 flex w-full items-center justify-between px-1 text-white">
-                    <div className="min-w-0">
-                        <p className="truncate text-sm">{currentAttachment.filename}</p>
-                        {hasMultiple ? (
-                            <p className="text-xs text-white/70">
-                                {currentIndex + 1} / {attachments.length}
-                            </p>
-                        ) : null}
-                    </div>
-                    <div className="flex items-center gap-2">
-                        <a
-                            href={currentAttachment.url}
-                            download={currentAttachment.filename}
-                            className="rounded-full bg-white/10 p-2 transition-colors hover:bg-white/20"
-                            aria-label="Download media"
-                        >
-                            <Download className="h-5 w-5" />
-                        </a>
-                        {currentAttachment.type === 'image' ? (
-                            <div className="flex items-center gap-1 rounded-full bg-white/10 px-2 py-1">
-                                <button
-                                    type="button"
-                                    onClick={() => setZoomLevel((previous) => Math.max(1, previous - 0.25))}
-                                    className="px-1 text-xs hover:text-white"
-                                >
-                                    -
-                                </button>
-                                <span className="w-10 text-center text-xs">{Math.round(zoomLevel * 100)}%</span>
-                                <button
-                                    type="button"
-                                    onClick={() => setZoomLevel((previous) => Math.min(3, previous + 0.25))}
-                                    className="px-1 text-xs hover:text-white"
-                                >
-                                    +
-                                </button>
-                            </div>
-                        ) : null}
-                        {currentAttachment.type === 'video' ? (
-                            <>
-                                {viewerHasAudioTrack !== false ? (
-                                    <button
-                                        type="button"
-                                        onClick={() => setViewerMuted((current) => !current)}
-                                        className="inline-flex h-9 w-9 items-center justify-center rounded-full border-0 bg-white/10 text-white transition-colors hover:bg-white/20 focus:outline-none focus-visible:bg-white/25"
-                                        aria-label={viewerMuted ? 'Turn audio on' : 'Turn audio off'}
-                                        aria-pressed={!viewerMuted}
-                                    >
-                                        {viewerMuted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
-                                    </button>
-                                ) : null}
-                                <select
-                                    value={videoSpeed}
-                                    onChange={(event) => setVideoSpeed(Number(event.target.value))}
-                                    className="rounded border border-white/20 bg-white/10 px-2 py-1 text-xs text-white"
-                                    aria-label="Playback speed"
-                                >
-                                    <option value={0.75}>0.75x</option>
-                                    <option value={1}>1x</option>
-                                    <option value={1.25}>1.25x</option>
-                                    <option value={1.5}>1.5x</option>
-                                    <option value={2}>2x</option>
-                                </select>
-                            </>
-                        ) : null}
-                        <button
-                            type="button"
-                            onClick={onClose}
-                            className="rounded-full bg-white/10 p-2 transition-colors hover:bg-white/20"
-                            aria-label="Close"
-                        >
-                            <X className="h-5 w-5" />
-                        </button>
-                    </div>
-                </div>
-
-                <div className="relative flex min-h-[60vh] w-full flex-1 items-center justify-center overflow-hidden">
-                    {currentAttachment.type === 'video' ? (
-                        <video
-                            ref={videoRef}
-                            key={currentAttachment.id}
-                            src={currentAttachment.url}
-                            controls
-                            autoPlay
-                            muted={viewerMuted}
-                            playsInline
-                            preload="metadata"
-                            onLoadedMetadata={updateViewerAudioTrackState}
-                            onLoadedData={updateViewerAudioTrackState}
-                            onVolumeChange={() => setViewerMuted(videoRef.current?.muted ?? true)}
-                            className="h-auto max-h-[82vh] w-auto max-w-full rounded-lg bg-black object-contain"
-                        />
-                    ) : currentAttachment.filename.toLowerCase().endsWith('.pdf') ? (
-                        <div className="relative h-[82vh] w-full overflow-hidden rounded-lg bg-white">
-                            <iframe
-                                key={currentAttachment.id}
-                                src={`${currentAttachment.url}#view=FitH&toolbar=0&navpanes=0`}
-                                sandbox="allow-scripts allow-same-origin"
-                                className="block h-full w-full border-0"
-                                style={{ colorScheme: 'light' }}
-                                title={currentAttachment.filename}
-                            />
-                        </div>
-                    ) : (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img
-                            key={currentAttachment.id}
-                            src={currentAttachment.url}
-                            alt={currentAttachment.filename}
-                            className="h-auto max-h-[82vh] w-auto max-w-full select-none rounded-lg object-contain"
-                            style={{ transform: `scale(${zoomLevel})`, transformOrigin: 'center center' }}
-                        />
-                    )}
-
-                    {hasMultiple ? (
-                        <>
-                            <button
-                                type="button"
-                                onClick={movePrevious}
-                                className="absolute left-2 rounded-full bg-black/50 p-2 text-white transition-colors hover:bg-black/70 md:left-4"
-                                aria-label="Previous media"
-                            >
-                                <ChevronLeft className="h-6 w-6" />
-                            </button>
-                            <button
-                                type="button"
-                                onClick={moveNext}
-                                className="absolute right-2 rounded-full bg-black/50 p-2 text-white transition-colors hover:bg-black/70 md:right-4"
-                                aria-label="Next media"
-                            >
-                                <ChevronRight className="h-6 w-6" />
-                            </button>
-                        </>
-                    ) : null}
-                </div>
+    if (error) {
+        return (
+            <div className="flex h-full flex-col items-center justify-center p-4 text-center text-zinc-900">
+                <File className="mb-2 h-12 w-12 text-zinc-400" />
+                <p className="mb-4 text-sm font-medium text-zinc-600">Security restrictions prevent inline viewing.</p>
+                <a
+                    href={attachment.url || attachment.localUrl || '#'}
+                    download={attachment.filename}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="rounded-full bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700"
+                >
+                    Download PDF
+                </a>
             </div>
-        </div>,
-        document.body,
+        );
+    }
+
+    return (
+        <iframe
+            src={sourceUrl}
+            className="block h-full w-full border-0 bg-white"
+            title={attachment.filename}
+            onError={() => {
+                if (sourceUrl === attachment.localUrl && attachment.url) {
+                    setSourceUrl(attachment.url);
+                    return;
+                }
+                setError(true);
+            }}
+        />
     );
 }
-
 function getMediaOrientation(dimensions: MediaDimensions | null) {
     if (!dimensions || dimensions.width === dimensions.height) return 'square';
     return dimensions.width > dimensions.height ? 'landscape' : 'portrait';
@@ -558,21 +418,4 @@ function formatFileSize(bytes: number): string {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function detectVideoAudioTrack(video: HTMLVideoElement): boolean | null {
-    const withAudioTracks = video as HTMLVideoElement & {
-        audioTracks?: { length: number };
-        mozHasAudio?: boolean;
-        webkitAudioDecodedByteCount?: number;
-    };
-
-    if (typeof withAudioTracks.mozHasAudio === 'boolean') return withAudioTracks.mozHasAudio;
-    if (withAudioTracks.audioTracks && typeof withAudioTracks.audioTracks.length === 'number') {
-        return withAudioTracks.audioTracks.length > 0;
-    }
-    if (typeof withAudioTracks.webkitAudioDecodedByteCount === 'number' && withAudioTracks.webkitAudioDecodedByteCount > 0) {
-        return true;
-    }
-    return null;
 }
