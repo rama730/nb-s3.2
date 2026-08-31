@@ -1,54 +1,31 @@
 "use server";
 
-import { and, eq, isNull } from "drizzle-orm";
-
 import { db } from "@/lib/db";
+import { eq } from "drizzle-orm";
 import { isTransientDbError, readDbErrorCode, withDbRetry } from "@/lib/db/retry";
-import { profiles, userNotifications } from "@/lib/db/schema";
+import { profiles } from "@/lib/db/schema";
 import {
     countUnreadNotifications,
     dismissNotification,
     markAllNotificationsRead,
     markNotificationRead,
+    markNotificationsSeen,
     markNotificationUnread,
     muteNotificationScope,
+    markConversationNotificationsRead,
     pauseNotifications,
     readNotificationsPage,
     snoozeNotification,
     toNotificationItem,
 } from "@/lib/notifications/service";
+import { InvalidNotificationCursorError } from "@/lib/notifications/cursor";
 import {
     DEFAULT_NOTIFICATION_PREFERENCES,
     normalizeNotificationPreferences,
 } from "@/lib/notifications/preferences";
 import type { NotificationMuteScope, NotificationPreferences } from "@/lib/notifications/types";
 import { logger } from "@/lib/logger";
-import { syncMessageBurstConversationReads } from "@/lib/notifications/message-burst-read";
 import { createClient } from "@/lib/supabase/server";
-
-function extractConversationIdFromEntityRefs(entityRefs: unknown): string | null {
-    if (!entityRefs || typeof entityRefs !== "object") return null;
-    const conversationId = (entityRefs as { conversationId?: unknown }).conversationId;
-    return typeof conversationId === "string" && conversationId.length > 0 ? conversationId : null;
-}
-
-async function collectUnreadMessageBurstConversationIds(userId: string) {
-    const rows = await db
-        .select({ entityRefs: userNotifications.entityRefs })
-        .from(userNotifications)
-        .where(and(
-            eq(userNotifications.userId, userId),
-            eq(userNotifications.kind, "message_burst"),
-            isNull(userNotifications.readAt),
-            isNull(userNotifications.dismissedAt),
-        ));
-
-    return Array.from(new Set(
-        rows
-            .map((row) => extractConversationIdFromEntityRefs(row.entityRefs))
-            .filter((conversationId): conversationId is string => Boolean(conversationId)),
-    ));
-}
 
 export async function readNotificationsAction(limit = 20, cursor?: string | null) {
     try {
@@ -68,6 +45,7 @@ export async function readNotificationsAction(limit = 20, cursor?: string | null
         return {
             success: false as const,
             error: error?.message || "Failed to load notifications",
+            ...(error instanceof InvalidNotificationCursorError ? { code: "INVALID_CURSOR" as const } : {}),
             page: null,
         };
     }
@@ -113,12 +91,6 @@ export async function markNotificationReadAction(notificationId: string) {
         if (!row) {
             return { success: false as const, error: "Notification not found", item: null };
         }
-        if (row.kind === "message_burst") {
-            const conversationId = extractConversationIdFromEntityRefs(row.entityRefs);
-            if (conversationId) {
-                await syncMessageBurstConversationReads([conversationId]);
-            }
-        }
         return { success: true as const, item: toNotificationItem(row) };
     } catch (error: any) {
         logger.error("notifications.mark_read_failed", {
@@ -126,6 +98,36 @@ export async function markNotificationReadAction(notificationId: string) {
             error: error?.message || String(error),
         });
         return { success: false as const, error: error?.message || "Failed to mark notification read", item: null };
+    }
+}
+
+/** Commits rows reviewed during a tray session without consuming their linked content. */
+export async function markNotificationsSeenAction(notificationIds: string[]) {
+    try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+            return { success: false as const, error: "Unauthorized", items: [] as ReturnType<typeof toNotificationItem>[] };
+        }
+
+        const rows = await markNotificationsSeen(user.id, notificationIds, db);
+        const items = rows.map((row) => toNotificationItem(row));
+        logger.info("notifications.tray_seen_committed", {
+            module: "notifications",
+            count: items.length,
+            requested: Array.from(new Set(notificationIds.filter(Boolean))).length,
+        });
+        return { success: true as const, items };
+    } catch (error: any) {
+        logger.error("notifications.mark_seen_failed", {
+            module: "notifications",
+            error: error?.message || String(error),
+        });
+        return {
+            success: false as const,
+            error: error?.message || "Failed to mark notifications seen",
+            items: [] as ReturnType<typeof toNotificationItem>[],
+        };
     }
 }
 
@@ -159,13 +161,11 @@ export async function markAllNotificationsReadAction() {
             return { success: false as const, error: "Unauthorized", readAt: null, messageConversationIds: [] as string[] };
         }
 
-        const messageConversationIds = await collectUnreadMessageBurstConversationIds(user.id);
         const readAt = await markAllNotificationsRead(user.id, db);
-        await syncMessageBurstConversationReads(messageConversationIds);
         return {
             success: true as const,
             readAt: readAt?.toISOString() ?? null,
-            messageConversationIds,
+            messageConversationIds: [] as string[],
         };
     } catch (error: any) {
         logger.error("notifications.mark_all_read_failed", {
@@ -189,7 +189,7 @@ export async function markConversationMessageNotificationsReadAction(conversatio
             return { success: false as const, error: "Unauthorized" };
         }
 
-        await syncMessageBurstConversationReads([conversationId]);
+        await markConversationNotificationsRead(user.id, conversationId, db);
         return { success: true as const };
     } catch (error: any) {
         logger.error("notifications.mark_message_burst_conversation_read_failed", {
@@ -197,7 +197,7 @@ export async function markConversationMessageNotificationsReadAction(conversatio
             conversationId,
             error: error?.message || String(error),
         });
-        return { success: false as const, error: "Failed to sync message notifications" };
+        return { success: false as const, error: "Failed to mark message notifications read" };
     }
 }
 
