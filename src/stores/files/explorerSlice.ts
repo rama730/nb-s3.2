@@ -114,7 +114,8 @@ export function evictLruIfNeeded(
 export function enforceNodesBudget(
   nodesById: Record<string, ProjectNode>,
   childrenByParentId: Record<string, string[]>,
-  budget: number = 5000
+  budget: number = 5000,
+  protectedIds: readonly string[] = [],
 ): {
   nodesById: Record<string, ProjectNode>;
   childrenByParentId: Record<string, string[]>;
@@ -124,8 +125,11 @@ export function enforceNodesBudget(
     return { nodesById, childrenByParentId };
   }
 
+  const protectedSet = new Set(protectedIds);
   const entriesToKeep = entries
     .sort(([idA, nodeA], [idB, nodeB]) => {
+      const protectedDiff = Number(protectedSet.has(idB)) - Number(protectedSet.has(idA));
+      if (protectedDiff) return protectedDiff;
       const scoreDiff = nodeRecencyScore(nodeB) - nodeRecencyScore(nodeA);
       if (scoreDiff !== 0) return scoreDiff;
       return idA.localeCompare(idB);
@@ -150,6 +154,22 @@ export function enforceNodesBudget(
     nodesById: result,
     childrenByParentId: childrenChanged ? prunedChildrenByParentId : childrenByParentId,
   };
+}
+
+/** A pruned folder must be reloaded, never interpreted as confirmed empty. */
+export function reconcileLoadedFolders(
+  before: Record<string, string[]>,
+  after: Record<string, string[]>,
+  loaded: Record<string, boolean>,
+): Record<string, boolean> {
+  let next = loaded;
+  for (const [key, ids] of Object.entries(before)) {
+    if (loaded[key] && ids.length !== (after[key]?.length ?? 0)) {
+      if (next === loaded) next = { ...loaded };
+      next[key] = false;
+    }
+  }
+  return next;
 }
 
 export function estimateVisibleRowsBudget(ws: FilesWorkspaceState["byProjectId"][string] | undefined) {
@@ -413,7 +433,7 @@ export const createExplorerSlice: StateCreator<FilesWorkspaceState, [], [], Expl
         }
       }
       if (!changed) return state;
-      const budgeted = enforceNodesBudget(nextById, ws.childrenByParentId, 5000);
+      const budgeted = enforceNodesBudget(nextById, ws.childrenByParentId, 5000, nodes.map(n => n.id));
       const limitedNodesById = budgeted.nodesById;
       const prunedChildrenByParentId = budgeted.childrenByParentId;
 
@@ -421,6 +441,7 @@ export const createExplorerSlice: StateCreator<FilesWorkspaceState, [], [], Expl
         ...ws,
         nodesById: limitedNodesById,
         childrenByParentId: prunedChildrenByParentId,
+        loadedChildren: reconcileLoadedFolders(ws.childrenByParentId, prunedChildrenByParentId, ws.loadedChildren),
         treeVersion: ws.treeVersion + 1,
       };
 
@@ -488,7 +509,7 @@ export const createExplorerSlice: StateCreator<FilesWorkspaceState, [], [], Expl
       const nextById = { ...ws.nodesById };
       for (const n of nodes) nextById[n.id] = n;
       const nextChildren = { ...ws.childrenByParentId, [key]: Array.from(new Set(childIds)) };
-      const budgeted = enforceNodesBudget(nextById, nextChildren, 5000);
+      const budgeted = enforceNodesBudget(nextById, nextChildren, 5000, [parentId ?? "", ...nodes.map(n => n.id)]);
       const limitedNodesById = budgeted.nodesById;
       const prunedChildrenByParentId = budgeted.childrenByParentId;
 
@@ -501,9 +522,9 @@ export const createExplorerSlice: StateCreator<FilesWorkspaceState, [], [], Expl
             ...ws,
             nodesById: limitedNodesById,
             childrenByParentId: prunedChildrenByParentId,
-            loadedChildren: payload?.loaded
+            loadedChildren: reconcileLoadedFolders(nextChildren, prunedChildrenByParentId, payload?.loaded
               ? { ...ws.loadedChildren, [key]: true }
-              : ws.loadedChildren,
+              : ws.loadedChildren),
             folderMeta: payload
               ? {
                 ...ws.folderMeta,
@@ -671,7 +692,7 @@ export const createExplorerSlice: StateCreator<FilesWorkspaceState, [], [], Expl
         }
       }
 
-      const budgeted = enforceNodesBudget(nodesById, childrenByParentId, 5000);
+      const budgeted = enforceNodesBudget(nodesById, childrenByParentId, 5000, nodes.map(n => n.id));
       const limitedNodesById = budgeted.nodesById;
       const prunedChildrenByParentId = budgeted.childrenByParentId;
 
@@ -684,6 +705,7 @@ export const createExplorerSlice: StateCreator<FilesWorkspaceState, [], [], Expl
             ...ws,
             nodesById: limitedNodesById,
             childrenByParentId: prunedChildrenByParentId,
+            loadedChildren: reconcileLoadedFolders(childrenByParentId, prunedChildrenByParentId, ws.loadedChildren),
             treeVersion: ws.treeVersion + 1
           },
         },
@@ -710,7 +732,7 @@ export const createExplorerSlice: StateCreator<FilesWorkspaceState, [], [], Expl
         nextFolderMeta[key] = { nextCursor: p.nextCursor, hasMore: p.hasMore };
       }
 
-      const budgeted = enforceNodesBudget(nextById, nextChildren, 5000);
+      const budgeted = enforceNodesBudget(nextById, nextChildren, 5000, nodes.map(n => n.id));
       const limitedNodesById = budgeted.nodesById;
       const prunedChildrenByParentId = budgeted.childrenByParentId;
 
@@ -723,7 +745,7 @@ export const createExplorerSlice: StateCreator<FilesWorkspaceState, [], [], Expl
             ...ws,
             nodesById: limitedNodesById,
             childrenByParentId: prunedChildrenByParentId,
-            loadedChildren: nextLoadedChildren,
+            loadedChildren: reconcileLoadedFolders(nextChildren, prunedChildrenByParentId, nextLoadedChildren),
             folderMeta: nextFolderMeta,
             treeVersion: ws.treeVersion + 1,
           },
