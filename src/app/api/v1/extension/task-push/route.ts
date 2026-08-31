@@ -6,8 +6,11 @@ import { getProjectAccessById } from "@/lib/data/project-access";
 import { logger } from "@/lib/logger";
 import { checkIdempotencyKey, saveIdempotencyResult } from "@/lib/security/idempotency";
 import { recordNodeEvent } from "@/lib/files/internal-helpers";
+import { validateCsrf } from "@/lib/security/csrf";
 
 export async function POST(request: Request) {
+  const csrfError = validateCsrf(request);
+  if (csrfError) return csrfError;
   try {
     const authResult = await requireAuthenticatedUser();
     if (authResult.response) {
