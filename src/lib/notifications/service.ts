@@ -4,6 +4,10 @@ import { db } from "@/lib/db";
 import { profiles, userNotifications } from "@/lib/db/schema";
 import { logger } from "@/lib/logger";
 import {
+    decodeNotificationCursor,
+    encodeNotificationCursor,
+} from "@/lib/notifications/cursor";
+import {
     DEFAULT_NOTIFICATION_PREFERENCES,
     isNotificationPauseActive,
     isQuietHoursActive,
@@ -15,7 +19,6 @@ import {
     getNotificationReason,
     notificationMatchesMuteScope,
 } from "@/lib/notifications/presentation";
-import { dispatchWebPush } from "@/lib/notifications/web-push";
 import type {
     NotificationEntityRefs,
     NotificationFeedPage,
@@ -31,9 +34,9 @@ import type {
 
 type NotificationWriteExecutor = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
 
-type NotificationCursor = {
-    updatedAt: string;
-    id: string;
+type NotificationActor = {
+    name: string | null;
+    avatarUrl: string | null;
 };
 
 export type CreateNotificationInput = NotificationFanoutInput;
@@ -55,27 +58,20 @@ function toIsoString(value: Date | string | null | undefined) {
     return next ? next.toISOString() : null;
 }
 
-export function encodeNotificationCursor(cursor: NotificationCursor) {
-    return Buffer.from(`${cursor.updatedAt}:::${cursor.id}`, "utf8").toString("base64");
-}
-
-export function decodeNotificationCursor(raw: string | null | undefined): NotificationCursor | null {
-    if (!raw) return null;
-    try {
-        const decoded = Buffer.from(raw, "base64").toString("utf8");
-        const [updatedAt, id] = decoded.split(":::");
-        if (!updatedAt || !id) return null;
-        const parsed = toIsoString(updatedAt);
-        if (!parsed) return null;
-        return { updatedAt: parsed, id };
-    } catch {
-        return null;
-    }
-}
-
 export function toNotificationItem(
     row: typeof userNotifications.$inferSelect,
+    actor?: NotificationActor | null,
 ): NotificationItem {
+    const storedPreview = (row.preview as NotificationPreview | null) ?? null;
+    const actorName = actor?.name ?? storedPreview?.actorName ?? null;
+    const actorAvatarUrl = actor?.avatarUrl ?? storedPreview?.actorAvatarUrl ?? null;
+    const preview = actorName || actorAvatarUrl || storedPreview
+        ? {
+            ...(storedPreview ?? {}),
+            actorName,
+            actorAvatarUrl,
+        }
+        : null;
     return {
         id: row.id,
         userId: row.userId,
@@ -86,7 +82,7 @@ export function toNotificationItem(
         body: row.body ?? null,
         href: row.href ?? null,
         entityRefs: (row.entityRefs as NotificationEntityRefs | null) ?? null,
-        preview: (row.preview as NotificationPreview | null) ?? null,
+        preview,
         reason: getNotificationReason(row.kind as NotificationKind, (row.entityRefs as NotificationEntityRefs | null) ?? null),
         dedupeKey: row.dedupeKey,
         aggregateCount: row.aggregateCount ?? 1,
@@ -95,11 +91,12 @@ export function toNotificationItem(
         dismissedAt: toIsoString(row.dismissedAt),
         snoozedUntil: toIsoString(row.snoozedUntil),
         createdAt: toIsoString(row.createdAt) ?? new Date(0).toISOString(),
+        activityAt: toIsoString(row.activityAt) ?? toIsoString(row.updatedAt) ?? toIsoString(row.createdAt) ?? new Date(0).toISOString(),
         updatedAt: toIsoString(row.updatedAt) ?? toIsoString(row.createdAt) ?? new Date(0).toISOString(),
     };
 }
 
-async function getNotificationPreferencesMap(
+export async function getNotificationPreferencesMap(
     executor: NotificationWriteExecutor,
     userIds: string[],
 ): Promise<Map<string, NotificationPreferences>> {
@@ -187,31 +184,17 @@ function logEmission(payload: {
     });
 }
 
-function maybeDispatchWebPush(
-    row: typeof userNotifications.$inferSelect | undefined,
-    preferences: NotificationPreferences,
-): void {
-    if (!row) return;
-    if (row.importance !== "important") return;
-    if (!preferences.delivery.push) return;
-    void dispatchWebPush(row.userId, toNotificationItem(row)).catch((error) => {
-        logger.warn("notifications.web_push_dispatch_failed", {
-            module: "notifications",
-            userId: row.userId,
-            error: error instanceof Error ? error.message : String(error),
-        });
-    });
-}
-
 export async function createNotification(
     input: CreateNotificationInput,
     executor?: NotificationWriteExecutor,
+    preloadedPreferenceMap?: Map<string, NotificationPreferences>,
 ) {
     const start = Date.now();
     const importance = input.importance ?? "more";
     const hasActor = Boolean(input.actorUserId);
     const tx = getExecutor(executor);
-    const preferenceMap = await getNotificationPreferencesMap(tx, [input.recipientUserId]);
+    const preferenceMap = preloadedPreferenceMap
+        ?? await getNotificationPreferencesMap(tx, [input.recipientUserId]);
     const check = resolveNotificationDeliveryPolicy({
         recipientUserId: input.recipientUserId,
         actorUserId: input.actorUserId,
@@ -254,6 +237,7 @@ export async function createNotification(
             dismissedAt: null,
             snoozedUntil: check.delayUntil,
             createdAt: now,
+            activityAt: now,
             updatedAt: now,
         })
         .onConflictDoNothing({
@@ -273,10 +257,6 @@ export async function createNotification(
             aggregate_count: inserted[0].aggregateCount ?? 1,
             delayed_reason: check.delayReason ?? undefined,
         });
-        const recipientPrefs = preferenceMap.get(input.recipientUserId) ?? DEFAULT_NOTIFICATION_PREFERENCES;
-        if (!check.delayUntil) {
-            maybeDispatchWebPush(inserted[0], recipientPrefs);
-        }
         return { notification: inserted[0], skipped: false as const };
     }
 
@@ -307,12 +287,14 @@ export async function createNotification(
 export async function upsertAggregatedNotification(
     input: CreateNotificationInput,
     executor?: NotificationWriteExecutor,
+    preloadedPreferenceMap?: Map<string, NotificationPreferences>,
 ) {
     const start = Date.now();
     const importance = input.importance ?? "more";
     const hasActor = Boolean(input.actorUserId);
     const tx = getExecutor(executor);
-    const preferenceMap = await getNotificationPreferencesMap(tx, [input.recipientUserId]);
+    const preferenceMap = preloadedPreferenceMap
+        ?? await getNotificationPreferencesMap(tx, [input.recipientUserId]);
     const check = resolveNotificationDeliveryPolicy({
         recipientUserId: input.recipientUserId,
         actorUserId: input.actorUserId,
@@ -356,6 +338,7 @@ export async function upsertAggregatedNotification(
             dismissedAt: null,
             snoozedUntil: check.delayUntil,
             createdAt: now,
+            activityAt: now,
             updatedAt: now,
         })
         .onConflictDoUpdate({
@@ -376,7 +359,15 @@ export async function upsertAggregatedNotification(
                 readAt: null,
                 seenAt: null,
                 dismissedAt: null,
-                snoozedUntil: check.delayUntil,
+                // A new aggregate event must never cancel an explicit future
+                // snooze already chosen for the existing inbox item. Policy
+                // delays may extend that snooze, but cannot shorten it.
+                snoozedUntil: sql`CASE
+                    WHEN ${userNotifications.snoozedUntil} > ${now}
+                        THEN GREATEST(${userNotifications.snoozedUntil}, ${check.delayUntil})
+                    ELSE ${check.delayUntil}
+                END`,
+                activityAt: now,
                 updatedAt: now,
             },
         })
@@ -393,11 +384,85 @@ export async function upsertAggregatedNotification(
         aggregate_count: row?.aggregateCount ?? aggregateDelta,
         delayed_reason: check.delayReason ?? undefined,
     });
-    const recipientPrefs = preferenceMap.get(input.recipientUserId) ?? DEFAULT_NOTIFICATION_PREFERENCES;
-    if (!check.delayUntil) {
-        maybeDispatchWebPush(row, recipientPrefs);
-    }
     return { notification: row ?? null, skipped: false as const };
+}
+
+export async function markMessageBurstSourceDeleted(
+    conversationId: string,
+    sourceMessageId: string,
+    executor?: NotificationWriteExecutor,
+) {
+    const tx = getExecutor(executor);
+    const now = new Date();
+    return tx
+        .update(userNotifications)
+        .set({
+            title: 'This message was deleted',
+            body: null,
+            entityRefs: sql`jsonb_set(
+                COALESCE(${userNotifications.entityRefs}, '{}'::jsonb),
+                '{messageDeletedAt}',
+                to_jsonb(${now.toISOString()}::text),
+                true
+            )`,
+            preview: sql`jsonb_set(
+                COALESCE(${userNotifications.preview}, '{}'::jsonb),
+                '{secondaryText}',
+                '"This message was deleted"'::jsonb,
+                true
+            )`,
+            updatedAt: now,
+        })
+        .where(and(
+            eq(userNotifications.kind, 'message_burst'),
+            eq(userNotifications.dedupeKey, `message-burst:${conversationId}`),
+            sql`${userNotifications.userId} IN (
+                SELECT participant.user_id
+                FROM conversation_participants participant
+                WHERE participant.conversation_id = ${conversationId}::uuid
+            )`,
+            sql`${userNotifications.entityRefs} ->> 'sourceMessageId' = ${sourceMessageId}`,
+            isNull(userNotifications.dismissedAt),
+        ));
+}
+
+/** Keep reaction notifications from retaining a preview of an unsent message. */
+export async function markMessageReactionSourceDeleted(
+    conversationId: string,
+    sourceMessageId: string,
+    executor?: NotificationWriteExecutor,
+) {
+    const tx = getExecutor(executor);
+    const now = new Date();
+    return tx
+        .update(userNotifications)
+        .set({
+            title: 'This message was deleted',
+            body: null,
+            entityRefs: sql`jsonb_set(
+                COALESCE(${userNotifications.entityRefs}, '{}'::jsonb),
+                '{messageDeletedAt}',
+                to_jsonb(${now.toISOString()}::text),
+                true
+            )`,
+            preview: sql`jsonb_set(
+                COALESCE(${userNotifications.preview}, '{}'::jsonb),
+                '{secondaryText}',
+                '"This message was deleted"'::jsonb,
+                true
+            )`,
+            updatedAt: now,
+        })
+        .where(and(
+            eq(userNotifications.kind, 'message_reaction'),
+            sql`${userNotifications.userId} IN (
+                SELECT participant.user_id
+                FROM conversation_participants participant
+                WHERE participant.conversation_id = ${conversationId}::uuid
+            )`,
+            sql`${userNotifications.dedupeKey} LIKE ${`message-reaction:${sourceMessageId}:%`}`,
+            isNull(userNotifications.dismissedAt),
+        ));
 }
 
 export async function markNotificationRead(
@@ -416,6 +481,35 @@ export async function markNotificationRead(
     return row ?? null;
 }
 
+/**
+ * Commits a completed notification-tray review without consuming the linked
+ * content. In particular, seeing a message alert must not mark the message
+ * conversation itself as read.
+ */
+export async function markNotificationsSeen(
+    userId: string,
+    notificationIds: string[],
+    executor?: NotificationWriteExecutor,
+) {
+    const ids = Array.from(new Set(notificationIds.filter((id) => typeof id === "string" && id.length > 0))).slice(0, 50);
+    if (ids.length === 0) return [] as Array<typeof userNotifications.$inferSelect>;
+    const tx = getExecutor(executor);
+    const seenAt = new Date();
+    return tx
+        .update(userNotifications)
+        .set({
+            seenAt,
+            updatedAt: seenAt,
+        })
+        .where(and(
+            eq(userNotifications.userId, userId),
+            inArray(userNotifications.id, ids),
+            isNull(userNotifications.seenAt),
+            isNull(userNotifications.dismissedAt),
+        ))
+        .returning();
+}
+
 export async function markNotificationUnread(
     userId: string,
     notificationId: string,
@@ -425,7 +519,7 @@ export async function markNotificationUnread(
     const now = new Date();
     const [row] = await tx
         .update(userNotifications)
-        .set({ readAt: null, updatedAt: now })
+        .set({ readAt: null, seenAt: null, updatedAt: now })
         .where(and(eq(userNotifications.userId, userId), eq(userNotifications.id, notificationId), isNull(userNotifications.dismissedAt)))
         .returning();
     return row ?? null;
@@ -449,22 +543,6 @@ export async function markAllNotificationsRead(
     return readAt;
 }
 
-export async function markNotificationsSeen(
-    userId: string,
-    executor?: NotificationWriteExecutor,
-) {
-    const tx = getExecutor(executor);
-    const seenAt = new Date();
-    await tx
-        .update(userNotifications)
-        .set({
-            seenAt,
-            updatedAt: seenAt,
-        })
-        .where(and(eq(userNotifications.userId, userId), isNull(userNotifications.seenAt), isNull(userNotifications.dismissedAt)));
-    return seenAt;
-}
-
 export async function markConversationNotificationsRead(
     userId: string,
     conversationId: string,
@@ -483,7 +561,13 @@ export async function markConversationNotificationsRead(
         .where(
             and(
                 eq(userNotifications.userId, userId),
-                eq(userNotifications.dedupeKey, `message-burst:${conversationId}`),
+                or(
+                    eq(userNotifications.dedupeKey, `message-burst:${conversationId}`),
+                    and(
+                        eq(userNotifications.kind, 'message_reaction'),
+                        sql`${userNotifications.entityRefs} ->> 'conversationId' = ${conversationId}`,
+                    ),
+                ),
                 isNull(userNotifications.readAt),
                 isNull(userNotifications.dismissedAt),
             ),
@@ -505,7 +589,7 @@ export async function countUnreadNotifications(
         .from(userNotifications)
         .where(and(
             eq(userNotifications.userId, userId),
-            isNull(userNotifications.readAt),
+            isNull(userNotifications.seenAt),
             isNull(userNotifications.dismissedAt),
             or(isNull(userNotifications.snoozedUntil), lte(userNotifications.snoozedUntil, now)),
         ));
@@ -618,7 +702,7 @@ export async function readNotificationsPage(
     const tx = getExecutor(executor);
     const safeLimit = Math.max(1, Math.min(limit, 50));
     const parsedCursor = decodeNotificationCursor(cursor);
-    const cursorDate = parsedCursor ? new Date(parsedCursor.updatedAt) : null;
+    const cursorDate = parsedCursor ? new Date(parsedCursor.activityAt) : null;
 
     const now = new Date();
     const rows = await tx
@@ -631,26 +715,39 @@ export async function readNotificationsPage(
                 or(isNull(userNotifications.snoozedUntil), lte(userNotifications.snoozedUntil, now)),
                 parsedCursor && cursorDate
                     ? or(
-                        lt(userNotifications.updatedAt, cursorDate),
-                        and(eq(userNotifications.updatedAt, cursorDate), lt(userNotifications.id, parsedCursor.id)),
+                        lt(userNotifications.activityAt, cursorDate),
+                        and(eq(userNotifications.activityAt, cursorDate), lt(userNotifications.id, parsedCursor.id)),
                     )
                     : undefined,
             ),
         )
-        .orderBy(desc(userNotifications.updatedAt), desc(userNotifications.id))
+        .orderBy(desc(userNotifications.activityAt), desc(userNotifications.id))
         .limit(safeLimit + 1);
 
     const hasMore = rows.length > safeLimit;
     const slice = hasMore ? rows.slice(0, safeLimit) : rows;
+    const actorIds = Array.from(new Set(slice
+        .map((row) => row.actorUserId)
+        .filter((actorId): actorId is string => Boolean(actorId))));
+    const actors = actorIds.length > 0
+        ? await tx
+            .select({ id: profiles.id, fullName: profiles.fullName, username: profiles.username, avatarUrl: profiles.avatarUrl })
+            .from(profiles)
+            .where(inArray(profiles.id, actorIds))
+        : [];
+    const actorById = new Map<string, NotificationActor>(actors.map((actor) => [actor.id, {
+        name: actor.fullName || actor.username || null,
+        avatarUrl: actor.avatarUrl ?? null,
+    }]));
     const counts = await countUnreadNotifications(userId, tx);
     const last = slice[slice.length - 1];
 
     return {
-        items: slice.map(toNotificationItem),
+        items: slice.map((row) => toNotificationItem(row, row.actorUserId ? actorById.get(row.actorUserId) ?? null : null)),
         hasMore,
         nextCursor: hasMore && last
             ? encodeNotificationCursor({
-                updatedAt: toIsoString(last.updatedAt) ?? toIsoString(last.createdAt) ?? new Date().toISOString(),
+                activityAt: toIsoString(last.activityAt) ?? toIsoString(last.updatedAt) ?? toIsoString(last.createdAt) ?? new Date().toISOString(),
                 id: last.id,
             })
             : null,
