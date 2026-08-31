@@ -131,12 +131,13 @@ export const projectImportStaleReconcile = inngest.createFunction(
             and(
                 inArray(projects.id, projectIds),
                 inArray(projects.syncStatus, IN_PROGRESS_SYNC_STATUSES),
+                lt(projects.updatedAt, staleBefore),
             ),
         )
         .returning({ id: projects.id });
 
     reconciled = updated.length;
-    let skippedRace = staleProjects.length - reconciled;
+    const skippedRace = staleProjects.length - reconciled;
 
     logger.metric("project.import.stale.reconcile", {
       scanned: staleProjects.length,
