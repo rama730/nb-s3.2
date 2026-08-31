@@ -167,6 +167,19 @@ test("encodePath: falls back to materialized path when ancestors are not cached"
   assert.equal(encodePath(tree, "security"), "docs/security/SECURITY.md");
 });
 
+test("encodePath: never serializes private task working-file storage", () => {
+  const tree = buildTree([
+    {
+      id: "task-file",
+      name: "brief.pdf",
+      parentId: "task-folder",
+      type: "file",
+      path: "/.system/tasks/9fbd8943-e594-473c-8f82-5830851d1d7a/brief.pdf",
+    },
+  ]);
+  assert.equal(encodePath(tree, "task-file"), "");
+});
+
 // ---------------------------------------------------------------------------
 // splitEncoded — Req 10.1, Req 20.1
 // ---------------------------------------------------------------------------
