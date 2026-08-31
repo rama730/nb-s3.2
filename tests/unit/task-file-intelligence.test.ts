@@ -5,6 +5,7 @@ import {
   getTaskFileWarnings,
   inferTaskFileRole,
   normalizeTaskTitleDraft,
+  replaceTaskFileRoleTag,
   resolveTaskFileIntent,
 } from "@/lib/projects/task-file-intelligence";
 
@@ -67,16 +68,86 @@ test("resolveTaskFileIntent detects files that already live under a linked folde
 
 test("inferTaskFileRole keeps deliverables, reference files, and working files distinct", () => {
   assert.equal(
-    inferTaskFileRole({ name: "product-spec.docx", path: "/docs/product-spec.docx", type: "file", annotation: null }),
+    inferTaskFileRole({
+      name: "product-spec.docx",
+      path: "/docs/product-spec.docx",
+      type: "file",
+      annotation: null,
+    }),
     "reference",
   );
   assert.equal(
-    inferTaskFileRole({ name: "bug-fix.patch", path: "/deliverables/bug-fix.patch", type: "file", annotation: null }),
+    inferTaskFileRole({
+      name: "bug-fix.patch",
+      path: "/deliverables/bug-fix.patch",
+      type: "file",
+      annotation: null,
+    }),
     "deliverable",
   );
   assert.equal(
-    inferTaskFileRole({ name: "working-draft.md", path: "/working-draft.md", type: "file", annotation: null }),
+    inferTaskFileRole({
+      name: "working-draft.md",
+      path: "/working-draft.md",
+      type: "file",
+      annotation: null,
+    }),
     "working",
+  );
+});
+
+test("inferTaskFileRole keeps initial references out of final deliverables", () => {
+  assert.equal(
+    inferTaskFileRole({
+      name: "customer-logo.png",
+      path: "/customer-logo.png",
+      type: "file",
+      annotation: null,
+      tags: ["initial_reference"],
+    }),
+    "reference",
+  );
+});
+
+test("published files replace conflicting working roles with one deliverable role", () => {
+  const tags = replaceTaskFileRoleTag(
+    ["working_file", "initial_reference", "reviewed"],
+    "deliverable",
+  );
+
+  assert.deepEqual(tags, ["reviewed", "deliverable"]);
+  assert.equal(
+    inferTaskFileRole({
+      id: "file-1",
+      name: "draft.tsx",
+      path: "/draft.tsx",
+      type: "file",
+      annotation: "#working_file",
+      tags,
+    }),
+    "deliverable",
+  );
+});
+
+test("role changes keep one role while preserving unrelated task-link tags", () => {
+  const workingTags = replaceTaskFileRoleTag(
+    ["initial_reference", "reviewed"],
+    "working",
+  );
+  const referenceTags = replaceTaskFileRoleTag(workingTags, "reference");
+
+  assert.deepEqual(workingTags, ["reviewed", "working_file"]);
+  assert.deepEqual(referenceTags, ["reviewed", "initial_reference"]);
+  assert.equal(
+    inferTaskFileRole({
+      id: "file-1",
+      name: "notes.md",
+      path: "/notes.md",
+      type: "file",
+      annotation: null,
+      tags: referenceTags,
+    }),
+    "reference",
   );
 });
 
