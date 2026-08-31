@@ -32,6 +32,7 @@ import {
 } from "./useDeepLinkResolver";
 import { useNavigateTo, type NavigateTo } from "./useNavigateTo";
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
+import { isInternalTaskWorkingFilesNode } from "@/lib/files/task-working-files";
 
 // ─── Pure/imperative helpers (tested without React) ──────────────────
 
@@ -65,6 +66,10 @@ export interface SyncUrlToLocationArgs {
   win: SyncUrlWindow;
   /** `encodePath(nodesById, currentLocationId)` output. Empty string = root. */
   encodedPath: string;
+  /** Opaque task-file identity. Never combine this with a storage path. */
+  fileId?: string | null;
+  /** Keep an incoming `fileId` intact until its node has hydrated. */
+  suspended?: boolean;
 }
 
 /**
@@ -75,11 +80,13 @@ export interface SyncUrlToLocationArgs {
  * Returns `true` when a `replaceState` call was made, `false` otherwise.
  */
 export function syncUrlToLocation(args: SyncUrlToLocationArgs): boolean {
+  if (args.suspended) return false;
   const plan = planUrlSync({
     pathname: args.win.location.pathname,
     search: args.win.location.search,
     hash: args.win.location.hash,
     encodedPath: args.encodedPath,
+    fileId: args.fileId,
   });
   if (plan.action === "noop") return false;
   args.win.history.replaceState(args.win.history.state ?? null, "", plan.url);
@@ -117,6 +124,15 @@ export async function handlePopState(args: HandlePopStateArgs): Promise<void> {
     search.startsWith("?") ? search.slice(1) : search,
   );
   const raw = params.get("path");
+  const fileId = params.get("fileId");
+
+  // Task files have no public path. Their ID is hydrated and access-checked
+  // by the caller before the view is opened, just like an initial `fileId`
+  // deep link.
+  if (fileId) {
+    args.navigateTo(fileId);
+    return;
+  }
 
   const result = await resolveDeepLinkFromSearch(raw, args);
   switch (result.kind) {
@@ -160,6 +176,33 @@ export interface UseFilesTabUrlSyncOptions {
    * omit this so the hook binds to the real browser globals.
    */
   window?: Window;
+  /** Prevent root mirroring from erasing a pending file deep link. */
+  suspendWrites?: boolean;
+}
+
+export function shouldPreserveTaskFileDeepLink(
+  search: string,
+  location:
+    | {
+        type: "file";
+        id: string;
+        node: { taskId?: string | null; path?: string | null };
+      }
+    | { type: "folder" | "root"; id?: string }
+    | null,
+): boolean {
+  // ponytail: taskId is absent on some legacy working files; their hidden path is the shared stable marker.
+  if (
+    location?.type !== "file" ||
+    (!location.node.taskId &&
+      !isInternalTaskWorkingFilesNode({ name: "", path: location.node.path }))
+  ) {
+    return false;
+  }
+  const params = new URLSearchParams(
+    search.startsWith("?") ? search.slice(1) : search,
+  );
+  return params.get("fileId") === location.id;
 }
 
 export function useFilesTabUrlSync(
@@ -188,12 +231,19 @@ export function useFilesTabUrlSync(
     const win = options.window ?? getBrowserWindow();
     if (!win) return;
     const id = location?.type === "root" || !location ? null : location.id;
+    const taskFileId = location?.type === "file" && isInternalTaskWorkingFilesNode(location.node)
+      ? location.id
+      : null;
     const encoded = encodePath(nodesByIdRef.current, id);
-    syncUrlToLocation({ win, encodedPath: encoded });
-    // location is the only dependency — nodesById is intentionally read
-    // through a ref so unrelated cache churn does not re-fire replaceState.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [location, projectId, options.window]);
+    syncUrlToLocation({
+      win,
+      encodedPath: encoded,
+      fileId: taskFileId,
+      suspended: options.suspendWrites,
+    });
+    // nodesById is intentionally read through a ref so unrelated cache churn
+    // does not re-fire replaceState.
+  }, [location, options.suspendWrites, options.window, projectId]);
 
   // Effect 2: wire up popstate → navigateTo.
   useEffect(() => {
