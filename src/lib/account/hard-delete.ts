@@ -1,9 +1,9 @@
-import { and, eq, isNull, or } from "drizzle-orm";
+import { and, eq, inArray, isNull, or } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import {
   accountDeletions,
-  conversationParticipants,
+  conversations,
   dmPairs,
   extensionRecoveryDrafts,
   profiles,
@@ -64,7 +64,10 @@ export async function executeHardDelete(
 
     // Verify the deletion record exists, matches the subject, and is eligible.
     const [deletion] = await db
-      .select({ id: accountDeletions.id })
+      .select({
+        id: accountDeletions.id,
+        cleanupStatus: accountDeletions.cleanupStatus,
+      })
       .from(accountDeletions)
       .where(
         and(
@@ -82,26 +85,75 @@ export async function executeHardDelete(
         error: "Deletion record not found or already processed",
       };
     }
+    if (
+      deletion.cleanupStatus !== "completed"
+      && deletion.cleanupStatus !== "in_progress"
+    ) {
+      return {
+        success: false,
+        error: `Storage cleanup is ${deletion.cleanupStatus}; hard delete will retry after cleanup completes`,
+      };
+    }
 
-    // Recovery drafts contain unpublished source text. Remove their private
-    // storage objects before deleting auth/DB ownership so the cleanup remains
-    // retryable and cannot leave ownerless draft bytes behind.
-    const recoveryDraftCount = await db
-      .select({ id: extensionRecoveryDrafts.id })
-      .from(extensionRecoveryDrafts)
-      .where(eq(extensionRecoveryDrafts.userId, userId));
-    if (recoveryDraftCount.length > 0) {
-      await deleteExtensionRecoveryDraftsForUser(userId);
-      logger.info("account.hard-delete.extension-recovery-drafts.removed", {
-        module: "account",
-        userId,
-        bucket: EXTENSION_RECOVERY_BUCKET,
-        count: recoveryDraftCount.length,
+    if (deletion.cleanupStatus === "completed") {
+      // Recovery drafts contain unpublished source text. Remove their private
+      // storage objects before deleting auth/DB ownership so the cleanup remains
+      // retryable and cannot leave ownerless draft bytes behind.
+      const recoveryDraftCount = await db
+        .select({ id: extensionRecoveryDrafts.id })
+        .from(extensionRecoveryDrafts)
+        .where(eq(extensionRecoveryDrafts.userId, userId));
+      if (recoveryDraftCount.length > 0) {
+        await deleteExtensionRecoveryDraftsForUser(userId);
+        logger.info("account.hard-delete.extension-recovery-drafts.removed", {
+          module: "account",
+          userId,
+          bucket: EXTENSION_RECOVERY_BUCKET,
+          count: recoveryDraftCount.length,
+        });
+      }
+
+      // Database cleanup is the durable first phase. `in_progress` means this
+      // phase committed and a retry must resume at Auth deletion.
+      await db.transaction(async (tx) => {
+        const ownedDmPairs = await tx
+          .select({ conversationId: dmPairs.conversationId })
+          .from(dmPairs)
+          .where(or(eq(dmPairs.userLow, userId), eq(dmPairs.userHigh, userId)));
+        const ownedProjects = await tx
+          .select({ conversationId: projects.conversationId })
+          .from(projects)
+          .where(eq(projects.ownerId, userId));
+        const conversationIdsToDelete = Array.from(new Set([
+          ...ownedDmPairs.map((pair) => pair.conversationId),
+          ...ownedProjects
+            .map((project) => project.conversationId)
+            .filter((id): id is string => Boolean(id)),
+        ]));
+
+        await tx.delete(projects).where(eq(projects.ownerId, userId));
+        if (conversationIdsToDelete.length > 0) {
+          await tx
+            .delete(conversations)
+            .where(inArray(conversations.id, conversationIdsToDelete));
+        }
+
+        await tx.delete(profiles).where(eq(profiles.id, userId));
+        await tx
+          .update(accountDeletions)
+          .set({
+            cleanupStatus: "in_progress",
+            cleanupDetails: {
+              databaseCleanupAt: new Date().toISOString(),
+              authCleanupPending: true,
+            },
+          })
+          .where(eq(accountDeletions.id, deletionId));
       });
     }
 
-    // C9: Delete auth user FIRST to avoid orphaned auth records.
-    // If auth deletion fails, DB data is preserved and can be retried.
+    // Auth deletion is phase two. If it fails, the durable deletion row remains
+    // `in_progress`; the scheduled job retries only this idempotent phase.
     const admin = await createAdminClient();
     let authError: { message: string } | null = null;
     try {
@@ -112,41 +164,35 @@ export async function executeHardDelete(
         message: error instanceof Error ? error.message : "Auth deletion not available",
       };
     }
-
     if (authError) {
       logger.error("account.hard-delete.auth-deletion.failed", {
         module: "account",
+        userId,
+        deletionId,
         error: authError.message,
       });
-      // Auth deletion failed — abort to prevent orphaned auth record.
-      // The Inngest job will retry on next scheduled attempt.
-      return { success: false, error: `Auth deletion failed: ${authError.message}` };
+      return { success: false, error: `Auth deletion pending retry: ${authError.message}` };
     }
 
-    // Run destructive DB deletes in a transaction (auth user already removed)
-    await db.transaction(async (tx) => {
-      // 1. Remove the user from conversations during the irreversible finalizer path.
-      await tx
-        .delete(conversationParticipants)
-        .where(eq(conversationParticipants.userId, userId));
-
-      // 2. Remove DM pair entries during hard delete so soft delete remains reversible.
-      await tx
-        .delete(dmPairs)
-        .where(or(eq(dmPairs.userLow, userId), eq(dmPairs.userHigh, userId)));
-
-      // 3. Delete projects owned by the user (cascade handles members, tasks, nodes, etc.)
-      await tx.delete(projects).where(eq(projects.ownerId, userId));
-
-      // 4. Delete the profile (cascade handles remaining FKs)
-      await tx.delete(profiles).where(eq(profiles.id, userId));
-
-      // 5. Mark deletion as completed
-      await tx
-        .update(accountDeletions)
-        .set({ completedAt: new Date(), cleanupStatus: "completed" })
-        .where(eq(accountDeletions.id, deletionId));
-    });
+    await db
+      .update(accountDeletions)
+      .set({
+        completedAt: new Date(),
+        cleanupStatus: "completed",
+        userId: deletionId,
+        email: "deleted-account@invalid",
+        username: null,
+        reason: null,
+        confirmationToken: null,
+        tokenExpiresAt: null,
+        metadata: {},
+        cleanupDetails: {
+          databaseCleanupComplete: true,
+          authCleanupComplete: true,
+          completedAt: new Date().toISOString(),
+        },
+      })
+      .where(eq(accountDeletions.id, deletionId));
 
     return { success: true };
   } catch (error) {
