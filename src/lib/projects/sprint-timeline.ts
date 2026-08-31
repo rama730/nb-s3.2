@@ -1,47 +1,43 @@
 import {
-  type SprintFileTimelineEntity,
   type SprintHealthSummary,
   type SprintListItem,
-  type SprintTaskTimelineEntity,
   type SprintTimelineRow,
+  type SprintTaskTimelineEntity,
 } from "@/lib/projects/sprint-detail";
 
+/**
+ * The Sprint surface is a summary of work that entered the sprint, not a
+ * second activity log.  A task owns its files, discussion, and status trail
+ * inside its disclosure panel; the outer trail owns exactly one row per task.
+ */
 export type SprintTimelineTaskInput = SprintTaskTimelineEntity & {
-  files: SprintFileTimelineEntity[];
+  /** Retained for cache compatibility; files are intentionally not outer rows. */
+  files?: unknown[];
 };
 
-function toTimestamp(value: string | null | undefined) {
-  if (!value) return Number.POSITIVE_INFINITY;
-  const parsed = Date.parse(value);
+function timestamp(value: string | null | undefined) {
+  const parsed = value ? Date.parse(value) : Number.POSITIVE_INFINITY;
   return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
 }
 
-function getActivityTaskId(row: Extract<SprintTimelineRow, { kind: "task" | "file" | "file_version" }>) {
-  return row.kind === "task" ? row.task.id : row.task.id;
+function compareRows(left: SprintTimelineRow, right: SprintTimelineRow) {
+  if (left.kind === "kickoff") return right.kind === "kickoff" ? left.id.localeCompare(right.id) : -1;
+  if (right.kind === "kickoff") return 1;
+  if (left.kind === "closeout") return right.kind === "closeout" ? left.id.localeCompare(right.id) : 1;
+  if (right.kind === "closeout") return -1;
+
+  const delta = timestamp(left.occurredAt) - timestamp(right.occurredAt);
+  return delta || left.id.localeCompare(right.id);
 }
 
-export function compareSprintTimelineActivityRows(
-  left: Extract<SprintTimelineRow, { kind: "task" | "file" | "file_version" }>,
-  right: Extract<SprintTimelineRow, { kind: "task" | "file" | "file_version" }>,
-) {
-  const leftAt = toTimestamp(left.occurredAt);
-  const rightAt = toTimestamp(right.occurredAt);
-  if (leftAt !== rightAt) return leftAt - rightAt;
+/** Cache callers use the same stable ordering as the visible summary trail. */
+export const compareSprintTimelineActivityRows = compareRows;
 
-  const leftTaskId = getActivityTaskId(left);
-  const rightTaskId = getActivityTaskId(right);
-  if (leftTaskId === rightTaskId && left.kind !== right.kind) {
-    // task rows come before file rows, file rows come before file_version rows
-    const kindOrder = { task: 0, file: 1, file_version: 2 };
-    return kindOrder[left.kind] - kindOrder[right.kind];
-  }
-
-  if (left.kind !== right.kind) {
-    const kindOrder = { task: 0, file: 1, file_version: 2 };
-    return kindOrder[left.kind] - kindOrder[right.kind];
-  }
-
-  return left.id.localeCompare(right.id);
+/** Keep overlapping cursor pages idempotent after a refetch or optimistic task mutation. */
+export function mergeSprintTimelineRows(groups: ReadonlyArray<ReadonlyArray<SprintTimelineRow>>) {
+  const rows = new Map<string, SprintTimelineRow>();
+  for (const group of groups) for (const row of group) rows.set(row.id, row);
+  return [...rows.values()].sort(compareRows);
 }
 
 export function buildSprintTimeline(input: {
@@ -51,95 +47,40 @@ export function buildSprintTimeline(input: {
   includeKickoff?: boolean;
   includeCloseout?: boolean;
 }) {
-  const tasks = [...input.tasks].sort((left, right) => {
-    const leftAt = toTimestamp(left.activityAt ?? left.createdAt ?? left.updatedAt ?? null);
-    const rightAt = toTimestamp(right.activityAt ?? right.createdAt ?? right.updatedAt ?? null);
-    if (leftAt !== rightAt) return leftAt - rightAt;
-    return left.id.localeCompare(right.id);
-  });
-
   const rows: SprintTimelineRow[] = [];
-  const activityRows: Extract<SprintTimelineRow, { kind: "task" | "file" | "file_version" }>[] = [];
 
   if (input.includeKickoff ?? true) {
     rows.push({
       id: `${input.sprint.id}:kickoff`,
       kind: "kickoff",
-      occurredAt: input.sprint.startDate ?? input.sprint.createdAt ?? null,
+      occurredAt: input.sprint.startedAt ?? input.sprint.createdAt ?? input.sprint.startDate ?? null,
       sprint: input.sprint,
     });
   }
 
-  for (const task of tasks) {
-    activityRows.push({
-      id: task.id,
+  for (const task of [...input.tasks].sort((left, right) => {
+    const delta = timestamp(left.addedAt ?? left.activityAt ?? left.createdAt) - timestamp(right.addedAt ?? right.activityAt ?? right.createdAt);
+    return delta || left.id.localeCompare(right.id);
+  })) {
+    rows.push({
+      id: `task:${task.id}`,
       kind: "task",
-      occurredAt: task.activityAt ?? task.createdAt ?? task.updatedAt ?? null,
+      // Sprint membership is the stable outer-trail origin. Later task work
+      // stays inside the disclosure and never reorders the Sprint trail.
+      occurredAt: task.addedAt ?? task.activityAt ?? task.createdAt ?? null,
       task,
     });
-
-    const files = [...task.files].sort((left, right) => {
-      const leftAt = toTimestamp(left.linkedAt ?? left.lastEventAt ?? null);
-      const rightAt = toTimestamp(right.linkedAt ?? right.lastEventAt ?? null);
-      if (leftAt !== rightAt) return leftAt - rightAt;
-      return left.id.localeCompare(right.id);
-    });
-
-    for (const file of files) {
-      activityRows.push({
-        id: `${task.id}:${file.id}`,
-        kind: "file",
-        occurredAt: file.linkedAt ?? file.lastEventAt ?? null,
-        task: {
-          id: task.id,
-          title: task.title,
-          taskNumber: task.taskNumber,
-          status: task.status,
-          priority: task.priority,
-        },
-        file,
-      });
-
-      // Render version events as inline sub-rows beneath the linked file row
-      if (file.versionEvents && file.versionEvents.length > 0) {
-        for (const versionEvent of file.versionEvents) {
-          activityRows.push({
-            id: `${task.id}:${file.id}:v${versionEvent.versionNumber}`,
-            kind: "file_version",
-            occurredAt: versionEvent.createdAt,
-            task: {
-              id: task.id,
-              title: task.title,
-              taskNumber: task.taskNumber,
-              status: task.status,
-              priority: task.priority,
-            },
-            file: {
-              id: file.id,
-              nodeId: file.nodeId,
-              nodeName: file.nodeName,
-              nodePath: file.nodePath,
-              nodeType: file.nodeType,
-            },
-            versionEvent,
-          });
-        }
-      }
-    }
   }
 
-  activityRows.sort(compareSprintTimelineActivityRows);
-  rows.push(...activityRows);
-
-  if (input.includeCloseout ?? true) {
-    const latestRow = activityRows[activityRows.length - 1] ?? null;
+  if (
+    (input.includeCloseout ?? true) &&
+    (input.sprint.status === "completed" ||
+      (input.sprint.status === "archived" && Boolean(input.sprint.completedAt)))
+  ) {
     rows.push({
       id: `${input.sprint.id}:closeout`,
       kind: "closeout",
-      occurredAt:
-        input.sprint.status === "completed"
-          ? input.sprint.endDate ?? latestRow?.occurredAt ?? input.sprint.updatedAt ?? null
-          : latestRow?.occurredAt ?? input.sprint.updatedAt ?? input.sprint.endDate ?? null,
+      occurredAt: input.sprint.completedAt ?? input.sprint.updatedAt ?? input.sprint.endDate ?? null,
       sprint: input.sprint,
       summary: input.summary,
     });
