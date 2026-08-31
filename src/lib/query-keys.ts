@@ -31,7 +31,8 @@ export const queryKeys = {
     targetUser: (userId: string) => ["chat", "targetUser", userId] as const,
     v2: {
       root: () => ["chat-v2"] as const,
-      inbox: (limit: number) => ["chat-v2", "inbox", limit] as const,
+      inbox: (limit: number, scope: "active" | "archived" = "active") =>
+        ["chat-v2", "inbox", limit, scope] as const,
       thread: (conversationId: string | null) =>
         ["chat-v2", "thread", asNullable(conversationId)] as const,
       capabilities: (conversationId: string | null, userId?: string | null) =>
@@ -65,8 +66,8 @@ export const queryKeys = {
           asNullable(conversationId),
           messageIds.slice().sort().join(","),
         ] as const,
-      applications: (limit: number, offset: number) =>
-        ["chat-v2", "applications", limit, offset] as const,
+      applications: (limit: number, status = "all", sort = "newest") =>
+        ["chat-v2", "applications", limit, status, sort] as const,
       projectGroups: (limit: number, offset: number) =>
         ["chat-v2", "project-groups", limit, offset] as const,
     },
@@ -88,7 +89,13 @@ export const queryKeys = {
     peopleRoot: () => ["global-search", "previews", "people"] as const,
     projectRoot: () => ["global-search", "previews", "project"] as const,
     preview: (
-      context: "hub" | "people" | "project" | "settings" | "messages" | "generic",
+      context:
+        | "hub"
+        | "people"
+        | "project"
+        | "settings"
+        | "messages"
+        | "generic",
       peopleScope: "discover" | "network",
       projectIdentifier: string | null,
       query: string,
@@ -110,12 +117,24 @@ export const queryKeys = {
       root: (projectId: string) => ["project", projectId, "detail"] as const,
       shell: (projectId: string) =>
         ["project", projectId, "detail", "shell"] as const,
+      guidance: (projectId: string) =>
+        ["project", projectId, "detail", "guidance"] as const,
       tasksRoot: (projectId: string) =>
         ["project", projectId, "detail", "tasks"] as const,
-      tasks: (projectId: string, scope: ProjectTaskScope = "all", search = "") =>
+      tasks: (
+        projectId: string,
+        scope: ProjectTaskScope = "all",
+        search = "",
+      ) =>
         search
           ? (["project", projectId, "detail", "tasks", scope, search] as const)
           : (["project", projectId, "detail", "tasks", scope] as const),
+      taskPanel: (
+        projectId: string,
+        taskId: string,
+        section: "subtasks" | "comments" | "files",
+      ) =>
+        ["project", projectId, "detail", "task-panel", taskId, section] as const,
       sprintTasksRoot: (projectId: string) =>
         ["project", projectId, "detail", "sprint-tasks"] as const,
       sprintTasks: (projectId: string, sprintId: string) =>
@@ -153,6 +172,8 @@ export const queryKeys = {
         ] as const,
       sprints: (projectId: string) =>
         ["project", projectId, "detail", "sprints"] as const,
+      workflow: (projectId: string) =>
+        ["project", projectId, "detail", "workflow"] as const,
       analytics: (projectId: string) =>
         ["project", projectId, "detail", "analytics"] as const,
       analyticsOverview: (
@@ -354,8 +375,11 @@ export const queryKeys = {
   },
   workspace: {
     root: () => ["workspace"] as const,
+    summary: () => ["workspace", "summary"] as const,
     members: () => ["workspace", "members"] as const,
     sprints: () => ["workspace", "sprints"] as const,
-    tasks: () => ["workspace", "tasks"] as const,
+    tasks: (scope: "my" | "team" | "all" = "my", limit = 24) =>
+      ["workspace", "tasks", scope, limit] as const,
+    joinRequests: () => ["workspace", "joinRequests"] as const,
   },
 } as const;
