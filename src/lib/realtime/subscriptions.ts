@@ -5,6 +5,7 @@ import {
     type SupabaseClient,
 } from '@supabase/supabase-js'
 import { logger } from '@/lib/logger'
+import { isPrivateRealtimeAuthorizationEnabled } from '@/lib/realtime/authorization'
 
 type DbRealtimeEventType = 'INSERT' | 'UPDATE' | 'DELETE'
 
@@ -25,6 +26,7 @@ export type ActiveResourceType =
     | 'profile'
     | 'project_files'
     | 'project_hydration'
+    | 'project_workflow'
     | 'task'
     | 'task_comments'
     | 'task_counts'
@@ -180,11 +182,12 @@ export function subscribeProjectStage(params: {
     supabase: SupabaseClient
     projectId: string
     onUpdate: (payload: DbRealtimePayload) => void
+    channelScope?: 'project_hydration' | 'project_workflow'
 }): RealtimeChannel {
-    const { supabase, projectId, onUpdate } = params;
+    const { supabase, projectId, onUpdate, channelScope = 'project_hydration' } = params;
     return subscribeActiveResource({
         supabase,
-        resourceType: 'project_hydration',
+        resourceType: channelScope,
         resourceId: projectId,
         bindings: [
             {
@@ -197,15 +200,24 @@ export function subscribeProjectStage(params: {
     });
 }
 
-export function subscribeProjectStats(params: {
+export async function subscribeProjectStats(params: {
     supabase: SupabaseClient
     projectId: string
-    onStatsUpdate: (payload: { viewCount?: number; followersCount?: number }) => void
-}): RealtimeChannel {
-    const { supabase, projectId, onStatsUpdate } = params;
-    const channel = supabase.channel(`project-stats:${projectId}`);
-    channel.on("broadcast", { event: "stats_update" }, ({ payload }: { payload: { viewCount?: number; followersCount?: number } }) => {
-        onStatsUpdate(payload);
+    onInvalidate: () => void
+}): Promise<RealtimeChannel | null> {
+    const { supabase, projectId, onInvalidate } = params;
+    if (!isPrivateRealtimeAuthorizationEnabled()) return null;
+
+    const { data, error } = await supabase.auth.getSession();
+    const accessToken = data.session?.access_token;
+    if (error || !accessToken) return null;
+    await supabase.realtime.setAuth(accessToken);
+
+    const channel = supabase.channel(`project-stats:${projectId}`, {
+        config: { private: true },
+    });
+    channel.on("broadcast", { event: "stats_invalidate" }, () => {
+        onInvalidate();
     });
     return channel.subscribe();
 }
