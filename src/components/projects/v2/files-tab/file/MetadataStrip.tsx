@@ -88,6 +88,11 @@ function nameLabel(node: MetadataStripNode): string {
   return raw.length > 0 ? raw : MISSING;
 }
 
+function taskReferenceLabel(node: MetadataStripNode): string | null {
+  const title = node.metadata?.taskWorkingFilesTaskTitle;
+  return typeof title === "string" && title.trim() ? title.trim() : null;
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -170,12 +175,13 @@ export function MetadataStrip({
     if (node.updatedById && uploaderNames?.[node.updatedById]) {
       return uploaderNames[node.updatedById];
     }
-    if (node.createdBy && uploaderNames?.[node.createdBy]) {
+    if (!node.updatedById && !node.versionUpdatedAt && node.createdBy && uploaderNames?.[node.createdBy]) {
       return uploaderNames[node.createdBy];
     }
     return null;
-  }, [node.updatedByName, node.updatedByUsername, node.updatedById, node.createdBy, uploaderNames]);
+  }, [node.updatedByName, node.updatedByUsername, node.updatedById, node.versionUpdatedAt, node.createdBy, uploaderNames]);
   const updatedAtValue = node.versionUpdatedAt ?? node.updatedAt;
+  const taskReference = taskReferenceLabel(node);
   const isoTimestamp = toIso(updatedAtValue);
   const relativeTimestamp = formatRelativeTime(updatedAtValue);
   const updatedAtText =
@@ -188,7 +194,7 @@ export function MetadataStrip({
       data-testid="files-tab-metadata-strip"
       data-node-id={node.id}
       className={cn(
-        "sticky top-0 z-10 flex items-center gap-3 border-b border-zinc-200 bg-white/95 px-4 py-2 backdrop-blur",
+        "sticky top-0 z-10 flex flex-wrap items-center gap-3 border-b border-zinc-200 bg-white/95 px-4 py-2 backdrop-blur",
         "dark:border-zinc-800 dark:bg-zinc-950/95",
         className,
       )}
@@ -201,6 +207,14 @@ export function MetadataStrip({
         >
           {nameLabel(node)}
         </span>
+        {taskReference ? (
+          <>
+            <Separator />
+            <span data-field="task-reference" title={taskReference}>
+              Task: {taskReference}
+            </span>
+          </>
+        ) : null}
         <Separator />
         <span data-field="size">{sizeLabel(node)}</span>
         {showVersionPill ? (
