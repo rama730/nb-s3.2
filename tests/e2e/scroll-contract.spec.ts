@@ -3,12 +3,12 @@ import { hasE2ECredentials, login } from "./_helpers/auth";
 import { attachPageMonitoring } from "./_helpers/monitoring";
 import { openRoute } from "./_helpers/navigation";
 
-const ROUTES: Array<{ path: string; ready: string; checkHubHeader?: boolean }> = [
+const ROUTES: Array<{ path: string; ready: string; checkHubHeader?: boolean; checkProfileTabs?: boolean }> = [
   { path: "/hub", ready: "[data-testid='hub-feed-scroll']", checkHubHeader: true },
-  { path: "/workspace", ready: "[data-testid='workspace-route-scroll']" },
+  { path: "/workspace", ready: "[data-testid='workspace-drawer']", checkHubHeader: true },
   { path: "/messages", ready: "[data-scroll-root='route']" },
   { path: "/people", ready: "[data-scroll-root='route']" },
-  { path: "/profile", ready: "[data-scroll-root='route']" },
+  { path: "/profile", ready: "[data-scroll-root='route']", checkProfileTabs: true },
   { path: "/settings?tab=security", ready: "[data-scroll-root='route']" },
 ];
 
@@ -66,6 +66,21 @@ test.describe("Scroll contract @critical", () => {
         const afterTop = await header.evaluate((node) => node.getBoundingClientRect().top);
 
         expect(Math.abs(beforeTop - afterTop), "Hub header should remain visually anchored during feed scroll").toBeLessThanOrEqual(2);
+      }
+
+      if (route.checkProfileTabs) {
+        const tabs = page.locator("[data-testid='profile-tabs-shell']").first();
+        const routeRoot = page.locator("[data-scroll-root='route']").first();
+        await expect(tabs).toBeVisible();
+
+        await page.evaluate(scrollVisibleRouteRoot, 1000);
+        await page.waitForTimeout(100);
+
+        const [tabsTop, routeTop] = await Promise.all([
+          tabs.evaluate((node) => node.getBoundingClientRect().top),
+          routeRoot.evaluate((node) => node.getBoundingClientRect().top),
+        ]);
+        expect(Math.abs(tabsTop - routeTop - 12), "Profile tabs should pin like the Hub header").toBeLessThanOrEqual(2);
       }
     }
 
