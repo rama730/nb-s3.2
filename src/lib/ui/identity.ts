@@ -2,6 +2,7 @@ import { initialsForName, trimOptionalDisplayText } from "@/lib/profile/display"
 import { getAvatarGradient } from "@/lib/ui/avatar";
 
 export type IdentityRecord = {
+  id?: unknown;
   fullName?: unknown;
   full_name?: unknown;
   username?: unknown;
@@ -10,6 +11,7 @@ export type IdentityRecord = {
 } | null | undefined;
 
 export type NormalizedIdentityFields = {
+  id: string | null;
   fullName: string | null;
   username: string | null;
   avatarUrl: string | null;
@@ -25,6 +27,7 @@ export type IdentityPresentation = NormalizedIdentityFields & {
 
 export function normalizeIdentityFields(identity: IdentityRecord): NormalizedIdentityFields {
   return {
+    id: typeof identity?.id === 'string' ? identity.id : null,
     fullName: trimOptionalDisplayText(identity?.fullName ?? identity?.full_name),
     username: trimOptionalDisplayText(identity?.username),
     avatarUrl: trimOptionalDisplayText(identity?.avatarUrl ?? identity?.avatar_url),
