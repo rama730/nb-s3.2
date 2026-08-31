@@ -1,5 +1,7 @@
 # Ponytail Main Top Navigation Audit — 2026-07-12
 
+> Historical snapshot from 2026-07-12. Do not use its verification status as current database, migration, capacity, or Supabase evidence; use the 2026-08-13 complete SQL/Supabase audit and a fresh verification run.
+
 Status: implemented and verified on 2026-07-12. All NAV-001 through NAV-035 are closed; the implementation closure is recorded at the end of this report.
 
 Mode: Ponytail full. The recommended fixes below intentionally prefer the smallest root-cause change already supported by the codebase.
