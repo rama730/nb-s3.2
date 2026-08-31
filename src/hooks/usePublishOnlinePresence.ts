@@ -20,11 +20,12 @@ import { useAuth } from '@/hooks/useAuth';
 import { subscribePresenceRoom } from '@/lib/realtime/presence-client';
 
 export function usePublishOnlinePresence() {
-    const { user } = useAuth();
+    const { user, session, isLoading } = useAuth();
     const viewerUserId = user?.id ?? null;
+    const realtimeReady = Boolean(viewerUserId && session?.access_token && !isLoading);
 
     useEffect(() => {
-        if (!viewerUserId || typeof window === 'undefined') return;
+        if (!viewerUserId || !realtimeReady || typeof window === 'undefined') return;
 
         // A no-op event listener keeps the subscription alive. We don't need
         // the `onEvent` payloads here — the shared client tracks our presence
@@ -41,5 +42,5 @@ export function usePublishOnlinePresence() {
         return () => {
             subscription.unsubscribe();
         };
-    }, [viewerUserId]);
+    }, [realtimeReady, viewerUserId]);
 }
