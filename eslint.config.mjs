@@ -12,6 +12,11 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Local skills, exploratory files, and service packages have their own
+    // toolchains; they are not part of the Next product lint boundary.
+    ".agents/**",
+    "scratch/**",
+    "services/**",
   ]),
   {
     rules: {
@@ -68,6 +73,17 @@ const eslintConfig = defineConfig([
       "@typescript-eslint/no-require-imports": "off",
       "@typescript-eslint/no-explicit-any": "off",
       "@typescript-eslint/no-unused-vars": "off",
+    },
+  },
+  {
+    // These SSR hook-contract tests intentionally capture a hook result in a
+    // local probe during static rendering. They do not execute in a client
+    // component lifecycle, so React's runtime immutability diagnostics do
+    // not apply to the test harness itself.
+    files: ["tests/**/*.{test,spec}.{ts,tsx,js,jsx}"],
+    rules: {
+      "react-hooks/immutability": "off",
+      "react-hooks/globals": "off",
     },
   },
 ]);
