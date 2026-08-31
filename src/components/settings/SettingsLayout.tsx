@@ -10,6 +10,7 @@ import { settingsTabHref } from "@/constants/routes";
 import { SETTINGS_SECTION_META } from "@/constants/settings";
 import { useAuth } from "@/lib/hooks/use-auth";
 import { cn } from "@/lib/utils";
+import { useRouteWarmPrefetch } from "@/hooks/useRouteWarmPrefetch";
 
 type SettingsItem = { title: string; tab: string; href: string; icon: ComponentType<{ className?: string }>; description: string };
 const settingsItems: SettingsItem[] = [
@@ -22,10 +23,11 @@ const settingsItems: SettingsItem[] = [
 ];
 
 function SettingsNav({ activeTab, onSignOut }: { activeTab: string; onSignOut: () => void }) {
+  const warmPrefetchRoute = useRouteWarmPrefetch();
   return <nav className="space-y-1">{settingsItems.map((item) => {
     const Icon = item.icon;
     const active = activeTab === item.tab;
-    return <Link key={item.tab} href={item.href} prefetch={false} className={cn("group flex items-start gap-3 rounded-xl transition-colors app-density-nav-item", active ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900" : "hover:bg-zinc-100 dark:hover:bg-zinc-900/50")}>
+    return <Link key={item.tab} href={item.href} prefetch={false} aria-current={active ? "page" : undefined} onPointerEnter={() => warmPrefetchRoute(item.href)} onFocus={() => warmPrefetchRoute(item.href)} className={cn("group flex items-start gap-3 rounded-xl transition-colors app-density-nav-item", active ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900" : "hover:bg-zinc-100 dark:hover:bg-zinc-900/50")}>
       <span className={cn("mt-0.5 flex h-8 w-8 items-center justify-center rounded-lg", active ? "bg-white/15 dark:bg-zinc-900/10" : "bg-zinc-100 dark:bg-zinc-900")}><Icon className={cn("h-4 w-4", active ? "text-white dark:text-zinc-900" : "text-zinc-600 dark:text-zinc-300")} /></span>
       <span className="min-w-0"><span className={cn("block text-sm font-medium leading-5", active ? "text-white dark:text-zinc-900" : "text-zinc-900 dark:text-zinc-100")}>{item.title}</span><span className={cn("mt-0.5 block text-xs leading-4", active ? "text-white/70 dark:text-zinc-600" : "text-zinc-500 dark:text-zinc-400")}>{item.description}</span></span>
     </Link>;
