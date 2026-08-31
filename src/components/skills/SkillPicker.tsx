@@ -101,9 +101,9 @@ export function SkillPicker({
     }
 
     return (
-        <div className={cn('space-y-3', className)}>
+        <div className={cn('min-w-0 space-y-3', className)}>
             <div className="flex items-start justify-between gap-4">
-                <div>
+                <div className="min-w-0">
                     <label htmlFor={inputId} className="text-sm font-medium text-zinc-900 dark:text-zinc-100">{label}</label>
                     <p id={`${inputId}-description`} className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{description}</p>
                 </div>
@@ -111,7 +111,7 @@ export function SkillPicker({
             </div>
 
             {value.length > 0 ? (
-                <div className="flex flex-wrap gap-2" aria-label="Selected skills">
+                <div className="flex min-w-0 flex-wrap gap-2" aria-label="Selected skills">
                     {value.map((skill) => <SkillChip key={resolveClientSkill(skill).canonicalKey} skill={skill} size={compact ? 'sm' : 'md'} onRemove={() => removeSkill(skill)} />)}
                 </div>
             ) : null}
@@ -147,7 +147,7 @@ export function SkillPicker({
                 {loading ? <Loader2 className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-zinc-400" aria-label="Searching skills" /> : null}
             </div>
 
-            <div className="flex gap-2 overflow-x-auto pb-1" aria-label="Filter skills by category">
+            <div className="flex flex-wrap gap-2" aria-label="Filter skills by category">
                 <button type="button" onClick={() => setCategory('all')} className={cn('whitespace-nowrap rounded-md px-2.5 py-1.5 text-xs font-medium', category === 'all' ? 'bg-zinc-900 text-white dark:bg-white dark:text-zinc-900' : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300')}>All</button>
                 {SKILL_CLIENT_CATEGORIES.map((item) => (
                     <button key={item.key} type="button" onClick={() => setCategory(item.key)} className={cn('whitespace-nowrap rounded-md px-2.5 py-1.5 text-xs font-medium', category === item.key ? 'bg-zinc-900 text-white dark:bg-white dark:text-zinc-900' : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300')}>{item.name}</button>
