@@ -164,7 +164,7 @@ describe("BreadcrumbBar — root-only location (Req 3.1, 3.2)", () => {
     assert.equal(segments[0]!.id, null);
     assert.equal(
       segments[0]!.name,
-      "root",
+      "Project files",
       "the root segment carries a non-empty display label",
     );
   });
