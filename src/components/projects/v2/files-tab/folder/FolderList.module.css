@@ -1,0 +1,12 @@
+.container { container-type: inline-size; min-width: 0; }
+.container [data-file-mobile-meta] { display: none; }
+@container (max-width: 720px) {
+  .container [role="row"] { --files-columns: minmax(0, 1fr) 120px 40px; }
+  .container [data-column="size"], .container [data-column="by"] { display: none; }
+}
+@container (max-width: 440px) {
+  .container [role="row"] { --files-columns: minmax(0, 1fr) 40px; }
+  .container [data-column="updated"] { display: none; }
+  .container [data-file-mobile-meta] { display: block; }
+  .container [data-testid="files-tab-folder-list-row"] { min-height: 64px; }
+}
