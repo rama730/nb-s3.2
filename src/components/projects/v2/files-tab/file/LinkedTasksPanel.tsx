@@ -20,6 +20,7 @@ import * as React from "react";
 import { Check, Loader2, Pencil, X } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { getTaskTitlePresentation } from "@/lib/projects/task-presentation";
 import { useTaskLinks, type LinkedTask } from "@/hooks/useTaskLinks";
 import { FileInspectorPanelHeader } from "./FileInspectorPanelHeader";
 
@@ -124,6 +125,7 @@ function LinkedTaskRow({
   onOpenTask,
   onUpdateAnnotation,
 }: LinkedTaskRowProps): React.JSX.Element {
+  const titlePresentation = getTaskTitlePresentation(task);
   const [isEditing, setIsEditing] = React.useState(false);
   const [annotationDraft, setAnnotationDraft] = React.useState(
     task.annotation ?? "",
@@ -138,31 +140,28 @@ function LinkedTaskRow({
     }
   }, [isEditing]);
 
-  const handleSaveAnnotation = React.useCallback(async () => {
+  const handleSaveAnnotation = async () => {
     if (isSaving) return;
     setIsSaving(true);
     await onUpdateAnnotation(task.taskId, annotationDraft.trim());
     setIsSaving(false);
     setIsEditing(false);
-  }, [task.taskId, annotationDraft, onUpdateAnnotation, isSaving]);
+  };
 
-  const handleCancelEdit = React.useCallback(() => {
+  const handleCancelEdit = () => {
     setAnnotationDraft(task.annotation ?? "");
     setIsEditing(false);
-  }, [task.annotation]);
+  };
 
-  const handleKeyDown = React.useCallback(
-    (e: React.KeyboardEvent<HTMLInputElement>) => {
-      if (e.key === "Enter") {
-        e.preventDefault();
-        handleSaveAnnotation();
-      } else if (e.key === "Escape") {
-        e.preventDefault();
-        handleCancelEdit();
-      }
-    },
-    [handleSaveAnnotation, handleCancelEdit],
-  );
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      void handleSaveAnnotation();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      handleCancelEdit();
+    }
+  };
 
   return (
     <li
@@ -182,7 +181,13 @@ function LinkedTaskRow({
         <div className="flex items-start gap-2">
           <StatusDot status={task.status} />
           <div className="min-w-0 flex-1">
-            <div className="truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">
+            <div
+              className={cn(
+                "truncate text-sm font-medium text-zinc-900 dark:text-zinc-100",
+                titlePresentation.className,
+              )}
+              aria-label={titlePresentation.ariaLabel}
+            >
               {task.title}
             </div>
             <div className="mt-0.5 flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
