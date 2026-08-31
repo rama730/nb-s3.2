@@ -38,7 +38,7 @@ export async function* fetchAndParseTarball(
     const gunzip = zlib.createGunzip();
 
     let iteratorResolvers: { resolve: (val: any) => void; reject: (err: any) => void }[] = [];
-    let fileQueue: TarballFile[] = [];
+    const fileQueue: TarballFile[] = [];
     let isDone = false;
     let streamError: Error | null = null;
 
