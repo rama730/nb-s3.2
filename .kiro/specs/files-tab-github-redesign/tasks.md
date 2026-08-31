@@ -1,5 +1,9 @@
 # Implementation Plan: Files Tab GitHub Redesign
 
+## Approved revision — 2026-08-31
+
+The Files ecosystem redesign supersedes Q1 and Q3 below: bulk selection is opt-in through a menu, and Trash is now a required left-navigation collection with Restore and separately confirmed permanent deletion. The six collections belong in the sidebar; Project files opens the tree with Back to Files. Routine manual Refresh is removed. Missing Trash/permanent-delete UI is a failing acceptance test, not "not applicable". See `docs/audits/ponytail-files-ecosystem-2026-08-31.md` for implemented behavior and verification limits.
+
 ## Overview
 
 Convert the Files tab from a mini-IDE (`WorkspaceShell`) into a GitHub-style browse-first surface (`FilesTabRoot`) behind the `filesTabV3Enabled` feature flag. Coexist with the legacy implementation during rollout; delete legacy modules only after Phase 4 completes. Strictly preserve the public API of shared modules (`filesWorkspaceStore`, `src/app/actions/files/*`, `src/lib/db/schema.ts`) so the Tasks tab keeps working (Req 21.7–21.8).
