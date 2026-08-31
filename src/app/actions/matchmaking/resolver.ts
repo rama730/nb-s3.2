@@ -4,6 +4,8 @@ import { db } from '@/lib/db';
 import { profiles, projectOpenRoles } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 import { rolePreferenceLabel, weeklyCapacityLabel, experienceLevelLabel } from '@/lib/profile/role-preferences';
+import { getAuthUser } from '@/lib/supabase/auth-user';
+import { getProjectAccessById } from '@/lib/data/project-access';
 
 export interface AttributeAlignment {
   skillsMatch: { matched: string[]; missing: string[] };
@@ -16,15 +18,44 @@ export async function getProfileToRoleAlignmentAction(
   profileId: string,
   roleId: string
 ): Promise<AttributeAlignment> {
-  const profile = await db.query.profiles.findFirst({
-    where: eq(profiles.id, profileId),
-  });
+  const viewer = await getAuthUser();
+  if (!viewer) throw new Error('Unauthorized');
 
   const role = await db.query.projectOpenRoles.findFirst({
     where: eq(projectOpenRoles.id, roleId),
+    columns: {
+      projectId: true,
+      skills: true,
+      experienceRequired: true,
+      hoursPerWeek: true,
+      commitmentType: true,
+    },
   });
 
-  if (!profile || !role) {
+  if (!role) {
+    return {
+      skillsMatch: { matched: [], missing: [] },
+      experienceMatch: { required: null, actual: null, aligns: false },
+      capacityMatch: { required: null, actual: null, aligns: false },
+      commitmentMatch: { required: null, actual: null, aligns: false },
+    };
+  }
+
+  const access = await getProjectAccessById(role.projectId, viewer.id);
+  if (!access.project || (!access.isOwner && access.memberRole !== 'admin')) {
+    throw new Error('You can only inspect candidate alignment for projects you manage');
+  }
+
+  const profile = await db.query.profiles.findFirst({
+    where: eq(profiles.id, profileId),
+    columns: {
+      skills: true,
+      experienceLevel: true,
+      hoursPerWeek: true,
+      openTo: true,
+    },
+  });
+  if (!profile) {
     return {
       skillsMatch: { matched: [], missing: [] },
       experienceMatch: { required: null, actual: null, aligns: false },
