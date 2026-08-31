@@ -3,7 +3,7 @@
 import { memo, useState, useRef, useEffect } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Plus, Filter } from 'lucide-react';
-import { FILTER_VIEWS, VIEW_MODES, FilterView, ViewMode } from '@/constants/hub';
+import { FILTER_VIEWS, FilterView, ViewMode } from '@/constants/hub';
 import { HubFilters } from '@/types/hub';
 import { useReducedMotionPreference } from '@/components/providers/theme-provider';
 
@@ -23,17 +23,10 @@ const HubHeader = memo(function HubHeader({
     onCreateProject,
     onPreloadModal,
     filters,
-    viewMode,
-    onViewModeChange,
 }: HubHeaderProps) {
     const reduceMotion = useReducedMotionPreference();
     const [isFilterDropdownOpen, setIsFilterDropdownOpen] = useState(false);
-    const [isResetting, setIsResetting] = useState(false);
-    const [isDoneResetting, setIsDoneResetting] = useState(false);
     const filterDropdownRef = useRef<HTMLDivElement>(null);
-    const resetTimeoutRef = useRef<number | null>(null);
-    const doneTimeoutRef = useRef<number | null>(null);
-    const isMountedRef = useRef(true);
     const getTitle = () => {
         switch (filterView) {
             case FILTER_VIEWS.TRENDING:
@@ -50,29 +43,8 @@ const HubHeader = memo(function HubHeader({
     };
 
     const handleResetOpen = () => {
-        if (resetTimeoutRef.current !== null) {
-            window.clearTimeout(resetTimeoutRef.current);
-            resetTimeoutRef.current = null;
-        }
-        if (doneTimeoutRef.current !== null) {
-            window.clearTimeout(doneTimeoutRef.current);
-            doneTimeoutRef.current = null;
-        }
-        setIsResetting(true);
-        setIsDoneResetting(false);
-        resetTimeoutRef.current = window.setTimeout(() => {
-            resetTimeoutRef.current = null;
-            if (!isMountedRef.current) return;
-            setIsResetting(false);
-            setIsDoneResetting(true);
-            onApplyFilters({ status: 'all', type: 'all', sort: 'newest', tech: [], hideOpened: false });
-            doneTimeoutRef.current = window.setTimeout(() => {
-                doneTimeoutRef.current = null;
-                if (!isMountedRef.current) return;
-                setIsDoneResetting(false);
-                setIsFilterDropdownOpen(false);
-            }, 1000);
-        }, 800);
+        onApplyFilters({ status: 'all', type: 'all', sort: 'newest', tech: [], hideOpened: false });
+        setIsFilterDropdownOpen(false);
     };
 
     // Close on click outside
@@ -85,20 +57,6 @@ const HubHeader = memo(function HubHeader({
 
         document.addEventListener('mousedown', handleClickOutside);
         return () => document.removeEventListener('mousedown', handleClickOutside);
-    }, []);
-
-    useEffect(() => {
-        return () => {
-            isMountedRef.current = false;
-            if (resetTimeoutRef.current !== null) {
-                window.clearTimeout(resetTimeoutRef.current);
-                resetTimeoutRef.current = null;
-            }
-            if (doneTimeoutRef.current !== null) {
-                window.clearTimeout(doneTimeoutRef.current);
-                doneTimeoutRef.current = null;
-            }
-        };
     }, []);
 
     return (
@@ -179,25 +137,9 @@ const HubHeader = memo(function HubHeader({
                                     <button
                                         type="button"
                                         onClick={handleResetOpen}
-                                        disabled={isResetting || isDoneResetting}
-                                        className={`w-full py-2.5 px-3 rounded-xl text-sm font-medium flex items-center justify-center transition-all ${
-                                            isDoneResetting 
-                                            ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' 
-                                            : 'bg-zinc-100 hover:bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:hover:bg-zinc-700 dark:text-zinc-300'
-                                        }`}
+                                        className="w-full py-2.5 px-3 rounded-xl text-sm font-medium flex items-center justify-center transition-all bg-zinc-100 hover:bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:hover:bg-zinc-700 dark:text-zinc-300"
                                     >
-                                        {isResetting ? (
-                                            <span className="flex items-center gap-2">
-                                                <div className="w-4 h-4 rounded-full border-2 border-zinc-400 border-t-zinc-600 animate-spin" />
-                                                Resetting...
-                                            </span>
-                                        ) : isDoneResetting ? (
-                                            <span className="flex items-center gap-2">
-                                                ✓ Done
-                                            </span>
-                                        ) : (
-                                            'Reset Open'
-                                        )}
+                                        Reset view
                                     </button>
                                 </div>
                             </motion.div>
