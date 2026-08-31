@@ -11,6 +11,11 @@ export interface WorkspaceSlice {
    * `expandedFolderIds` with `true`.
    */
   setCurrentLocation: (projectId: string, nodeId: string | null) => void;
+  setDirtyFile: (projectId: string, nodeId: string, dirty: boolean) => void;
+  setPendingNavigation: (
+    projectId: string,
+    pending: { nodeId: string | null } | null,
+  ) => void;
 
   setQuickOpenOpen: (projectId: string, open: boolean) => void;
   toggleSidebar: (projectId: string) => void;
@@ -76,6 +81,39 @@ export const createWorkspaceSlice: StateCreator<FilesWorkspaceState, [], [], Wor
             selectionVersion: idChanged ? ws.selectionVersion + 1 : ws.selectionVersion,
             treeVersion: expandedChanged ? ws.treeVersion + 1 : ws.treeVersion,
           },
+        },
+      };
+    }),
+  setDirtyFile: (projectId, nodeId, dirty) =>
+    set((state) => {
+      const ws = state.byProjectId[projectId] ?? defaultWorkspace();
+      const dirtyFileId = dirty
+        ? nodeId
+        : ws.dirtyFileId === nodeId
+          ? null
+          : ws.dirtyFileId;
+      if (dirtyFileId === ws.dirtyFileId && state.byProjectId[projectId]) return state;
+      return {
+        byProjectId: {
+          ...state.byProjectId,
+          [projectId]: { ...ws, dirtyFileId },
+        },
+      };
+    }),
+  setPendingNavigation: (projectId, pending) =>
+    set((state) => {
+      const ws = state.byProjectId[projectId] ?? defaultWorkspace();
+      if (
+        ws.pendingNavigation?.nodeId === pending?.nodeId &&
+        Boolean(ws.pendingNavigation) === Boolean(pending) &&
+        state.byProjectId[projectId]
+      ) {
+        return state;
+      }
+      return {
+        byProjectId: {
+          ...state.byProjectId,
+          [projectId]: { ...ws, pendingNavigation: pending },
         },
       };
     }),
