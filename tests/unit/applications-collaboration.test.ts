@@ -88,6 +88,20 @@ test('sendStructuredMessageActionV2 validation guards for project invitations', 
     assert.match(sendStructured, /messageWorkflowItems/);
 });
 
+test('sendStructuredMessageActionV2 writes workflow invitations complete for realtime clients', () => {
+    const source = readProjectFile('src/app/actions/messaging/collaboration.ts');
+    const sendStructured = extractExportedFunction(source, 'sendStructuredMessageActionV2');
+
+    const workflowIdIndex = sendStructured.indexOf('const workflowItemId = workflowKind ? crypto.randomUUID() : null;');
+    const transactionIndex = sendStructured.indexOf('const result = await db.transaction');
+    assert.ok(workflowIdIndex >= 0 && workflowIdIndex < transactionIndex);
+    assert.match(sendStructured, /}, persistedStructured\), 'sent'\)/);
+    assert.match(sendStructured, /\.values\(\{\s*id: workflowItemId,/s);
+    assert.doesNotMatch(sendStructured, /\.update\(messages\)/);
+    assert.doesNotMatch(sendStructured, /refreshConversationParticipantPreviews\(conversationId\)/);
+    assert.match(sendStructured, /native message trigger owns participant previews\/unread state/);
+});
+
 test('getIncomingApplicationsAction queries and merges roleApplications and messageWorkflowItems project invites', () => {
     const source = readProjectFile('src/app/actions/applications/internal.ts');
     const getIncoming = extractExportedFunction(source, 'getIncomingApplicationsAction');
@@ -105,7 +119,7 @@ test('getInboxApplicationsAction queries and merges roleApplications and message
     assert.match(getInbox, /db\.query\.roleApplications\.findMany/);
     assert.match(getInbox, /db\.query\.messageWorkflowItems\.findMany/);
     assert.match(getInbox, /isWorkflowItem:\s*true/);
-    assert.match(getInbox, /kind,\s*'project_invite'/);
+    assert.match(getInbox, /invite\.kind\s*=\s*'project_invite'/);
 });
 
 test('resolveStructuredWorkflowTransition handles cancel actions for creators', () => {
