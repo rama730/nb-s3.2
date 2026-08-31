@@ -10,6 +10,7 @@ import { logger } from '@/lib/logger';
 import { buildProjectOwnerPresentation } from '@/lib/privacy/presentation';
 import { resolvePrivacyRelationships } from '@/lib/privacy/resolver';
 import { getProjectMemberRoleLabel } from '@/lib/projects/settings-policies';
+import { filterProjectLinksForAudience } from '@/lib/projects/social-links';
 import { HubFilters, Project } from '@/types/hub';
 import { countCanonicalSkillMatches } from '@/lib/skills/matching';
 import { containsLikePattern, escapeLikePattern, normalizeSearchQuery, tokenizeSearchQuery } from '@/lib/search/query';
@@ -31,10 +32,17 @@ interface HubQueryOptions {
 }
 
 type ParsedCursor =
-    | { kind: 'score'; score: number; createdAt: string; id: string }
-    | { kind: 'time'; createdAt: string; id: string }
-    | { kind: 'snapshot'; score: number; id: string }
+    | { kind: 'score'; fingerprint: string; score: number; createdAt: string; id: string }
+    | { kind: 'time'; fingerprint: string; createdAt: string; id: string }
+    | { kind: 'snapshot'; fingerprint: string; score: number; id: string }
     | null;
+
+export class InvalidHubCursorError extends Error {
+    constructor() {
+        super('Invalid project search cursor');
+        this.name = 'InvalidHubCursorError';
+    }
+}
 
 type RawProjectRow = {
     id: string;
@@ -56,6 +64,8 @@ type RawProjectRow = {
     importSource: {
         metadata?: Record<string, unknown>;
     } | null;
+    externalLinks: import('@/lib/profile/normalization').SocialLinkStorage | null;
+    githubRepoUrl: string | null;
     createdAt: Date;
     updatedAt: Date;
     feedScore: number | null;
@@ -117,51 +127,41 @@ const parseHubCursor = (cursor?: string): ParsedCursor => {
     if (!cursor) return null;
 
     if (cursor.startsWith('s:')) {
-        const [, payload] = cursor.split('s:');
-        if (!payload) return null;
-        const [scoreRaw, createdAt, id] = payload.split('|');
+        const [fingerprint, scoreRaw, createdAt, id, extra] = cursor.slice(2).split('|');
         const score = Number(scoreRaw);
-        if (Number.isFinite(score) && createdAt && id) {
-            return { kind: 'score', score, createdAt, id };
+        if (fingerprint && Number.isFinite(score) && createdAt && Number.isFinite(Date.parse(createdAt)) && id && !extra) {
+            return { kind: 'score', fingerprint, score, createdAt, id };
         }
-        return null;
+        throw new InvalidHubCursorError();
     }
 
     if (cursor.startsWith('h:')) {
-        const [, payload] = cursor.split('h:');
-        if (!payload) return null;
-        const [scoreRaw, id] = payload.split('|');
+        const [fingerprint, scoreRaw, id, extra] = cursor.slice(2).split('|');
         const score = Number(scoreRaw);
-        if (Number.isFinite(score) && id) {
-            return { kind: 'snapshot', score, id };
+        if (fingerprint && Number.isFinite(score) && id && !extra) {
+            return { kind: 'snapshot', fingerprint, score, id };
         }
-        return null;
+        throw new InvalidHubCursorError();
     }
 
     if (cursor.startsWith('t:')) {
-        const [, payload] = cursor.split('t:');
-        if (!payload) return null;
-        const [createdAt, id] = payload.split('|');
-        if (createdAt && id) {
-            return { kind: 'time', createdAt, id };
+        const [fingerprint, createdAt, id, extra] = cursor.slice(2).split('|');
+        if (fingerprint && createdAt && Number.isFinite(Date.parse(createdAt)) && id && !extra) {
+            return { kind: 'time', fingerprint, createdAt, id };
         }
-        return null;
+        throw new InvalidHubCursorError();
     }
 
-    const [createdAt, id] = cursor.split('|');
-    if (createdAt && id) {
-        return { kind: 'time', createdAt, id };
-    }
-
-    return null;
+    throw new InvalidHubCursorError();
 };
 
-const buildTimeCursor = (createdAt: Date, id: string) => `t:${createdAt.toISOString()}|${id}`;
-const buildSnapshotCursor = (score: number, id: string) =>
-    `h:${Number.isFinite(score) ? score.toFixed(6) : '0.000000'}|${id}`;
+const buildTimeCursor = (fingerprint: string, createdAt: Date, id: string) =>
+    `t:${fingerprint}|${createdAt.toISOString()}|${id}`;
+const buildSnapshotCursor = (fingerprint: string, score: number, id: string) =>
+    `h:${fingerprint}|${Number.isFinite(score) ? score.toFixed(6) : '0.000000'}|${id}`;
 
-const buildScoreCursor = (score: number, createdAt: Date, id: string) =>
-    `s:${Number.isFinite(score) ? score.toFixed(6) : '0.000000'}|${createdAt.toISOString()}|${id}`;
+const buildScoreCursor = (fingerprint: string, score: number, createdAt: Date, id: string) =>
+    `s:${fingerprint}|${Number.isFinite(score) ? score.toFixed(6) : '0.000000'}|${createdAt.toISOString()}|${id}`;
 
 const isProjectsSelectSchemaError = (error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
@@ -642,7 +642,7 @@ const getFeedSnapshot = async (
     return { snapshot: value, cacheHit };
 };
 
-const fetchProjectsByIds = async (projectIds: string[]) => {
+const fetchProjectsByIds = async (projectIds: string[], conditions: SQL<unknown>[] = []) => {
     if (projectIds.length === 0) {
         return {
             rows: [] as RawProjectRow[],
@@ -672,12 +672,14 @@ const fetchProjectsByIds = async (projectIds: string[]) => {
                 status: projects.status,
                 lifecycleStages: projects.lifecycleStages,
                 importSource: projects.importSource,
+                externalLinks: projects.externalLinks,
+                githubRepoUrl: projects.githubRepoUrl,
                 createdAt: projects.createdAt,
                 updatedAt: projects.updatedAt,
                 feedScore: sql<number>`0`,
             })
             .from(projects)
-            .where(inArray(projects.id, projectIds));
+            .where(and(inArray(projects.id, projectIds), ...conditions));
 
         const rank = new Map(projectIds.map((id, index) => [id, index]));
         rows.sort((a, b) => (rank.get(a.id) ?? 0) - (rank.get(b.id) ?? 0));
@@ -705,12 +707,14 @@ const fetchProjectsByIds = async (projectIds: string[]) => {
                 status: projects.status,
                 lifecycleStages: sql<string[] | null>`null`,
                 importSource: sql<RawProjectRow['importSource']>`null`,
+                externalLinks: sql<RawProjectRow['externalLinks']>`null`,
+                githubRepoUrl: sql<string | null>`null`,
                 createdAt: projects.createdAt,
                 updatedAt: projects.updatedAt,
                 feedScore: sql<number>`0`,
             })
             .from(projects)
-            .where(inArray(projects.id, projectIds));
+            .where(and(inArray(projects.id, projectIds), ...conditions));
 
         const rank = new Map(projectIds.map((id, index) => [id, index]));
         rows.sort((a, b) => (rank.get(a.id) ?? 0) - (rank.get(b.id) ?? 0));
@@ -970,6 +974,11 @@ const hydrateProjects = async (
             tags: project.tags || [],
             skills: project.skills || [],
             visibility: project.visibility || 'public',
+            externalLinks: filterProjectLinksForAudience(
+                project.externalLinks,
+                project.ownerId === viewerId || projectMembersRows.some((member) => member.member.userId === viewerId),
+            ),
+            githubRepoUrl: project.githubRepoUrl,
             viewCount: project.viewCount || 0,
             followersCount,
 
@@ -1033,7 +1042,10 @@ export const getHubProjects = cache(async (
 
     const parsedCursor = parseHubCursor(cursor);
     const viewerType = viewerId ? 'user' : 'anon';
-    const filtersFingerprint = buildHubSnapshotKey({ view, filters }).slice(0, 12);
+    const filtersFingerprint = buildHubSnapshotKey({ view, filters, viewerId: viewerId ?? 'anon' }).slice(0, 12);
+    if (parsedCursor && parsedCursor.fingerprint !== filtersFingerprint) {
+        throw new InvalidHubCursorError();
+    }
 
     const personalizationTerms =
         view === FILTER_VIEWS.RECOMMENDATIONS
@@ -1045,6 +1057,9 @@ export const getHubProjects = cache(async (
         !filters.includedIds?.length;
 
     if (shouldUseSnapshot) {
+        if (parsedCursor && parsedCursor.kind !== 'snapshot') {
+            throw new InvalidHubCursorError();
+        }
         const { snapshot, cacheHit } = await getFeedSnapshot(view, viewerId, filters, personalizationTerms);
         let startIndex = 0;
         if (parsedCursor?.kind === 'snapshot') {
@@ -1062,22 +1077,31 @@ export const getHubProjects = cache(async (
                     filtersFingerprint,
                     cacheHit,
                 });
-            } else {
-                startIndex = cursorIndex + 1;
+                throw new InvalidHubCursorError();
             }
+            startIndex = cursorIndex + 1;
         }
 
-        const pageItems = snapshot.items.slice(startIndex, startIndex + pageSize);
-        const pageIds = pageItems.map((item) => item.id);
-        const reasonsMap = new Map(pageItems.map((item) => [item.id, item.reasons]));
+        const currentConditions = buildBaseConditions(filters, view, viewerId);
+        const reasonsMap = new Map<string, string[]>();
+        const pageRows: RawProjectRow[] = [];
+        let hasFollowersCountColumn = true;
+        let consumedIndex = startIndex;
 
-        const { rows, hasFollowersCountColumn } = await fetchProjectsByIds(pageIds);
-        const mappedProjects = await hydrateProjects(rows, hasFollowersCountColumn, reasonsMap, viewerId, surface);
+        while (pageRows.length < pageSize && consumedIndex < snapshot.items.length) {
+            const pageItems = snapshot.items.slice(consumedIndex, consumedIndex + pageSize - pageRows.length);
+            consumedIndex += pageItems.length;
+            const result = await fetchProjectsByIds(pageItems.map((item) => item.id), currentConditions);
+            hasFollowersCountColumn &&= result.hasFollowersCountColumn;
+            pageRows.push(...result.rows);
+            for (const item of pageItems) reasonsMap.set(item.id, item.reasons);
+        }
 
-        const lastSnapshotItem = pageItems.at(-1);
+        const mappedProjects = await hydrateProjects(pageRows, hasFollowersCountColumn, reasonsMap, viewerId, surface);
+        const lastSnapshotItem = snapshot.items[consumedIndex - 1];
         const nextCursor =
-            startIndex + pageSize < snapshot.items.length && lastSnapshotItem
-                ? buildSnapshotCursor(lastSnapshotItem.score, lastSnapshotItem.id)
+            consumedIndex < snapshot.items.length && lastSnapshotItem
+                ? buildSnapshotCursor(filtersFingerprint, lastSnapshotItem.score, lastSnapshotItem.id)
                 : undefined;
 
         recordHubMetric({
@@ -1136,6 +1160,10 @@ export const getHubProjects = cache(async (
         isOldestSort = true;
     }
 
+    if (parsedCursor && parsedCursor.kind !== (scoreExpr ? 'score' : 'time')) {
+        throw new InvalidHubCursorError();
+    }
+
     let scoreCursorCondition: SQL<unknown> | null = null;
 
     if (scoreExpr && parsedCursor?.kind === 'score') {
@@ -1183,6 +1211,8 @@ export const getHubProjects = cache(async (
             status: sql<string | null>`null`,
             lifecycleStages: sql<string[] | null>`null`,
             importSource: sql<RawProjectRow['importSource']>`null`,
+            externalLinks: projects.externalLinks,
+            githubRepoUrl: projects.githubRepoUrl,
             createdAt: projects.createdAt,
             updatedAt: projects.updatedAt,
             feedScore: scoreExpr ?? sql<number>`0`,
@@ -1203,6 +1233,8 @@ export const getHubProjects = cache(async (
             status: projects.status,
             lifecycleStages: projects.lifecycleStages,
             importSource: projects.importSource,
+            externalLinks: projects.externalLinks,
+            githubRepoUrl: projects.githubRepoUrl,
             createdAt: projects.createdAt,
             updatedAt: projects.updatedAt,
             feedScore: scoreExpr ?? sql<number>`0`,
@@ -1217,7 +1249,7 @@ export const getHubProjects = cache(async (
                 .from(projects)
                 .where(and(...conditions))
                 .orderBy(...orderByClauses)
-                .limit(pageSize);
+                .limit(pageSize + 1);
         });
     } catch (error) {
         if (!isProjectsSelectSchemaError(error)) throw error;
@@ -1250,6 +1282,8 @@ export const getHubProjects = cache(async (
             status: sql<string | null>`null`,
             lifecycleStages: sql<string[] | null>`null`,
             importSource: sql<RawProjectRow['importSource']>`null`,
+            externalLinks: sql<RawProjectRow['externalLinks']>`null`,
+            githubRepoUrl: sql<string | null>`null`,
             createdAt: projects.createdAt,
             updatedAt: projects.updatedAt,
             feedScore: sql<number>`0`,
@@ -1270,6 +1304,8 @@ export const getHubProjects = cache(async (
             status: projects.status,
             lifecycleStages: sql<string[] | null>`null`,
             importSource: sql<RawProjectRow['importSource']>`null`,
+            externalLinks: sql<RawProjectRow['externalLinks']>`null`,
+            githubRepoUrl: sql<string | null>`null`,
             createdAt: projects.createdAt,
             updatedAt: projects.updatedAt,
             feedScore: sql<number>`0`,
@@ -1284,17 +1320,19 @@ export const getHubProjects = cache(async (
                 .from(projects)
                 .where(and(...fallbackConditions))
                 .orderBy(...fallbackOrderBy)
-                .limit(pageSize);
+                .limit(pageSize + 1);
         });
     }
 
-    const mappedProjects = await hydrateProjects(rawProjects, hasFollowersCountColumn, undefined, viewerId ?? null, surface);
-    const lastProject = rawProjects[rawProjects.length - 1];
-    const nextCursor = rawProjects.length === pageSize
+    const hasMore = rawProjects.length > pageSize;
+    const pageProjects = hasMore ? rawProjects.slice(0, pageSize) : rawProjects;
+    const mappedProjects = await hydrateProjects(pageProjects, hasFollowersCountColumn, undefined, viewerId ?? null, surface);
+    const lastProject = pageProjects.at(-1);
+    const nextCursor = hasMore
         ? scoreExpr && lastProject
-            ? buildScoreCursor(Number(lastProject.feedScore || 0), lastProject.createdAt, lastProject.id)
+            ? buildScoreCursor(filtersFingerprint, Number(lastProject.feedScore || 0), lastProject.createdAt, lastProject.id)
             : lastProject
-                ? buildTimeCursor(lastProject.createdAt, lastProject.id)
+                ? buildTimeCursor(filtersFingerprint, lastProject.createdAt, lastProject.id)
                 : undefined
         : undefined;
 
@@ -1312,7 +1350,7 @@ export const getHubProjects = cache(async (
     return {
         projects: mappedProjects,
         nextCursor,
-        hasMore: rawProjects.length === pageSize,
+        hasMore,
         schemaVersion: HUB_RANKING_SCHEMA_VERSION,
     };
 });
