@@ -7,7 +7,7 @@ import { createProjectSchema, type CreateProjectInput, type OpenRoleInput } from
 import { generateSlug, generateProjectId } from '@/lib/utils/project-ids';
 import { toast } from 'sonner';
 import { TOTAL_PHASES, WizardPhaseId } from '@/constants/project-wizard';
-import { applyProjectDocCreationIntentAction, createProjectAction } from '@/app/actions/project';
+import { createProjectAction } from '@/app/actions/project';
 import { parseGithubRepo } from '@/lib/github/repo-preview';
 import { fetchGithubImportPreviewFolder, fetchGithubImportPreviewRoot } from '@/lib/github/import-client';
 import { shouldIgnorePath } from '@/lib/import/import-filters';
@@ -89,6 +89,7 @@ export function useCreateProjectWizard({ onClose, onSuccess, draftId }: UseCreat
                 title: '',
             },
             import_source: { type: 'scratch' },
+            external_links: [],
             readme: {
                 mode: 'skip',
                 sourcePath: null,
@@ -401,6 +402,13 @@ export function useCreateProjectWizard({ onClose, onSuccess, draftId }: UseCreat
         openRoles, setOpenRoles, addRole, updateRole, removeRole
     }), [openRoles, addRole, updateRole, removeRole]);
 
+    // Phase is navigation only. Reaching a later step does not make the
+    // project dirty, so closing after restoring all values must not prompt.
+    // Keep the two non-form inputs that would otherwise be lost in the check.
+    const hasUnsavedWizardChanges = isDirty
+        || Boolean(uploadFiles?.length)
+        || openRoles.some((role) => Boolean(role.role?.trim()));
+
     // --- Navigation ---
     const handleNext = useCallback(async () => {
         let isValid = false;
@@ -466,9 +474,9 @@ export function useCreateProjectWizard({ onClose, onSuccess, draftId }: UseCreat
     }, []);
 
     const handleCloseAttempt = useCallback(() => {
-        if (isDirty || phase > 1) setShowExitConfirm(true);
+        if (hasUnsavedWizardChanges) setShowExitConfirm(true);
         else onClose();
-    }, [isDirty, phase, onClose]);
+    }, [hasUnsavedWizardChanges, onClose]);
 
     // --- Submission ---
     const onSubmit = useCallback(async (data: CreateProjectInput) => {
@@ -507,20 +515,7 @@ export function useCreateProjectWizard({ onClose, onSuccess, draftId }: UseCreat
                     roles: resolvedRoles,
                     includeRoles: readmeIntent.includeRoles !== false,
                 });
-                const readmeResult = await applyProjectDocCreationIntentAction(projectId, {
-                    ...readmeIntent,
-                    starterContent,
-                });
                 readmeApplied = true;
-
-                if (!readmeResult.success) {
-                    console.warn('[create-project] Doc setup failed', readmeResult.error);
-                    return;
-                }
-
-                if (readmeResult.status === 'not_found') {
-                    toast.info('Project created. Doc source was not ready yet, so you can import it later from the Doc tab.');
-                }
             } catch (error) {
                 console.warn('[create-project] Doc setup failed', error);
             }
