@@ -23,6 +23,7 @@ import { notifyForFileVersionCreated } from "@/lib/notifications/task-file";
 import { enqueueProjectNotificationEvent } from "@/lib/notifications/project-events";
 import {
   assertProjectFileReadAccess,
+  assertTaskFileNodeVisible,
   assertProjectUploadAccess,
   assertProjectWriteAccess,
   assertProjectWriteAccessTx,
@@ -51,6 +52,16 @@ import {
 
 const LIST_VERSIONS_MAX = 200;
 
+async function assertVersionNodeReadable(projectId: string, nodeId: string, actorId: string | null) {
+  const access = await assertProjectFileReadAccess(projectId, actorId);
+  const node = await db.query.projectNodes.findFirst({
+    where: and(eq(projectNodes.id, nodeId), eq(projectNodes.projectId, projectId)),
+    columns: { id: true, path: true, taskId: true, deletedAt: true },
+  });
+  if (!node) throw new Error("File not found");
+  assertTaskFileNodeVisible(access, node);
+}
+
 function actorNotificationSnapshot(user: { user_metadata?: Record<string, unknown> | null }) {
   return {
     actorName: (user.user_metadata?.full_name as string | undefined) ?? (user.user_metadata?.username as string | undefined) ?? null,
@@ -78,14 +89,15 @@ export async function listFileVersions(
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   const actorId = user?.id ?? null;
-  await assertProjectFileReadAccess(projectId, actorId);
+  const access = await assertProjectFileReadAccess(projectId, actorId);
 
   // Confirm the node belongs to the project (defense-in-depth on top of RLS).
   const node = await db.query.projectNodes.findFirst({
     where: and(eq(projectNodes.id, nodeId), eq(projectNodes.projectId, projectId)),
-    columns: { id: true, type: true },
+    columns: { id: true, type: true, path: true, taskId: true, deletedAt: true },
   });
   if (!node) throw new Error("File not found");
+  assertTaskFileNodeVisible(access, node);
   if (node.type !== "file") throw new Error("Versions are tracked only on files");
 
   const rows = await db
@@ -125,7 +137,7 @@ export async function getVersionSignedUrl(
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   const actorId = user?.id ?? null;
-  await assertProjectFileReadAccess(projectId, actorId);
+  await assertVersionNodeReadable(projectId, nodeId, actorId);
   const clampedTtl = Math.max(30, Math.min(3600, ttlSeconds));
 
   const version_row = await db.query.fileVersions.findFirst({
@@ -387,7 +399,7 @@ export async function getFileVersionContentAction(
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   const actorId = user?.id ?? null;
-  await assertProjectFileReadAccess(projectId, actorId);
+  await assertVersionNodeReadable(projectId, nodeId, actorId);
 
   const versionRow = await db.query.fileVersions.findFirst({
     where: and(eq(fileVersions.nodeId, nodeId), eq(fileVersions.version, versionNumber)),
@@ -466,11 +478,12 @@ export async function deleteFileVersionAction(
     }),
   );
 
-  const stillReferenced = await db.query.fileVersions.findFirst({
-    where: eq(fileVersions.s3Key, mutation.target.s3Key),
-    columns: { id: true },
-  });
-  if (!stillReferenced) {
+  const [versionReference, nodeReference] = await Promise.all([
+    db.query.fileVersions.findFirst({ where: eq(fileVersions.s3Key, mutation.target.s3Key), columns: { id: true } }),
+    db.query.projectNodes.findFirst({ where: eq(projectNodes.s3Key, mutation.target.s3Key), columns: { id: true } }),
+  ]);
+  // Copies and trashed files may still refer to a blob without a version row.
+  if (!versionReference && !nodeReference && parseProjectFileKey(mutation.target.s3Key)?.projectId === projectId) {
     const adminClient = await createAdminClient();
     await adminClient.storage.from("project-files").remove([mutation.target.s3Key]).catch(() => null);
   }
