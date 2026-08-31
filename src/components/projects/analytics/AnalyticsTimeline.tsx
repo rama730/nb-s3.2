@@ -125,11 +125,11 @@ export function AnalyticsTimeline({
 
     return (
         <div className="space-y-3">
-            <AnalyticsShellCard>
+            <AnalyticsShellCard className="sticky top-3 z-10 bg-white/95 shadow-sm backdrop-blur dark:bg-zinc-950/95">
                 <AnalyticsSectionHeader
                     eyebrow="Timeline"
-                    title="Chronological project movement"
-                    description="Task, sprint, file, member, application, workflow, and settings activity normalized into one project trail."
+                    title="Project activity trail"
+                    description="A chronological audit trail across tasks, sprints, files, people, applications, workflows, and settings."
                 />
                 <div className="mt-3 flex flex-wrap gap-1.5">
                     {EVENT_TYPES.map((eventType) => (
