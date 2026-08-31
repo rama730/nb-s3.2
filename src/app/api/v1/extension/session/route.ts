@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { extensionDeviceSessionEvents, extensionDeviceSessions } from "@/lib/db/schema";
 import { EXTENSION_DEVICE_SESSION_EVENTS } from "@/lib/extension/session-events";
 import { logger } from "@/lib/logger";
+import { validateCsrf } from "@/lib/security/csrf";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -53,6 +54,8 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  const csrfError = validateCsrf(request);
+  if (csrfError) return csrfError;
   try {
     const limitResponse = await enforceRouteLimit(request, "api:v1:extension:session:revoke", 30, 60);
     if (limitResponse) return limitResponse;
