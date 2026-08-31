@@ -30,6 +30,22 @@ export type PresenceMemberState = {
   profile: PresenceMemberProfile | null;
 };
 
+export type PresenceTypingUser = {
+  id: string;
+  username: string | null;
+  fullName: string | null;
+  avatarUrl: string | null;
+};
+
+export function toPresenceTypingUser(member: PresenceMemberState): PresenceTypingUser {
+  return {
+    id: member.userId,
+    username: member.profile?.username ?? null,
+    fullName: member.profile?.fullName ?? member.userName ?? null,
+    avatarUrl: member.profile?.avatarUrl ?? null,
+  };
+}
+
 export type PresenceServerEvent =
   | {
       type: "presence.state";
