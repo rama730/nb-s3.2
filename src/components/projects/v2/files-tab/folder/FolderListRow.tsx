@@ -3,10 +3,11 @@
 "use client";
 
 import * as React from "react";
-import { Star } from "lucide-react";
+import { MoreHorizontal, Star } from "lucide-react";
 
 import type { ProjectNode } from "@/lib/db/schema";
 import { cn } from "@/lib/utils";
+import { getTaskWorkingFilesDisplayName } from "@/lib/files/task-working-files";
 
 import { FileIcon } from "../../explorer/FileIcons";
 import { TaskLinkPopover } from "../TaskLinkPopover";
@@ -37,6 +38,7 @@ export interface FolderListRowProps {
   node: FolderListRowNode;
   /** Toggles drag source + hides the favorite affordance when false. */
   canEdit: boolean;
+  canMove?: boolean;
   /** Renders the favorite star as filled. */
   isFavorite: boolean;
   /** Optional git change status for this node. */
@@ -52,10 +54,15 @@ export interface FolderListRowProps {
   /** Context-menu handler (preserves `ExplorerContextMenu` integration). */
   onContextMenu: (node: FolderListRowNode, event: React.MouseEvent) => void;
   /** Drop handler — only folder rows are valid drop targets. */
-  onDropOnFolder: (targetFolderId: string, draggedNodeId: string) => void;
+  onDropOnFolder?: (targetFolderId: string, draggedNodeId: string) => void;
   /** Desktop file drop upload target. Only firing when `canEdit` is true. */
   onDesktopFileDrop?: (files: File[], targetFolderId: string) => void;
   className?: string;
+  selected?: boolean;
+  onSelectionChange?: (nodeId: string, selected: boolean) => void;
+  showActions?: boolean;
+  actions?: React.ReactNode;
+  subtitle?: string;
 }
 
 // ─── Drag-source MIME (matches the tree drag-source in `FileTreeRow`) ─
@@ -146,16 +153,21 @@ export const FolderListRow = React.memo(function FolderListRow({
   projectId,
   node,
   canEdit,
+  canMove = canEdit,
   isFavorite,
   gitChange,
   gitIntegrationEnabled,
   taskLinkCount,
   onNavigate,
-  onToggleFavorite,
   onContextMenu,
   onDropOnFolder,
   onDesktopFileDrop,
   className,
+  selected = false,
+  onSelectionChange,
+  showActions = true,
+  actions,
+  subtitle,
 }: FolderListRowProps): React.JSX.Element {
   const isFolder = node.type === "folder";
   const [dropHighlight, setDropHighlight] = React.useState(false);
@@ -166,14 +178,6 @@ export const FolderListRow = React.memo(function FolderListRow({
   const handleClick = React.useCallback(() => {
     onNavigate(node.id);
   }, [node.id, onNavigate]);
-
-  const handleFavoriteClick = React.useCallback(
-    (e: React.MouseEvent<HTMLButtonElement>) => {
-      e.stopPropagation();
-      onToggleFavorite(node.id);
-    },
-    [node.id, onToggleFavorite],
-  );
 
   const handleContextMenu = React.useCallback(
     (e: React.MouseEvent) => {
@@ -186,24 +190,37 @@ export const FolderListRow = React.memo(function FolderListRow({
 
   const handleDragStart = React.useCallback(
     (e: React.DragEvent) => {
-      if (!canEdit) return;
+      if (!canMove) return;
       e.dataTransfer.setData(NODE_DRAG_MIME, node.id);
       e.dataTransfer.effectAllowed = "move";
     },
-    [canEdit, node.id],
+    [canMove, node.id],
   );
 
   const handleDragOver = React.useCallback(
     (e: React.DragEvent) => {
       if (!isFolder) return;
-      e.preventDefault();
-      const hasFiles = e.dataTransfer.types.includes("Files");
-      const hasNodeDrag = e.dataTransfer.types.includes(NODE_DRAG_MIME);
+      const hasFiles =
+        canEdit &&
+        Boolean(onDesktopFileDrop) &&
+        e.dataTransfer.types.includes("Files");
+      const hasNodeDrag =
+        canMove &&
+        Boolean(onDropOnFolder) &&
+        e.dataTransfer.types.includes(NODE_DRAG_MIME);
       if (!hasFiles && !hasNodeDrag) return;
+      e.preventDefault();
       e.dataTransfer.dropEffect = hasFiles ? "copy" : "move";
       if (!dropHighlight) setDropHighlight(true);
     },
-    [dropHighlight, isFolder],
+    [
+      canEdit,
+      canMove,
+      dropHighlight,
+      isFolder,
+      onDesktopFileDrop,
+      onDropOnFolder,
+    ],
   );
 
   const handleDragLeave = React.useCallback(() => {
@@ -223,18 +240,26 @@ export const FolderListRow = React.memo(function FolderListRow({
         onDesktopFileDrop(files, node.id);
         return;
       }
-      if (!canEdit) return;
+      if (!canMove || !onDropOnFolder) return;
 
       if (!e.dataTransfer.types.includes(NODE_DRAG_MIME)) return;
       const draggedId = extractDraggedNodeId(e.dataTransfer);
       if (!draggedId || draggedId === node.id) return;
       onDropOnFolder(node.id, draggedId);
     },
-    [canEdit, isFolder, node.id, onDesktopFileDrop, onDropOnFolder],
+    [
+      canEdit,
+      canMove,
+      isFolder,
+      node.id,
+      onDesktopFileDrop,
+      onDropOnFolder,
+    ],
   );
 
   const byLabel = updatedByLabel(node);
   const updatedLabel = updatedAtLabel(node);
+  const displayName = getTaskWorkingFilesDisplayName(node);
 
   return (
     <div
@@ -244,17 +269,18 @@ export const FolderListRow = React.memo(function FolderListRow({
       data-node-type={node.type}
       style={{
         gridTemplateColumns: FOLDER_LIST_GRID_TEMPLATE,
-        height: FOLDER_LIST_ROW_HEIGHT_PX,
+        minHeight: FOLDER_LIST_ROW_HEIGHT_PX,
       }}
       onClick={handleClick}
       onKeyDown={(e) => {
+        if (e.target !== e.currentTarget) return;
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
           onNavigate(node.id);
         }
       }}
       onContextMenu={handleContextMenu}
-      draggable={canEdit}
+      draggable={canMove}
       onDragStart={handleDragStart}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
@@ -263,7 +289,7 @@ export const FolderListRow = React.memo(function FolderListRow({
       className={cn(
         "group grid cursor-pointer items-center gap-x-3 border-b border-zinc-100 px-4 text-sm outline-none transition-colors",
         "hover:bg-zinc-50 focus-visible:bg-zinc-50   ",
-        "dark:border-zinc-800 dark:hover:bg-zinc-900/40 dark:focus-visible:bg-zinc-900/40 dark:",
+        "dark:border-zinc-800 dark:hover:bg-zinc-900/40 dark:focus-visible:bg-zinc-900/40 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500",
         dropHighlight &&
           "bg-indigo-50/70 ring-1 ring-inset ring-indigo-400 dark:bg-indigo-900/30",
         className,
@@ -275,46 +301,27 @@ export const FolderListRow = React.memo(function FolderListRow({
         data-column="name"
         className="flex min-w-0 items-center gap-2"
       >
+        {canEdit && onSelectionChange && <label className="flex size-9 shrink-0 cursor-pointer items-center justify-center" onClick={event => event.stopPropagation()}><input type="checkbox" aria-label={`Select ${displayName}`} checked={selected} onChange={event => onSelectionChange(node.id, event.target.checked)} className="size-4 accent-blue-600" /></label>}
         <FileIcon
-          name={node.name}
+          name={displayName}
           isFolder={isFolder}
           isOpen={false}
           className="h-4 w-4 shrink-0 text-zinc-500"
         />
-        <span
+        <div className="min-w-0 flex-1"><span
           data-testid="files-tab-folder-list-name"
           className={cn(
-            "truncate text-zinc-800 dark:text-zinc-200",
+            "block truncate text-zinc-800 dark:text-zinc-200",
             isFolder && "font-medium",
           )}
-          title={node.name}
+          title={displayName}
         >
-          {node.name}
+          {displayName}
         </span>
+        {subtitle && <span className="block truncate text-xs text-zinc-500">{subtitle}</span>}
+        <span data-file-mobile-meta className="truncate text-xs text-zinc-500">{[updatedLabel, sizeLabel(node), byLabel].filter(label => label && label !== MISSING).join(" · ")}</span></div>
         <VersionPill v={node.currentVersion} />
-        {canEdit || isFavorite ? (
-          <button
-            type="button"
-            onClick={handleFavoriteClick}
-            aria-label={isFavorite ? "Remove favorite" : "Add favorite"}
-            aria-pressed={isFavorite}
-            data-testid="files-tab-folder-list-favorite"
-            data-favorite={isFavorite ? "true" : "false"}
-            className={cn(
-              "shrink-0 rounded p-0.5 transition-colors",
-              isFavorite
-                ? "text-amber-400 hover:text-amber-500"
-                : "text-transparent group-hover:text-zinc-400 hover:text-amber-400 focus-visible:text-zinc-500",
-              "focus:outline-none  ",
-            )}
-          >
-            <Star
-              className="h-3.5 w-3.5"
-              fill={isFavorite ? "currentColor" : "none"}
-              aria-hidden="true"
-            />
-          </button>
-        ) : null}
+        {isFavorite && <Star aria-label="Starred" className="size-3.5 shrink-0 text-zinc-500" fill="currentColor" />}
         {showGitBadge ? <GitChangeBadge status={gitChange!} /> : null}
         {(taskLinkCount ?? 0) > 0 ? (
           <TaskLinkPopover
@@ -323,6 +330,7 @@ export const FolderListRow = React.memo(function FolderListRow({
             count={taskLinkCount!}
           />
         ) : null}
+
       </div>
 
       {/* Last updated */}
@@ -353,28 +361,9 @@ export const FolderListRow = React.memo(function FolderListRow({
       >
         {byLabel}
       </div>
+      <div role="cell" data-column="actions" onClick={event => event.stopPropagation()} className="flex justify-end">{showActions && (actions ?? <button type="button" aria-label={`Actions for ${displayName}`} className="flex size-10 items-center justify-center rounded hover:bg-zinc-200 focus-visible:ring-2 focus-visible:ring-blue-500 dark:hover:bg-zinc-800" onClick={handleContextMenu}><MoreHorizontal aria-hidden="true" className="size-4" /></button>)}</div>
     </div>
   );
-}, arePropsEqual);
+});
 
 export default FolderListRow;
-
-function arePropsEqual(
-  prev: FolderListRowProps,
-  next: FolderListRowProps,
-): boolean {
-  return (
-    prev.node === next.node &&
-    prev.canEdit === next.canEdit &&
-    prev.isFavorite === next.isFavorite &&
-    prev.gitChange === next.gitChange &&
-    prev.gitIntegrationEnabled === next.gitIntegrationEnabled &&
-    prev.taskLinkCount === next.taskLinkCount &&
-    prev.onNavigate === next.onNavigate &&
-    prev.onToggleFavorite === next.onToggleFavorite &&
-    prev.onContextMenu === next.onContextMenu &&
-    prev.onDropOnFolder === next.onDropOnFolder &&
-    prev.onDesktopFileDrop === next.onDesktopFileDrop &&
-    prev.className === next.className
-  );
-}
