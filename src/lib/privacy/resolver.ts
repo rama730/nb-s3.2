@@ -3,7 +3,6 @@ import { db } from "@/lib/db";
 import { connections, profiles } from "@/lib/db/schema";
 import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { logger } from "@/lib/logger";
-import { getRedisClient } from "@/lib/redis";
 import {
   derivePrivacyRelationshipState,
   type ConnectionPrivacySetting,
@@ -14,40 +13,6 @@ import {
 } from "@/lib/privacy/relationship-state";
 
 type ConnectionRow = PrivacyConnectionRow;
-
-// Circuit breaker for Redis fast-path (versioned to prevent concurrent reset races)
-const CIRCUIT_THRESHOLD = 5;
-const CIRCUIT_RESET_MS = 30_000;
-
-const circuitState = {
-  failureCount: 0,
-  openUntil: 0,
-  version: 0,
-};
-
-function isRedisCircuitOpen(): boolean {
-  if (circuitState.openUntil === 0) return false;
-  if (Date.now() >= circuitState.openUntil) {
-    // Atomic reset: bump version so only the first caller resets
-    circuitState.version++;
-    circuitState.openUntil = 0;
-    circuitState.failureCount = 0;
-    return false;
-  }
-  return true;
-}
-
-function recordRedisFailure(): void {
-  circuitState.failureCount++;
-  if (circuitState.failureCount >= CIRCUIT_THRESHOLD) {
-    circuitState.openUntil = Date.now() + CIRCUIT_RESET_MS;
-  }
-}
-
-function recordRedisSuccess(): void {
-  circuitState.failureCount = 0;
-  circuitState.openUntil = 0;
-}
 
 const DEFAULT_VISIBILITY: ProfileVisibilitySetting = "public";
 const DEFAULT_MESSAGE_PRIVACY: MessagePrivacySetting = "connections";
@@ -153,80 +118,36 @@ export async function resolvePrivacyRelationship(
 
   if (!targetProfile) return null;
 
-  // =========================================================================
-  // PURE OPTIMIZATION: Redis Fast Path for Connected Users
-  // If the viewer's connection set exists in Redis and contains the target,
-  // we KNOW they are connected — skip the DB query entirely.
-  // =========================================================================
   let latestConnection: ConnectionRow | null = null;
-  let usedFastPath = false;
+  const usedFastPath = false;
 
   if (viewerId && viewerId !== targetUserId) {
-    const redis = getRedisClient();
-
-    // Step 1: Bloom Filter pre-check for blocked pairs
-    // If BF says "definitely not blocked", skip the block DB lookup entirely.
-    let mightBeBlocked = true;
-    try {
-      const { isBlockedPair } = await import("@/lib/privacy/bloom-filter");
-      mightBeBlocked = await isBlockedPair(viewerId, targetUserId);
-    } catch {
-      // If bloom filter fails, assume might be blocked (safe fallback)
-    }
-
-    // Step 2: Redis SISMEMBER fast path for connection status
-    if (redis && !mightBeBlocked && !isRedisCircuitOpen()) {
-      try {
-        const key = `user:${viewerId}:connections`;
-        const exists = await redis.exists(key);
-        if (exists) {
-          const isMember = await redis.sismember(key, targetUserId);
-          if (isMember) {
-            // Synthesize a "connected" row without hitting DB
-            latestConnection = {
-              id: `redis-fast-path-${viewerId}-${targetUserId}`,
-              requesterId: viewerId,
-              addresseeId: targetUserId,
-              status: "accepted",
-              blockedBy: null,
-            };
-            usedFastPath = true;
-          }
-        }
-        recordRedisSuccess();
-      } catch {
-        recordRedisFailure();
-        // Redis failure — fall through to DB
-      }
-    }
-
-    // Step 3: DB fallback (only if fast path didn't resolve)
-    if (!latestConnection) {
-      const dbConnection = await db.query.connections.findFirst({
-        columns: {
-          id: true,
-          requesterId: true,
-          addresseeId: true,
-          status: true,
-          blockedBy: true,
-        },
-        where: or(
-          and(eq(connections.requesterId, viewerId), eq(connections.addresseeId, targetUserId)),
-          and(eq(connections.requesterId, targetUserId), eq(connections.addresseeId, viewerId)),
-        ),
-        orderBy: [
-          sql`CASE
-            WHEN status = 'accepted' THEN 1
-            WHEN status = 'blocked' THEN 2
-            WHEN status = 'pending' THEN 3
-            ELSE 4
-          END`,
-          desc(connections.updatedAt),
-          desc(connections.id)
-        ],
-      });
-      latestConnection = dbConnection ?? null;
-    }
+    // Redis relationship projections are never authorization proof: a block
+    // and cache invalidation cannot be committed atomically across systems.
+    const dbConnection = await db.query.connections.findFirst({
+      columns: {
+        id: true,
+        requesterId: true,
+        addresseeId: true,
+        status: true,
+        blockedBy: true,
+      },
+      where: or(
+        and(eq(connections.requesterId, viewerId), eq(connections.addresseeId, targetUserId)),
+        and(eq(connections.requesterId, targetUserId), eq(connections.addresseeId, viewerId)),
+      ),
+      orderBy: [
+        sql`CASE
+          WHEN status = 'blocked' THEN 1
+          WHEN status = 'accepted' THEN 2
+          WHEN status = 'pending' THEN 3
+          ELSE 4
+        END`,
+        desc(connections.updatedAt),
+        desc(connections.id)
+      ],
+    });
+    latestConnection = dbConnection ?? null;
   }
 
   const needsMutualResolution =
@@ -357,6 +278,71 @@ export async function resolvePrivacyRelationships(
 
   logger.metric("privacy.relationship.resolve", {
     mode: "batch",
+    viewerId: viewerId ?? "anon",
+    targetCount: uniqueTargetIds.length,
+    mutualResolutionCount: needsMutualResolutionIds.length,
+    durationMs: Date.now() - startedAt,
+  });
+  return results;
+}
+
+/**
+ * Resolve privacy when the caller already selected the target profile policy.
+ * Discovery feeds also exclude existing relationships in SQL, so querying the
+ * same profiles and connection rows again only adds a serial database roundtrip.
+ * Mutual-only policies still use the canonical batched mutual resolver.
+ */
+export async function resolvePrivacyRelationshipsFromProfiles(
+  viewerId: string | null,
+  targetProfiles: Array<{
+    id: string;
+    visibility: ProfileVisibilitySetting | null;
+    messagePrivacy: MessagePrivacySetting | null;
+    connectionPrivacy: ConnectionPrivacySetting | null;
+  }>,
+  options: { connectionsKnownAbsent: true },
+): Promise<Map<string, PrivacyRelationshipState>> {
+  const startedAt = Date.now();
+  const profilesById = new Map(
+    targetProfiles.filter((profile) => Boolean(profile.id)).map((profile) => [profile.id, profile]),
+  );
+  const uniqueTargetIds = Array.from(profilesById.keys());
+  if (uniqueTargetIds.length === 0) return new Map();
+
+  const needsMutualResolutionIds = viewerId
+    ? uniqueTargetIds.filter((targetUserId) => {
+        const profile = profilesById.get(targetUserId);
+        return (
+          viewerId !== targetUserId &&
+          (profile?.connectionPrivacy ?? DEFAULT_CONNECTION_PRIVACY) === "mutuals_only"
+        );
+      })
+    : [];
+  const mutualAcceptedCountByTarget =
+    viewerId && needsMutualResolutionIds.length > 0
+      ? await countMutualAcceptedConnectionsBatch(viewerId, needsMutualResolutionIds)
+      : new Map<string, number>();
+
+  const results = new Map<string, PrivacyRelationshipState>();
+  for (const targetUserId of uniqueTargetIds) {
+    const profile = profilesById.get(targetUserId);
+    if (!profile) continue;
+    results.set(
+      targetUserId,
+      derivePrivacyRelationshipState({
+        viewerId,
+        targetUserId,
+        profileVisibility: profile.visibility ?? DEFAULT_VISIBILITY,
+        messagePrivacy: profile.messagePrivacy ?? DEFAULT_MESSAGE_PRIVACY,
+        connectionPrivacy: profile.connectionPrivacy ?? DEFAULT_CONNECTION_PRIVACY,
+        latestConnection: options.connectionsKnownAbsent ? null : null,
+        mutualAcceptedCount: mutualAcceptedCountByTarget.get(targetUserId) ?? 0,
+      }),
+    );
+  }
+
+  logger.metric("privacy.relationship.resolve", {
+    mode: "batch-preloaded",
     viewerId: viewerId ?? "anon",
     targetCount: uniqueTargetIds.length,
     mutualResolutionCount: needsMutualResolutionIds.length,
