@@ -14,7 +14,7 @@
 //      `FilesTabBootContext.Provider`. Child subtrees that need per-folder
 //      reads (`useFolderContents`) read from the context rather than
 //      re-booting; double-booting would double-fire the batch hydration
-//      and `getProjectTreeFlat` fetch.
+//      and the paginated root fetch.
 //   4. Gate `useDeepLinkResolver(projectId, ...)` on `stage === "main"`
 //      per design.md § useDeepLinkResolver. Critically, the resolver reads
 //      from a **mount-time snapshot** of `window.location.search` rather
@@ -54,6 +54,7 @@
 "use client";
 
 import { toast } from "sonner";
+import { useQueryClient } from "@tanstack/react-query";
 
 import React, {
   useCallback,
@@ -66,7 +67,6 @@ import React, {
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 import { createClient } from "@/lib/supabase/client";
 import { subscribeProjectFilesChannel } from "@/lib/realtime/project-files-channel";
-import { getTaskLinkCounts } from "@/app/actions/files/links";
 import { getNodeMetadataBatch } from "@/app/actions/files/nodes";
 
 import { useExplorerBoot } from "../explorer/useExplorerBoot";
@@ -77,15 +77,17 @@ import {
 } from "./FilesTabRoleContext";
 import { FilesTabSidebar } from "./FilesTabSidebar";
 import { FilesTabMain } from "./FilesTabMain";
-import { GitHubSyncDrawer } from "./navigation/GitHubSyncDrawer";
 import { QuickOpenDialog } from "./quick-open/QuickOpenDialog";
 import { HydrationProgressBanner } from "@/components/projects/HydrationProgressBanner";
 import { FilesTabBootContext } from "./hooks/useFolderContents";
 import { useFilesTabStartupStage } from "./hooks/useFilesTabStartupStage";
 import { useDeepLinkResolver } from "./hooks/useDeepLinkResolver";
 import { useFilesTabUrlSync } from "./hooks/useFilesTabUrlSync";
-import { useNavigateTo } from "./hooks/useNavigateTo";
+import { runNavigateTo, useNavigateTo } from "./hooks/useNavigateTo";
 import { fetchProjectFileLeases } from "@/lib/files/file-lease-client";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { FilesWorkspaceViews } from "./FilesWorkspaceViews";
+import { FilesWorkspaceGitHubDrawer } from "./navigation/FilesWorkspaceGitHubDrawer";
 
 function showFilesToast(message: string, type: "success" | "error" | "info" | "warning" = "info") {
   if (type === "success") toast.success(message);
@@ -110,6 +112,10 @@ export interface FilesTabRootProps {
    * member. Combined with `currentUserId` to derive the Files-tab role.
    */
   isOwnerOrMember: boolean;
+  isOwner?: boolean;
+  canManageFiles?: boolean;
+  canUploadFiles?: boolean;
+  canReadTasks?: boolean;
   /**
    * Whether the Files tab is the active project tab. Forwarded to
    * `useExplorerBoot` to gate background fetches. Defaults to `true`.
@@ -132,17 +138,19 @@ export interface FilesTabRootProps {
   initialOpenFileId?: string | null;
 }
 
-// Module-level global registry to prevent duplicate project subscriptions.
-const ACTIVE_SUBSCRIPTIONS = new Set<string>();
+const FILES_WORKSPACE_SCROLL_EVENT = "project:files-workspace-scroll";
 
 // ─── Component ───────────────────────────────────────────────────────
 
 export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
+  const queryClient = useQueryClient();
   const {
     projectId,
     projectName,
     currentUserId,
     isOwnerOrMember,
+    isOwner = false,
+    canManageFiles = false,
     isActive = true,
     syncStatus,
     initialOpenPath,
@@ -158,15 +166,32 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
 
   // ── 2. Role derivation ───────────────────────────────────────────
   //
-  // Owner/Member distinction is not available at this boundary — the
-  // upstream `isOwnerOrMember` collapses both. Per design.md § Roles,
-  // `canEdit = true` for both, so collapsing to `Role_Owner` is safe for
-  // role-gated UI. Viewer is the floor for unauthenticated visitors.
   const role: Role = useMemo<Role>(() => {
     if (!currentUserId) return "Role_Viewer";
-    return isOwnerOrMember ? "Role_Owner" : "Role_Viewer";
-  }, [currentUserId, isOwnerOrMember]);
-  const canEdit = role !== "Role_Viewer";
+    if (isOwner) return "Role_Owner";
+    return isOwnerOrMember ? "Role_Member" : "Role_Viewer";
+  }, [currentUserId, isOwner, isOwnerOrMember]);
+  const canEdit = role !== "Role_Viewer" && props.canUploadFiles !== false;
+  const canReadTasks = props.canReadTasks ?? role !== "Role_Viewer";
+  const pendingNavigation = useFilesWorkspaceStore(
+    (state) => state.byProjectId[projectId]?.pendingNavigation ?? null,
+  );
+  const confirmPendingNavigation = useCallback(() => {
+    if (!pendingNavigation) return;
+    const state = useFilesWorkspaceStore.getState();
+    const dirtyFileId = state.byProjectId[projectId]?.dirtyFileId ?? null;
+    if (dirtyFileId) state.setDirtyFile(projectId, dirtyFileId, false);
+    state.setPendingNavigation(projectId, null);
+    runNavigateTo(
+      {
+        setCurrentLocation: state.setCurrentLocation,
+        addRecent: state.addRecent,
+        getNodeType: (id) => state.byProjectId[projectId]?.nodesById[id]?.type,
+      },
+      projectId,
+      pendingNavigation.nodeId,
+    );
+  }, [pendingNavigation, projectId]);
 
   // ── 3. Three-stage startup machine (Req 16.4) ─────────────────────
   const [stage, signalStageComplete] = useFilesTabStartupStage(projectId);
@@ -287,20 +312,31 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
   );
   const handledInitialFileIdRef = useRef<string | null>(null);
   const resolvingInitialFileIdRef = useRef<string | null>(null);
+  const [handledInitialFileId, setHandledInitialFileId] = useState<string | null>(null);
+  const completeInitialFileResolution = useCallback((fileId: string) => {
+    handledInitialFileIdRef.current = fileId;
+    setHandledInitialFileId(fileId);
+  }, []);
 
   useEffect(() => {
     if (!initialOpenFileId) {
       handledInitialFileIdRef.current = null;
       resolvingInitialFileIdRef.current = null;
+      setHandledInitialFileId(null);
     }
   }, [initialOpenFileId]);
 
   useEffect(() => {
     if (!initialOpenFileId || !initialOpenFileExists) return;
     if (handledInitialFileIdRef.current === initialOpenFileId) return;
-    handledInitialFileIdRef.current = initialOpenFileId;
     navigateToInitialFile(initialOpenFileId);
-  }, [initialOpenFileExists, initialOpenFileId, navigateToInitialFile]);
+    completeInitialFileResolution(initialOpenFileId);
+  }, [
+    completeInitialFileResolution,
+    initialOpenFileExists,
+    initialOpenFileId,
+    navigateToInitialFile,
+  ]);
 
   useEffect(() => {
     if (!initialOpenFileId || initialOpenFileExists) return;
@@ -315,18 +351,20 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
         if (cancelled) return;
         if (!result.success) {
           toast.error(result.message || "The requested file is not available.");
+          completeInitialFileResolution(initialOpenFileId);
           return;
         }
 
         const node = result.data.nodes.find((candidate) => candidate.id === initialOpenFileId);
         if (!node || node.type !== "file") {
           toast.error("The requested file is not available or you do not have access.");
+          completeInitialFileResolution(initialOpenFileId);
           return;
         }
 
         upsertNodes(projectId, result.data.nodes);
-        handledInitialFileIdRef.current = initialOpenFileId;
         navigateToInitialFile(initialOpenFileId);
+        completeInitialFileResolution(initialOpenFileId);
       })
       .catch((error) => {
         if (cancelled) return;
@@ -336,6 +374,7 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
           error,
         });
         toast.error("The requested file is not available or you do not have access.");
+        completeInitialFileResolution(initialOpenFileId);
       })
       .finally(() => {
         if (resolvingInitialFileIdRef.current === initialOpenFileId) {
@@ -347,6 +386,7 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
       cancelled = true;
     };
   }, [
+    completeInitialFileResolution,
     initialOpenFileExists,
     initialOpenFileId,
     navigateToInitialFile,
@@ -362,62 +402,39 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
 
   // ── 7. URL sync (replaceState mirror + popstate handler) ──────────
   useFilesTabUrlSync(projectId, {
+    suspendWrites: Boolean(
+      initialOpenFileId &&
+        handledInitialFileId !== initialOpenFileId,
+    ),
     onPopStateError: () => {
       toast.error("Deep link target not found.");
     },
   });
 
-  // ── 8. Project_Channel realtime subscription (Req 3.1, 3.2) ────────
+  // ── 8. Project lease channel + bounded freshness reconciliation ───
   //
-  // Lazy-mount a single project-scoped realtime channel when the Files tab
-  // is active. The channel multiplexes `task_node_links` and `file_versions`
-  // bindings. On unmount (or navigation away), we unsubscribe to free the
-  // channel budget.
-  const setTaskLinkCounts = useFilesWorkspaceStore((s) => s.setTaskLinkCounts);
+  // The only Realtime binding is the project-filtered lease table. File/link
+  // state reconciles from the authoritative folder query after mutations and
+  // when the visible tab regains focus; this avoids workspace-wide events and
+  // dead `project_nodes` subscriptions.
   const setLocks = useFilesWorkspaceStore((s) => s.setLocks);
+  const currentLocationId = useFilesWorkspaceStore(
+    (s) => s.byProjectId[projectId]?.currentLocationId ?? null,
+  );
+  const currentLocationNode = useFilesWorkspaceStore(
+    (s) => currentLocationId
+      ? s.byProjectId[projectId]?.nodesById[currentLocationId] ?? null
+      : null,
+  );
+  const visibleFolderId = currentLocationNode?.type === "folder"
+    ? currentLocationNode.id
+    : currentLocationNode?.parentId ?? null;
 
   useEffect(() => {
     if (!isActive) return;
-    if (ACTIVE_SUBSCRIPTIONS.has(projectId)) return;
-    ACTIVE_SUBSCRIPTIONS.add(projectId);
-
     const supabase = createClient();
     let reconcileTimer: number | null = null;
-    let versionReconcileTimer: number | null = null;
-    let versionReconcileInFlight = false;
     let disposed = false;
-    const pendingVersionNodeIds = new Set<string>();
-
-    const flushVersionReconciliation = async () => {
-      versionReconcileTimer = null;
-      if (disposed || versionReconcileInFlight || pendingVersionNodeIds.size === 0) return;
-      const nodeIds = Array.from(pendingVersionNodeIds);
-      pendingVersionNodeIds.clear();
-      versionReconcileInFlight = true;
-      try {
-        const result = await getNodeMetadataBatch(projectId, nodeIds);
-        if (!disposed && result.success) {
-          upsertNodes(projectId, result.data.nodes);
-        }
-      } catch (error) {
-        console.warn("[files-tab] failed to reconcile file version metadata", error);
-      } finally {
-        versionReconcileInFlight = false;
-        if (!disposed && pendingVersionNodeIds.size > 0 && versionReconcileTimer === null) {
-          versionReconcileTimer = window.setTimeout(() => {
-            void flushVersionReconciliation();
-          }, 75);
-        }
-      }
-    };
-
-    const reconcileVersionNode = (nodeId: string) => {
-      pendingVersionNodeIds.add(nodeId);
-      if (versionReconcileTimer !== null || versionReconcileInFlight) return;
-      versionReconcileTimer = window.setTimeout(() => {
-        void flushVersionReconciliation();
-      }, 75);
-    };
 
     const reconcileLocks = () => {
       if (reconcileTimer) window.clearTimeout(reconcileTimer);
@@ -427,52 +444,73 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
           .catch((error) => console.warn("[files-tab] failed to reconcile file leases", error));
       }, 100);
     };
-    reconcileLocks();
 
     const channel = subscribeProjectFilesChannel(supabase, {
       projectId,
-      onTaskLinkChange: (event) => {
-        // Re-fetch the count for the affected node so the store has the
-        // authoritative value. For DELETE events where the link is removed,
-        // the count may drop to zero — `setTaskLinkCounts` handles that by
-        // removing the TaskLinkChip (Req 3.7).
-        void getTaskLinkCounts(projectId, [event.nodeId]).then((counts) => {
-          setTaskLinkCounts(projectId, counts);
-        });
-      },
-      onFileVersionChange: (event) => {
-        reconcileVersionNode(event.nodeId);
-      },
       onFileLeaseChange: reconcileLocks,
       onStatus: (status) => {
         if (status === "SUBSCRIBED") reconcileLocks();
       },
     });
 
+    const reconcileVisibleFolder = () => {
+      if (disposed || document.visibilityState !== "visible") return;
+      void loadFolderContent(visibleFolderId, "refresh").catch((error) => {
+        console.warn("[files-tab] failed to reconcile visible folder", error);
+      });
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") reconcileVisibleFolder();
+    };
+    const onFilesChanged = (event: Event) => {
+      if ((event as CustomEvent<{ projectId?: string }>).detail?.projectId !== projectId) return;
+      for (const collection of ["files-task-collections", "files-trash", "files-saved-collection", "files-directory", "files-picker", "files-picker-recent", "files-quick-open", "files-quick-open-recent"]) void queryClient.invalidateQueries({ queryKey: [collection, projectId] });
+      reconcileVisibleFolder();
+    };
+    window.addEventListener("focus", reconcileVisibleFolder);
+    window.addEventListener("project:task-files-changed", onFilesChanged);
+    window.addEventListener("online", reconcileVisibleFolder);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    const folderReconciliation = window.setInterval(reconcileVisibleFolder, 60_000);
     const expirySweep = window.setInterval(() => {
       const current = useFilesWorkspaceStore.getState().byProjectId[projectId]?.locksByNodeId ?? {};
-      setLocks(projectId, Object.values(current).filter((lock) => lock.expiresAt > Date.now()));
+      const locks = Object.values(current);
+      if (locks.some((lock) => lock.expiresAt <= Date.now())) {
+        setLocks(projectId, locks.filter((lock) => lock.expiresAt > Date.now()));
+      }
     }, 5_000);
 
     return () => {
       disposed = true;
-      ACTIVE_SUBSCRIPTIONS.delete(projectId);
       if (reconcileTimer) window.clearTimeout(reconcileTimer);
-      if (versionReconcileTimer) window.clearTimeout(versionReconcileTimer);
       window.clearInterval(expirySweep);
-      channel.unsubscribe();
+      window.clearInterval(folderReconciliation);
+      window.removeEventListener("focus", reconcileVisibleFolder);
+      window.removeEventListener("project:task-files-changed", onFilesChanged);
+      window.removeEventListener("online", reconcileVisibleFolder);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      void supabase.removeChannel(channel);
     };
-  }, [projectId, isActive, setTaskLinkCounts, setLocks, upsertNodes]);
+  }, [projectId, isActive, loadFolderContent, setLocks, visibleFolderId, queryClient]);
 
   // ── 9. Quick Open state + ⌘P / Ctrl+P toggle (Req 9.1) ────────────
   const [quickOpenOpen, setQuickOpenOpen] = useState(false);
   const [quickOpenQuery, setQuickOpenQuery] = useState("");
-  const [githubSyncOpen, setGithubSyncOpen] = useState(false);
 
   const handleQuickOpenChange = useCallback((next: boolean) => {
     setQuickOpenOpen(next);
     if (!next) setQuickOpenQuery(""); // Req 9.7 discards input on close
   }, []);
+
+  const handleWorkspaceScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+
+    window.dispatchEvent(new CustomEvent(FILES_WORKSPACE_SCROLL_EVENT, {
+      detail: { projectId, scrollTop: target.scrollTop },
+    }));
+  }, [projectId]);
 
   // Use a ref so the listener identity stays stable across renders; the
   // ref carries the freshest `open` value without re-binding the handler.
@@ -514,28 +552,26 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
   // ── 10. Render ─────────────────────────────────────────────────────
   return (
     <FilesTabBootContext.Provider value={bootContextValue}>
-      <FilesTabRoleProvider role={role} canEdit={canEdit}>
+      <FilesTabRoleProvider role={role} canEdit={canEdit} canManageFiles={canManageFiles} canReadTasks={canReadTasks}>
+        <FilesWorkspaceViews projectId={projectId} canReadTasks={canReadTasks}>
         <div
           data-testid="files-tab-root"
           data-startup-stage={stage}
+          onScrollCapture={handleWorkspaceScroll}
           className="relative flex h-full min-h-0 w-full"
         >
           <HydrationProgressBanner projectId={projectId} />
           <FilesTabSidebar
             projectId={projectId}
             canEdit={canEdit}
+            canManageFiles={canManageFiles}
             projectName={projectName}
           />
           <FilesTabMain
             projectId={projectId}
-            onToggleGitHubSync={() => setGithubSyncOpen((open) => !open)}
+            canOpenGitHub={isOwner}
           />
-          {githubSyncOpen && (
-            <GitHubSyncDrawer
-              projectId={projectId}
-              onClose={() => setGithubSyncOpen(false)}
-            />
-          )}
+          <FilesWorkspaceGitHubDrawer projectId={projectId} enabled={isOwner} />
           <QuickOpenDialog
             projectId={projectId}
             open={quickOpenOpen}
@@ -543,7 +579,23 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
             onQueryChange={setQuickOpenQuery}
             onOpenChange={handleQuickOpenChange}
           />
+          <ConfirmDialog
+            open={Boolean(pendingNavigation)}
+            onOpenChange={(open) => {
+              if (!open) {
+                useFilesWorkspaceStore
+                  .getState()
+                  .setPendingNavigation(projectId, null);
+              }
+            }}
+            title="Discard unsaved changes?"
+            description="Your edits have not been saved. Discard them and open the selected location?"
+            confirmLabel="Discard and open"
+            variant="destructive"
+            onConfirm={confirmPendingNavigation}
+          />
         </div>
+        </FilesWorkspaceViews>
       </FilesTabRoleProvider>
     </FilesTabBootContext.Provider>
   );
