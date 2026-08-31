@@ -26,7 +26,8 @@ export function NotificationList(props: {
     items: NotificationItem[];
     filter: NotificationTrayFilter;
     onOpen: (item: NotificationItem) => void | Promise<unknown>;
-    onToggleRead: (item: NotificationItem) => void | Promise<unknown>;
+    onViewed: (notificationIds: string[]) => void;
+    onMarkUnread: (item: NotificationItem) => void | Promise<unknown>;
     onDismiss: (item: NotificationItem) => void | Promise<unknown>;
     onMuteScope: (item: NotificationItem, scope: NotificationMuteScope) => void | Promise<unknown>;
     onSnooze?: (item: NotificationItem, snoozedUntil: string) => void | Promise<unknown>;
@@ -39,7 +40,8 @@ export function NotificationList(props: {
         items,
         filter,
         onOpen,
-        onToggleRead,
+        onViewed,
+        onMarkUnread,
         onDismiss,
         onMuteScope,
         onSnooze,
@@ -128,9 +130,9 @@ export function NotificationList(props: {
             }
             case "r": {
                 const item = resolveFocusedItem();
-                if (!item) return;
+                if (!item || !item.seenAt) return;
                 event.preventDefault();
-                void onToggleRead(item);
+                void onMarkUnread(item);
                 return;
             }
             default:
@@ -151,12 +153,12 @@ export function NotificationList(props: {
             ref={containerRef}
             onKeyDown={handleKeyDown}
             role="region"
-            aria-label="Notifications list. Press J or down arrow to move down, K or up arrow to move up, Enter to open, E to dismiss, R to toggle read."
+            aria-label="Notifications list. Press J or down arrow to move down, K or up arrow to move up, Enter to open, E to dismiss, R to mark a seen notification as new."
         >
             {importantItems.length > 0 ? (
-                <section aria-label="Important notifications">
-                    <div className="sticky top-0 z-10 border-b border-red-200 bg-red-50/95 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-red-700 backdrop-blur dark:border-red-950/70 dark:bg-red-950/30 dark:text-red-300">
-                        Important
+                <section aria-label="Notifications needing attention">
+                    <div className="sticky top-0 z-10 border-b border-zinc-200 bg-white/95 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-600 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/95 dark:text-zinc-400">
+                        Needs attention
                     </div>
                     <div role="list" className="divide-y divide-zinc-100 dark:divide-zinc-900">
                         {importantBundles.map((bundle) => (
@@ -165,7 +167,8 @@ export function NotificationList(props: {
                                     <NotificationBundleRow
                                         bundle={bundle}
                                         onOpen={onOpen}
-                                        onToggleRead={onToggleRead}
+                                        onViewed={onViewed}
+                                        onMarkUnread={onMarkUnread}
                                         onDismiss={onDismiss}
                                         onMuteScope={onMuteScope}
                                         onSnooze={onSnooze}
@@ -174,7 +177,8 @@ export function NotificationList(props: {
                                     <NotificationRow
                                         item={bundle.lead}
                                         onOpen={onOpen}
-                                        onToggleRead={onToggleRead}
+                                        onViewed={onViewed}
+                                        onMarkUnread={onMarkUnread}
                                         onDismiss={onDismiss}
                                         onMuteScope={onMuteScope}
                                         onSnooze={onSnooze}
@@ -200,7 +204,8 @@ export function NotificationList(props: {
                                         <NotificationBundleRow
                                             bundle={bundle}
                                             onOpen={onOpen}
-                                            onToggleRead={onToggleRead}
+                                            onViewed={onViewed}
+                                            onMarkUnread={onMarkUnread}
                                             onDismiss={onDismiss}
                                             onMuteScope={onMuteScope}
                                             onSnooze={onSnooze}
@@ -209,7 +214,8 @@ export function NotificationList(props: {
                                         <NotificationRow
                                             item={bundle.lead}
                                             onOpen={onOpen}
-                                            onToggleRead={onToggleRead}
+                                            onViewed={onViewed}
+                                            onMarkUnread={onMarkUnread}
                                             onDismiss={onDismiss}
                                             onMuteScope={onMuteScope}
                                             onSnooze={onSnooze}
