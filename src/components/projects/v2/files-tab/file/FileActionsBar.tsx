@@ -11,7 +11,9 @@ import {
   ListTodo,
   Pencil,
   RefreshCw,
-  Settings,
+  MoreHorizontal,
+  Download,
+  Copy,
   ChevronDown,
   History,
 } from "lucide-react";
@@ -24,12 +26,12 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { isTextLike as isTextFile } from "../../utils/fileKind";
 import { cn } from "@/lib/utils";
 import { logger } from "@/lib/logger";
 import { useQueryClient } from "@tanstack/react-query";
 import { normalizeProjectDocSlug } from "@/lib/projects/doc";
 import {
-  PROJECT_DOC_DRAFT_QUERY_KEY,
   PROJECT_DOC_QUERY_KEY,
   PROJECT_MARKDOWNS_LIST_QUERY_KEY,
 } from "@/hooks/hub/useProjectDocData";
@@ -127,20 +129,7 @@ export function FileActionsBar({
     );
   }, [fileName, mimeType]);
 
-  const isTextLike = React.useMemo(() => {
-    const name = (fileName || "").toLowerCase();
-    const mime = (mimeType || "").toLowerCase();
-    if (mime.startsWith("text/")) return true;
-    if (mime === "application/json" || mime === "application/xml") return true;
-    const ext = name.split(".").pop() || "";
-    const textExts = new Set([
-      "txt", "md", "markdown", "json", "yml", "yaml", "toml", "xml", "csv",
-      "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "rb", "go", "rs", "java",
-      "kt", "swift", "c", "h", "cc", "cpp", "hpp", "cs", "php", "sql", "css",
-      "scss", "html", "htm", "sh", "bash", "dockerfile", "gitignore"
-    ]);
-    return textExts.has(ext);
-  }, [fileName, mimeType]);
+  const isTextLike = isTextFile({ type: "file", name: fileName || "", mimeType: mimeType ?? null });
 
   const canUseAsReadme = canEdit && Boolean(projectId) && Boolean(nodeId) && isDocLikeFile;
 
@@ -148,9 +137,9 @@ export function FileActionsBar({
   const isEmpty = fileSize === 0;
   // If empty, show Raw. Otherwise, show Raw only if it is markdown/readme (normal code is already raw).
   const showRawOption = isEmpty || isDocLikeFile;
-  const canEditOption = canEdit && isTextLike && !isEmpty;
-  const canReplaceOption = canReplace && !isEmpty;
-  const canAttachOption = canAttachToTask && !isEmpty;
+  const canEditOption = canEdit && isTextLike;
+  const canReplaceOption = canReplace;
+  const canAttachOption = canAttachToTask;
   const canReadmeOption = (canUseAsReadme || isLinked) && !isEmpty;
 
   const handleOpenTaskPicker = React.useCallback(() => {
@@ -170,10 +159,11 @@ export function FileActionsBar({
       setIsLinking(true);
       try {
         const { linkNodeToTask } = await import("@/app/actions/files/links");
-        await linkNodeToTask(taskId, nodeId);
+        await linkNodeToTask(taskId, nodeId, { role: "reference" });
         // On success: close picker (Req 9.4). TaskLinkChip updates via
         // realtime Project_Channel (Req 9.6).
         setIsTaskPickerOpen(false);
+        window.dispatchEvent(new CustomEvent("project:task-files-changed", { detail: { projectId } }));
         toast.success("File attached to task");
       } catch (err) {
         // On failure: show error toast, keep picker open for retry (Req 9.5).
@@ -184,7 +174,7 @@ export function FileActionsBar({
         setIsLinking(false);
       }
     },
-    [nodeId, isLinking],
+    [projectId, nodeId, isLinking],
   );
 
   const handleUseAsReadme = React.useCallback(async () => {
@@ -201,7 +191,6 @@ export function FileActionsBar({
         toast.success("File unlinked from Doc successfully");
         await Promise.all([
           queryClient.invalidateQueries({ queryKey: PROJECT_MARKDOWNS_LIST_QUERY_KEY(projectId) }),
-          queryClient.invalidateQueries({ queryKey: PROJECT_DOC_DRAFT_QUERY_KEY(projectId, linkedDoc.slug) }),
           queryClient.invalidateQueries({ queryKey: PROJECT_DOC_QUERY_KEY(projectId, linkedDoc.slug) })
         ]);
       } catch (err) {
@@ -226,7 +215,7 @@ export function FileActionsBar({
       toast.success("File linked to Doc successfully");
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: PROJECT_MARKDOWNS_LIST_QUERY_KEY(projectId) }),
-        queryClient.invalidateQueries({ queryKey: PROJECT_DOC_DRAFT_QUERY_KEY(projectId, docSlug) }),
+        queryClient.invalidateQueries({ queryKey: PROJECT_DOC_QUERY_KEY(projectId, docSlug) }),
         queryClient.invalidateQueries({ queryKey: PROJECT_DOC_QUERY_KEY(projectId, docSlug) })
       ]);
       onNavigateToDoc?.(docSlug);
@@ -322,10 +311,44 @@ export function FileActionsBar({
     [pendingFile, projectId, nodeId]
   );
 
+  const [downloading, setDownloading] = React.useState(false);
+  async function downloadFile() {
+    if (!projectId || !nodeId || downloading) return;
+    setDownloading(true);
+    try {
+      const { getProjectFileSignedUrl, getProjectFileContent } = await import("@/app/actions/files/content");
+      const node = useFilesWorkspaceStore.getState().byProjectId[projectId]?.nodesById[nodeId];
+      let url: string;
+      let local = false;
+      if (node?.s3Key) url = (await getProjectFileSignedUrl(projectId, nodeId, 300, true)).url;
+      else {
+        const content = await getProjectFileContent(projectId, nodeId);
+        url = URL.createObjectURL(new Blob([content], { type: mimeType || "text/plain" }));
+        local = true;
+      }
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = fileName || "download";
+      anchor.rel = "noopener";
+      anchor.click();
+      if (local) setTimeout(() => URL.revokeObjectURL(url), 30_000);
+    } catch (error) { toast.error(error instanceof Error ? error.message : "Could not download file"); }
+    finally { setDownloading(false); }
+  }
+  async function copyLink() {
+    if (!nodeId) return;
+    const url = new URL(window.location.href);
+    url.searchParams.set("tab", "files");
+    url.searchParams.set("fileId", nodeId);
+    ["path", "filesView", "filesTask"].forEach(key => url.searchParams.delete(key));
+    try { await navigator.clipboard.writeText(url.toString()); toast.success("File link copied. Recipients still need access."); }
+    catch { toast.error("Could not copy the link. Check browser clipboard permissions."); }
+  }
+
   return (
     <div
       data-testid="files-tab-file-actions-bar"
-      className={cn("flex items-center gap-2", className)}
+      className={cn("flex shrink-0 flex-wrap items-center gap-2", className)}
     >
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
@@ -337,12 +360,17 @@ export function FileActionsBar({
             className="gap-1.5 h-8 font-medium text-xs border-zinc-200 dark:border-zinc-800"
             data-testid="files-tab-file-actions-dropdown-trigger"
           >
-            <Settings className="h-3.5 w-3.5 opacity-70" aria-hidden="true" />
+            <MoreHorizontal className="h-3.5 w-3.5 opacity-70" aria-hidden="true" />
             Actions
             <ChevronDown className="h-3.5 w-3.5 opacity-50" aria-hidden="true" />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-52">
+          {projectId && nodeId && <>
+            <DropdownMenuItem disabled={downloading} onClick={() => void downloadFile()} className="gap-2"><Download className="size-4" />{downloading ? "Downloading…" : "Download"}</DropdownMenuItem>
+            <DropdownMenuItem onClick={() => void copyLink()} className="gap-2"><Copy className="size-4" />Copy file link</DropdownMenuItem>
+            <DropdownMenuSeparator />
+          </>}
           {/* View / Preview option */}
           {mode !== "view" && (
             <DropdownMenuItem onClick={onView} className="gap-2 cursor-pointer">
@@ -401,7 +429,7 @@ export function FileActionsBar({
           )}
 
           {/* Toggle panels */}
-          {onToggleLinkedTasks && (
+          {onToggleLinkedTasks && roleCtx?.canReadTasks && (
             <DropdownMenuItem
               onClick={onToggleLinkedTasks}
               data-testid="linked-tasks-toggle"
