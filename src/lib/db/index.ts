@@ -72,9 +72,10 @@ const client = globalForDb.conn ?? postgres(resolvedConnectionString, {
     onclose: () => logger.debug('pg connection closed', { module: 'db' }),
 })
 
-// Read Client (Replica Fallback)
-const readConnectionStringRaw = env.READ_DATABASE_URL || connectionString
-const resolvedReadConnectionString = resolvePoolerConnectionString(readConnectionStringRaw, '6544')
+// Read Client (explicit replica, otherwise the primary pool)
+const resolvedReadConnectionString = env.READ_DATABASE_URL
+    ? resolvePoolerConnectionString(env.READ_DATABASE_URL)
+    : resolvedConnectionString
 const readDbPreparedStatementsEnabled = resolvePreparedStatementsEnabled(resolvedReadConnectionString)
 
 const readClient = globalForDb.readConn ?? (
