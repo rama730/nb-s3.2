@@ -33,9 +33,13 @@ import {
     type WorkflowResolutionAction,
     withStructuredMessageMetadata,
 } from '@/lib/messages/structured';
-import { refreshConversationParticipantPreviewsIfNeeded } from '@/lib/messages/preview-refresh';
+import { refreshConversationParticipantPreviews } from '@/lib/messages/preview-refresh';
 import { withDeliveryMetadata } from '@/lib/messages/delivery-state';
-import { emitWorkflowAssignedNotification, emitWorkflowResolvedNotification } from '@/lib/notifications/emitters';
+import {
+    emitMessageBurstNotifications,
+    emitWorkflowAssignedNotification,
+    emitWorkflowResolvedNotification,
+} from '@/lib/notifications/emitters';
 import { enqueueProjectNotificationEvent } from '@/lib/notifications/project-events';
 import {
     isMessagingActivityBridgesEnabled,
@@ -51,6 +55,7 @@ import {
     isProjectMemberEligibleFor,
     requireProjectCapability,
 } from '@/lib/projects/collaborator-lifecycle';
+import { resolveProjectInvitationInternal } from '@/lib/projects/project-invitations';
 import { revalidatePath } from 'next/cache';
 
 type StructuredComposerKind =
@@ -273,6 +278,27 @@ function buildStructuredPayload(input: {
 async function hydrateSingleMessage(conversationId: string, messageId: string) {
     const context = await getMessageContext(conversationId, messageId);
     return context.success && context.available && context.message ? context.message : null;
+}
+
+function toStructuredMessageResponse(
+    row: typeof messages.$inferSelect,
+    sender: Pick<typeof profiles.$inferSelect, 'id' | 'username' | 'fullName' | 'avatarUrl'> | null,
+): MessageWithSender {
+    return {
+        id: row.id,
+        conversationId: row.conversationId,
+        senderId: row.senderId,
+        clientMessageId: row.clientMessageId,
+        content: row.content,
+        type: row.type as MessageWithSender['type'],
+        metadata: withDeliveryMetadata((row.metadata ?? {}) as Record<string, unknown>, 'sent'),
+        replyTo: null,
+        createdAt: row.createdAt,
+        editedAt: row.editedAt,
+        deletedAt: row.deletedAt,
+        sender,
+        attachments: [],
+    };
 }
 
 async function emitActivityBridgeMessage(params: {
@@ -498,6 +524,9 @@ export async function sendStructuredMessageActionV2(params: {
     projectId?: string | null;
     roleId?: string | null;
     roleTitle?: string | null;
+    projectInvitationId?: string | null;
+    projectInvitationKind?: "ordinary_role" | "guidance_appointment" | null;
+    guidanceReviewAt?: string | null;
     taskId?: string | null;
     fileId?: string | null;
     profileId?: string | null;
@@ -509,7 +538,7 @@ export async function sendStructuredMessageActionV2(params: {
     next?: string | null;
     contextChips?: MessageContextChip[];
     clientMessageId?: string | null;
-}): Promise<{ success: boolean; error?: string; conversationId?: string; message?: MessageWithSender }> {
+}): Promise<{ success: boolean; error?: string; conversationId?: string; workflowItemId?: string; message?: MessageWithSender; deduped?: boolean }> {
     try {
         const user = await getAuthUser();
         if (!user) {
@@ -521,6 +550,39 @@ export async function sendStructuredMessageActionV2(params: {
 
         const conversationId = await resolveConversationId(params);
         await requireConversationAccess(conversationId, user.id);
+        const clientMessageId = params.clientMessageId?.trim() || null;
+        if (clientMessageId) {
+            const [existing] = await db
+                .select()
+                .from(messages)
+                .where(and(
+                    eq(messages.conversationId, conversationId),
+                    eq(messages.senderId, user.id),
+                    eq(messages.clientMessageId, clientMessageId),
+                ))
+                .limit(1);
+            if (existing) {
+                const [[sender], [workflow]] = await Promise.all([
+                    db.select({
+                        id: profiles.id,
+                        username: profiles.username,
+                        fullName: profiles.fullName,
+                        avatarUrl: profiles.avatarUrl,
+                    }).from(profiles).where(eq(profiles.id, user.id)).limit(1),
+                    db.select({ id: messageWorkflowItems.id })
+                        .from(messageWorkflowItems)
+                        .where(eq(messageWorkflowItems.messageId, existing.id))
+                        .limit(1),
+                ]);
+                return {
+                    success: true,
+                    deduped: true,
+                    conversationId,
+                    workflowItemId: workflow?.id,
+                    message: toStructuredMessageResponse(existing, sender ?? null),
+                };
+            }
+        }
         const otherParticipant = await getDirectConversationOtherParticipant(conversationId, user.id).catch(() => null);
         const requestedProfileId = params.profileId?.trim() || null;
         const resolveAssignee = async (fallbackProfileId?: string | null) => {
@@ -544,6 +606,9 @@ export async function sendStructuredMessageActionV2(params: {
 
         if (params.kind === 'project_invite') {
             if (!params.projectId) throw new Error('Select a project to invite into');
+            if (!params.projectInvitationId) {
+                throw new Error('Use the project Invite flow to send a project invitation');
+            }
             const [project] = await db
                 .select({
                     id: projects.id,
@@ -592,19 +657,18 @@ export async function sendStructuredMessageActionV2(params: {
 
             // 3. Verify if user has a pending invitation for this project/role
             const activeInvites = await db
-                .select()
+                .select({ id: messageWorkflowItems.id })
                 .from(messageWorkflowItems)
                 .where(and(
                     eq(messageWorkflowItems.projectId, params.projectId),
                     eq(messageWorkflowItems.assigneeUserId, otherParticipant.id),
                     eq(messageWorkflowItems.status, 'pending'),
-                    eq(messageWorkflowItems.kind, 'project_invite')
+                    eq(messageWorkflowItems.kind, 'project_invite'),
+                    params.roleId
+                        ? eq(messageWorkflowItems.roleId, params.roleId)
+                        : isNull(messageWorkflowItems.roleId),
                 ));
-            const duplicateInvite = activeInvites.find((invite) => {
-                const payload = invite.payload as Record<string, unknown> | null;
-                return payload?.roleId === params.roleId;
-            });
-            if (duplicateInvite) throw new Error('An invitation for this role is already active');
+            if (activeInvites.length > 0) throw new Error('An invitation for this role is already active');
             
             let inviteRoleTitle = params.roleTitle || 'Team Member';
             if (params.roleId) {
@@ -633,6 +697,9 @@ export async function sendStructuredMessageActionV2(params: {
                     projectSlug: project.slug,
                     roleId: params.roleId || null,
                     roleTitle: inviteRoleTitle,
+                    projectInvitationId: params.projectInvitationId?.trim() || null,
+                    projectInvitationKind: params.projectInvitationKind ?? null,
+                    guidanceReviewAt: params.guidanceReviewAt?.trim() || null,
                 },
             });
         } else if (params.kind === 'feedback_request') {
@@ -749,27 +816,34 @@ export async function sendStructuredMessageActionV2(params: {
             });
         }
 
+        // Persist the complete structured payload in the first message write.
+        // Realtime clients must never observe a workflow invite before it has its workflow ID.
+        const workflowItemId = workflowKind ? crypto.randomUUID() : null;
+        const persistedStructured = workflowItemId
+            ? { ...structured, workflowItemId } satisfies StructuredMessagePayload
+            : structured;
+
         const result = await db.transaction(async (tx) => {
             const [messageRow] = await tx
                 .insert(messages)
                 .values({
                     conversationId,
                     senderId: user.id,
-                    clientMessageId: params.clientMessageId?.trim() || null,
+                    clientMessageId,
                     content: null,
                     type: 'text',
                     metadata: withDeliveryMetadata(withStructuredMessageMetadata({
                         version: 4,
-                        ...(params.clientMessageId ? { clientMessageId: params.clientMessageId } : {}),
-                    }, structured), 'sent'),
+                        ...(clientMessageId ? { clientMessageId } : {}),
+                    }, persistedStructured), 'sent'),
                 })
-                .returning({ id: messages.id });
+                .returning();
 
-            let workflowItemId: string | null = null;
-            if (workflowKind) {
-                const [workflowRow] = await tx
+            if (workflowKind && workflowItemId) {
+                await tx
                     .insert(messageWorkflowItems)
                     .values({
+                        id: workflowItemId,
                         messageId: messageRow!.id,
                         conversationId,
                         kind: workflowKind,
@@ -777,72 +851,102 @@ export async function sendStructuredMessageActionV2(params: {
                         creatorId: user.id,
                         assigneeUserId: structured.entityRefs.profileId ?? null,
                         projectId: structured.entityRefs.projectId ?? null,
+                        roleId: workflowKind === 'project_invite'
+                            && typeof structured.payload?.roleId === 'string'
+                            && isUuid(structured.payload.roleId)
+                            ? structured.payload.roleId
+                            : null,
                         taskId: structured.entityRefs.taskId ?? null,
                         status: 'pending',
                         payload: structured.payload || {},
                         dueAt,
-                    })
-                    .returning({ id: messageWorkflowItems.id });
-                workflowItemId = workflowRow?.id ?? null;
-                if (workflowRow?.id) {
-                    await upsertMessageWorkLink(tx, {
-                        sourceMessageId: messageRow!.id,
-                        sourceConversationId: conversationId,
-                        targetType: 'workflow',
-                        targetId: workflowRow.id,
-                        targetProjectId: structured.entityRefs.projectId ?? null,
-                        visibility: 'shared',
-                        status: 'pending',
-                        ownerUserId: user.id,
-                        assigneeUserId: structured.entityRefs.profileId ?? null,
-                        createdBy: user.id,
-                        href: buildMessageSourceHref(conversationId, messageRow!.id),
-                        metadata: {
-                            label: structured.title,
-                            subtitle: structured.summary,
-                            title: structured.title,
-                            workflowKind,
-                            workflowLabel: structured.title,
-                            projectId: structured.entityRefs.projectId ?? null,
-                            taskId: structured.entityRefs.taskId ?? null,
-                        },
                     });
-                }
+                await upsertMessageWorkLink(tx, {
+                    sourceMessageId: messageRow!.id,
+                    sourceConversationId: conversationId,
+                    targetType: 'workflow',
+                    targetId: workflowItemId,
+                    targetProjectId: structured.entityRefs.projectId ?? null,
+                    visibility: 'shared',
+                    status: 'pending',
+                    ownerUserId: user.id,
+                    assigneeUserId: structured.entityRefs.profileId ?? null,
+                    createdBy: user.id,
+                    href: buildMessageSourceHref(conversationId, messageRow!.id),
+                    metadata: {
+                        label: structured.title,
+                        subtitle: structured.summary,
+                        title: structured.title,
+                        workflowKind,
+                        workflowLabel: structured.title,
+                        projectId: structured.entityRefs.projectId ?? null,
+                        taskId: structured.entityRefs.taskId ?? null,
+                    },
+                });
             }
 
-            if (workflowItemId) {
-                const nextStructured = {
-                    ...structured,
-                    workflowItemId,
-                } satisfies StructuredMessagePayload;
-                await tx
-                    .update(messages)
-                    .set({
-                        metadata: withDeliveryMetadata(withStructuredMessageMetadata({
-                            version: 4,
-                            ...(params.clientMessageId ? { clientMessageId: params.clientMessageId } : {}),
-                        }, nextStructured), 'sent'),
-                    })
-                    .where(eq(messages.id, messageRow!.id));
-            }
+            const [sender] = await tx
+                .select({
+                    id: profiles.id,
+                    username: profiles.username,
+                    fullName: profiles.fullName,
+                    avatarUrl: profiles.avatarUrl,
+                })
+                .from(profiles)
+                .where(eq(profiles.id, user.id))
+                .limit(1);
 
-            return { messageId: messageRow!.id, workflowItemId };
+            return { messageRow: messageRow!, workflowItemId, sender: sender ?? null };
         });
 
-        if (result.workflowItemId && structured.entityRefs.profileId) {
-            const [projectRow] = structured.entityRefs.projectId
-                ? await db
-                    .select({
-                        id: projects.id,
-                        slug: projects.slug,
-                        title: projects.title,
-                    })
-                    .from(projects)
-                    .where(eq(projects.id, structured.entityRefs.projectId))
-                    .limit(1)
-                : [null];
+        // The native message trigger owns participant previews/unread state for
+        // every message kind, including structured messages. Post-commit work
+        // below is best effort and can never turn a committed send into failure.
+        const responseMessage = toStructuredMessageResponse(result.messageRow, result.sender);
 
+        try {
+            const recipients = await db
+                .select({
+                    userId: conversationParticipants.userId,
+                    muted: conversationParticipants.muted,
+                })
+                .from(conversationParticipants)
+                .where(and(
+                    eq(conversationParticipants.conversationId, conversationId),
+                    ne(conversationParticipants.userId, user.id),
+                    isNull(conversationParticipants.archivedAt),
+                ));
+            await emitMessageBurstNotifications({
+                recipients,
+                actorUserId: user.id,
+                actorName: result.sender?.fullName ?? result.sender?.username ?? null,
+                actorAvatarUrl: result.sender?.avatarUrl ?? null,
+                conversationId,
+                sourceMessageId: result.messageRow.id,
+                secondaryText: structured.summary,
+            });
+        } catch (notificationError) {
+            logger.warn("messages.structured_burst_notification_failed", {
+                module: "messaging",
+                conversationId,
+                messageId: result.messageRow.id,
+                error: notificationError instanceof Error ? notificationError.message : String(notificationError),
+            });
+        }
+
+        if (result.workflowItemId && structured.entityRefs.profileId && !params.projectInvitationId) {
             try {
+                const [projectRow] = structured.entityRefs.projectId
+                    ? await db
+                        .select({
+                            id: projects.id,
+                            slug: projects.slug,
+                            title: projects.title,
+                        })
+                        .from(projects)
+                        .where(eq(projects.id, structured.entityRefs.projectId))
+                        .limit(1)
+                    : [null];
                 const actor = await readActorNotificationSnapshot(user);
                 if (structured.entityRefs.projectId) {
                     const kindLabel = workflowKindLabel(workflowKind);
@@ -856,10 +960,11 @@ export async function sendStructuredMessageActionV2(params: {
                             ? `${actor.actorName || "Someone"} invited you to ${projectRow?.title || "a project"}`
                             : `${actor.actorName || "Someone"} assigned you a ${kindLabel}`,
                         body: projectRow?.title ? `Project: ${projectRow.title}` : null,
-                        href: `/messages?conversationId=${encodeURIComponent(conversationId)}`,
+                        href: buildMessageSourceHref(conversationId, result.messageRow.id),
                         entityRefs: {
                             workflowItemId: result.workflowItemId,
                             conversationId,
+                            sourceMessageId: result.messageRow.id,
                             projectId: structured.entityRefs.projectId,
                             projectSlug: projectRow?.slug ?? null,
                             taskId: structured.entityRefs.taskId ?? null,
@@ -882,6 +987,7 @@ export async function sendStructuredMessageActionV2(params: {
                         workflowItemId: result.workflowItemId,
                         workflowKind: workflowKind ?? "follow_up",
                         conversationId,
+                        sourceMessageId: result.messageRow.id,
                         projectId: structured.entityRefs.projectId ?? null,
                         projectSlug: projectRow?.slug ?? null,
                         projectTitle: projectRow?.title ?? null,
@@ -899,12 +1005,11 @@ export async function sendStructuredMessageActionV2(params: {
             }
         }
 
-        const message = await hydrateSingleMessage(conversationId, result.messageId);
         return {
-            success: Boolean(message),
-            error: message ? undefined : 'Failed to send structured message',
+            success: true,
             conversationId,
-            message: message ?? undefined,
+            workflowItemId: result.workflowItemId ?? undefined,
+            message: responseMessage,
         };
     } catch (error) {
         logger.error('[messages.collaboration] failed to send structured message', {
@@ -939,6 +1044,7 @@ export async function resolveMessageWorkflowActionV2(params: {
                 creatorId: messageWorkflowItems.creatorId,
                 assigneeUserId: messageWorkflowItems.assigneeUserId,
                 projectId: messageWorkflowItems.projectId,
+                roleId: messageWorkflowItems.roleId,
                 taskId: messageWorkflowItems.taskId,
                 payload: messageWorkflowItems.payload,
                 messageMetadata: messages.metadata,
@@ -995,23 +1101,34 @@ export async function resolveMessageWorkflowActionV2(params: {
         const bridgeConfig = transition.bridge;
         const resolvedAt = new Date();
 
-        const memberJoinLifecycle = await db.transaction(async (tx) => {
-            let lifecycle: Awaited<ReturnType<typeof addProjectMemberInternal>> | null = null;
-            if (workflow.kind === 'project_invite' && params.action === 'accept' && workflow.projectId && workflow.assigneeUserId) {
-                const roleId = (workflow.payload as any)?.roleId ?? null;
-                lifecycle = await addProjectMemberInternal(tx, {
-                    projectId: workflow.projectId,
-                    userId: workflow.assigneeUserId,
-                    role: 'member',
-                    actorId: user.id,
-                    source: 'project_invite',
-                    syncGroupConversation: true,
-                    roleId,
-                    incrementRoleCapacity: !!roleId,
-                });
+        const transactionResult = await db.transaction(async (tx) => {
+            if (
+                workflow.kind === 'project_invite'
+                && params.action === 'accept'
+                && workflow.projectId
+            ) {
+                await tx.execute(sql`
+                    SELECT id
+                    FROM ${projects}
+                    WHERE id = ${workflow.projectId}
+                      AND deleted_at IS NULL
+                    FOR UPDATE
+                `);
+                if (workflow.roleId) {
+                    const lockedRoles = await tx.execute<{ id: string }>(sql`
+                        SELECT id
+                        FROM ${projectOpenRoles}
+                        WHERE id = ${workflow.roleId}
+                          AND project_id = ${workflow.projectId}
+                        FOR UPDATE
+                    `);
+                    if (Array.from(lockedRoles).length !== 1) {
+                        throw new Error('The invited role is no longer available');
+                    }
+                }
             }
 
-            await tx
+            const [claimedWorkflow] = await tx
                 .update(messageWorkflowItems)
                 .set({
                     status: nextStatus,
@@ -1023,7 +1140,42 @@ export async function resolveMessageWorkflowActionV2(params: {
                         resolution: params.action,
                     },
                 })
-                .where(eq(messageWorkflowItems.id, workflow.id));
+                .where(and(
+                    eq(messageWorkflowItems.id, workflow.id),
+                    eq(messageWorkflowItems.status, 'pending'),
+                ))
+                .returning({ id: messageWorkflowItems.id });
+            if (!claimedWorkflow) {
+                throw new Error('This workflow has already been resolved');
+            }
+
+            let lifecycle: Awaited<ReturnType<typeof addProjectMemberInternal>> | null = null;
+            const durableInvitationId = typeof workflow.payload?.projectInvitationId === 'string'
+                ? workflow.payload.projectInvitationId
+                : null;
+            if (
+                workflow.kind === 'project_invite'
+                && durableInvitationId
+                && (params.action === 'accept' || params.action === 'decline' || params.action === 'cancel')
+            ) {
+                const durableResult = await resolveProjectInvitationInternal(tx, {
+                    invitationId: durableInvitationId,
+                    actorId: user.id,
+                    action: params.action,
+                });
+                lifecycle = durableResult.lifecycle;
+            } else if (workflow.kind === 'project_invite' && params.action === 'accept' && workflow.projectId && workflow.assigneeUserId) {
+                lifecycle = await addProjectMemberInternal(tx, {
+                    projectId: workflow.projectId,
+                    userId: workflow.assigneeUserId,
+                    role: 'member',
+                    actorId: user.id,
+                    source: 'project_invite',
+                    syncGroupConversation: true,
+                    roleId: workflow.roleId,
+                    incrementRoleCapacity: Boolean(workflow.roleId),
+                });
+            }
 
             await tx
                 .update(messageWorkLinks)
@@ -1060,7 +1212,7 @@ export async function resolveMessageWorkflowActionV2(params: {
                 },
             } satisfies StructuredMessagePayload;
 
-            await tx
+            const [updatedMessage] = await tx
                 .update(messages)
                 .set({
                     metadata: withDeliveryMetadata(withStructuredMessageMetadata(
@@ -1068,10 +1220,32 @@ export async function resolveMessageWorkflowActionV2(params: {
                         nextStructured,
                     ), 'sent'),
                 })
-                .where(eq(messages.id, workflow.messageId!));
+                .where(eq(messages.id, workflow.messageId!))
+                .returning();
+            if (!updatedMessage) {
+                throw new Error('Workflow message no longer exists');
+            }
 
-            return lifecycle;
+            const [sender] = updatedMessage.senderId
+                ? await tx
+                    .select({
+                        id: profiles.id,
+                        username: profiles.username,
+                        fullName: profiles.fullName,
+                        avatarUrl: profiles.avatarUrl,
+                    })
+                    .from(profiles)
+                    .where(eq(profiles.id, updatedMessage.senderId))
+                    .limit(1)
+                : [null];
+
+            return { lifecycle, updatedMessage, sender: sender ?? null };
         });
+        const memberJoinLifecycle = transactionResult.lifecycle;
+        const responseMessage = toStructuredMessageResponse(
+            transactionResult.updatedMessage,
+            transactionResult.sender,
+        );
 
         if (memberJoinLifecycle?.changed && workflow.projectId && workflow.assigneeUserId) {
             try {
@@ -1113,19 +1287,18 @@ export async function resolveMessageWorkflowActionV2(params: {
         }
 
         if (workflow.assigneeUserId === user.id && workflow.creatorId !== user.id) {
-            const [projectRow] = workflow.projectId
-                ? await db
-                    .select({
-                        id: projects.id,
-                        slug: projects.slug,
-                        title: projects.title,
-                    })
-                    .from(projects)
-                    .where(eq(projects.id, workflow.projectId))
-                    .limit(1)
-                : [null];
-
             try {
+                const [projectRow] = workflow.projectId
+                    ? await db
+                        .select({
+                            id: projects.id,
+                            slug: projects.slug,
+                            title: projects.title,
+                        })
+                        .from(projects)
+                        .where(eq(projects.id, workflow.projectId))
+                        .limit(1)
+                    : [null];
                 const actor = await readActorNotificationSnapshot(user);
                 if (workflow.projectId) {
                     await enqueueProjectNotificationEvent({
@@ -1136,10 +1309,11 @@ export async function resolveMessageWorkflowActionV2(params: {
                         affectedMemberId: workflow.creatorId,
                         title: `${actor.actorName || "Someone"} resolved your ${workflowKindLabel(workflow.kind)}`,
                         body: nextLabel,
-                        href: `/messages?conversationId=${encodeURIComponent(workflow.conversationId)}`,
+                        href: buildMessageSourceHref(workflow.conversationId, workflow.messageId),
                         entityRefs: {
                             workflowItemId: workflow.id,
                             conversationId: workflow.conversationId,
+                            sourceMessageId: workflow.messageId,
                             projectId: workflow.projectId,
                             projectSlug: projectRow?.slug ?? null,
                             taskId: workflow.taskId ?? null,
@@ -1163,6 +1337,7 @@ export async function resolveMessageWorkflowActionV2(params: {
                         workflowKind: workflow.kind,
                         resolutionLabel: nextLabel,
                         conversationId: workflow.conversationId,
+                        sourceMessageId: workflow.messageId,
                         projectId: workflow.projectId ?? null,
                         projectSlug: projectRow?.slug ?? null,
                         projectTitle: projectRow?.title ?? null,
@@ -1180,23 +1355,40 @@ export async function resolveMessageWorkflowActionV2(params: {
             }
         }
 
-        await refreshConversationParticipantPreviewsIfNeeded(workflow.conversationId, workflow.messageId);
-        const bridgeMessage = bridgeConfig
-            ? await emitActivityBridgeMessage({
+        try {
+            await refreshConversationParticipantPreviews(workflow.conversationId);
+        } catch (previewError) {
+            logger.warn("messages.workflow_preview_refresh_failed", {
+                module: "messaging",
                 conversationId: workflow.conversationId,
-                senderId: user.id,
-                title: bridgeConfig.title,
-                summary: bridgeConfig.summary,
-                contextChips: currentStructured.contextChips,
-                entityRefs: currentStructured.entityRefs,
-            })
-            : null;
-        const message = await hydrateSingleMessage(workflow.conversationId, workflow.messageId);
+                workflowItemId: workflow.id,
+                error: previewError instanceof Error ? previewError.message : String(previewError),
+            });
+        }
+        let bridgeMessage: MessageWithSender | null = null;
+        if (bridgeConfig) {
+            try {
+                bridgeMessage = await emitActivityBridgeMessage({
+                    conversationId: workflow.conversationId,
+                    senderId: user.id,
+                    title: bridgeConfig.title,
+                    summary: bridgeConfig.summary,
+                    contextChips: currentStructured.contextChips,
+                    entityRefs: currentStructured.entityRefs,
+                });
+            } catch (bridgeError) {
+                logger.warn("messages.workflow_activity_bridge_failed", {
+                    module: "messaging",
+                    conversationId: workflow.conversationId,
+                    workflowItemId: workflow.id,
+                    error: bridgeError instanceof Error ? bridgeError.message : String(bridgeError),
+                });
+            }
+        }
         return {
-            success: Boolean(message),
-            error: message ? undefined : 'Failed to refresh workflow message',
+            success: true,
             conversationId: workflow.conversationId,
-            message: message ?? undefined,
+            message: responseMessage,
             bridgeMessage,
         };
     } catch (error) {
@@ -1297,6 +1489,14 @@ export async function convertMessageToTaskActionV2(params: {
         });
 
         const taskResult = await db.transaction(async (tx) => {
+            await tx.execute(sql`
+                SELECT pg_advisory_xact_lock(
+                    hashtextextended(
+                        ${`message-task:${messageRow.id}:${params.projectId}:${user.id}`},
+                        0
+                    )
+                )
+            `);
             const projectRows = await tx.execute<{
                 current_task_number: number | null;
                 slug: string | null;
@@ -1311,6 +1511,43 @@ export async function convertMessageToTaskActionV2(params: {
             `);
             const targetProject = Array.from(projectRows)[0];
             if (!targetProject) throw new Error('Project not found');
+
+            const [existingTaskLink] = await tx
+                .select({
+                    link: messageWorkLinks,
+                    task: {
+                        id: tasks.id,
+                        projectId: tasks.projectId,
+                        title: tasks.title,
+                        taskNumber: tasks.taskNumber,
+                        createdAt: tasks.createdAt,
+                        updatedAt: tasks.updatedAt,
+                    },
+                })
+                .from(messageWorkLinks)
+                .innerJoin(tasks, eq(tasks.id, messageWorkLinks.targetId))
+                .where(and(
+                    eq(messageWorkLinks.sourceMessageId, messageRow.id),
+                    eq(messageWorkLinks.targetType, 'task'),
+                    eq(messageWorkLinks.targetProjectId, params.projectId),
+                    eq(messageWorkLinks.createdBy, user.id),
+                    isNull(messageWorkLinks.deletedAt),
+                    eq(tasks.projectId, params.projectId),
+                ))
+                .limit(1);
+            if (existingTaskLink) {
+                return {
+                    task: existingTaskLink.task,
+                    link: existingTaskLink.link,
+                    project: {
+                        id: params.projectId,
+                        slug: targetProject.slug ?? null,
+                        title: targetProject.title ?? null,
+                        key: targetProject.key ?? null,
+                    },
+                    deduped: true,
+                };
+            }
 
             const nextTaskNumber = Number(targetProject.current_task_number || 0) + 1;
             await tx
@@ -1379,13 +1616,27 @@ export async function convertMessageToTaskActionV2(params: {
                     title: targetProject.title ?? null,
                     key: targetProject.key ?? null,
                 },
+                deduped: false,
             };
         });
 
-        await queueCounterRefreshBestEffort([taskAssigneeId]);
-        revalidatePath(`/projects/${params.projectId}`);
+        if (!taskResult.deduped) {
+            try {
+                await queueCounterRefreshBestEffort([taskAssigneeId]);
+                revalidatePath(`/projects/${params.projectId}`);
+            } catch (projectionError) {
+                logger.warn('messages.collaboration.task_post_commit_projection_failed', {
+                    module: 'messaging',
+                    conversationId: messageRow.conversationId,
+                    messageId: messageRow.id,
+                    projectId: params.projectId,
+                    taskId: taskResult.task.id,
+                    error: projectionError instanceof Error ? projectionError.message : String(projectionError),
+                });
+            }
+        }
 
-        if (taskAssigneeId && taskAssigneeId !== user.id) {
+        if (!taskResult.deduped && taskAssigneeId && taskAssigneeId !== user.id) {
             try {
                 const actor = await readActorNotificationSnapshot(user);
                 await enqueueProjectNotificationEvent({
@@ -1427,31 +1678,44 @@ export async function convertMessageToTaskActionV2(params: {
             }
         }
 
-        const [conversationProject] = await db
-            .select({ id: projects.id, title: projects.title })
-            .from(projects)
-            .where(eq(projects.conversationId, messageRow.conversationId))
-            .limit(1);
-
-        const bridgeMessage = conversationProject?.id === params.projectId
-            ? await emitActivityBridgeMessage({
-                conversationId: messageRow.conversationId,
-                senderId: user.id,
-                title: 'Task created from message',
-                summary: `Created task #${taskResult.task.taskNumber} ${taskResult.task.title}`,
-                contextChips: [{
-                    kind: 'task',
-                    id: taskResult.task.id,
-                    label: `#${taskResult.task.taskNumber} ${taskResult.task.title}`,
-                    subtitle: conversationProject.title,
-                }],
-                entityRefs: {
+        let bridgeMessage: MessageWithSender | null = null;
+        if (!taskResult.deduped) {
+            try {
+                const [conversationProject] = await db
+                    .select({ id: projects.id, title: projects.title })
+                    .from(projects)
+                    .where(eq(projects.conversationId, messageRow.conversationId))
+                    .limit(1);
+                if (conversationProject?.id === params.projectId) {
+                    bridgeMessage = await emitActivityBridgeMessage({
+                        conversationId: messageRow.conversationId,
+                        senderId: user.id,
+                        title: 'Task created from message',
+                        summary: `Created task #${taskResult.task.taskNumber} ${taskResult.task.title}`,
+                        contextChips: [{
+                            kind: 'task',
+                            id: taskResult.task.id,
+                            label: `#${taskResult.task.taskNumber} ${taskResult.task.title}`,
+                            subtitle: conversationProject.title,
+                        }],
+                        entityRefs: {
+                            projectId: params.projectId,
+                            taskId: taskResult.task.id,
+                            messageId: messageRow.id,
+                        },
+                    });
+                }
+            } catch (bridgeError) {
+                logger.warn('messages.collaboration.task_activity_bridge_failed', {
+                    module: 'messaging',
+                    conversationId: messageRow.conversationId,
+                    messageId: messageRow.id,
                     projectId: params.projectId,
                     taskId: taskResult.task.id,
-                    messageId: messageRow.id,
-                },
-            })
-            : null;
+                    error: bridgeError instanceof Error ? bridgeError.message : String(bridgeError),
+                });
+            }
+        }
 
         return {
             success: true,
@@ -1510,6 +1774,47 @@ export async function convertMessageToFollowUpActionV2(params: {
             metadata: messageRow.metadata as Record<string, unknown> | null,
         });
         const result = await db.transaction(async (tx) => {
+            await tx.execute(sql`
+                SELECT pg_advisory_xact_lock(
+                    hashtextextended(${`message-follow-up:${messageRow.id}:${user.id}`}, 0)
+                )
+            `);
+            const [existingWorkflow] = await tx
+                .select({ id: messageWorkflowItems.id })
+                .from(messageWorkflowItems)
+                .where(and(
+                    eq(messageWorkflowItems.messageId, messageRow.id),
+                    eq(messageWorkflowItems.creatorId, user.id),
+                    eq(messageWorkflowItems.kind, 'follow_up'),
+                    eq(messageWorkflowItems.scope, 'private'),
+                    eq(messageWorkflowItems.status, 'pending'),
+                ))
+                .limit(1);
+            if (existingWorkflow) {
+                const link = await upsertMessageWorkLink(tx, {
+                    sourceMessageId: messageRow.id,
+                    sourceConversationId: messageRow.conversationId,
+                    targetType: 'follow_up',
+                    targetId: existingWorkflow.id,
+                    targetProjectId: null,
+                    visibility: 'private',
+                    status: 'pending',
+                    ownerUserId: user.id,
+                    assigneeUserId: user.id,
+                    createdBy: user.id,
+                    href: buildMessageSourceHref(messageRow.conversationId, messageRow.id),
+                    metadata: {
+                        label: 'Follow-up',
+                        subtitle: params.note?.trim() || preview,
+                        note: params.note?.trim() || null,
+                        preview,
+                        dueAt: dueAt?.toISOString() ?? null,
+                        dueDate: dueAt ? formatDueDateKey(dueAt) : null,
+                    },
+                });
+                return { workflowItemId: existingWorkflow.id, link };
+            }
+
             const [workflowRow] = await tx
                 .insert(messageWorkflowItems)
                 .values({
