@@ -348,6 +348,18 @@ describe("MetadataStrip — '—' fallback for each missing field (Req 5.9)", ()
     assert.equal(fieldText(html, "mime-type"), DASH);
     assert.match(fieldText(html, "updated-at") ?? "", /^Last updated .+ by Alex$/);
   });
+
+  it("shows the real task title for a task-scoped working file", () => {
+    const html = renderMetadataStrip({
+      node: makeNode({
+        name: "Hussain_resume.pdf",
+        metadata: { taskWorkingFilesTaskTitle: "Update the related files." },
+      }),
+    });
+    assert.equal(fieldText(html, "name"), "Hussain_resume.pdf");
+    assert.equal(fieldText(html, "task-reference"), "Task: Update the related files.");
+    assert.doesNotMatch(html, /9fbd8943-e594-473c-8f82-5830851d1d7a/);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────
