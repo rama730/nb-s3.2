@@ -85,6 +85,7 @@ async function openFilesTabV3(
   await expect(page.getByTestId(SIDEBAR_TESTID).first()).toBeVisible({
     timeout: 10_000,
   });
+  await page.getByRole("navigation", { name: "File collections" }).getByRole("button", { name: "Project files", exact: true }).click();
   return { ready: true };
 }
 
