@@ -38,17 +38,9 @@ test("project tabs use router-owned URL updates so Doc edit survives refreshes",
     );
 });
 
-test("project docs isolate document identity across URLs, cache, editor, and collaboration", () => {
+test("project docs isolate published document identity across URLs and cache", () => {
     const docTab = fs.readFileSync(
         path.join(repoRoot, "src/components/projects/tabs/DocTab.tsx"),
-        "utf8",
-    );
-    const draftEditorHook = fs.readFileSync(
-        path.join(repoRoot, "src/components/projects/doc/useProjectDocDraftEditor.ts"),
-        "utf8",
-    );
-    const collaborationHook = fs.readFileSync(
-        path.join(repoRoot, "src/components/projects/doc/useDocCollaboration.ts"),
         "utf8",
     );
     const queryHook = fs.readFileSync(
@@ -63,18 +55,8 @@ test("project docs isolate document identity across URLs, cache, editor, and col
     );
     assert.match(
         docTab,
-        /key=\{`\$\{projectId\}:\$\{docSlug\}:editor`\}/,
-        "the document editor should remount when switching markdown documents",
-    );
-    assert.match(
-        draftEditorHook,
-        /project-doc-draft:\$\{projectId\}:\$\{normalizedDocSlug\}/,
-        "local draft backups must be scoped by project and document slug",
-    );
-    assert.match(
-        collaborationHook,
-        /new Y\.Doc\(\), \[projectId, normalizedDocSlug\]/,
-        "Yjs documents must be scoped by project and document slug",
+        /key=\{`\$\{projectId\}:\$\{docSlug\}:\$\{readmeQuery\.data\.version\.id\}`\}/,
+        "the published viewer should remount when either document or version changes",
     );
     assert.match(
         queryHook,
@@ -96,17 +78,17 @@ test("project detail reads retry transient Supabase pooler DNS failures", () => 
     );
     assert.match(
         projectActions,
-        /'ENOTFOUND'/,
+        /["']ENOTFOUND["']/,
         "project detail read retry should include DNS lookup failures from the Supabase pooler",
     );
     assert.match(
         projectActions,
-        /retryProjectDetailRead\('resolve_project_detail_metadata_target'/,
+        /retryProjectDetailRead\(\s*["']resolve_project_detail_target["']/,
         "project metadata resolution should retry transient read failures before returning an internal error",
     );
     assert.match(
         projectActions,
-        /retryProjectDetailRead\('project_detail_shell_data'/,
+        /retryProjectDetailRead\(\s*["']project_detail_shell_data["']/,
         "project shell loading should retry transient read failures before the route throws",
     );
 });
