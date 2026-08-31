@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { sendStructuredMessageActionV2 } from "@/app/actions/messaging/collaboration";
+import { createProjectInvitationAction } from "@/app/actions/project/guidance";
 import { enforceRouteLimit, getRequestId, jsonError, jsonSuccess, logApiRoute, requireAuthenticatedUser } from "@/app/api/v1/_shared";
 import { validateCsrf } from "@/lib/security/csrf";
 import { getProfileInviteProjectOptions } from "@/lib/profile/collaboration";
@@ -9,7 +9,12 @@ import { isUuid } from "@/lib/validations/uuid";
 
 const inviteSchema = z.object({
   projectId: z.string().uuid(),
+  kind: z.enum(["ordinary_role", "guidance_appointment"]).default("ordinary_role"),
+  roleId: z.string().uuid().nullable().optional(),
+  guidanceLabel: z.string().trim().max(60).nullable().optional(),
+  reviewAt: z.string().trim().max(40).nullable().optional(),
   note: z.string().trim().max(500).optional(),
+  idempotencyKey: z.string().trim().max(160).optional(),
 });
 
 export async function POST(
@@ -44,8 +49,11 @@ export async function POST(
   }
 
   try {
-    const options = await getProfileInviteProjectOptions(auth.user.id, id);
-    const selected = options.find((project) => project.id === parsed.data.projectId);
+    const options = await getProfileInviteProjectOptions(auth.user.id, id, {
+      projectId: parsed.data.projectId,
+      limit: 1,
+    });
+    const selected = options.projects[0];
     if (!selected) {
       logApiRoute(request, {
         requestId,
@@ -59,19 +67,15 @@ export async function POST(
       return jsonError("You can only invite this profile to projects you manage", 403, "FORBIDDEN");
     }
 
-    const result = await sendStructuredMessageActionV2({
-      targetUserId: id,
-      kind: "project_invite",
+    const result = await createProjectInvitationAction({
       projectId: selected.id,
-      title: "Project invite",
-      summary: `Invitation to join ${selected.title}`,
+      candidateId: id,
+      kind: parsed.data.kind,
+      roleId: parsed.data.roleId ?? null,
+      guidanceLabel: parsed.data.guidanceLabel ?? null,
+      reviewAt: parsed.data.reviewAt ?? null,
       note: parsed.data.note ?? null,
-      contextChips: [{
-        kind: "project",
-        id: selected.id,
-        label: selected.title,
-        subtitle: selected.slug ? `/${selected.slug}` : null,
-      }],
+      idempotencyKey: parsed.data.idempotencyKey ?? crypto.randomUUID(),
     });
 
     if (!result.success) {
@@ -96,7 +100,7 @@ export async function POST(
       status: 200,
     });
     return jsonSuccess({
-      conversationId: result.conversationId,
+      invitationId: result.invitationId,
       project: selected,
     }, "Project invite sent");
   } catch (error) {
