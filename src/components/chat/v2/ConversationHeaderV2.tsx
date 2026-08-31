@@ -1,17 +1,14 @@
 'use client';
 
-import { useMemo } from 'react';
-import Image from 'next/image';
-import Link from 'next/link';
 import { MoreVertical, ArrowLeft, Archive, Bell, BellOff, Ban, Maximize2, ChevronDown } from 'lucide-react';
 import { useMessagesV2UiStore } from '@/stores/messagesV2UiStore';
-import type { TypingUser } from '@/hooks/useTypingChannel';
 import type { InboxConversationV2 } from '@/hooks/useMessagesV2';
 import { useOnlineUsers } from '@/hooks/useOnlineUsers';
 import { OnlineIndicator } from '@/components/ui/OnlineIndicator';
 import { UserAvatar } from '@/components/ui/UserAvatar';
-import { getTypingStatusText } from '@/lib/chat/typing-display';
 import type { ApplicationBannerStatus } from '@/lib/chat/application-events';
+import { buildIdentityPresentation } from '@/lib/ui/identity';
+import { buildConversationDisplay } from '@/lib/messages/conversation-display';
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -26,12 +23,12 @@ interface ConversationHeaderV2Props {
     surface?: 'page' | 'popup';
     compact?: boolean;
     actionLoading?: boolean;
-    typingUsers?: TypingUser[];
     onBack?: () => void;
     onToggleMute: () => void;
     onToggleArchive: () => void;
     onToggleBlock?: () => void;
     onViewProfile?: () => void;
+    onOpenFullScreen?: () => void;
 }
 
 export function ConversationHeaderV2({
@@ -40,38 +37,29 @@ export function ConversationHeaderV2({
     surface = 'page',
     compact = false,
     actionLoading = false,
-    typingUsers,
     onBack,
     onToggleMute,
     onToggleArchive,
     onToggleBlock,
     onViewProfile,
+    onOpenFullScreen,
 }: ConversationHeaderV2Props) {
     const otherParticipant = conversation.participants[0];
     const isDirectMessage = conversation.type === 'dm';
     const isPopup = surface === 'popup';
+    const display = buildConversationDisplay({
+        type: conversation.type,
+        participants: conversation.participants,
+        configuredTitle: conversation.displayTitle,
+        configuredAvatarUrl: conversation.displayAvatarUrl,
+        projectTitle: conversation.type === 'project_group' ? conversation.displayTitle : null,
+    });
 
     // Wave 2 — Presence & online dot. Only observe the DM counterpart; group /
     // project_group headers don't expose a single-user online state.
-    const observedUserIds = useMemo(
-        () => (isDirectMessage && otherParticipant?.id ? [otherParticipant.id] : []),
-        [isDirectMessage, otherParticipant?.id],
-    );
+    const observedUserIds = isDirectMessage && otherParticipant?.id ? [otherParticipant.id] : [];
     const onlineMap = useOnlineUsers(observedUserIds);
     const peerOnline = otherParticipant?.id ? onlineMap[otherParticipant.id] === true : false;
-    const statusLine = (() => {
-        if (typingUsers && typingUsers.length > 0) {
-            return <span className="text-primary">{getTypingStatusText(typingUsers) || 'typing...'}</span>;
-        }
-        if (conversation.capability.blocked) return 'Blocked';
-        if (peerOnline && conversation.capability.canSend) {
-            return <span className="text-emerald-600 dark:text-emerald-400">Online</span>;
-        }
-        if (conversation.capability.canSend) return 'Ready to message';
-        if (conversation.capability.status === 'pending_received') return 'Incoming request';
-        if (conversation.capability.status === 'pending_sent') return 'Request pending';
-        return 'Messaging restricted';
-    })();
 
     return (
         <div className={`pointer-events-none absolute inset-x-0 top-0 z-20 flex items-center justify-between ${
@@ -106,7 +94,7 @@ export function ConversationHeaderV2({
                                 <div className={`flex items-center gap-2 truncate font-semibold text-zinc-900 dark:text-zinc-100 ${
                                     isPopup ? 'text-[13px]' : 'text-sm'
                                 }`}>
-                                    <span className="truncate">{otherParticipant.fullName || otherParticipant.username || 'Unknown'}</span>
+                                    <span className="truncate">{buildIdentityPresentation(otherParticipant).displayName}</span>
                                     {latestApplicationStatus === 'pending' && (
                                         <span className="shrink-0 rounded-full bg-indigo-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-400">
                                             Pending Request
@@ -130,7 +118,7 @@ export function ConversationHeaderV2({
                                 <div className={`flex items-center gap-2 truncate font-semibold text-zinc-900 dark:text-zinc-100 ${
                                     isPopup ? 'text-[13px]' : 'text-sm'
                                 }`}>
-                                    <span className="truncate">{otherParticipant.fullName || otherParticipant.username || 'Unknown'}</span>
+                                    <span className="truncate">{buildIdentityPresentation(otherParticipant).displayName}</span>
                                     {latestApplicationStatus === 'pending' && (
                                         <span className="shrink-0 rounded-full bg-indigo-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-400">
                                             Pending Request
@@ -143,7 +131,7 @@ export function ConversationHeaderV2({
                 ) : (
                     <div className="min-w-0">
                         <div className="truncate text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-                            {conversation.type === 'project_group' ? 'Project group' : 'Conversation'}
+                            {display.title}
                         </div>
                     </div>
                 )}
@@ -152,17 +140,18 @@ export function ConversationHeaderV2({
             <div className="pointer-events-auto flex items-center gap-2">
                 {isPopup && (
                     <>
-                        <Link
-                            href={`/messages?conversationId=${conversation.id}`}
-                            className="rounded-full text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:hover:bg-zinc-800 dark:hover:text-zinc-100 p-1.5"
+                        <button
+                            type="button"
+                            onClick={onOpenFullScreen}
+                            className="rounded-full bg-zinc-100 text-zinc-700 transition-colors hover:bg-zinc-200 hover:text-zinc-900 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700 dark:hover:text-zinc-100 p-1.5"
                             aria-label="Open in fullscreen"
                         >
                             <Maximize2 className="h-4 w-4" />
-                        </Link>
+                        </button>
                         <button
                             type="button"
-                            onClick={() => useMessagesV2UiStore.getState().setPopupMinimized(true)}
-                            className="rounded-full text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:hover:bg-zinc-800 dark:hover:text-zinc-100 p-1.5"
+                            onClick={() => useMessagesV2UiStore.getState().setPopupState('minimized')}
+                            className="rounded-full bg-zinc-100 text-zinc-700 transition-colors hover:bg-zinc-200 hover:text-zinc-900 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700 dark:hover:text-zinc-100 p-1.5"
                             aria-label="Collapse messages"
                         >
                             <ChevronDown className="h-4 w-4" />
@@ -174,7 +163,7 @@ export function ConversationHeaderV2({
                         <button
                             type="button"
                             disabled={actionLoading}
-                            className={`rounded-full text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:hover:bg-zinc-800 dark:hover:text-zinc-100 ${
+                            className={`rounded-full bg-zinc-100 text-zinc-700 transition-colors hover:bg-zinc-200 hover:text-zinc-900 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700 dark:hover:text-zinc-100 ${
                                 isPopup ? 'p-1.5' : 'p-2'
                             }`}
                             aria-label="Conversation actions"
