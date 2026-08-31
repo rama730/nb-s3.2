@@ -13,10 +13,6 @@ import { normalizeProjectDocSlug } from "@/lib/projects/doc";
 
 export const PROJECT_DOC_QUERY_KEY = (projectId: string, docSlug: string = "readme") =>
     [...queryKeys.project.detail.readme(projectId), normalizeProjectDocSlug(docSlug)] as const;
-export const PROJECT_DOC_DRAFT_QUERY_KEY = (projectId: string, docSlug: string = "readme") =>
-    [...queryKeys.project.detail.readmeDraft(projectId), normalizeProjectDocSlug(docSlug)] as const;
-export const PROJECT_DOC_VERSIONS_QUERY_KEY = (projectId: string, docSlug: string = "readme") =>
-    [...queryKeys.project.detail.readmeVersions(projectId), normalizeProjectDocSlug(docSlug)] as const;
 export const PROJECT_DOC_SETTINGS_QUERY_KEY = (projectId: string, docSlug: string = "readme") =>
     [...queryKeys.project.detail.readmeSettings(projectId), normalizeProjectDocSlug(docSlug)] as const;
 export const PROJECT_DOC_REFERENCES_QUERY_KEY = (projectId: string, kind: ProjectDocReferenceKind, query: string) =>
@@ -37,36 +33,6 @@ export function useProjectDoc(projectId: string, docSlug: string = "readme") {
         },
         staleTime: 1000 * 60 * 5,
         refetchOnWindowFocus: false,
-    });
-}
-
-export function useProjectDocDraft(projectId: string, docSlug: string = "readme", enabled = true) {
-    return useQuery({
-        queryKey: PROJECT_DOC_DRAFT_QUERY_KEY(projectId, docSlug),
-        queryFn: async () => {
-            const { readProjectDocDraftAction } = await import("@/app/actions/project");
-            const result = await readProjectDocDraftAction(projectId, docSlug);
-            if (!result.success) throw new Error(result.error);
-            return result.data;
-        },
-        staleTime: 1000 * 60,
-        refetchOnWindowFocus: false,
-        enabled,
-    });
-}
-
-export function useProjectDocVersions(projectId: string, docSlug: string = "readme", enabled = true) {
-    return useQuery({
-        queryKey: PROJECT_DOC_VERSIONS_QUERY_KEY(projectId, docSlug),
-        queryFn: async () => {
-            const { listProjectDocVersionsAction } = await import("@/app/actions/project");
-            const result = await listProjectDocVersionsAction(projectId, docSlug);
-            if (!result.success) throw new Error(result.error);
-            return result.versions;
-        },
-        staleTime: 1000 * 60 * 2,
-        refetchOnWindowFocus: false,
-        enabled,
     });
 }
 
@@ -93,21 +59,6 @@ export function useProjectDocReferenceOptions(projectId: string, kind: ProjectDo
             const result = await readProjectDocReferenceOptionsAction(projectId, { kind, query, limit: 12 });
             if (!result.success) throw new Error(result.error);
             return result.options;
-        },
-        staleTime: 1000 * 30,
-        refetchOnWindowFocus: false,
-        enabled,
-    });
-}
-
-export function useProjectDocImportCandidates(projectId: string, query: string, enabled = true) {
-    return useQuery({
-        queryKey: PROJECT_DOC_IMPORT_CANDIDATES_QUERY_KEY(projectId, query),
-        queryFn: async () => {
-            const { readProjectDocImportCandidatesAction } = await import("@/app/actions/project");
-            const result = await readProjectDocImportCandidatesAction(projectId, { query, limit: 12 });
-            if (!result.success) throw new Error(result.error);
-            return result.candidates;
         },
         staleTime: 1000 * 30,
         refetchOnWindowFocus: false,
@@ -178,7 +129,6 @@ export function useProjectDocSmartBlockPreviews(projectId: string, blocks: Proje
         },
         staleTime: 1000 * 60,
         refetchOnWindowFocus: false,
-        placeholderData: (previous) => previous,
         enabled: enabled && blocks.length > 0,
     });
 }
