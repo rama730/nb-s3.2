@@ -2,7 +2,11 @@ import { and, eq, isNull, sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { profiles, projectNodes, projects, tasks, taskNodeLinks } from "@/lib/db/schema";
-import { enqueueProjectNotificationEvent } from "@/lib/notifications/project-events";
+import {
+    enqueueProjectNotificationEvent,
+    enqueueProjectNotificationEvents,
+} from "@/lib/notifications/project-events";
+import type { EnqueueProjectNotificationEventInput } from "@/lib/notifications/project-events";
 import { logger } from "@/lib/logger";
 import type { ProjectNotificationEventKey } from "@/lib/notifications/project-policy";
 
@@ -58,13 +62,13 @@ export async function notifyTaskParticipantsForFileEvent(params: {
             .innerJoin(projects, eq(tasks.projectId, projects.id))
             .where(and(eq(taskNodeLinks.nodeId, params.nodeId), eq(tasks.projectId, params.projectId), isNull(tasks.deletedAt)));
 
-        await Promise.all(linkedTasks.map((task) => {
+        const actorName = actor?.fullName || actor?.username || null;
+        const actionLabel = taskFileActionLabel(params.kind);
+        const events: EnqueueProjectNotificationEventInput[] = linkedTasks.flatMap((task) => {
             const recipients = Array.from(new Set([task.assigneeId, task.creatorId].filter(Boolean) as string[]))
                 .filter((recipientUserId) => recipientUserId !== params.actorUserId);
-            if (recipients.length === 0) return Promise.resolve();
-            const actorName = actor?.fullName || actor?.username || null;
-            const actionLabel = taskFileActionLabel(params.kind);
-            return enqueueProjectNotificationEvent({
+            if (recipients.length === 0) return [];
+            return [{
                 projectId: task.projectId,
                 actorUserId: params.actorUserId,
                 actorName,
@@ -89,8 +93,12 @@ export async function notifyTaskParticipantsForFileEvent(params: {
                     secondaryText: params.version ? `${node.name} v${params.version}` : node.name,
                 },
                 sourceEventId: `${task.taskId}:${params.kind}:${node.id}:${params.version ?? "latest"}`,
-            });
-        }));
+            }];
+        });
+        await enqueueProjectNotificationEvents(events, {
+            actorName,
+            actorAvatarUrl: actor?.avatarUrl ?? null,
+        });
     } catch (error) {
         logger.warn("notifications.task_file_emit_failed", {
             module: "notifications",
@@ -158,13 +166,13 @@ export async function notifyForFileVersionCreated(params: {
         if (!node) return;
 
         if (linkedTasks.length > 0) {
-            await Promise.all(linkedTasks.map((task) => {
+            const actorName = actor?.fullName || actor?.username || null;
+            const events: EnqueueProjectNotificationEventInput[] = linkedTasks.flatMap((task) => {
                 const recipients = Array.from(
                     new Set([task.assigneeId, task.creatorId].filter(Boolean) as string[]),
                 ).filter((recipientUserId) => recipientUserId !== params.actorUserId);
-                if (recipients.length === 0) return Promise.resolve();
-                const actorName = actor?.fullName || actor?.username || null;
-                return enqueueProjectNotificationEvent({
+                if (recipients.length === 0) return [];
+                return [{
                     projectId: task.projectId,
                     actorUserId: params.actorUserId,
                     actorName,
@@ -188,8 +196,12 @@ export async function notifyForFileVersionCreated(params: {
                         secondaryText: `${node.name} v${params.version}`,
                     },
                     sourceEventId: `${task.taskId}:file-replaced:${node.id}:${params.version}`,
-                });
-            }));
+                }];
+            });
+            await enqueueProjectNotificationEvents(events, {
+                actorName,
+                actorAvatarUrl: actor?.avatarUrl ?? null,
+            });
         } else {
             // Node has zero task links → emit file_version_added notification
             // Audience: favoriters (client-side only, not available server-side)
@@ -198,12 +210,16 @@ export async function notifyForFileVersionCreated(params: {
 
             // Get last 5 distinct editors from file_versions (by uploadedBy, most recent first)
             const recentEditorRows = await db.execute<{ uploaded_by: string }>(sql`
-                SELECT DISTINCT ON (uploaded_by) uploaded_by
-                FROM file_versions
-                WHERE node_id = ${params.nodeId}
-                  AND uploaded_by IS NOT NULL
-                  AND uploaded_by != ${params.actorUserId}
-                ORDER BY uploaded_by, uploaded_at DESC
+                SELECT uploaded_by
+                FROM (
+                    SELECT DISTINCT ON (uploaded_by) uploaded_by, uploaded_at
+                    FROM file_versions
+                    WHERE node_id = ${params.nodeId}
+                      AND uploaded_by IS NOT NULL
+                      AND uploaded_by != ${params.actorUserId}
+                    ORDER BY uploaded_by, uploaded_at DESC
+                ) recent_editors
+                ORDER BY uploaded_at DESC, uploaded_by
                 LIMIT 5
             `);
 
