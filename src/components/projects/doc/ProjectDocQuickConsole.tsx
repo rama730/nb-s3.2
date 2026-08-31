@@ -25,7 +25,6 @@ import { buildProjectDocPlainText } from "@/lib/projects/doc-plain-text";
 import { cn } from "@/lib/utils";
 import { useProjectMarkdowns } from "@/hooks/hub/useProjectDocData";
 import { readProjectMarkdownSearchAction } from "@/app/actions/project";
-import { ProjectDocLinkDialog } from "@/components/projects/doc/ProjectDocLinkDialog";
 
 
 type ReadmeRailVariant = "rail" | "compact";
@@ -397,23 +396,20 @@ const HeadingRow = memo(function HeadingRow({
     );
 });
 
-function DocumentSwitcher({ 
-    projectId, 
+function DocumentSwitcher({
+    projectId,
     activeSlug,
-    canEdit,
-    onEdit,
-}: { 
-    projectId: string; 
+    }: {
+    projectId: string;
     activeSlug: string;
-    canEdit: boolean;
-    onEdit?: () => void;
-}) {
+    canEdit?: boolean;
+    }) {
     const router = useRouter();
     const pathname = usePathname();
     const searchParams = useSearchParams();
-    
+
     const [isLinkDialogOpen, setIsLinkDialogOpen] = useState(false);
-    
+
     const { data: markdowns = [], isLoading } = useProjectMarkdowns(projectId);
 
     // Client-side sorting fallback
@@ -433,7 +429,7 @@ function DocumentSwitcher({
     };
 
     return (
-        <>
+        <div className={cn("grid gap-2 shrink-0 w-full mb-3", sortedMarkdowns.length > 4 ? "grid-cols-2 sm:grid-cols-3" : "grid-cols-2")}>
             {isLoading ? (
                 <div className="flex h-9 items-center justify-center px-3 text-zinc-400 text-xs gap-1.5 shrink-0">
                     <Loader2 className="h-3 w-3 animate-spin" />
@@ -457,35 +453,12 @@ function DocumentSwitcher({
                     </button>
                 ))
             )}
-            
-            {canEdit && (
-                <button
-                    type="button"
-                    onClick={() => setIsLinkDialogOpen(true)}
-                    className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-dashed border-zinc-300 bg-zinc-50/50 hover:bg-zinc-100 hover:border-zinc-400 dark:border-zinc-800 dark:bg-zinc-950/50 dark:hover:bg-zinc-900 transition-colors shrink-0"
-                    title="Add Document..."
-                >
-                    <Plus className="h-3.5 w-3.5 text-zinc-500" />
-                </button>
-            )}
 
-            {canEdit && onEdit && (
-                <button
-                    type="button"
-                    onClick={onEdit}
-                    className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-2.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 hover:border-blue-300 hover:text-blue-600 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-300 dark:hover:bg-zinc-900 transition-colors shrink-0"
-                >
-                    <Pencil className="h-3.5 w-3.5 text-zinc-500" />
-                    <span>Edit</span>
-                </button>
-            )}
 
-            <ProjectDocLinkDialog
-                projectId={projectId}
-                isOpen={isLinkDialogOpen}
-                onClose={() => setIsLinkDialogOpen(false)}
-            />
-        </>
+
+
+
+        </div>
     );
 }
 
@@ -493,14 +466,14 @@ function SearchPanel({ projectId, onSelectMatch }: { projectId: string; onSelect
     const [query, setQuery] = useState("");
     const [results, setResults] = useState<any[]>([]);
     const [searching, setSearching] = useState(false);
-    
+
     useEffect(() => {
         const trimmed = query.trim();
         if (!trimmed) {
             setResults([]);
             return;
         }
-        
+
         const timer = setTimeout(async () => {
             setSearching(true);
             try {
@@ -516,7 +489,7 @@ function SearchPanel({ projectId, onSelectMatch }: { projectId: string; onSelect
                 setSearching(false);
             }
         }, 300);
-        
+
         return () => clearTimeout(timer);
     }, [query, projectId]);
 
@@ -541,7 +514,7 @@ function SearchPanel({ projectId, onSelectMatch }: { projectId: string; onSelect
                     </button>
                 )}
             </div>
-            
+
             <div className="space-y-4 max-h-[24rem] overflow-y-auto pr-1 app-scroll app-scroll-y">
                 {searching ? (
                     <div className="flex items-center justify-center py-8 text-zinc-400 text-sm gap-2">
@@ -613,8 +586,6 @@ export function ProjectDocQuickConsole({
     selectedActionId,
     variant = "rail",
     className,
-    canEdit = false,
-    onEdit,
 }: {
     projectId: string;
     docSlug?: string;
@@ -639,8 +610,7 @@ export function ProjectDocQuickConsole({
     selectedActionId?: string | null;
     variant?: ReadmeRailVariant;
     className?: string;
-    canEdit?: boolean;
-    onEdit?: () => void;
+
 }) {
     const generatedId = useId().replace(/[^a-zA-Z0-9_-]/g, "");
     const railInstanceId = instanceId ?? generatedId;
@@ -708,7 +678,7 @@ export function ProjectDocQuickConsole({
         const params = new URLSearchParams(searchParams ? searchParams.toString() : "");
         params.set("tab", "docs");
         params.set("doc", normalizedMatchSlug);
-        
+
         if (normalizedMatchSlug === normalizedActiveSlug) {
             const targetId = `line-${line}`;
             onRailAction?.({
@@ -1167,14 +1137,10 @@ export function ProjectDocQuickConsole({
             data-readme-rail-variant={variant}
         >
             <span className="sr-only" aria-live="polite">{railAnnouncement}</span>
-            <div className="flex flex-wrap items-center gap-2 shrink-0 w-full mb-3">
-                <DocumentSwitcher 
-                    projectId={projectId} 
-                    activeSlug={docSlug} 
-                    canEdit={canEdit}
-                    onEdit={onEdit}
-                />
-            </div>
+            <DocumentSwitcher
+                projectId={projectId}
+                activeSlug={docSlug}
+            />
             <motion.div
                 ref={tabListRef}
                 className={cn("grid shrink-0 gap-2", variant === "compact" ? "grid-cols-2 sm:grid-cols-3" : "grid-cols-2")}
