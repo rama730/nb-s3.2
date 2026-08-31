@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { REALTIME_SUBSCRIBE_STATES } from "@supabase/supabase-js";
 import { readMessageWorkLinksAction } from "@/app/actions/messaging/linked-work";
@@ -9,13 +9,15 @@ import { queryKeys } from "@/lib/query-keys";
 import type { MessageLinkedWorkSummary } from "@/lib/messages/linked-work";
 import { subscribeActiveResource } from "@/lib/realtime/subscriptions";
 
-const MAX_LINKED_WORK_MESSAGE_IDS = 160;
+const RECENT_LINKED_WORK_MESSAGE_COUNT = 5;
+const LINKED_WORK_DEFER_MS = 1_000;
 const linkedWorkQueryPrefix = (conversationId: string) => ["chat-v2", "linked-work", conversationId] as const;
 
 export function useMessageWorkLinks(conversationId: string | null | undefined, messageIds: readonly string[]) {
     const queryClient = useQueryClient();
+    const [isDeferredQueryReady, setIsDeferredQueryReady] = useState(false);
     const normalizedMessageIds = useMemo(
-        () => Array.from(new Set(messageIds.filter(Boolean))).slice(0, MAX_LINKED_WORK_MESSAGE_IDS),
+        () => Array.from(new Set(messageIds.filter(Boolean))).slice(-RECENT_LINKED_WORK_MESSAGE_COUNT),
         [messageIds],
     );
     const queryKey = useMemo(
@@ -23,10 +25,20 @@ export function useMessageWorkLinks(conversationId: string | null | undefined, m
         [conversationId, normalizedMessageIds],
     );
 
+    useEffect(() => {
+        setIsDeferredQueryReady(false);
+        if (!conversationId) return;
+        const timer = window.setTimeout(() => setIsDeferredQueryReady(true), LINKED_WORK_DEFER_MS);
+        return () => window.clearTimeout(timer);
+    }, [conversationId]);
+
     const query = useQuery({
         queryKey,
-        enabled: Boolean(conversationId) && normalizedMessageIds.length > 0,
+        // ponytail: linked work is supplementary context, not part of first
+        // paint. Ask for the newest visible rows after the thread settles.
+        enabled: isDeferredQueryReady && Boolean(conversationId) && normalizedMessageIds.length > 0,
         staleTime: 30_000,
+        refetchOnWindowFocus: false,
         queryFn: async () => {
             if (!conversationId) return {} as Record<string, MessageLinkedWorkSummary[]>;
             const result = await readMessageWorkLinksAction(conversationId, normalizedMessageIds);
