@@ -6,7 +6,6 @@ export const FILES_RUNTIME_BUDGETS = {
   fileCacheMaxEntries: 256,
   maxInFlightFolderRequests: 8,
   maxInFlightContentRequests: 16,
-  maxFlatTreeBootNodes: 2500,
   maxFolderBatchRowsPerInteraction: 1500,
   indexQueueMinConcurrency: 2,
   indexQueueMaxConcurrency: 4,
