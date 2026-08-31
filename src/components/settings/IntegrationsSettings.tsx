@@ -65,6 +65,27 @@ function formatPlatform(platform: string) {
   return platform;
 }
 
+function ExtensionAppCard() {
+  return (
+    <div className="mb-5 flex flex-col gap-4 rounded-xl border border-zinc-200 bg-zinc-50/60 p-4 dark:border-zinc-800 dark:bg-zinc-900/40 sm:flex-row sm:items-center">
+      <Image
+        src="/icon-192.png"
+        alt="Edge editor extension"
+        width={48}
+        height={48}
+        className="h-12 w-12 shrink-0 rounded-xl"
+      />
+      <div className="min-w-0">
+        <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Edge editor extension</h3>
+        <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+          Connect VS Code, Cursor, Windsurf, or Antigravity using revocable sessions.
+        </p>
+        <p className="mt-1 text-xs text-zinc-400">Web login or manual token</p>
+      </div>
+    </div>
+  );
+}
+
 function ExtensionSessionRow({ session, revoking, onRevoke }: { session: ExtensionSessionData; revoking: boolean; onRevoke: () => void }) {
   const ideIcon = resolveIDEIcon(session);
   const platform = session.editorPlatform ? formatPlatform(session.editorPlatform) : "Unknown platform";
@@ -164,6 +185,7 @@ export default function IntegrationsSettings() {
     </SettingsSectionCard>
 
     <SettingsSectionCard title="Editor sessions" description="Revocable sessions created by the editor-extension authorization flow.">
+      <ExtensionAppCard />
       <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div className="flex items-center gap-6">
           <div className="grid gap-1">
