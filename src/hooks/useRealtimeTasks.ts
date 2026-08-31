@@ -1,46 +1,43 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
-import { getProjectTaskDetailAction } from "@/app/actions/project";
 import { subscribeActiveResource } from "@/lib/realtime/subscriptions";
 import { createClient } from "@/lib/supabase/client";
-import {
-  findTaskInProjectTaskCaches,
-  patchProjectTaskCaches,
-  removeTaskFromProjectTaskCaches,
-} from "@/lib/projects/task-cache";
-import {
-  mergeTaskSurfaceRecords,
-  normalizeTaskSurfaceRecord,
-  type TaskSurfaceRecord,
-} from "@/lib/projects/task-presentation";
+import { queryKeys } from "@/lib/query-keys";
 
-function shouldHydrateTask(input: {
-  incoming: TaskSurfaceRecord;
-  cached: TaskSurfaceRecord | null;
-}) {
-  const { incoming, cached } = input;
-  if (!cached) return true;
-  if (!incoming.projectKey && !!cached.projectKey) return false;
-  if (incoming.assigneeId !== cached.assigneeId && !incoming.assignee) return true;
-  if (incoming.creatorId !== cached.creatorId && !incoming.creator) return true;
-  if (incoming.sprintId !== cached.sprintId && !incoming.sprint) return true;
-  return false;
-}
-
-export function useRealtimeTasks(projectId: string) {
+export function useRealtimeTasks(projectId: string, deferredTaskId: string | null = null) {
   const supabase = useMemo(() => createClient(), []);
   const queryClient = useQueryClient();
+  const reconcileTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const deferredTaskRef = useRef<string | null>(deferredTaskId);
+  const deferredTaskChangedRef = useRef(false);
+
+  useEffect(() => {
+    const previouslyDeferred = deferredTaskRef.current;
+    deferredTaskRef.current = deferredTaskId;
+    if (previouslyDeferred && !deferredTaskId && deferredTaskChangedRef.current) {
+      deferredTaskChangedRef.current = false;
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.project.detail.tasksRoot(projectId),
+        refetchType: "active",
+      });
+    }
+  }, [deferredTaskId, projectId, queryClient]);
 
   useEffect(() => {
     if (!projectId) return;
 
-    const hydrateTask = async (taskId: string) => {
-      const result = await getProjectTaskDetailAction(projectId, taskId);
-      if (!result.success || !result.task) return;
-      patchProjectTaskCaches(queryClient, projectId, normalizeTaskSurfaceRecord(result.task));
+    const scheduleReconcile = () => {
+      if (reconcileTimerRef.current) return;
+      reconcileTimerRef.current = setTimeout(() => {
+        reconcileTimerRef.current = null;
+        void queryClient.invalidateQueries({
+          queryKey: queryKeys.project.detail.tasksRoot(projectId),
+          refetchType: "active",
+        });
+      }, 150);
     };
 
     const channel = subscribeActiveResource({
@@ -53,29 +50,24 @@ export function useRealtimeTasks(projectId: string) {
           table: "tasks",
           filter: `project_id=eq.${projectId}`,
           handler: (payload) => {
-            if (payload.eventType === "DELETE") {
-              const previousRow = (payload.old ?? null) as Record<string, unknown> | null;
-              const deletedId = typeof previousRow?.id === "string" ? previousRow.id : null;
-              if (deletedId) {
-                removeTaskFromProjectTaskCaches(queryClient, projectId, deletedId);
-              }
+            const eventRow = (payload.eventType === "DELETE" ? payload.old : payload.new) as Record<string, unknown> | null;
+            const eventTaskId = typeof eventRow?.id === "string" ? eventRow.id : null;
+            if (eventTaskId && eventTaskId === deferredTaskRef.current) {
+              // ponytail: reconcile this one task after its optimistic drag settles instead of fighting the pointer mid-drag.
+              deferredTaskChangedRef.current = true;
               return;
             }
 
-            const incoming = normalizeTaskSurfaceRecord(payload.new);
-            const cached = findTaskInProjectTaskCaches(queryClient, projectId, incoming.id);
-            const merged = mergeTaskSurfaceRecords(cached, incoming);
-            patchProjectTaskCaches(queryClient, projectId, merged);
-
-            if (shouldHydrateTask({ incoming, cached })) {
-              void hydrateTask(incoming.id);
-            }
+            // ponytail: Dumb invalidation. If 30 changes happen, this absorbs it into 1 fetch. Zero stutter.
+            scheduleReconcile();
           },
         },
       ],
     });
 
     return () => {
+      if (reconcileTimerRef.current) clearTimeout(reconcileTimerRef.current);
+      reconcileTimerRef.current = null;
       supabase.removeChannel(channel);
     };
   }, [projectId, queryClient, supabase]);
