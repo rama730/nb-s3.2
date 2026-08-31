@@ -1,173 +1,81 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { buildSprintHealthSummary } from "@/lib/projects/sprint-detail";
-import { buildSprintTimeline } from "@/lib/projects/sprint-timeline";
+import {
+  buildSprintHealthSummary,
+  formatSprintDateRange,
+  isSprintReadyToClose,
+  type SprintTaskTimelineEntity,
+} from "@/lib/projects/sprint-detail";
+import { buildSprintTimeline, mergeSprintTimelineRows } from "@/lib/projects/sprint-timeline";
+
+const sprint = {
+  id: "sprint-1", projectId: "project-1", sprintNumber: 1, code: "SPR-1", name: "Sprint 1",
+  goal: "Ship the redesign", description: null, startDate: "2026-04-09T00:00:00.000Z",
+  endDate: "2026-04-23T00:00:00.000Z", status: "active" as const,
+  startedAt: "2026-04-09T00:00:00.000Z", completedAt: null, archivedAt: null, cancelledAt: null,
+  createdAt: "2026-04-08T10:00:00.000Z", updatedAt: "2026-04-15T12:00:00.000Z",
+  creator: { id: "creator-1", fullName: "Sprint Creator", avatarUrl: null, roleLabel: "Owner" },
+};
+
+const summary = buildSprintHealthSummary({ totalTasks: 2, completedTasks: 1, blockedTasks: 0, linkedFileCount: 2, totalStoryPoints: 8, completedStoryPoints: 5 });
+
+function task(id: string, taskNumber: number, addedAt: string): SprintTaskTimelineEntity {
+  return {
+    id, projectId: "project-1", sprintId: "sprint-1", taskNumber, title: `Task ${taskNumber}`,
+    description: null, status: "todo", priority: "medium", storyPoints: null, dueDate: null,
+    createdAt: "2026-01-01T00:00:00.000Z", updatedAt: addedAt, activityAt: addedAt,
+    completedAt: null,
+    linkedFileCount: 0, isDeleted: false, membershipState: "committed", addedAt, removedAt: null,
+    linkedFiles: [], assignee: null, creator: null,
+  };
+}
 
 describe("sprint timeline", () => {
-  it("builds kickoff, task, file, and closeout rows from start to finish", () => {
-    const sprint = {
-      id: "sprint-1",
-      projectId: "project-1",
-      name: "Sprint 1",
-      goal: "Ship the redesign",
-      description: null,
-      startDate: "2026-04-09T00:00:00.000Z",
-      endDate: "2026-04-23T00:00:00.000Z",
-      status: "active" as const,
-      createdAt: "2026-04-08T10:00:00.000Z",
-      updatedAt: "2026-04-15T12:00:00.000Z",
-    };
-
-    const summary = buildSprintHealthSummary({
-      totalTasks: 2,
-      completedTasks: 1,
-      blockedTasks: 0,
-      linkedFileCount: 2,
-      totalStoryPoints: 8,
-      completedStoryPoints: 5,
-    });
-
+  it("orders one outer row per task by durable membership time", () => {
     const rows = buildSprintTimeline({
       sprint,
       summary,
       tasks: [
-        {
-          id: "task-1",
-          projectId: "project-1",
-          sprintId: "sprint-1",
-          taskNumber: 12,
-          title: "Define timeline structure",
-          description: null,
-          status: "in_progress",
-          priority: "medium",
-          storyPoints: 3,
-          dueDate: null,
-          createdAt: "2026-04-10T08:00:00.000Z",
-          updatedAt: "2026-04-11T08:00:00.000Z",
-          activityAt: "2026-04-11T08:00:00.000Z",
-          linkedFileCount: 0,
-          assignee: null,
-          creator: null,
-          files: [],
-        },
-        {
-          id: "task-2",
-          projectId: "project-1",
-          sprintId: "sprint-1",
-          taskNumber: 13,
-          title: "Finish sprint detail view",
-          description: null,
-          status: "done",
-          priority: "high",
-          storyPoints: 5,
-          dueDate: null,
-          createdAt: "2026-04-12T08:00:00.000Z",
-          updatedAt: "2026-04-14T08:00:00.000Z",
-          activityAt: "2026-04-14T08:00:00.000Z",
-          linkedFileCount: 2,
-          assignee: null,
-          creator: null,
-          files: [
-            {
-              id: "link-1",
-              taskId: "task-2",
-              nodeId: "node-1",
-              nodeName: "SprintShell.tsx",
-              nodePath: "Project/SprintShell.tsx",
-              nodeType: "file",
-              annotation: null,
-              linkedAt: "2026-04-13T09:00:00.000Z",
-              lastEventType: null,
-              lastEventAt: null,
-              lastEventBy: null,
-              versionEvents: [
-                {
-                  id: "version-2",
-                  nodeId: "node-1",
-                  versionNumber: 2,
-                  createdAt: "2026-04-13T10:00:00.000Z",
-                  createdBy: "user-1",
-                  createdByName: "Ramanayudu",
-                  comment: "Updated the task implementation",
-                },
-              ],
-            },
-            {
-              id: "link-2",
-              taskId: "task-2",
-              nodeId: "node-2",
-              nodeName: "sprint-detail.ts",
-              nodePath: "Project/sprint-detail.ts",
-              nodeType: "file",
-              annotation: "Shared presenter contract",
-              linkedAt: "2026-04-14T07:00:00.000Z",
-              lastEventType: null,
-              lastEventAt: null,
-              lastEventBy: null,
-            },
-          ],
-        },
+        task("task-2", 2, "2026-04-12T08:00:00.000Z"),
+        task("task-1", 1, "2026-04-10T08:00:00.000Z"),
       ],
     });
 
-    assert.deepEqual(
-      rows.map((row) => row.kind),
-      ["kickoff", "task", "file", "file_version", "file", "task", "closeout"],
-    );
-    assert.equal(rows[0]?.kind, "kickoff");
-    assert.equal(rows[1]?.kind, "task");
-    assert.equal(rows[2]?.kind, "file");
-    assert.equal(rows[2]?.file.nodeName, "SprintShell.tsx");
-    const versionRow = rows[3];
-    assert.equal(versionRow?.kind, "file_version");
-    assert.equal(
-      versionRow && versionRow.kind === "file_version"
-        ? versionRow.versionEvent.createdByName
-        : null,
-      "Ramanayudu",
-    );
-    assert.equal(
-      versionRow && versionRow.kind === "file_version"
-        ? versionRow.versionEvent.versionNumber
-        : null,
-      2,
-    );
-    const secondFileRow = rows[4];
-    assert.equal(secondFileRow?.kind, "file");
-    assert.equal(secondFileRow && secondFileRow.kind === "file" ? secondFileRow.file.nodeName : null, "sprint-detail.ts");
-    assert.equal(rows[5]?.kind, "task");
-    assert.equal(rows[5]?.task.id, "task-2");
-    assert.equal(rows[6]?.kind, "closeout");
+    assert.deepEqual(rows.map((row) => row.kind), ["kickoff", "task", "task"]);
+    assert.equal(rows[1]?.kind === "task" ? rows[1].task.id : null, "task-1");
+    assert.equal(rows[1]?.occurredAt, "2026-04-10T08:00:00.000Z");
   });
 
-  it("can omit kickoff and closeout anchors for follow-up pages", () => {
-    const rows = buildSprintTimeline({
-      sprint: {
-        id: "sprint-empty",
-        projectId: "project-1",
-        name: "Sprint Empty",
-        goal: null,
-        description: null,
-        startDate: "2026-04-09T00:00:00.000Z",
-        endDate: "2026-04-23T00:00:00.000Z",
-        status: "planning",
-        createdAt: "2026-04-08T10:00:00.000Z",
-        updatedAt: "2026-04-08T10:00:00.000Z",
-      },
-      summary: buildSprintHealthSummary({
-        totalTasks: 0,
-        completedTasks: 0,
-        blockedTasks: 0,
-        linkedFileCount: 0,
-        totalStoryPoints: 0,
-        completedStoryPoints: 0,
-      }),
-      tasks: [],
-      includeKickoff: false,
-      includeCloseout: false,
-    });
+  it("uses the actual start timestamp for the sprint kickoff", () => {
+    const rows = buildSprintTimeline({ sprint, summary, tasks: [] });
+    assert.equal(rows[0]?.occurredAt, sprint.startedAt);
+  });
 
-    assert.equal(rows.length, 0);
+  it("adds closeout to Completed and completed-then-Archived Sprints", () => {
+    const completedAt = "2026-04-23T12:00:00.000Z";
+    const completed = buildSprintTimeline({ sprint: { ...sprint, status: "completed" as const, completedAt }, summary, tasks: [] });
+    const archived = buildSprintTimeline({ sprint: { ...sprint, status: "archived" as const, completedAt, archivedAt: "2026-04-24T00:00:00.000Z" }, summary, tasks: [] });
+    assert.deepEqual(completed.map((row) => row.kind), ["kickoff", "closeout"]);
+    assert.deepEqual(archived.map((row) => row.kind), ["kickoff", "closeout"]);
+    assert.equal(archived[1]?.occurredAt, completedAt);
+  });
+
+  it("deduplicates overlapping cursor pages by durable row id", () => {
+    const rows = buildSprintTimeline({ sprint, summary, tasks: [] });
+    assert.equal(mergeSprintTimelineRows([rows, rows]).length, 1);
+  });
+
+  it("treats the configured end as an inclusive calendar day", () => {
+    const activeSprint = { ...sprint, endDate: "2026-04-23T00:00:00.000Z" };
+    assert.equal(isSprintReadyToClose(activeSprint, new Date("2026-04-23T12:00:00.000Z")), false);
+    assert.equal(isSprintReadyToClose(activeSprint, new Date("2026-04-24T00:00:00.000Z")), true);
+  });
+
+  it("formats date-only schedules without changing calendar days", () => {
+    assert.equal(
+      formatSprintDateRange("2026-04-09T00:00:00.000Z", "2026-04-23T00:00:00.000Z"),
+      "Apr 9 - Apr 23, 2026",
+    );
   });
 });
