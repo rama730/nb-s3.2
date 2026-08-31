@@ -139,12 +139,10 @@ export function ProjectDocViewer({
     project,
     payload,
     docSlug = "readme",
-    onEdit,
 }: {
     project: Project;
     payload: ProjectDocPublishedPayload;
     docSlug?: string;
-    onEdit: () => void;
 }) {
     const normalizedDocSlug = useMemo(() => normalizeProjectDocSlug(docSlug), [docSlug]);
     
@@ -394,20 +392,7 @@ export function ProjectDocViewer({
 
     return (
         <div className="relative mx-auto w-full max-w-[1480px] px-4 py-0 sm:px-6 lg:px-8">
-            {payload.canEdit ? (
-                <div className="absolute right-4 top-0 z-10 flex items-center gap-2 sm:right-6 lg:right-8">
-                    {!hasQuickRail && (
-                        <button
-                            type="button"
-                            onClick={onEdit}
-                            className="inline-flex items-center gap-2 rounded-full border border-zinc-200 bg-white/80 px-3 py-1.5 text-sm font-semibold text-zinc-700 backdrop-blur transition hover:border-blue-300 hover:text-blue-600 dark:border-zinc-800 dark:bg-zinc-950/80 dark:text-zinc-200"
-                        >
-                            <Pencil className="h-4 w-4" />
-                            Edit
-                        </button>
-                    )}
-                </div>
-            ) : null}
+
 
             <div className={hasQuickRail && isWideRail ? "grid gap-8 xl:grid-cols-[minmax(0,1fr)_300px]" : ""}>
                 <div className="min-w-0">
@@ -436,8 +421,6 @@ export function ProjectDocViewer({
                             selectedActionId={railState.selectedActionId}
                             variant="compact"
                             className="mb-5"
-                            canEdit={payload.canEdit}
-                            onEdit={onEdit}
                         />
                     ) : null}
                     <ProjectDocRenderer
@@ -447,13 +430,13 @@ export function ProjectDocViewer({
                         allowExternalImages={payload.settings.externalImages}
                         allowSmartBlocks={payload.settings.projectBlocks}
                         className="mx-auto max-w-none"
-                        highlightedTargetId={highlightedTarget?.targetId}
-                        highlightedTargetToken={highlightedTarget?.token}
                         onRequestTarget={scrollToTarget}
                         onMediaLoad={handleReadmeMediaLoad}
                         previewByKey={previewByKey}
                         previewsLoading={readmePreviewsQuery.isLoading}
                         viewModel={readmeViewModel}
+                        highlightedTargetId={highlightedTarget?.targetId}
+                        highlightedTargetToken={highlightedTarget?.token}
                     />
                 </div>
                 {hasQuickRail && isWideRail ? (
@@ -469,8 +452,6 @@ export function ProjectDocViewer({
                                 report={readmeViewModel.report}
                                 railActions={railActions}
                                 recommendedAction={recommendedAction}
-                                highlightedTargetId={highlightedTarget?.targetId}
-                                highlightedTargetToken={highlightedTarget?.token}
                                 instanceId="desktop"
                                 openTab={railState.openTab}
                                 onRailAction={handleRailAction}
@@ -481,8 +462,6 @@ export function ProjectDocViewer({
                                 referencesError={readmePreviewsQuery.isError}
                                 referencesLoading={readmePreviewsQuery.isLoading}
                                 selectedActionId={railState.selectedActionId}
-                                canEdit={payload.canEdit}
-                                onEdit={onEdit}
                             />
                         </div>
                     </aside>
