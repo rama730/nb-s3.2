@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 
 import {
   createTaskCommentAction,
@@ -31,6 +32,7 @@ import {
 } from "@/lib/projects/task-discussion";
 import { subscribeTaskResource } from "@/lib/realtime/task-resource";
 import { newClientId } from "@/lib/utils/client-id";
+import { queryKeys } from "@/lib/query-keys";
 import { createVisibilityAwareInterval } from "@/lib/utils/visibility";
 
 import { useTaskDiscussionTyping } from "./useTaskDiscussionTyping";
@@ -47,6 +49,7 @@ export function useTaskDiscussionResource(params: {
   const { taskId, projectId, canEdit, currentUserId, enabled } = params;
   const { isConnected } = useRealtime();
   const { profile, user } = useAuth();
+  const queryClient = useQueryClient();
 
   const [page, setPage] = useState<TaskDiscussionThreadPage>(() => createEmptyTaskDiscussionPage());
   const [isLoading, setIsLoading] = useState(false);
@@ -97,7 +100,17 @@ export function useTaskDiscussionResource(params: {
     }
 
     try {
-      const result = await readTaskDiscussionAction(projectId, taskId, options?.cursor ?? null);
+      const result = append
+        ? await readTaskDiscussionAction(projectId, taskId, options?.cursor ?? null)
+        : await queryClient.fetchQuery({
+            queryKey: queryKeys.project.detail.taskPanel(
+              projectId,
+              taskId,
+              "comments",
+            ),
+            staleTime: 30_000,
+            queryFn: () => readTaskDiscussionAction(projectId, taskId, null),
+          });
       if (!result.success) {
         throw new Error(result.error || "Failed to load discussion");
       }
@@ -105,7 +118,7 @@ export function useTaskDiscussionResource(params: {
       let nextPage = createEmptyTaskDiscussionPage();
       setPage((current) => {
         nextPage = append
-          ? mergeTaskDiscussionPage(current, result.data, "prepend_older")
+          ? mergeTaskDiscussionPage(current, result.data, "append_older")
           : mergeTaskDiscussionPage(createEmptyTaskDiscussionPage(), result.data, "replace");
         return nextPage;
       });
@@ -122,9 +135,29 @@ export function useTaskDiscussionResource(params: {
         setIsLoading(false);
       }
     }
-  }, [projectId, taskId]);
+  }, [projectId, queryClient, taskId]);
 
-  const refreshDiscussion = useCallback(async () => loadDiscussion(), [loadDiscussion]);
+  const refreshDiscussion = useCallback(async () => {
+    await queryClient.invalidateQueries({
+      queryKey: queryKeys.project.detail.taskPanel(
+        projectId,
+        taskId,
+        "comments",
+      ),
+      refetchType: "none",
+    });
+    return loadDiscussion();
+  }, [loadDiscussion, projectId, queryClient, taskId]);
+
+  const invalidateDiscussionCache = useCallback(() =>
+    queryClient.invalidateQueries({
+      queryKey: queryKeys.project.detail.taskPanel(
+        projectId,
+        taskId,
+        "comments",
+      ),
+      refetchType: "none",
+    }), [projectId, queryClient, taskId]);
 
   const loadOlderComments = useCallback(async () => {
     if (!page.nextCursor || isLoadingMore) return;
@@ -215,35 +248,6 @@ export function useTaskDiscussionResource(params: {
           return;
         }
 
-        if (event.kind === "comment_like") {
-          const nextPayload = event.payload.new as Record<string, unknown> | null;
-          const previousPayload = event.payload.old as Record<string, unknown> | null;
-          const commentId =
-            typeof nextPayload?.comment_id === "string"
-              ? nextPayload.comment_id
-              : typeof previousPayload?.comment_id === "string"
-                ? previousPayload.comment_id
-                : "";
-          const userId =
-            typeof nextPayload?.user_id === "string"
-              ? nextPayload.user_id
-              : typeof previousPayload?.user_id === "string"
-                ? previousPayload.user_id
-                : "";
-
-          if (!commentId || !userId) return;
-
-          if (event.payload.eventType === "INSERT" || event.payload.eventType === "DELETE") {
-            setPage((current) =>
-              patchTaskDiscussionLike(current, {
-                commentId,
-                userId,
-                shouldAdd: event.payload.eventType === "INSERT",
-                currentUserId,
-              }),
-            );
-          }
-        }
       },
       onStatus: (status) => {
         resourceConnectedRef.current = status === "SUBSCRIBED";
@@ -329,8 +333,9 @@ export function useTaskDiscussionResource(params: {
     }
 
     setPage((current) => replaceOptimisticTaskDiscussionEntry(current, optimisticId, createdComment));
+    void invalidateDiscussionCache();
     return { success: true };
-  }, [canEdit, currentAuthor, currentUserId, projectId, taskId]);
+  }, [canEdit, currentAuthor, currentUserId, invalidateDiscussionCache, projectId, taskId]);
 
   const toggleLike = useCallback(async (commentId: string) => {
     if (!canEdit) {
@@ -367,8 +372,9 @@ export function useTaskDiscussionResource(params: {
       return { success: false as const, error: message };
     }
 
+    void invalidateDiscussionCache();
     return { success: true as const };
-  }, [canEdit, currentUserId, page, projectId]);
+  }, [canEdit, currentUserId, invalidateDiscussionCache, page, projectId]);
 
   const deleteComment = useCallback(async (commentId: string) => {
     if (!canEdit) {
@@ -418,8 +424,9 @@ export function useTaskDiscussionResource(params: {
       }
     }
 
+    void invalidateDiscussionCache();
     return { success: true as const };
-  }, [canEdit, currentUserId, page, projectId]);
+  }, [canEdit, currentUserId, invalidateDiscussionCache, page, projectId]);
 
   const comments = page.comments;
   const totalCount = page.totalCount || countTaskDiscussionEntries(page);
@@ -432,11 +439,11 @@ export function useTaskDiscussionResource(params: {
     isLoadingMore,
     isLoaded,
     error,
-    isPresenceConnected: typing.presenceStatus === "connected",
+    presenceStatus: typing.presenceStatus,
     topLevelTypingUsers: typing.topLevelTypingUsers,
     replyTypingUsersByParentId: typing.replyTypingUsersByParentId,
     sendTyping: typing.sendTyping,
-    loadDiscussion: refreshDiscussion,
+    loadDiscussion,
     loadOlderComments,
     addComment,
     toggleLike,
@@ -453,7 +460,7 @@ export function useTaskDiscussionResource(params: {
     typing.topLevelTypingUsers,
     typing.replyTypingUsersByParentId,
     typing.sendTyping,
-    refreshDiscussion,
+    loadDiscussion,
     loadOlderComments,
     addComment,
     toggleLike,
