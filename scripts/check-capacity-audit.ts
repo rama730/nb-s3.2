@@ -43,6 +43,45 @@ const capacityAuditSchema = z.object({
         notes: z.string().min(1),
     }),
     services: z.array(serviceSchema),
+    supabaseUsage: z.object({
+        periodStart: z.string().datetime(),
+        periodEnd: z.string().datetime(),
+        regularEgressBytes: z.number().nonnegative(),
+        cachedEgressBytes: z.number().nonnegative(),
+        realtimeMessages: z.number().int().nonnegative(),
+        realtimePeakConnections: z.number().int().nonnegative(),
+        monthlyActiveUsers: z.number().int().nonnegative(),
+        storageBytes: z.number().int().nonnegative(),
+        databaseBytes: z.number().int().nonnegative(),
+        storageConcentration: z.object({
+            largestOwnerBytes: z.number().int().nonnegative(),
+            largestProjectBytes: z.number().int().nonnegative(),
+            documentedFixtureBytes: z.number().int().nonnegative(),
+            perOwnerSoftBudgetBytes: z.number().int().positive(),
+            perProjectSoftBudgetBytes: z.number().int().positive(),
+        }),
+        edgeInvocations: z.number().int().nonnegative(),
+        peakPresenceRoomsPerTab: z.number().int().nonnegative(),
+        signedUrlReuseRate: z.number().min(0).max(1),
+        attributionDimensions: z.array(z.enum([
+            'environment', 'route', 'resource', 'table', 'channel', 'cache_status', 'byte_band',
+        ])).min(7),
+        attributionCoverage: z.number().min(0).max(1),
+        projectedRegularEgressBytesAtPeriodEnd: z.number().nonnegative(),
+        projectedCachedEgressBytesAtPeriodEnd: z.number().nonnegative(),
+    }),
+    alerts: z.array(z.object({
+        metric: z.enum([
+            'regular_egress_bytes', 'cached_egress_bytes', 'realtime_messages',
+            'realtime_peak_connections', 'monthly_active_users', 'storage_bytes',
+            'database_bytes', 'edge_invocations', 'presence_rooms_per_tab',
+            'signed_url_reuse_rate', 'largest_owner_storage_bytes',
+            'largest_project_storage_bytes',
+        ]),
+        warningThreshold: z.number().nonnegative(),
+        criticalThreshold: z.number().nonnegative(),
+        owner: z.string().min(1),
+    })).min(12),
     globalBlockers: z.array(z.string()),
 })
 
@@ -90,6 +129,8 @@ function main() {
         pendingServices,
         blockedServices,
         summaryStatus: parsed.data.summary.status,
+        supabaseUsage: parsed.data.supabaseUsage,
+        alertMetrics: parsed.data.alerts.map((alert) => alert.metric),
         globalBlockers: parsed.data.globalBlockers,
     }
 
