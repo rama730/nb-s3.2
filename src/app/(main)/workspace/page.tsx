@@ -1,4 +1,4 @@
-import WorkspaceRouteClient from "@/components/workspace/WorkspaceRouteClient";
+import { redirect } from "next/navigation";
 
 export const dynamic = 'force-dynamic';
 
@@ -10,13 +10,7 @@ export async function generateMetadata() {
 }
 
 export default function WorkspacePage() {
-    return (
-        <div
-            data-scroll-root="route"
-            data-testid="workspace-route-scroll"
-            className="h-full min-h-0 overflow-auto"
-        >
-            <WorkspaceRouteClient />
-        </div>
-    );
+    // ponytail: /workspace was a second page only to open the hub drawer.
+    // Keep old links working while the hub remains the single workspace host.
+    redirect("/hub?workspace=tasks");
 }
