@@ -29,6 +29,8 @@ const THRESHOLDS: Record<string, number> = {
   'project.detail.application.submit': 700,
   'project.detail.application.decision': 900,
   'project.detail.files.tab.open': 1000,
+  'task.detail.panel.open': 100,
+  'task.detail.tab.open': 350,
 };
 
 function percentile(values: number[], p: number): number {
