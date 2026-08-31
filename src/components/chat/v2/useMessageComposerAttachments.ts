@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { cancelAttachmentUpload, uploadAttachment } from '@/app/actions/messaging';
-import { compressImage } from '@/lib/messages/image-compression';
+import { compressImage, generateTinyThumbnail } from '@/lib/messages/image-compression';
 import { readMediaDimensions, type MediaDimensions } from '@/lib/messages/media-metadata';
 import {
     MAX_UPLOAD_RETRIES,
@@ -16,6 +16,7 @@ const COMPRESSION_CONCURRENCY = 2;
 interface PreparedAttachmentFile {
     file: File;
     dimensions: MediaDimensions | null;
+    tinyBase64?: string;
 }
 
 interface UseMessageComposerAttachmentsParams {
@@ -23,18 +24,19 @@ interface UseMessageComposerAttachmentsParams {
     onAddFiles?: (register: (files: File[]) => void) => void;
 }
 
-function createPendingAttachment({ file, dimensions }: PreparedAttachmentFile): PendingAttachment {
+function createPendingAttachment({ file, dimensions, tinyBase64 }: PreparedAttachmentFile): PendingAttachment {
     return {
         id: typeof crypto !== 'undefined' && 'randomUUID' in crypto
             ? crypto.randomUUID()
             : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
         file,
-        preview: file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined,
+        preview: (file.type.startsWith('image/') || file.type.startsWith('video/')) ? URL.createObjectURL(file) : undefined,
         status: 'queued',
         progress: 0,
         attempts: 0,
         width: dimensions?.width,
         height: dimensions?.height,
+        tinyBase64: file.type.startsWith('image/') ? tinyBase64 : undefined,
     };
 }
 
@@ -53,9 +55,11 @@ async function compressFilesWithLimit(files: File[], concurrency: number) {
             const index = nextIndex;
             nextIndex += 1;
             const file = await compressImage(files[index]!);
+            const tinyBase64 = await generateTinyThumbnail(file) || undefined;
             results[index] = {
                 file,
                 dimensions: await readMediaDimensions(file),
+                tinyBase64,
             };
         }
     }
@@ -184,11 +188,12 @@ export function useMessageComposerAttachments({
         try {
             const compressedFile = await compressImage(file);
             const dimensions = await readMediaDimensions(compressedFile);
+            const tinyBase64 = await generateTinyThumbnail(compressedFile) || undefined;
             if (conversationEpochRef.current !== epoch) {
                 releaseAttachmentSlots(reservedCount);
                 return false;
             }
-            return stagePreparedAttachments([{ file: compressedFile, dimensions }], reservedCount, epoch) > 0;
+            return stagePreparedAttachments([{ file: compressedFile, dimensions, tinyBase64 }], reservedCount, epoch) > 0;
         } catch (error) {
             releaseAttachmentSlots(reservedCount);
             throw error;
@@ -231,6 +236,9 @@ export function useMessageComposerAttachments({
                     formData.append('width', String(attachment.width));
                     formData.append('height', String(attachment.height));
                 }
+                if (attachment.tinyBase64) {
+                    formData.append('tinyBase64', attachment.tinyBase64);
+                }
 
                 setAttachments((prev) =>
                     prev.map((item) =>
@@ -252,6 +260,8 @@ export function useMessageComposerAttachments({
                 }, 500);
                 progressTimeoutsRef.current.set(attachment.id, progressTimeoutId);
 
+                // ponytail: the authenticated server action already accepts FormData.
+                // Keeping binary uploads on that native path avoids a second multipart parser.
                 void uploadAttachment(formData)
                     .then((result) => {
                         const progressTimeout = progressTimeoutsRef.current.get(attachment.id);
@@ -275,7 +285,10 @@ export function useMessageComposerAttachments({
                                     ...item,
                                     status: 'uploaded',
                                     progress: 100,
-                                    uploaded: result.attachment,
+                                    uploaded: {
+                                        ...result.attachment,
+                                        localUrl: item.preview,
+                                    },
                                     error: undefined,
                                 };
                             }),
@@ -348,7 +361,7 @@ export function useMessageComposerAttachments({
         );
     }, []);
 
-    const clearAttachments = useCallback(() => {
+    const clearAttachments = useCallback((keepBackendUploads = false) => {
         // Invalidate any in-flight compression work so cleared files cannot
         // reappear if their async enqueue finishes later in the same thread.
         conversationEpochRef.current += 1;
@@ -359,7 +372,9 @@ export function useMessageComposerAttachments({
                 clearTimeout(progressTimeout);
                 progressTimeoutsRef.current.delete(attachment.id);
             }
-            void cancelAttachmentUpload(attachment.id);
+            if (!keepBackendUploads) {
+                void cancelAttachmentUpload(attachment.id);
+            }
         });
         activeUploadIdsRef.current.clear();
         progressTimeoutsRef.current.clear();
