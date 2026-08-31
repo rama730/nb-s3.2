@@ -15,23 +15,17 @@ function extractFunction(source: string, functionName: string) {
 }
 
 test('conversation unread reconciliation counts system messages with null sender', () => {
-    const source = readProjectFile('src/app/actions/messaging/_all.ts');
-    const reconcile = extractFunction(source, 'reconcileConversationUnreadCounts');
-    const unreadPredicate = extractFunction(source, 'buildUnreadAfterReadWatermarkPredicate');
+    const reconcile = readProjectFile('src/lib/messages/preview-refresh.ts');
+    const migration = readProjectFile('drizzle/0129_messages_data_authority.sql');
 
-    assert.match(reconcile, /eq\(messages\.conversationId, conversationId\)/);
-    assert.match(reconcile, /or\(isNull\(messages\.senderId\), ne\(messages\.senderId, participant\.userId\)\)/);
-    assert.match(reconcile, /isNull\(messages\.deletedAt\)/);
-    assert.match(reconcile, /lastReadMessageId: conversationParticipants\.lastReadMessageId/);
-    assert.match(reconcile, /const unreadAfterWatermark = buildUnreadAfterReadWatermarkPredicate\(\n\s*participant\.lastReadMessageId,\n\s*participant\.lastReadAt,/);
-    assert.match(reconcile, /if \(unreadAfterWatermark\) predicates\.push\(unreadAfterWatermark\)/);
-    assert.match(unreadPredicate, /if \(lastReadMessageId\) \{/);
-    assert.match(unreadPredicate, /\$\{messages\.createdAt\} > \$\{watermarkCreatedAt\}/);
-    assert.match(unreadPredicate, /AND \$\{messages\.id\} > \$\{lastReadMessageId\}/);
-    assert.match(unreadPredicate, /return gt\(messages\.createdAt, lastReadAt\)/);
-    assert.doesNotMatch(reconcile, /gt\(messages\.id, participant\.lastReadMessageId\)/);
-    assert.doesNotMatch(reconcile, /eq\(messages\.createdAt, participant\.lastReadAt\)/);
-    assert.doesNotMatch(reconcile, /\n\s*ne\(messages\.senderId, participant\.userId\),/);
+    assert.match(reconcile, /nb_reconcile_conversation_participants\(\s*\$\{conversationId\}::uuid,\s*NULL::uuid\s*\)/);
+    assert.match(migration, /CREATE OR REPLACE FUNCTION app_private\.nb_reconcile_conversation_participants/);
+    assert.match(migration, /unread_message\.sender_id IS DISTINCT FROM target\.user_id/);
+    assert.match(migration, /\(unread_message\.created_at, unread_message\.id\) >/);
+    assert.match(migration, /target\.last_read_message_id/);
+    assert.match(migration, /FROM public\.message_hidden_for_users hidden/);
+    assert.match(migration, /unread_message\.deleted_at IS NULL/);
+    assert.doesNotMatch(reconcile, /\.select\(\{ count:/);
 });
 
 test('mark conversation read returns the reconciled unread count instead of forcing zero', () => {
@@ -48,7 +42,8 @@ test('mark conversation read returns the reconciled unread count instead of forc
     assert.match(markRead, /unreadCount: updatedMembership\?\.unreadCount \?\? 0/);
     assert.match(markRead, /lastReadMessageId: updatedMembership\?\.lastReadMessageId \?\? null/);
     assert.match(markRead, /lastReadAt: updatedMembership\?\.lastReadAt \?\? null/);
-    assert.match(markRead, /if \(\(updatedMembership\?\.unreadCount \?\? 0\) === 0\)/);
+    assert.match(markRead, /shouldClearNotifications:/);
+    assert.match(markRead, /if \(result\.shouldClearNotifications\)/);
     assert.doesNotMatch(markRead, /unreadCount: 0,\n\s*archivedAt: null/);
 });
 
@@ -64,10 +59,11 @@ test('mark conversation read never regresses the persisted read watermark', () =
     assert.match(markRead, /const shouldAdvanceWatermark = shouldAdvanceReadWatermark/);
     assert.match(markRead, /lastReadAt: nextLastReadAt/);
     assert.match(markRead, /lastReadMessageId: nextLastReadMessageId/);
-    assert.match(markRead, /const unreadAfterWatermark = buildUnreadAfterReadWatermarkPredicate\(\n\s*nextLastReadMessageId,\n\s*nextLastReadAt,/);
+    assert.match(markRead, /const unreadAfterWatermark = buildUnreadAfterReadWatermarkPredicate\(\n\s*conversationId,\n\s*nextLastReadMessageId,\n\s*nextLastReadAt,/);
     assert.match(markRead, /if \(unreadAfterWatermark\) predicates\.push\(unreadAfterWatermark\)/);
     assert.doesNotMatch(markRead, /gt\(messages\.id, nextLastReadMessageId\)/);
     assert.match(markRead, /if \(watermarkMessage && shouldAdvanceWatermark\)/);
+    assert.match(markRead, /if \(!shouldAdvanceWatermark && \(membership\.unreadCount \?\? 0\) === 0\)/);
 });
 
 test('mark read mutation rejects server failures and keeps cache in sync with server count', () => {
@@ -84,7 +80,8 @@ test('mark read mutation rejects server failures and keeps cache in sync with se
     assert.match(markRead, /const previousLastReadAt = currentConversation\?\.lastReadAt \?\? null/);
     assert.match(markRead, /const optimisticReadMessage = params\.lastReadMessageId/);
     assert.match(markRead, /setPendingReadCommitState\(queryClient, params\.conversationId/);
-    assert.match(markRead, /const optimisticClearedCount = Math\.max\(0, previousUnreadCount\)/);
+    assert.match(markRead, /params\.lastReadMessageId === currentConversation\?\.lastMessage\?\.id/);
+    assert.match(markRead, /\? Math\.max\(0, previousUnreadCount\)\n\s*: 0/);
     assert.match(markRead, /patchThreadConversation\(queryClient, params\.conversationId, \(conversation\) => \(\{/);
     assert.match(markRead, /lastReadAt: optimisticLastReadAt/);
     assert.match(markRead, /lastReadMessageId: optimisticLastReadMessageId/);
@@ -104,28 +101,61 @@ test('mark read mutation rejects server failures and keeps cache in sync with se
     assert.match(markRead, /if \(nextUnreadCount > previousUnreadCount\)/);
 });
 
-test('messages workspace commits one concrete loaded read watermark on open', () => {
+test('messages workspace advances only the concrete watermark reported by visible unread rows', () => {
     const source = readProjectFile('src/components/chat/v2/MessagesWorkspaceV2.tsx');
+    const thread = readProjectFile('src/components/chat/v2/MessageThreadV2.tsx');
 
-    assert.match(source, /const hasLoadedReadableMessage = useMemo/);
-    assert.match(source, /thread\.messages\.some\(\(message\) => !message\.deletedAt && !isTemporaryMessageId\(message\.id\)\)/);
-    assert.match(source, /const latestReadableMessageId = useMemo/);
-    assert.match(source, /commitOptions\.allowLatestFallback[\s\S]*\? latestReadableMessageId : null/);
     assert.doesNotMatch(source, /latest-server-message/);
     assert.match(source, /readCommitInFlightRef/);
     assert.match(source, /queuedReadCommitRef/);
-    assert.match(source, /read_commit_replaced_by_newer/);
-    assert.match(source, /read_seen_detected/);
+    assert.match(source, /recordMessagesReadWatermark\(\{/);
+    assert.match(source, /outcome: 'queued'/);
+    assert.match(source, /outcome: 'requested'/);
+    assert.match(source, /outcome: 'succeeded'/);
+    assert.match(source, /outcome: 'failed'/);
     assert.match(source, /lastReadMessageId: serverMessageId/);
-    assert.match(source, /ignorePendingWatermark/);
-    assert.match(source, /handleCommitThreadRead\(null, \{ ignorePendingWatermark: true \}\)/);
-    assert.match(source, /const shouldCommitLatestServerWatermark =/);
-    assert.match(source, /const shouldCommitLatestServerWatermark =\n\s*hasLoadedReadableMessage && hasLoadedAuthoritativeLatest;/);
+    assert.match(source, /handleCommitThreadRead\(messageId, \{ allowLatestFallback: false \}\)/);
     assert.doesNotMatch(source, /READ_COMMIT_DWELL_MS/);
     assert.doesNotMatch(source, /readOpenCommitTimerRef/);
-    assert.doesNotMatch(source, /onComposerEngagement=\{handleCommitVisibleThreadRead\}/);
-    assert.doesNotMatch(source, /hasLoadedReadableMessage\n\s*&& !focusMessageId/);
-    assert.doesNotMatch(source, /latestUnreadMessageId/);
+    assert.doesNotMatch(source, /visibilitychange|pagehide|window\.addEventListener\(['"]blur/);
+    assert.match(thread, /IntersectionObserver/);
+    assert.match(thread, /document\.visibilityState === 'visible'/);
+    assert.equal(
+        (thread.match(/onVisibleReadWatermarkRef\.current\?\.\(/g) ?? []).length,
+        1,
+        'the intersection observer should be the only read-watermark owner',
+    );
+});
+
+test('active-thread read handling does not duplicate notification or global unread work', () => {
+    const workspace = readProjectFile('src/components/chat/v2/MessagesWorkspaceV2.tsx');
+    const realtime = readProjectFile('src/hooks/useMessagesV2Realtime.ts');
+
+    assert.doesNotMatch(workspace, /markConversationMessageNotificationsReadAction/);
+    assert.doesNotMatch(realtime, /getUnreadCount/);
+    assert.doesNotMatch(realtime, /scheduleUnreadRefresh/);
+    assert.doesNotMatch(realtime, /refreshUnreadSummary/);
+});
+
+test('ordinary sends use the database trigger and optimistic cache instead of redundant summaries', () => {
+    const messaging = readProjectFile('src/app/actions/messaging/_all.ts');
+    const v2 = readProjectFile('src/app/actions/messaging/v2.ts');
+
+    assert.match(messaging, /const \[participantMembershipId, conversationRows\] = await Promise\.all/);
+    assert.match(messaging, /const \[replyPreview, existing\] = await Promise\.all/);
+    assert.match(messaging, /if \(claimedAttachments\.length > 0\) \{\s*await tx\s*\.update\(conversationParticipants\)/s);
+    assert.match(v2, /let needsConversationSnapshot = false/);
+    assert.match(v2, /const conversation = user && result\.success && needsConversationSnapshot/);
+    assert.match(v2, /const needsConversationSnapshot = !params\.conversationId \|\| params\.conversationId\.startsWith\('draft:'\)/);
+});
+
+test('linked-work hydration avoids a full-history query while the thread is opening', () => {
+    const hook = readProjectFile('src/hooks/useMessageWorkLinks.ts');
+
+    assert.match(hook, /const RECENT_LINKED_WORK_MESSAGE_COUNT = 5/);
+    assert.match(hook, /const LINKED_WORK_DEFER_MS = 1_000/);
+    assert.match(hook, /\.slice\(-RECENT_LINKED_WORK_MESSAGE_COUNT\)/);
+    assert.match(hook, /enabled: isDeferredQueryReady && Boolean\(conversationId\) && normalizedMessageIds\.length > 0/);
 });
 
 test('messages workspace gates chat-only runtime work by active tab', () => {
@@ -135,17 +165,17 @@ test('messages workspace gates chat-only runtime work by active tab', () => {
 
     assert.match(workspace, /const isChatsTabActive = activeTab === 'chats'/);
     assert.match(workspace, /const hasActiveConversation = Boolean\(selectedConversationId\)/);
-    assert.match(workspace, /const inbox = useInbox\(20, isChatsTabActive\)/);
+    assert.match(workspace, /const inbox = useInbox\(20, isChatsTabActive, inboxView\)/);
     assert.match(workspace, /enabled: hasActiveConversation \|\| isChatsTabActive/);
     assert.match(workspace, /listVisible: isChatsTabActive/);
     assert.match(workspace, /inbox: isChatsTabActive/);
     assert.match(workspace, /activeThread: hasActiveConversation/);
-    assert.match(workspace, /NEXT_PUBLIC_MESSAGES_RENDER_PROFILER/);
-    assert.match(workspace, /<Profiler id=\{`messages-workspace:\$\{mode\}`\}/);
+    assert.doesNotMatch(workspace, /NEXT_PUBLIC_MESSAGES_RENDER_PROFILER/);
+    assert.doesNotMatch(workspace, /<Profiler/);
 
-    assert.match(messagesHook, /export function useInbox\(limit: number = 20, enabled: boolean = true\)/);
-    assert.match(messagesHook, /if \(!enabled\) return/);
-    assert.match(messagesHook, /enabled,/);
+    assert.match(messagesHook, /export function useInbox\(\n\s*limit: number = 20,\n\s*enabled: boolean = true,\n\s*scope: 'active' \| 'archived' = 'active'/);
+    assert.match(messagesHook, /if \(!enabled \|\| !user\?\.id\)/);
+    assert.match(messagesHook, /enabled: enabled && cacheReady/);
 
     assert.match(realtime, /type MessagesRealtimeOptions = boolean \| \{/);
     assert.match(realtime, /NEXT_PUBLIC_MESSAGES_REALTIME_TRACE/);
@@ -154,4 +184,11 @@ test('messages workspace gates chat-only runtime work by active tab', () => {
     assert.match(realtime, /if \(!inboxRealtimeEnabled \|\| !userId \|\| !realtimeToken\)/);
     assert.match(realtime, /if \(!activeThreadRealtimeEnabled \|\| !activeConversationId \|\| !realtimeToken/);
     assert.match(realtime, /traceMessagesRealtimeChannel\('subscribe'/);
+});
+
+test('inbox summaries never seed a thread with their partial last-message snapshot', () => {
+    const realtime = readProjectFile('src/hooks/useMessagesV2Realtime.ts');
+
+    assert.match(realtime, /upsertInboxConversation\(queryClient, result\.conversation\)/);
+    assert.doesNotMatch(realtime, /upsertThreadMessage\([^;]*conversation\.lastMessage/s);
 });
