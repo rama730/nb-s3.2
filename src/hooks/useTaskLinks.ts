@@ -70,7 +70,7 @@ export function useTaskLinks(projectId: string, nodeId: string): UseTaskLinksRet
     async (taskId: string): Promise<{ success: boolean; error?: string }> => {
       try {
         const { linkNodeToTask } = await import("@/app/actions/files/links");
-        await linkNodeToTask(taskId, nodeId);
+        await linkNodeToTask(taskId, nodeId, { role: "reference" });
         await fetchLinks();
         return { success: true };
       } catch (err) {
