@@ -41,6 +41,7 @@ function toBootstrapProfile(
         | 'education'
         | 'openTo'
         | 'socialLinks'
+        | 'socialLinkMetadata'
         | 'visibility'
         | 'messagePrivacy'
         | 'connectionPrivacy'
@@ -69,6 +70,8 @@ function toBootstrapProfile(
         education: profile.education ?? [],
         openTo: profile.openTo ?? [],
         socialLinks: profile.socialLinks ?? {},
+        // Compatibility only: the deployed column is no longer read by the safe-link flow.
+        socialLinkMetadata: profile.socialLinkMetadata ?? {},
         notificationPreferences: normalizeNotificationPreferences(profile.notificationPreferences),
         experienceLevel: null,
         hoursPerWeek: null,
@@ -106,6 +109,7 @@ export const getUserProfile = cache(async (userId: string) => {
                 education: profiles.education,
                 openTo: profiles.openTo,
                 socialLinks: profiles.socialLinks,
+                socialLinkMetadata: profiles.socialLinkMetadata,
                 visibility: profiles.visibility,
                 messagePrivacy: profiles.messagePrivacy,
                 connectionPrivacy: profiles.connectionPrivacy,
@@ -235,6 +239,7 @@ const PROFILE_DETAIL_COLUMNS = {
     experienceLevel: true,
     hoursPerWeek: true,
     socialLinks: true,
+    socialLinkMetadata: true,
     visibility: true,
     messagePrivacy: true,
     connectionPrivacy: true,
