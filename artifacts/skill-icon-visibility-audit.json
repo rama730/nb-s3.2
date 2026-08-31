@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-07-13T02:12:04.006Z",
+  "generatedAt": "2026-08-24T04:35:30.605Z",
   "policy": {
     "lightBackground": "#FFFFFF",
     "darkBackground": "#09090B",
@@ -8,12 +8,12 @@
     "lightPolicy": "non-empty-alpha"
   },
   "totals": {
-    "catalogSkills": 1118,
-    "brandedSkills": 767,
-    "uniqueBrandedRenders": 718,
-    "fallbackSkills": 351,
-    "auditedSkills": 1118,
-    "passing": 1118,
+    "catalogSkills": 1170,
+    "brandedSkills": 780,
+    "uniqueBrandedRenders": 731,
+    "fallbackSkills": 390,
+    "auditedSkills": 1170,
+    "passing": 1170,
     "failing": 0
   },
   "failures": [],
@@ -14325,6 +14325,305 @@
       }
     },
     {
+      "canonicalKey": "scientific-engineering.comsol-multiphysics",
+      "name": "COMSOL Multiphysics",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "simple-icons",
+      "iconKey": "comsol",
+      "light": {
+        "theme": "light",
+        "opaquePixels": 169,
+        "visiblePixels": 163,
+        "visibleFraction": 0.9645,
+        "averageContrast": 1.7701,
+        "pass": true
+      },
+      "dark": {
+        "theme": "dark",
+        "opaquePixels": 169,
+        "visiblePixels": 158,
+        "visibleFraction": 0.9349,
+        "averageContrast": 2.1225,
+        "pass": true
+      }
+    },
+    {
+      "canonicalKey": "scientific-engineering.ansys",
+      "name": "ANSYS",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "simple-icons",
+      "iconKey": "ansys",
+      "light": {
+        "theme": "light",
+        "opaquePixels": 330,
+        "visiblePixels": 296,
+        "visibleFraction": 0.897,
+        "averageContrast": 1.514,
+        "pass": true
+      },
+      "dark": {
+        "theme": "dark",
+        "opaquePixels": 330,
+        "visiblePixels": 328,
+        "visibleFraction": 0.9939,
+        "averageContrast": 7.2179,
+        "pass": true
+      }
+    },
+    {
+      "canonicalKey": "scientific-engineering.labview",
+      "name": "LabVIEW",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "simple-icons",
+      "iconKey": "labview",
+      "light": {
+        "theme": "light",
+        "opaquePixels": 425,
+        "visiblePixels": 321,
+        "visibleFraction": 0.7553,
+        "averageContrast": 1.2516,
+        "pass": true
+      },
+      "dark": {
+        "theme": "dark",
+        "opaquePixels": 425,
+        "visiblePixels": 424,
+        "visibleFraction": 0.9976,
+        "averageContrast": 8.4421,
+        "pass": true
+      }
+    },
+    {
+      "canonicalKey": "scientific-engineering.wolfram-mathematica",
+      "name": "Wolfram Mathematica",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "simple-icons",
+      "iconKey": "wolframmathematica",
+      "light": {
+        "theme": "light",
+        "opaquePixels": 1134,
+        "visiblePixels": 1134,
+        "visibleFraction": 1,
+        "averageContrast": 4.1831,
+        "pass": true
+      },
+      "dark": {
+        "theme": "dark",
+        "opaquePixels": 1134,
+        "visiblePixels": 1065,
+        "visibleFraction": 0.9392,
+        "averageContrast": 3.1829,
+        "pass": true
+      }
+    },
+    {
+      "canonicalKey": "scientific-engineering.gnu-octave",
+      "name": "GNU Octave",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "simple-icons",
+      "iconKey": "octave",
+      "light": {
+        "theme": "light",
+        "opaquePixels": 708,
+        "visiblePixels": 697,
+        "visibleFraction": 0.9845,
+        "averageContrast": 2.9671,
+        "pass": true
+      },
+      "dark": {
+        "theme": "dark",
+        "opaquePixels": 708,
+        "visiblePixels": 693,
+        "visibleFraction": 0.9788,
+        "averageContrast": 4.2031,
+        "pass": true
+      }
+    },
+    {
+      "canonicalKey": "scientific-engineering.kicad",
+      "name": "KiCad",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "simple-icons",
+      "iconKey": "kicad",
+      "light": {
+        "theme": "light",
+        "opaquePixels": 528,
+        "visiblePixels": 527,
+        "visibleFraction": 0.9981,
+        "averageContrast": 4.7427,
+        "pass": true
+      },
+      "dark": {
+        "theme": "dark",
+        "opaquePixels": 528,
+        "visiblePixels": 501,
+        "visibleFraction": 0.9489,
+        "averageContrast": 2.0144,
+        "pass": true
+      }
+    },
+    {
+      "canonicalKey": "scientific-engineering.ltspice",
+      "name": "LTspice",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "simple-icons",
+      "iconKey": "ltspice",
+      "light": {
+        "theme": "light",
+        "opaquePixels": 795,
+        "visiblePixels": 795,
+        "visibleFraction": 1,
+        "averageContrast": 8.2389,
+        "pass": true
+      },
+      "dark": {
+        "theme": "dark",
+        "opaquePixels": 795,
+        "visiblePixels": 728,
+        "visibleFraction": 0.9157,
+        "averageContrast": 1.9377,
+        "pass": true
+      }
+    },
+    {
+      "canonicalKey": "scientific-engineering.freecad",
+      "name": "FreeCAD",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "simple-icons",
+      "iconKey": "freecad",
+      "light": {
+        "theme": "light",
+        "opaquePixels": 1217,
+        "visiblePixels": 1215,
+        "visibleFraction": 0.9984,
+        "averageContrast": 3.3153,
+        "pass": true
+      },
+      "dark": {
+        "theme": "dark",
+        "opaquePixels": 1217,
+        "visiblePixels": 1215,
+        "visibleFraction": 0.9984,
+        "averageContrast": 5.7334,
+        "pass": true
+      }
+    },
+    {
+      "canonicalKey": "scientific-engineering.autodesk-revit",
+      "name": "Autodesk Revit",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "simple-icons",
+      "iconKey": "autodeskrevit",
+      "light": {
+        "theme": "light",
+        "opaquePixels": 1790,
+        "visiblePixels": 1787,
+        "visibleFraction": 0.9983,
+        "averageContrast": 4.1367,
+        "pass": true
+      },
+      "dark": {
+        "theme": "dark",
+        "opaquePixels": 1790,
+        "visiblePixels": 1778,
+        "visibleFraction": 0.9933,
+        "averageContrast": 3.9097,
+        "pass": true
+      }
+    },
+    {
+      "canonicalKey": "scientific-engineering.rhinoceros",
+      "name": "Rhinoceros",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "simple-icons",
+      "iconKey": "rhinoceros",
+      "light": {
+        "theme": "light",
+        "opaquePixels": 642,
+        "visiblePixels": 642,
+        "visibleFraction": 1,
+        "averageContrast": 7.9826,
+        "pass": true
+      },
+      "dark": {
+        "theme": "dark",
+        "opaquePixels": 642,
+        "visiblePixels": 568,
+        "visibleFraction": 0.8847,
+        "averageContrast": 1.6715,
+        "pass": true
+      }
+    },
+    {
+      "canonicalKey": "scientific-engineering.siemens-nx",
+      "name": "Siemens NX",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "simple-icons",
+      "iconKey": "siemens",
+      "light": {
+        "theme": "light",
+        "opaquePixels": 303,
+        "visiblePixels": 299,
+        "visibleFraction": 0.9868,
+        "averageContrast": 2.4639,
+        "pass": true
+      },
+      "dark": {
+        "theme": "dark",
+        "opaquePixels": 303,
+        "visiblePixels": 298,
+        "visibleFraction": 0.9835,
+        "averageContrast": 3.544,
+        "pass": true
+      }
+    },
+    {
+      "canonicalKey": "scientific-engineering.proteus",
+      "name": "Proteus",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "simple-icons",
+      "iconKey": "proteus",
+      "light": {
+        "theme": "light",
+        "opaquePixels": 709,
+        "visiblePixels": 697,
+        "visibleFraction": 0.9831,
+        "averageContrast": 3.2715,
+        "pass": true
+      },
+      "dark": {
+        "theme": "dark",
+        "opaquePixels": 709,
+        "visiblePixels": 667,
+        "visibleFraction": 0.9408,
+        "averageContrast": 2.939,
+        "pass": true
+      }
+    },
+    {
+      "canonicalKey": "scientific-engineering.multisim",
+      "name": "Multisim",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "simple-icons",
+      "iconKey": "multisim",
+      "light": {
+        "theme": "light",
+        "opaquePixels": 1938,
+        "visiblePixels": 1925,
+        "visibleFraction": 0.9933,
+        "averageContrast": 2.2923,
+        "pass": true
+      },
+      "dark": {
+        "theme": "dark",
+        "opaquePixels": 1938,
+        "visiblePixels": 1934,
+        "visibleFraction": 0.9979,
+        "averageContrast": 6.9068,
+        "pass": true
+      }
+    },
+    {
       "canonicalKey": "embedded.arduino",
       "name": "Arduino",
       "categoryKey": "embedded",
@@ -19683,6 +19982,357 @@
       "categoryKey": "games",
       "iconSource": "lucide",
       "iconKey": "panels-top-left",
+      "strategy": "semantic-current-color",
+      "pass": true
+    },
+    {
+      "canonicalKey": "scientific-engineering.abaqus",
+      "name": "Abaqus",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "lucide",
+      "iconKey": "wrench",
+      "strategy": "semantic-current-color",
+      "pass": true
+    },
+    {
+      "canonicalKey": "scientific-engineering.openfoam",
+      "name": "OpenFOAM",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "lucide",
+      "iconKey": "wrench",
+      "strategy": "semantic-current-color",
+      "pass": true
+    },
+    {
+      "canonicalKey": "scientific-engineering.simulink",
+      "name": "Simulink",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "lucide",
+      "iconKey": "wrench",
+      "strategy": "semantic-current-color",
+      "pass": true
+    },
+    {
+      "canonicalKey": "scientific-engineering.solidworks",
+      "name": "SolidWorks",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "lucide",
+      "iconKey": "wrench",
+      "strategy": "semantic-current-color",
+      "pass": true
+    },
+    {
+      "canonicalKey": "scientific-engineering.catia",
+      "name": "CATIA",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "lucide",
+      "iconKey": "wrench",
+      "strategy": "semantic-current-color",
+      "pass": true
+    },
+    {
+      "canonicalKey": "scientific-engineering.fusion-360",
+      "name": "Fusion 360",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "lucide",
+      "iconKey": "wrench",
+      "strategy": "semantic-current-color",
+      "pass": true
+    },
+    {
+      "canonicalKey": "scientific-engineering.altium-designer",
+      "name": "Altium Designer",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "lucide",
+      "iconKey": "wrench",
+      "strategy": "semantic-current-color",
+      "pass": true
+    },
+    {
+      "canonicalKey": "scientific-engineering.onshape",
+      "name": "Onshape",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "lucide",
+      "iconKey": "wrench",
+      "strategy": "semantic-current-color",
+      "pass": true
+    },
+    {
+      "canonicalKey": "scientific-engineering.autodesk-inventor",
+      "name": "Autodesk Inventor",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "lucide",
+      "iconKey": "wrench",
+      "strategy": "semantic-current-color",
+      "pass": true
+    },
+    {
+      "canonicalKey": "scientific-engineering.grasshopper",
+      "name": "Grasshopper",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "lucide",
+      "iconKey": "wrench",
+      "strategy": "semantic-current-color",
+      "pass": true
+    },
+    {
+      "canonicalKey": "scientific-engineering.pspice",
+      "name": "PSpice",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "lucide",
+      "iconKey": "wrench",
+      "strategy": "semantic-current-color",
+      "pass": true
+    },
+    {
+      "canonicalKey": "scientific-engineering.modelica",
+      "name": "Modelica",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "lucide",
+      "iconKey": "wrench",
+      "strategy": "semantic-current-color",
+      "pass": true
+    },
+    {
+      "canonicalKey": "scientific-engineering.openmodelica",
+      "name": "OpenModelica",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "lucide",
+      "iconKey": "wrench",
+      "strategy": "semantic-current-color",
+      "pass": true
+    },
+    {
+      "canonicalKey": "scientific-engineering.gnu-radio",
+      "name": "GNU Radio",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "lucide",
+      "iconKey": "wrench",
+      "strategy": "semantic-current-color",
+      "pass": true
+    },
+    {
+      "canonicalKey": "scientific-engineering.scientific-computing",
+      "name": "Scientific Computing",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "lucide",
+      "iconKey": "orbit",
+      "strategy": "semantic-current-color",
+      "pass": true
+    },
+    {
+      "canonicalKey": "scientific-engineering.numerical-methods",
+      "name": "Numerical Methods",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "lucide",
+      "iconKey": "gauge",
+      "strategy": "semantic-current-color",
+      "pass": true
+    },
+    {
+      "canonicalKey": "scientific-engineering.finite-element-analysis-fea",
+      "name": "Finite Element Analysis (FEA)",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "lucide",
+      "iconKey": "gauge",
+      "strategy": "semantic-current-color",
+      "pass": true
+    },
+    {
+      "canonicalKey": "scientific-engineering.computational-fluid-dynamics-cfd",
+      "name": "Computational Fluid Dynamics (CFD)",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "lucide",
+      "iconKey": "gauge",
+      "strategy": "semantic-current-color",
+      "pass": true
+    },
+    {
+      "canonicalKey": "scientific-engineering.multiphysics-simulation",
+      "name": "Multiphysics Simulation",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "lucide",
+      "iconKey": "orbit",
+      "strategy": "semantic-current-color",
+      "pass": true
+    },
+    {
+      "canonicalKey": "scientific-engineering.computer-aided-design-cad",
+      "name": "Computer-Aided Design (CAD)",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "lucide",
+      "iconKey": "pen-tool",
+      "strategy": "semantic-current-color",
+      "pass": true
+    },
+    {
+      "canonicalKey": "scientific-engineering.computer-aided-engineering-cae",
+      "name": "Computer-Aided Engineering (CAE)",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "lucide",
+      "iconKey": "circuit-board",
+      "strategy": "semantic-current-color",
+      "pass": true
+    },
+    {
+      "canonicalKey": "scientific-engineering.computer-aided-manufacturing-cam",
+      "name": "Computer-Aided Manufacturing (CAM)",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "lucide",
+      "iconKey": "wrench",
+      "strategy": "semantic-current-color",
+      "pass": true
+    },
+    {
+      "canonicalKey": "scientific-engineering.structural-analysis",
+      "name": "Structural Analysis",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "lucide",
+      "iconKey": "building-2",
+      "strategy": "semantic-current-color",
+      "pass": true
+    },
+    {
+      "canonicalKey": "scientific-engineering.thermal-analysis",
+      "name": "Thermal Analysis",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "lucide",
+      "iconKey": "activity",
+      "strategy": "semantic-current-color",
+      "pass": true
+    },
+    {
+      "canonicalKey": "scientific-engineering.electromagnetics-simulation",
+      "name": "Electromagnetics Simulation",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "lucide",
+      "iconKey": "circuit-board",
+      "strategy": "semantic-current-color",
+      "pass": true
+    },
+    {
+      "canonicalKey": "scientific-engineering.circuit-simulation",
+      "name": "Circuit Simulation",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "lucide",
+      "iconKey": "circuit-board",
+      "strategy": "semantic-current-color",
+      "pass": true
+    },
+    {
+      "canonicalKey": "scientific-engineering.model-based-design",
+      "name": "Model-Based Design",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "lucide",
+      "iconKey": "boxes",
+      "strategy": "semantic-current-color",
+      "pass": true
+    },
+    {
+      "canonicalKey": "scientific-engineering.systems-engineering",
+      "name": "Systems Engineering",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "lucide",
+      "iconKey": "workflow",
+      "strategy": "semantic-current-color",
+      "pass": true
+    },
+    {
+      "canonicalKey": "scientific-engineering.digital-twin",
+      "name": "Digital Twin",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "lucide",
+      "iconKey": "boxes",
+      "strategy": "semantic-current-color",
+      "pass": true
+    },
+    {
+      "canonicalKey": "scientific-engineering.design-for-manufacturing",
+      "name": "Design for Manufacturing",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "lucide",
+      "iconKey": "wrench",
+      "strategy": "semantic-current-color",
+      "pass": true
+    },
+    {
+      "canonicalKey": "scientific-engineering.additive-manufacturing",
+      "name": "Additive Manufacturing",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "lucide",
+      "iconKey": "box",
+      "strategy": "semantic-current-color",
+      "pass": true
+    },
+    {
+      "canonicalKey": "scientific-engineering.mechanical-engineering",
+      "name": "Mechanical Engineering",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "lucide",
+      "iconKey": "wrench",
+      "strategy": "semantic-current-color",
+      "pass": true
+    },
+    {
+      "canonicalKey": "scientific-engineering.electrical-engineering",
+      "name": "Electrical Engineering",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "lucide",
+      "iconKey": "circuit-board",
+      "strategy": "semantic-current-color",
+      "pass": true
+    },
+    {
+      "canonicalKey": "scientific-engineering.civil-engineering",
+      "name": "Civil Engineering",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "lucide",
+      "iconKey": "building-2",
+      "strategy": "semantic-current-color",
+      "pass": true
+    },
+    {
+      "canonicalKey": "scientific-engineering.chemical-engineering",
+      "name": "Chemical Engineering",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "lucide",
+      "iconKey": "test-tube-2",
+      "strategy": "semantic-current-color",
+      "pass": true
+    },
+    {
+      "canonicalKey": "scientific-engineering.biomedical-engineering",
+      "name": "Biomedical Engineering",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "lucide",
+      "iconKey": "activity",
+      "strategy": "semantic-current-color",
+      "pass": true
+    },
+    {
+      "canonicalKey": "scientific-engineering.materials-science",
+      "name": "Materials Science",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "lucide",
+      "iconKey": "box",
+      "strategy": "semantic-current-color",
+      "pass": true
+    },
+    {
+      "canonicalKey": "scientific-engineering.semiconductor-engineering",
+      "name": "Semiconductor Engineering",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "lucide",
+      "iconKey": "cpu",
+      "strategy": "semantic-current-color",
+      "pass": true
+    },
+    {
+      "canonicalKey": "scientific-engineering.renewable-energy-engineering",
+      "name": "Renewable Energy Engineering",
+      "categoryKey": "scientific-engineering",
+      "iconSource": "lucide",
+      "iconKey": "cloud-lightning",
       "strategy": "semantic-current-color",
       "pass": true
     },
