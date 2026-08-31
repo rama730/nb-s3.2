@@ -32,12 +32,10 @@ interface MessageComposerV2Props {
     targetUserId?: string | null;
     capability: ConversationCapabilityV2 | null;
     replyTarget: MessageWithSender | null;
-    messageCount?: number;
     surface?: 'page' | 'popup';
     sendTyping?: (isTyping: boolean) => Promise<void> | void;
     onWillSend?: () => void;
     onComposerEngagement?: () => void;
-    onComposerHeightChange?: (height: number) => void;
     onClearReply: () => void;
     onAddFiles?: (register: (files: File[]) => void) => void;
     participants?: Array<{ id: string; username: string | null; fullName: string | null; avatarUrl: string | null }>;
@@ -51,12 +49,10 @@ export function MessageComposerV2({
     targetUserId,
     capability,
     replyTarget,
-    messageCount = 0,
     surface = 'page',
     sendTyping,
     onWillSend,
     onComposerEngagement,
-    onComposerHeightChange,
     onClearReply,
     onAddFiles,
     participants,
@@ -67,54 +63,8 @@ export function MessageComposerV2({
     const [sendAnimating, setSendAnimating] = useState(false);
     const inputRef = useRef<HTMLTextAreaElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
-    const composerRootRef = useRef<HTMLDivElement>(null);
     const typingIdleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const typingActiveRef = useRef(false);
-    const composerHeightRef = useRef(0);
-    const [isExpanded, setIsExpanded] = useState(false);
-
-    useEffect(() => {
-        const el = inputRef.current;
-        if (!el) return;
-        const observer = new ResizeObserver((entries) => {
-            for (const entry of entries) {
-                // Height > 50px indicates multiple lines
-                setIsExpanded(entry.contentRect.height > 50);
-            }
-        });
-        observer.observe(el);
-        return () => observer.disconnect();
-    }, []);
-
-    useEffect(() => {
-        if (!onComposerHeightChange) return;
-        const el = composerRootRef.current;
-        if (!el) return;
-
-        const publishHeight = () => {
-            const nextHeight = Math.ceil(el.getBoundingClientRect().height);
-            if (!Number.isFinite(nextHeight) || nextHeight <= 0) return;
-            if (Math.abs(nextHeight - composerHeightRef.current) < 1) return;
-            composerHeightRef.current = nextHeight;
-            onComposerHeightChange(nextHeight);
-        };
-
-        publishHeight();
-        window.addEventListener('resize', publishHeight);
-
-        if (typeof ResizeObserver === 'undefined') {
-            return () => window.removeEventListener('resize', publishHeight);
-        }
-
-        const observer = new ResizeObserver(publishHeight);
-        observer.observe(el);
-
-        return () => {
-            observer.disconnect();
-            window.removeEventListener('resize', publishHeight);
-        };
-    }, [onComposerHeightChange]);
-
     const commands = useMessageComposerCommands({
         conversationId,
         draft,
@@ -280,7 +230,7 @@ export function MessageComposerV2({
     }, [conversationId, draft, setDraft]);
 
     return (
-        <div ref={composerRootRef} className={`pointer-events-none absolute inset-x-0 bottom-0 z-20 mx-auto w-full min-w-[320px] ${
+        <div className={`pointer-events-none absolute inset-x-0 bottom-0 z-20 mx-auto w-full min-w-[320px] ${
             isPopup ? 'px-3 py-3 max-w-[95%]' : 'px-5 py-4 max-w-[50%]'
         }`}>
             {workflowNotice ? (
@@ -352,6 +302,10 @@ export function MessageComposerV2({
                         value={draft}
                         onChange={handleChange}
                         onKeyDown={handleComposerKeyDown}
+                        onBlur={() => {
+                            clearTypingIdleTimer();
+                            updateTypingState(false);
+                        }}
 	                        onPaste={(event) => {
 	                            const items = Array.from(event.clipboardData?.items || []);
 	                            const imageItem = items.find((item) => item.type.startsWith('image/'));
@@ -388,8 +342,7 @@ export function MessageComposerV2({
                         rows={1}
                         style={{ fieldSizing: 'content' } as React.CSSProperties}
                         className={cn(
-                            "max-h-[160px] min-h-[44px] flex-1 resize-none overflow-hidden border border-transparent bg-zinc-50 px-4 py-3 text-sm outline-none transition-all duration-200 data-[overflowing=true]:overflow-y-auto dark:bg-zinc-900 app-scroll",
-                            isExpanded ? "rounded-2xl" : "rounded-full"
+                            "max-h-[160px] min-h-[44px] flex-1 resize-none overflow-hidden border border-zinc-200 focus:border-zinc-300 dark:border-zinc-850 dark:focus:border-zinc-750 bg-white/60 dark:bg-zinc-950/60 backdrop-blur-md px-4 py-3 text-sm outline-none transition-all duration-200 data-[overflowing=true]:overflow-y-auto rounded-2xl app-scroll shadow-sm"
                         )}
                     />
                     <button
