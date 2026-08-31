@@ -1,16 +1,17 @@
 "use client";
 
-import { useState, useEffect, useRef, type CSSProperties } from "react";
+import { useState, useEffect, useMemo, useRef, type CSSProperties, type KeyboardEvent } from "react";
 import Link from "next/link";
 import {
     LayoutDashboard, ListTodo, FolderOpen, BookOpenText,
-    Settings, Share2, ChevronLeft, Bell, Timer, BarChart3, Loader2, Newspaper
+    Settings, Share2, ChevronLeft, Bell, IterationCcw, BarChart3, Loader2, Newspaper
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Project } from "@/types/hub";
 import { profileHref } from "@/lib/routing/identifiers";
 import { useRouteWarmPrefetch } from "@/hooks/useRouteWarmPrefetch";
 import ProjectStatsBar from "@/components/projects/ProjectStatsBar";
+import { ProjectLinkCluster } from "@/components/projects/dashboard/ProjectSocialLinksCard";
 import {
     isProjectTabVisibleToViewer,
     normalizeProjectPublicTabVisibility,
@@ -35,19 +36,25 @@ interface ProjectLayoutProps {
     followLoading?: boolean;
     onShare?: () => void;
     onTabHover?: (tabId: string) => void;
-    onTabLeave?: (tabId: string) => void;
 }
 
 const TABS = [
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
     { id: "readme", label: "Docs", icon: BookOpenText },
     { id: "updates", label: "Updates", icon: Newspaper },
-    { id: "sprints", label: "Sprints", icon: Timer },
+    { id: "sprints", label: "Sprints", icon: IterationCcw },
     { id: "tasks", label: "Tasks", icon: ListTodo },
-    { id: "analytics", label: "Analytics", icon: BarChart3 },
     { id: "files", label: "Files", icon: FolderOpen },
+    { id: "analytics", label: "Analytics", icon: BarChart3 },
     { id: "settings", label: "Settings", icon: Settings, ownerOnly: true },
 ];
+
+const FILES_WORKSPACE_SCROLL_EVENT = "project:files-workspace-scroll";
+
+type FilesWorkspaceScrollDetail = {
+    projectId: string;
+    scrollTop: number;
+};
 
 export default function ProjectLayout({
     children, project, isOwner, activeTab, onTabChange,
@@ -60,7 +67,6 @@ export default function ProjectLayout({
 
     isFollowing, onFollow, followLoading, onShare,
     onTabHover,
-    onTabLeave,
 }: ProjectLayoutProps) {
     const prefetch = useRouteWarmPrefetch();
     const [isScrolled, setIsScrolled] = useState(false);
@@ -70,13 +76,45 @@ export default function ProjectLayout({
     const isFilesTab = activeTab === "files";
     const isSettingsTab = activeTab === "settings";
     const isUpdatesTab = activeTab === "updates";
+    const isTasksTab = activeTab === "tasks";
     const isDocEditWorkspaceTab = activeTab === "readme" && isDocEditing;
     const isContainedWorkspaceTab = isFilesTab || isDocEditWorkspaceTab;
 
-    // Detect route scroll for sticky header state. Workspace tabs own their
-    // own scroll chrome.
+    // Detect the active tab's scroll surface for sticky header state. Files
+    // owns independent sidebar and content scrollers, so FilesTabRoot emits a
+    // single event from either pane rather than making the workspace itself
+    // page-scrollable.
     useEffect(() => {
-        if (isContainedWorkspaceTab) {
+        if (isFilesTab) {
+            let rafId = 0;
+            let latestScrollTop = 0;
+
+            const scheduleScrollState = () => {
+                if (rafId) return;
+
+                rafId = requestAnimationFrame(() => {
+                    const shouldBeScrolled = latestScrollTop > 10;
+                    setIsScrolled((prev) => (prev === shouldBeScrolled ? prev : shouldBeScrolled));
+                    rafId = 0;
+                });
+            };
+            const handleFilesWorkspaceScroll = (event: Event) => {
+                const detail = (event as CustomEvent<FilesWorkspaceScrollDetail>).detail;
+                if (!detail || detail.projectId !== project.id) return;
+                latestScrollTop = detail.scrollTop;
+                scheduleScrollState();
+            };
+
+            window.addEventListener(FILES_WORKSPACE_SCROLL_EVENT, handleFilesWorkspaceScroll);
+            setIsScrolled(false);
+
+            return () => {
+                window.removeEventListener(FILES_WORKSPACE_SCROLL_EVENT, handleFilesWorkspaceScroll);
+                if (rafId) cancelAnimationFrame(rafId);
+            };
+        }
+
+        if (isDocEditWorkspaceTab) {
             setIsScrolled(false);
             return;
         }
@@ -103,7 +141,7 @@ export default function ProjectLayout({
             scrollTarget.removeEventListener("scroll", scheduleScrollState as EventListener);
             if (rafId) cancelAnimationFrame(rafId);
         };
-    }, [isContainedWorkspaceTab]);
+    }, [isDocEditWorkspaceTab, isFilesTab, project.id]);
 
     useEffect(() => {
         const updateProjectLayoutMetrics = () => {
@@ -124,11 +162,51 @@ export default function ProjectLayout({
         };
     }, [activeTab, isContainedWorkspaceTab]);
 
-    const normalizedPublicTabs = normalizeProjectPublicTabVisibility(publicTabVisibility ?? project.publicTabVisibility);
+    const normalizedPublicTabs = useMemo(
+        () => normalizeProjectPublicTabVisibility(publicTabVisibility ?? project.publicTabVisibility),
+        [project.publicTabVisibility, publicTabVisibility],
+    );
     const canSeeMemberTabs = isOwnerOrMember ?? isOwner;
+    const visibleTabs = useMemo(
+        () => TABS.filter((tab) => {
+            if (tab.ownerOnly && !(canManageSettings ?? isOwner)) return false;
+            return isProjectTabVisibleToViewer({
+                tabId: tab.id,
+                isOwnerOrMember: canSeeMemberTabs,
+                canManageSettings: canManageSettings ?? isOwner,
+                publicTabVisibility: normalizedPublicTabs,
+            });
+        }),
+        [canManageSettings, canSeeMemberTabs, isOwner, normalizedPublicTabs],
+    );
+    const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
+        let nextIndex: number | null = null;
+        if (event.key === "ArrowRight") nextIndex = (index + 1) % visibleTabs.length;
+        if (event.key === "ArrowLeft") nextIndex = (index - 1 + visibleTabs.length) % visibleTabs.length;
+        if (event.key === "Home") nextIndex = 0;
+        if (event.key === "End") nextIndex = visibleTabs.length - 1;
+        if (nextIndex === null) return;
+        event.preventDefault();
+        const nextTab = visibleTabs[nextIndex];
+        if (!nextTab) return;
+        onTabChange(nextTab.id);
+        requestAnimationFrame(() => {
+            tabsRef.current?.querySelector<HTMLButtonElement>(`[data-testid="project-tab-${nextTab.id}"]`)?.focus();
+        });
+    };
     const owner = (project as any)?.owner;
+    const guidance = (project as any)?.guidance as {
+        label?: string | null;
+        fullName?: string | null;
+        username?: string | null;
+        guideUserId?: string | null;
+    } | null;
     const ownerName = owner?.displayName || owner?.fullName || owner?.username || "Creator";
     const ownerHref = owner?.canOpenProfile ? profileHref({ id: owner?.id, username: owner?.username }) : null;
+    const guidanceName = guidance?.fullName || guidance?.username || "";
+    const guidanceHref = guidance?.guideUserId
+        ? profileHref({ id: guidance.guideUserId, username: guidance.username })
+        : null;
     const layoutStyle = {
         "--project-tabs-height": `${projectTabsHeight}px`,
     } as CSSProperties;
@@ -143,15 +221,13 @@ export default function ProjectLayout({
             style={layoutStyle}
         >
             {/* Top Row: Context & Actions (NOT sticky; scrolls away) */}
-            <div
-                className={cn(
-                    "bg-white/80 dark:bg-zinc-950/80 backdrop-blur-md shrink-0 overflow-hidden transition-[height,opacity,transform] duration-200 ease-in-out",
-                    isContainedWorkspaceTab && isScrolled
-                        ? "h-0 -translate-y-2 opacity-0 pointer-events-none"
-                        : "h-14 translate-y-0 opacity-100",
-                )}
-            >
-                <div className="max-w-7xl mx-auto">
+            <div className={cn(
+                "bg-white/80 dark:bg-zinc-950/80 backdrop-blur-md shrink-0 overflow-hidden transition-[height,opacity,transform] duration-200 ease-in-out",
+                isContainedWorkspaceTab && isScrolled
+                    ? "h-0 -translate-y-2 opacity-0 pointer-events-none"
+                    : "h-14 translate-y-0 opacity-100",
+            )}>
+                <div className="max-w-7xl mx-auto w-full">
                     <div className="flex items-center justify-between px-4 h-14">
                         {/* Left: Project Identity */}
                         <div className="flex items-center gap-4 min-w-0">
@@ -164,9 +240,27 @@ export default function ProjectLayout({
                             </Link>
 
                             <div className="flex items-center gap-3 min-w-0">
-                                <h1 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100 truncate">
+                                <h1 className="min-w-0 truncate text-sm font-semibold text-zinc-900 dark:text-zinc-100">
                                     {project?.title}
                                 </h1>
+                                <ProjectLinkCluster
+                                    projectId={project.id}
+                                    links={project.externalLinks ?? (project as any).external_links}
+                                    githubRepoUrl={project.githubRepoUrl ?? (project as any).github_repo_url}
+                                    health={project.externalLinkMetadata ?? (project as any).external_link_metadata}
+                                    projectType={project.category}
+                                    canManage={canManageSettings ?? isOwner}
+                                />
+                                {guidanceName ? (
+                                    <div className="hidden md:flex items-center gap-1 text-xs text-zinc-500 dark:text-zinc-400 min-w-0">
+                                        <span className="shrink-0">{guidance?.label === "Guide" ? "Guided by" : `${guidance?.label || "Guide"}:`}</span>
+                                        {guidanceHref ? (
+                                            <Link href={guidanceHref} onMouseEnter={() => prefetch(guidanceHref)} onFocus={() => prefetch(guidanceHref)} className="font-medium text-primary hover:underline truncate max-w-[180px]" title={guidanceName}>
+                                                {guidanceName}
+                                            </Link>
+                                        ) : <span className="truncate max-w-[180px] font-medium text-zinc-700 dark:text-zinc-300">{guidanceName}</span>}
+                                    </div>
+                                ) : null}
                                 {/* Created by */}
                                 <div className="hidden md:flex items-center gap-1 text-xs text-zinc-500 dark:text-zinc-400 min-w-0">
                                     <span className="shrink-0">Created by</span>
@@ -189,9 +283,6 @@ export default function ProjectLayout({
                                         </span>
                                     )}
                                 </div>
-                                {project?.status === "active" && (
-                                    <span className="hidden sm:inline-block w-2 h-2 rounded-full bg-emerald-500" title="Active Project" />
-                                )}
                             </div>
 
                             {/* Inline project meta */}
@@ -255,16 +346,8 @@ export default function ProjectLayout({
                 style={isContainedWorkspaceTab ? undefined : { top: 0 }}
             >
                 <div className="max-w-7xl mx-auto">
-                    <div className="flex items-center px-4 overflow-x-auto scrollbar-hide -mb-px">
-                        {TABS.map((tab) => {
-                            if (tab.ownerOnly && !(canManageSettings ?? isOwner)) return null;
-                            if (!isProjectTabVisibleToViewer({
-                                tabId: tab.id,
-                                isOwnerOrMember: canSeeMemberTabs,
-                                canManageSettings: canManageSettings ?? isOwner,
-                                publicTabVisibility: normalizedPublicTabs,
-                            })) return null;
-                            // Ponytail: deleted hasPublishedReadme check for readme tab visibility
+                    <div role="tablist" aria-label="Project sections" className="flex items-center px-4 overflow-x-auto app-scroll app-scroll-x -mb-px">
+                        {visibleTabs.map((tab, index) => {
                             const isActive = activeTab === tab.id;
                             return (
                                 <button
@@ -272,9 +355,15 @@ export default function ProjectLayout({
                                     type="button"
                                     data-testid={`project-tab-${tab.id}`}
                                     data-active={isActive ? "true" : "false"}
+                                    id={`project-tab-${tab.id}`}
+                                    role="tab"
+                                    aria-selected={isActive}
+                                    aria-controls="project-active-tab-panel"
+                                    tabIndex={isActive ? 0 : -1}
                                     onClick={() => onTabChange(tab.id)}
+                                    onKeyDown={(event) => handleTabKeyDown(event, index)}
                                     onMouseEnter={() => onTabHover?.(tab.id)}
-                                    onMouseLeave={() => onTabLeave?.(tab.id)}
+                                    onFocus={() => onTabHover?.(tab.id)}
                                     className={cn(
                                         "relative flex items-center gap-2 px-4 py-3 text-sm font-medium transition-all whitespace-nowrap",
                                         isActive
@@ -294,13 +383,16 @@ export default function ProjectLayout({
 
             {/* Main Content Area */}
             <section
+                id="project-active-tab-panel"
+                role="tabpanel"
+                aria-labelledby={`project-tab-${activeTab}`}
                 aria-label="Project detail content"
                 className={cn(
                     isContainedWorkspaceTab
                         ? "flex-1 min-h-0 w-full overflow-hidden flex flex-col"
                         : isSettingsTab
                             ? "w-full"
-                            : isUpdatesTab
+                            : isUpdatesTab || isTasksTab
                                 ? "w-full p-4 sm:p-6 lg:p-8"
                                 : "max-w-7xl mx-auto p-4 sm:p-6 lg:p-8"
                 )}
