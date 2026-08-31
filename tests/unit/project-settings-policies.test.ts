@@ -175,7 +175,8 @@ test("project notification policy normalizes defaults and locks mandatory events
     assert.equal(PROJECT_NOTIFICATION_EVENT_REGISTRY["security.delete_scheduled"].visible, false);
     assert.equal(PROJECT_NOTIFICATION_EVENT_REGISTRY["updates.published"].visible, true);
     assert.equal(PROJECT_NOTIFICATION_EVENT_REGISTRY["updates.comment"].visible, true);
-    assert.equal(PROJECT_NOTIFICATION_EVENT_REGISTRY["updates.follower_digest"].visible, true);
+    assert.equal(PROJECT_NOTIFICATION_EVENT_REGISTRY["readme.published"].visible, false);
+    assert.equal(PROJECT_NOTIFICATION_EVENT_REGISTRY["updates.follower_digest"].visible, false);
 });
 
 test("project access impact explains counts and transition checklist", () => {
