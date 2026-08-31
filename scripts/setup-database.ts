@@ -46,9 +46,19 @@ if (!DATABASE_URL && !DRY_RUN) {
   process.exit(1);
 }
 
+function requiresDatabaseTls(connectionString: string | undefined) {
+  if (!connectionString) return true;
+  try {
+    const hostname = new URL(connectionString).hostname;
+    return hostname !== "localhost" && hostname !== "127.0.0.1" && hostname !== "::1";
+  } catch {
+    return true;
+  }
+}
+
 const sql = postgres(DATABASE_URL || "postgres://dry-run.invalid/unused", {
   prepare: false,
-  ssl: "require",
+  ssl: requiresDatabaseTls(DATABASE_URL) ? "require" : false,
 });
 
 function resolveWorkspacePath(...parts: string[]) {
