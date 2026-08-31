@@ -10,7 +10,6 @@ import {
     getConversationSummaryV2,
     getConversationThreadPageV2,
 } from '@/app/actions/messaging/v2';
-import { getUnreadCount } from '@/app/actions/messaging';
 import type { MessagesInboxPageV2 } from '@/app/actions/messaging/v2';
 import {
     getCachedInboxConversationIds,
@@ -18,9 +17,10 @@ import {
     hideThreadMessageForViewer,
     isCachedConversationLastMessage,
     patchConversationLastMessageFromMessage,
+    patchThreadConversation,
     patchThreadMessage,
+    patchThreadMessages,
     replaceThreadSnapshot,
-    setUnreadSummary,
     upsertInboxConversation,
     upsertThreadMessage,
     upsertThreadConversation,
@@ -28,11 +28,11 @@ import {
 import {
     isRealtimeTerminalStatus,
     subscribeActiveResource,
-    subscribeMessagingNotifications,
 } from '@/lib/realtime/subscriptions';
 import { isMessagingDenormalizedInboxRealtimeEnabled } from '@/lib/features/messages';
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
+import { useRealtime } from '@/components/providers/RealtimeProvider';
 import { useMessagesV2OutboxStore } from '@/stores/messagesV2OutboxStore';
 import { queryKeys } from '@/lib/query-keys';
 import {
@@ -43,6 +43,16 @@ import {
 import { withReactionSummaryMetadata } from '@/lib/messages/reactions';
 
 const FALLBACK_REFRESH_DEBOUNCE_MS = 220;
+const THREAD_MESSAGE_SYNC_DEBOUNCE_MS = 16;
+
+type MessageReadWatermark = Pick<MessageWithSender, 'id' | 'createdAt'>;
+
+function compareMessageWatermarks(left: MessageReadWatermark, right: MessageReadWatermark) {
+    const leftTime = new Date(left.createdAt).getTime();
+    const rightTime = new Date(right.createdAt).getTime();
+    if (leftTime !== rightTime) return leftTime - rightTime;
+    return left.id.localeCompare(right.id);
+}
 
 function getPayloadConversationId(payload: { new?: Record<string, unknown>; old?: Record<string, unknown> }) {
     const nextId = payload.new?.conversation_id;
@@ -339,14 +349,6 @@ function isLastMessageAfterReadWatermark(
     return false;
 }
 
-function hasPendingReadCommit(queryClient: QueryClient) {
-    return queryClient
-        .getQueriesData<{ requestId: string } | null>({
-            queryKey: ['chat-v2', 'read-commit-state'] as const,
-        })
-        .some(([, state]) => Boolean(state?.requestId));
-}
-
 type MessagesRealtimeOptions = boolean | {
     inbox?: boolean;
     activeThread?: boolean;
@@ -394,6 +396,7 @@ export function useMessagesV2Realtime(
 ) {
     const queryClient = useQueryClient();
     const { user, session, isLoading } = useAuth();
+    const { isMessagingConnected, messagingStatus, subscribeMessagingNotifications } = useRealtime();
     const userId = user?.id ?? null;
     const realtimeToken = session?.access_token ?? null;
     const requestedRealtime = normalizeMessagesRealtimeOptions(options);
@@ -401,46 +404,20 @@ export function useMessagesV2Realtime(
     const realtimeAvailable = Boolean(userId) && Boolean(realtimeToken) && !isLoading;
     const inboxRealtimeEnabled = requestedRealtime.inbox && realtimeAvailable;
     const activeThreadRealtimeEnabled = requestedRealtime.activeThread && realtimeAvailable;
-    const [inboxRealtimeConnected, setInboxRealtimeConnected] = useState(true);
     const [activeThreadConnected, setActiveThreadConnected] = useState(true);
     const inboxRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const threadRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const unreadRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const summaryRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const inboxConnectionTokenRef = useRef(0);
     const activeThreadConnectionTokenRef = useRef(0);
     const activeConversationIdRef = useRef(activeConversationId);
     const pendingConversationRefreshRef = useRef(new Map<string, boolean>());
     const pendingThreadMessageEventsRef = useRef(new Map<string, 'INSERT' | 'UPDATE' | 'DELETE' | 'REFRESH'>());
     const threadMessageSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const participantReadWatermarksRef = useRef(new Map<string, MessageReadWatermark>());
 
     useEffect(() => {
         activeConversationIdRef.current = activeConversationId;
     }, [activeConversationId]);
-
-    const refreshUnreadSummary = useCallback(async () => {
-        const result = await getUnreadCount();
-        if (result.success && typeof result.count === 'number') {
-            const cachedCount = queryClient.getQueryData<number | undefined>(queryKeys.messages.v2.unread()) ?? 0;
-            if (result.count > cachedCount && hasPendingReadCommit(queryClient)) {
-                console.debug('[messages-v2] read_summary_ignored_stale', {
-                    previousUnread: cachedCount,
-                    nextUnread: result.count,
-                    source: 'unread-summary',
-                });
-                return;
-            }
-            setUnreadSummary(queryClient, result.count);
-        }
-    }, [queryClient]);
-
-    const scheduleUnreadRefresh = useCallback(() => {
-        if (unreadRefreshTimerRef.current) return;
-        unreadRefreshTimerRef.current = setTimeout(() => {
-            unreadRefreshTimerRef.current = null;
-            void refreshUnreadSummary();
-        }, FALLBACK_REFRESH_DEBOUNCE_MS);
-    }, [refreshUnreadSummary]);
 
     const refreshThreadSnapshot = useCallback(async (conversationId: string) => {
         const result = await getConversationThreadPageV2(conversationId, undefined, 30);
@@ -484,10 +461,10 @@ export function useMessagesV2Realtime(
             upsertInboxConversation(queryClient, conversation);
             if (conversation.id === activeConversationIdRef.current) {
                 upsertThreadConversation(queryClient, conversation);
-                    queryClient.setQueriesData(
-                        { queryKey: ['chat-v2', 'capabilities', conversation.id] as const },
-                        () => conversation.capability,
-                    );
+                queryClient.setQueriesData(
+                    { queryKey: ['chat-v2', 'capabilities', conversation.id] as const },
+                    () => conversation.capability,
+                );
             }
         }
     }, [queryClient]);
@@ -497,9 +474,8 @@ export function useMessagesV2Realtime(
         inboxRefreshTimerRef.current = setTimeout(() => {
             inboxRefreshTimerRef.current = null;
             void refreshTrackedConversations();
-            void refreshUnreadSummary();
         }, FALLBACK_REFRESH_DEBOUNCE_MS);
-    }, [refreshTrackedConversations, refreshUnreadSummary]);
+    }, [refreshTrackedConversations]);
 
     const scheduleThreadRefresh = useCallback((conversationId: string | null) => {
         if (!conversationId || threadRefreshTimerRef.current) return;
@@ -661,6 +637,61 @@ export function useMessagesV2Realtime(
         [queryClient],
     );
 
+    const applyParticipantReadWatermark = useCallback((
+        conversationId: string,
+        participantId: string,
+        messageId: string,
+    ) => {
+        if (!userId) return;
+        const thread = queryClient.getQueryData<{ pages?: Array<{ messages?: MessageWithSender[] }> }>(
+            queryKeys.messages.v2.thread(conversationId),
+        );
+        const watermark = thread?.pages
+            ?.flatMap((page) => page.messages ?? [])
+            .find((message) => message.id === messageId);
+        if (!watermark) return;
+
+        const key = `${conversationId}:${participantId}`;
+        const previous = participantReadWatermarksRef.current.get(key);
+        if (previous && compareMessageWatermarks(watermark, previous) <= 0) return;
+        participantReadWatermarksRef.current.set(key, {
+            id: watermark.id,
+            createdAt: watermark.createdAt,
+        });
+
+        // ponytail: participant watermarks are the native fallback when a
+        // receipt event is missed; the direct receipt stream remains primary.
+        patchThreadMessages(
+            queryClient,
+            conversationId,
+            (message) => message.senderId === userId
+                && compareMessageWatermarks(message, watermark) <= 0
+                && (!previous || compareMessageWatermarks(message, previous) > 0),
+            (message) => {
+                const metadata = (message.metadata || {}) as Record<string, unknown>;
+                if (metadata.deliveryState === 'read') return message;
+                const counts = (metadata.deliveryCounts as {
+                    total?: number;
+                    delivered?: number;
+                    read?: number;
+                } | undefined) ?? {};
+                const read = Math.max(1, typeof counts.read === 'number' ? counts.read : 0);
+                return {
+                    ...message,
+                    metadata: {
+                        ...metadata,
+                        deliveryState: 'read',
+                        deliveryCounts: {
+                            total: typeof counts.total === 'number' ? counts.total : 0,
+                            delivered: Math.max(read, typeof counts.delivered === 'number' ? counts.delivered : 0),
+                            read,
+                        },
+                    },
+                };
+            },
+        );
+    }, [queryClient, userId]);
+
     const flushPendingThreadMessageEvents = useCallback((conversationId: string) => {
         const pendingEntries = Array.from(pendingThreadMessageEventsRef.current.entries());
         pendingThreadMessageEventsRef.current.clear();
@@ -706,123 +737,62 @@ export function useMessagesV2Realtime(
         threadMessageSyncTimerRef.current = setTimeout(() => {
             threadMessageSyncTimerRef.current = null;
             flushPendingThreadMessageEvents(conversationId);
-        }, FALLBACK_REFRESH_DEBOUNCE_MS);
+        }, THREAD_MESSAGE_SYNC_DEBOUNCE_MS);
     }, [flushPendingThreadMessageEvents]);
 
     useEffect(() => {
         if (!inboxRealtimeEnabled || !userId || !realtimeToken) {
-            inboxConnectionTokenRef.current += 1;
-            setInboxRealtimeConnected(true);
             return;
         }
 
-        const supabase = createClient();
-        const connectionToken = inboxConnectionTokenRef.current + 1;
-        inboxConnectionTokenRef.current = connectionToken;
-        setInboxRealtimeConnected(true);
-        let cancelled = false;
-        let channel: ReturnType<typeof subscribeMessagingNotifications> | null = null;
-
-        void (async () => {
-            await supabase.realtime.setAuth(realtimeToken);
-            if (cancelled || inboxConnectionTokenRef.current !== connectionToken) {
+        const unsubscribe = subscribeMessagingNotifications((event) => {
+            const currentActiveId = activeConversationIdRef.current;
+            if (event.kind === 'conversation_participant') {
+                const conversationId = getPayloadConversationId(event.payload);
+                if (conversationId) {
+                    if (shouldPlayParticipantUpdateSound({
+                        payload: event.payload,
+                        activeConversationId: currentActiveId,
+                    })) {
+                        playMessageSound();
+                    }
+                } else {
+                    scheduleInboxRefresh();
+                }
                 return;
             }
 
-            channel = subscribeMessagingNotifications({
-                supabase,
-                userId,
-                onEvent: (event) => {
-                    const currentActiveId = activeConversationIdRef.current;
-                    if (event.kind === 'conversation_participant') {
-                        const conversationId = getPayloadConversationId(event.payload);
-                        if (conversationId && denormalizedInboxRealtimeEnabled) {
-                            scheduleConversationSummaryRefresh(conversationId);
-                            scheduleUnreadRefresh();
-                            if (shouldPlayParticipantUpdateSound({
-                                payload: event.payload,
-                                activeConversationId: currentActiveId,
-                            })) {
-                                playMessageSound();
-                            }
-                        } else {
-                            scheduleInboxRefresh();
-                        }
-                        return;
-                    }
+            const hiddenConversationId = getPayloadConversationId(event.payload);
+            const messageId = getPayloadHiddenMessageId(event.payload);
+            if (hiddenConversationId) {
+                scheduleConversationSummaryRefresh(hiddenConversationId, {
+                    syncThread: hiddenConversationId === currentActiveId,
+                });
+            } else {
+                scheduleInboxRefresh();
+            }
 
-                    const hiddenConversationId = getPayloadConversationId(event.payload);
-                    const messageId = getPayloadHiddenMessageId(event.payload);
-                    if (hiddenConversationId) {
-                        scheduleConversationSummaryRefresh(hiddenConversationId, {
-                            syncThread: hiddenConversationId === currentActiveId,
-                        });
-                    } else {
-                        scheduleInboxRefresh();
-                    }
+            if (!currentActiveId || !messageId || !hasCachedThreadMessage(queryClient, currentActiveId, messageId)) {
+                return;
+            }
 
-                    if (!currentActiveId || !messageId) {
-                        return;
-                    }
-
-                    if (!hasCachedThreadMessage(queryClient, currentActiveId, messageId)) {
-                        return;
-                    }
-
-                    hideThreadMessageForViewer(queryClient, currentActiveId, messageId);
-                    if (isCachedConversationLastMessage(queryClient, currentActiveId, messageId)) {
-                        scheduleConversationSummaryRefresh(currentActiveId, { syncThread: true });
-                    }
-                },
-                onStatus: (status) => {
-                    if (inboxConnectionTokenRef.current !== connectionToken) {
-                        return;
-                    }
-
-                    if (status === REALTIME_SUBSCRIBE_STATES.SUBSCRIBED) {
-                        setInboxRealtimeConnected(true);
-                        return;
-                    }
-
-                    if (isRealtimeTerminalStatus(status)) {
-                        setInboxRealtimeConnected(false);
-                    }
-                },
-            });
-            traceMessagesRealtimeChannel('subscribe', {
-                scope: 'inbox',
-                tables: [
-                    'conversation_participants',
-                    'hidden_messages',
-                    'messages',
-                    'message_delivery_receipts',
-                    'message_read_receipts',
-                ],
-            });
-        })().catch((error) => {
-            console.error('[messages-v2] failed to initialize inbox realtime', error);
-            if (inboxConnectionTokenRef.current === connectionToken) {
-                setInboxRealtimeConnected(false);
+            hideThreadMessageForViewer(queryClient, currentActiveId, messageId);
+            if (isCachedConversationLastMessage(queryClient, currentActiveId, messageId)) {
+                scheduleConversationSummaryRefresh(currentActiveId, { syncThread: true });
             }
         });
 
+        traceMessagesRealtimeChannel('subscribe', {
+            scope: 'inbox',
+            tables: ['conversation_participants', 'hidden_messages'],
+        });
+
         return () => {
-            cancelled = true;
-            inboxConnectionTokenRef.current += 1;
-            setInboxRealtimeConnected(true);
-            if (channel) {
-                supabase.removeChannel(channel);
-                traceMessagesRealtimeChannel('unsubscribe', {
-                    scope: 'inbox',
-                    tables: [
-                        'conversation_participants',
-                        'hidden_messages',
-                        'messages',
-                        'message_delivery_receipts',
-                        'message_read_receipts',
-                    ],
-                });
-            }
+            unsubscribe();
+            traceMessagesRealtimeChannel('unsubscribe', {
+                scope: 'inbox',
+                tables: ['conversation_participants', 'hidden_messages'],
+            });
         };
     }, [
         denormalizedInboxRealtimeEnabled,
@@ -831,8 +801,8 @@ export function useMessagesV2Realtime(
         realtimeToken,
         refreshTrackedConversations,
         scheduleConversationSummaryRefresh,
-        scheduleUnreadRefresh,
         scheduleInboxRefresh,
+        subscribeMessagingNotifications,
         userId,
     ]);
 
@@ -866,8 +836,33 @@ export function useMessagesV2Realtime(
                         table: 'messages',
                         filter: `conversation_id=eq.${activeConversationId}`,
                         handler: (payload) => {
-                            if (payload.eventType === 'DELETE') {
-                                queueThreadMessageSync(activeConversationId, payload);
+                            const isSoftDelete = payload.eventType === 'UPDATE' && Boolean(getPayloadDateField(payload, 'new', 'deleted_at'));
+
+                            if (payload.eventType === 'DELETE' || isSoftDelete) {
+                                const deletedMessageId = getPayloadMessageId(payload);
+                                if (deletedMessageId) {
+                                    const deletedAt = isSoftDelete
+                                        ? getPayloadDateField(payload, 'new', 'deleted_at')
+                                        : new Date();
+
+                                    patchThreadMessage(queryClient, activeConversationId, deletedMessageId, (current) => ({
+                                        ...current,
+                                        deletedAt,
+                                    }));
+                                    const cached = queryClient.getQueryData<{ pages?: Array<{ messages?: MessageWithSender[] }> }>(
+                                        queryKeys.messages.v2.thread(activeConversationId),
+                                    );
+                                    const deletedMessage = cached?.pages
+                                        ?.flatMap((page) => page.messages ?? [])
+                                        .find((message) => message.id === deletedMessageId);
+                                    if (deletedMessage) {
+                                        patchConversationLastMessageFromMessage(queryClient, activeConversationId, {
+                                            ...deletedMessage,
+                                            content: null,
+                                            deletedAt,
+                                        });
+                                    }
+                                }
                                 return;
                             }
 
@@ -893,11 +888,16 @@ export function useMessagesV2Realtime(
                                     upsertThreadMessage(queryClient, activeConversationId, nextMessage);
                                 }
                                 removeOutboxItemIfPresent(nextMessage.clientMessageId);
-                                patchConversationLastMessageFromMessage(queryClient, activeConversationId, nextMessage);
+                                patchConversationLastMessageFromMessage(
+                                    queryClient,
+                                    activeConversationId,
+                                    nextMessage,
+                                    { incrementUnreadCount: nextMessage.senderId !== userId }
+                                );
                                 return;
                             }
 
-                            if (!hasCachedThreadMessage(queryClient, activeConversationId, nextMessage.id) || nextMessage.deletedAt) {
+                            if (!hasCachedThreadMessage(queryClient, activeConversationId, nextMessage.id)) {
                                 queueThreadMessageSync(activeConversationId, payload);
                                 return;
                             }
@@ -937,38 +937,48 @@ export function useMessagesV2Realtime(
                         event: '*',
                         table: 'conversation_participants',
                         filter: `conversation_id=eq.${activeConversationId}`,
-                        handler: () => {
-                            if (denormalizedInboxRealtimeEnabled) {
-                                scheduleConversationSummaryRefresh(activeConversationId, { syncThread: true });
-                            } else {
-                                scheduleInboxRefresh();
+                        handler: (payload) => {
+                            if (payload.eventType === 'UPDATE' || payload.eventType === 'INSERT') {
+                                const participantUserId = getPayloadStringField(payload, 'new', 'user_id');
+                                const lastReadMessageId = getPayloadStringField(payload, 'new', 'last_read_message_id');
+                                if (participantUserId === userId) {
+                                    const rawUnread = getPayloadField(payload, 'new', 'unread_count');
+                                    const nextUnreadCount = typeof rawUnread === 'number' ? rawUnread : undefined;
+                                    if (typeof nextUnreadCount === 'number') {
+                                        patchThreadConversation(queryClient, activeConversationId, (conv) => ({
+                                            ...conv,
+                                            unreadCount: nextUnreadCount,
+                                        }));
+                                    }
+                                } else if (
+                                    payload.eventType === 'UPDATE'
+                                    && participantUserId
+                                    && lastReadMessageId
+                                ) {
+                                    applyParticipantReadWatermark(
+                                        activeConversationId,
+                                        participantUserId,
+                                        lastReadMessageId,
+                                    );
+                                }
                             }
-                            scheduleUnreadRefresh();
+                            // The global MessageAttentionProvider owns unread
+                            // aggregation. This active-thread listener only owns
+                            // its local conversation cache.
                         },
                     },
-                    // Subscribe to INSERT/DELETE on message_reactions scoped
+                    // Subscribe to INSERT/UPDATE/DELETE on message_reactions scoped
                     // to the active conversation. Own reactions are handled
                     // optimistically by useToggleReaction and skipped here.
                     {
-                        event: 'INSERT',
+                        event: '*',
                         table: 'message_reactions',
                         filter: `conversation_id=eq.${activeConversationId}`,
                         handler: (payload) => {
-                            const reactionUserId = getPayloadStringField(payload, 'new', 'user_id');
+                            const scope = payload.eventType === 'DELETE' ? 'old' : 'new';
+                            const reactionUserId = getPayloadStringField(payload, scope, 'user_id');
                             if (!reactionUserId || reactionUserId === userId) return;
-                            const messageId = getPayloadStringField(payload, 'new', 'message_id');
-                            if (!messageId || !hasCachedThreadMessage(queryClient, activeConversationId, messageId)) return;
-                            void refreshMessageReactionSummary(activeConversationId, messageId);
-                        },
-                    },
-                    {
-                        event: 'DELETE',
-                        table: 'message_reactions',
-                        filter: `conversation_id=eq.${activeConversationId}`,
-                        handler: (payload) => {
-                            const reactionUserId = getPayloadStringField(payload, 'old', 'user_id');
-                            if (!reactionUserId || reactionUserId === userId) return;
-                            const messageId = getPayloadStringField(payload, 'old', 'message_id');
+                            const messageId = getPayloadStringField(payload, scope, 'message_id');
                             if (!messageId || !hasCachedThreadMessage(queryClient, activeConversationId, messageId)) return;
                             void refreshMessageReactionSummary(activeConversationId, messageId);
                         },
@@ -1053,6 +1063,7 @@ export function useMessagesV2Realtime(
     }, [
         activeConversationId,
         activeThreadRealtimeEnabled,
+        applyParticipantReadWatermark,
         applyReceiptPatch,
         denormalizedInboxRealtimeEnabled,
         queueThreadMessageSync,
@@ -1061,11 +1072,11 @@ export function useMessagesV2Realtime(
         refreshMessageReactionSummary,
         scheduleInboxRefresh,
         scheduleConversationSummaryRefresh,
-        scheduleUnreadRefresh,
     ]);
 
     useEffect(() => {
         pendingThreadMessageEventsRef.current.clear();
+        participantReadWatermarksRef.current.clear();
         if (threadMessageSyncTimerRef.current) {
             clearTimeout(threadMessageSyncTimerRef.current);
             threadMessageSyncTimerRef.current = null;
@@ -1079,9 +1090,6 @@ export function useMessagesV2Realtime(
             }
             if (threadRefreshTimerRef.current) {
                 clearTimeout(threadRefreshTimerRef.current);
-            }
-            if (unreadRefreshTimerRef.current) {
-                clearTimeout(unreadRefreshTimerRef.current);
             }
             if (summaryRefreshTimerRef.current) {
                 clearTimeout(summaryRefreshTimerRef.current);
@@ -1097,15 +1105,16 @@ export function useMessagesV2Realtime(
     }, []);
 
     return useMemo(() => ({
-        inboxRealtimeConnected,
+        inboxRealtimeConnected: isMessagingConnected,
         activeThreadConnected,
         isDegraded:
-            (requestedRealtime.inbox && !inboxRealtimeConnected)
+            (requestedRealtime.inbox && messagingStatus === 'disconnected')
             || (requestedRealtime.activeThread && Boolean(activeConversationId) && !activeThreadConnected),
     }), [
         activeConversationId,
         activeThreadConnected,
-        inboxRealtimeConnected,
+        isMessagingConnected,
+        messagingStatus,
         requestedRealtime.activeThread,
         requestedRealtime.inbox,
     ]);
