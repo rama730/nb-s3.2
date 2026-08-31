@@ -21,11 +21,13 @@ import assert from "node:assert/strict";
 
 import {
   DEEP_LINK_MAX_LENGTH,
+  encodePath,
   evaluateDeepLinkPath,
   planUrlSync,
 } from "@/components/projects/v2/files-tab/url";
 import {
   handlePopState,
+  shouldPreserveTaskFileDeepLink,
   syncUrlToLocation,
 } from "@/components/projects/v2/files-tab/hooks/useFilesTabUrlSync";
 import {
@@ -78,6 +80,21 @@ function makeWindow(init: { pathname?: string; search?: string; hash?: string } 
 
 // ─── planUrlSync / syncUrlToLocation — acceptance (i) + (ii) ─────────
 
+describe("task-working-file presentation paths", () => {
+  it("never serializes task storage or presentation slugs", () => {
+    const encoded = encodePath({
+      file: {
+        id: "file",
+        name: "Hussain_resume.pdf",
+        path: "/.system/tasks/a-uuid/Hussain_resume.pdf",
+        metadata: { taskWorkingFilesTaskTitle: "Update the related files." },
+      },
+    } as never, "file");
+
+    assert.equal(encoded, "");
+  });
+});
+
 describe("planUrlSync (Task 2.4 — Req 10.1, 10.4, 20.1)", () => {
   it("emits a URL without `?path=` at all when encodedPath is empty (root state)", () => {
     const plan = planUrlSync({
@@ -112,6 +129,20 @@ describe("planUrlSync (Task 2.4 — Req 10.1, 10.4, 20.1)", () => {
     assert.deepEqual(plan, {
       action: "replace",
       url: "/projects/proj-1?path=src/App.tsx",
+    });
+  });
+
+  it("uses an opaque fileId and removes a legacy task-storage path", () => {
+    const plan = planUrlSync({
+      pathname: "/projects/proj-1",
+      search: "?tab=files&path=.system/tasks/task-id/Hussain_resume.pdf",
+      hash: "",
+      encodedPath: "",
+      fileId: "task-file-1",
+    });
+    assert.deepEqual(plan, {
+      action: "replace",
+      url: "/projects/proj-1?tab=files&fileId=task-file-1",
     });
   });
 
@@ -176,6 +207,18 @@ describe("planUrlSync (Task 2.4 — Req 10.1, 10.4, 20.1)", () => {
 });
 
 describe("syncUrlToLocation (Task 2.4 — Req 10.4 ONLY replaceState)", () => {
+  it("does not erase an incoming fileId while its node is hydrating", () => {
+    const win = makeWindow({ search: "?tab=files&fileId=file-1" });
+    const didWrite = syncUrlToLocation({
+      win,
+      encodedPath: "",
+      suspended: true,
+    });
+
+    assert.equal(didWrite, false);
+    assert.equal(win.history.calls.length, 0);
+  });
+
   it("calls history.replaceState and NEVER history.pushState", () => {
     const win = makeWindow({ search: "" });
     const didWrite = syncUrlToLocation({ win, encodedPath: "src/App.tsx" });
@@ -186,6 +229,18 @@ describe("syncUrlToLocation (Task 2.4 — Req 10.4 ONLY replaceState)", () => {
     assert.equal(win.history.calls[0]?.url, "/projects/proj-1?path=src/App.tsx");
     const pushStateCalls = win.history.calls.filter((c) => c.method === "pushState");
     assert.equal(pushStateCalls.length, 0, "pushState must never be called (Req 10.4)");
+  });
+
+  it("writes an opaque task file identity instead of a private path", () => {
+    const win = makeWindow({
+      search: "?tab=files&path=.system/tasks/task-id/brief.pdf",
+    });
+    syncUrlToLocation({ win, encodedPath: "", fileId: "task-file-1" });
+
+    assert.equal(
+      win.history.calls[0]?.url,
+      "/projects/proj-1?tab=files&fileId=task-file-1",
+    );
   });
 
   it("at root state, replaceState removes the `?path=` key entirely (ii)", () => {
@@ -216,6 +271,44 @@ describe("syncUrlToLocation (Task 2.4 — Req 10.4 ONLY replaceState)", () => {
     syncUrlToLocation({ win, encodedPath: "src/App.tsx" });
 
     assert.equal(win.history.calls[0]?.state, opaqueState);
+  });
+});
+
+describe("task-file deep links", () => {
+  it("retains an opaque fileId instead of exposing internal task storage", () => {
+    assert.equal(
+      shouldPreserveTaskFileDeepLink("?tab=files&fileId=task-file-1", {
+        type: "file",
+        id: "task-file-1",
+        node: { taskId: "task-1" },
+      }),
+      true,
+    );
+  });
+
+  it("allows canonical project files to settle on their readable path", () => {
+    assert.equal(
+      shouldPreserveTaskFileDeepLink("?tab=files&fileId=project-file-1", {
+        type: "file",
+        id: "project-file-1",
+        node: { taskId: null },
+      }),
+      false,
+    );
+  });
+
+  it("keeps hidden working-file storage out of the browser URL", () => {
+    assert.equal(
+      shouldPreserveTaskFileDeepLink("?tab=files&fileId=working-file-1", {
+        type: "file",
+        id: "working-file-1",
+        node: {
+          taskId: null,
+          path: "/.system/tasks/task-1/Hussain_resume.pdf",
+        },
+      }),
+      true,
+    );
   });
 });
 
@@ -345,6 +438,23 @@ describe("resolveDeepLinkFromSearch (Task 2.4 — Req 10.5, Req 20.4)", () => {
 // ─── handlePopState — acceptance (iv) ────────────────────────────────
 
 describe("handlePopState (Task 2.4 — Req 20.3)", () => {
+  it("restores an opaque task file identity without resolving a storage path", async () => {
+    const win = makeWindow({ search: "?tab=files&fileId=task-file-1" });
+    const navigateCalls: Array<string | null> = [];
+
+    await handlePopState({
+      win,
+      navigateTo: (id) => navigateCalls.push(id),
+      onError: () => assert.fail("opaque file IDs should not report a path error"),
+      projectId: "proj-1",
+      findNodeByPathAny: async () => {
+        throw new Error("path lookup must not run for fileId");
+      },
+    });
+
+    assert.deepEqual(navigateCalls, ["task-file-1"]);
+  });
+
   it("re-reads the URL and dispatches navigateTo with the resolved id", async () => {
     const win = makeWindow({ search: "?path=src%2FApp.tsx" });
     const navigateCalls: Array<string | null> = [];
