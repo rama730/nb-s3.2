@@ -2,17 +2,25 @@ import { notFound } from 'next/navigation';
 import type { Metadata } from 'next';
 import { cache, Suspense } from 'react';
 import ProjectDashboardClient from '@/components/projects/dashboard/ProjectDashboardClient';
-import { readProjectDetailMetadata, readProjectDetailShell, readProjectSprintDetail } from '@/app/actions/project/_all';
+import { readProjectDetailShell, readProjectSprintDetail } from '@/app/actions/project/_all';
 import { isHardeningDomainEnabled } from '@/lib/features/hardening';
-import { getViewerAuthContext, getViewerProfileContext, toClientViewer } from '@/lib/server/viewer-context';
+import { getViewerAuthContext, getViewerIdentityContext, toClientViewer } from '@/lib/server/viewer-context';
 import { buildRouteMetadata } from '@/lib/metadata/route-metadata';
 import { buildProjectDetailMetadataInput } from '@/lib/projects/project-detail-metadata';
 import { isProjectTabVisibleToViewer } from '@/lib/projects/settings-policies';
 import { readProjectFileMetadataTitle, readProjectTaskMetadataTitle } from '@/lib/projects/project-detail-metadata-lookup';
 
-const readProjectDetailMetadataCached = cache((slugOrId: string, actorUserId: string | null) => readProjectDetailMetadata({ slugOrId, actorUserId }));
-const readProjectDetailShellCached = cache((slugOrId: string, actorUserId: string | null) => readProjectDetailShell({ slugOrId, actorUserId }));
-const readProjectSprintDetailCached = cache((slugOrId: string, actorUserId: string | null, limit?: number, sprintId?: string) => readProjectSprintDetail({ slugOrId, actorUserId, limit, sprintId }));
+const readProjectSprintDetailCached = cache((slugOrId: string, actorUserId: string | null, limit?: number, sprintId?: string, taskReference?: string) => readProjectSprintDetail({ slugOrId, actorUserId, limit, sprintId, taskReference }));
+
+// ponytail: metadata and the rendered route share one auth-qualified shell read.
+const readProjectRouteShell = cache(async (slugOrId: string) => {
+    const viewer = await getViewerAuthContext();
+    const result = await readProjectDetailShell({
+        slugOrId,
+        actorUserId: viewer.user?.id ?? null,
+    });
+    return { viewer, result };
+});
 
 export async function generateMetadata({
     params,
@@ -28,8 +36,7 @@ export async function generateMetadata({
     }>;
 }): Promise<Metadata> {
     const [{ slug }, _searchParams] = await Promise.all([params, searchParams]);
-    const { user } = await getViewerAuthContext();
-    const result = await readProjectDetailMetadataCached(slug, user?.id ?? null);
+    const { result } = await readProjectRouteShell(slug);
     if (!result.success) {
         return buildRouteMetadata({
             title: "Project unavailable | Edge",
@@ -37,7 +44,7 @@ export async function generateMetadata({
             path: `/projects/${encodeURIComponent(slug)}`,
         });
     }
-    const project = result.data;
+    const { project } = result.data;
     const metadataInput = buildProjectDetailMetadataInput(slug, project);
 
     const tab = _searchParams?.tab || "dashboard";
@@ -56,7 +63,7 @@ export async function generateMetadata({
         const fileId = _searchParams?.fileId;
         if (fileId) {
             try {
-                const fileTitle = await readProjectFileMetadataTitle(project.projectId, fileId);
+                const fileTitle = await readProjectFileMetadataTitle(project.id, fileId);
                 if (fileTitle) {
                     tabTitle = `${fileTitle} | Files`;
                 }
@@ -70,7 +77,7 @@ export async function generateMetadata({
         const drawerId = _searchParams?.drawerId;
         if (drawerType === "task" && drawerId) {
             try {
-                const taskTitle = await readProjectTaskMetadataTitle(project.projectId, drawerId);
+                const taskTitle = await readProjectTaskMetadataTitle(project.id, drawerId);
                 if (taskTitle) {
                     tabTitle = `${taskTitle} | Tasks`;
                 }
@@ -92,16 +99,17 @@ async function ResolvedProjectDashboard({
     searchParams
 }: {
     params: Promise<{ slug: string }>;
-    searchParams: Promise<{ tab?: string; updateId?: string; commentId?: string; sprintId?: string }>;
+    searchParams: Promise<{ tab?: string; updateId?: string; commentId?: string; sprintId?: string; sprint?: string; task?: string; taskId?: string }>;
 }) {
     const [{ slug }, _searchParams] = await Promise.all([params, searchParams]);
     const selectedTab = _searchParams?.tab || "dashboard";
-    const sprintId = _searchParams?.sprintId;
-    const viewer = await getViewerProfileContext();
+    const sprintId = _searchParams?.sprint ?? _searchParams?.sprintId;
+    const [{ viewer, result }, viewerIdentity] = await Promise.all([
+        readProjectRouteShell(slug),
+        getViewerIdentityContext(),
+    ]);
     const { user } = viewer;
-    const clientViewer = toClientViewer(viewer);
-
-    const result = await readProjectDetailShellCached(slug, user?.id ?? null);
+    const clientViewer = toClientViewer(viewerIdentity);
 
     if (!result.success) {
         if (result.errorCode === 'NOT_FOUND' || result.errorCode === 'FORBIDDEN') {
@@ -117,7 +125,7 @@ async function ResolvedProjectDashboard({
         publicTabVisibility: project.publicTabVisibility,
     });
     const sprintResult = selectedTab === "sprints" && canViewSprints
-        ? await readProjectSprintDetailCached(slug, user?.id ?? null, 24, sprintId)
+        ? await readProjectSprintDetailCached(slug, user?.id ?? null, 24, sprintId, _searchParams?.task ?? _searchParams?.taskId)
         : null;
 
     const dataHardeningEnabled = isHardeningDomainEnabled('dataV1', user?.id ?? null);
@@ -125,22 +133,18 @@ async function ResolvedProjectDashboard({
     const peopleHardeningEnabled = isHardeningDomainEnabled('peopleV1', user?.id ?? null);
 
     return (
-        <div
-            className="h-full min-h-0 flex flex-col"
+        <ProjectDashboardClient
+            project={project}
+            currentUserId={user?.id || null}
+            viewerDisplayName={clientViewer.displayName}
+            viewerAvatarUrl={clientViewer.avatarUrl}
+            isOwner={capabilities.isOwner}
+            isMember={capabilities.isMember}
+            initialSprintData={sprintResult && sprintResult.success ? sprintResult.data : null}
             data-hardening-data={dataHardeningEnabled ? "v1" : "off"}
             data-hardening-files={filesHardeningEnabled ? "v1" : "off"}
             data-hardening-people={peopleHardeningEnabled ? "v1" : "off"}
-        >
-            <ProjectDashboardClient
-                project={project}
-                currentUserId={user?.id || null}
-                viewerDisplayName={clientViewer.displayName}
-                viewerAvatarUrl={clientViewer.avatarUrl}
-                isOwner={capabilities.isOwner}
-                isMember={capabilities.isMember}
-                initialSprintData={sprintResult && sprintResult.success ? sprintResult.data : null}
-            />
-        </div>
+        />
     );
 }
 
