@@ -6,6 +6,7 @@ import {
     Bell,
     CalendarDays,
     Loader2,
+    Link2,
     Lock,
     MapPin,
     Palette,
@@ -20,14 +21,18 @@ import {
 import type { ReactNode } from "react";
 
 import { SkillIcon } from "@/components/skills";
+import { SocialPresenceIcon } from "@/components/profile/SocialPresenceIcon";
 import { UserAvatar } from "@/components/ui/UserAvatar";
 import type {
     GlobalSearchPreview,
     GlobalSearchProfilePreview,
     GlobalSearchProjectPreview,
+    GlobalSearchLinkPreview,
     GlobalSearchTaskPreview,
 } from "@/hooks/useGlobalSearchPreviews";
 import { getTaskPriorityPresentation, getTaskStatusPresentation } from "@/lib/projects/task-workflow";
+import { getTaskTitlePresentation } from "@/lib/projects/task-presentation";
+import type { SocialPresenceIconKey } from "@/lib/profile/normalization";
 import { resolveClientSkill } from "@/lib/skills/client";
 import { cn } from "@/lib/utils";
 import type { SettingsSearchItem } from "./global-search";
@@ -220,6 +225,7 @@ export function ProfileSearchResultCard({ result, onOpen, onConnect, isConnectin
 
 export function TaskSearchResultCard({ result, onOpen, onRemove, ...interaction }: ResultInteractionProps & { result: GlobalSearchTaskPreview; onOpen: (result: GlobalSearchPreview) => void; onRemove?: () => void }) {
     const status = getTaskStatusPresentation(result.status);
+    const titlePresentation = getTaskTitlePresentation(result);
     const priority = getTaskPriorityPresentation(result.priority);
     const dueDate = result.dueDate ? new Date(result.dueDate) : null;
     const validDueDate = dueDate && !Number.isNaN(dueDate.getTime()) ? dueDate : null;
@@ -234,7 +240,7 @@ export function TaskSearchResultCard({ result, onOpen, onRemove, ...interaction 
         >
             <span className="flex min-w-0 items-center gap-2">
                 <span className="shrink-0 font-mono text-[11px] font-medium text-zinc-400">{result.taskCode}</span>
-                <span className="truncate text-sm font-semibold text-zinc-950 dark:text-zinc-50">{result.title}</span>
+                <span className={cn("truncate text-sm font-semibold text-zinc-950 dark:text-zinc-50", titlePresentation.className)} aria-label={titlePresentation.ariaLabel}>{result.title}</span>
             </span>
             <span className="mt-0.5 block truncate text-xs leading-5 text-zinc-500 dark:text-zinc-400">{result.subtitle}</span>
             <span className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px]">
@@ -244,6 +250,27 @@ export function TaskSearchResultCard({ result, onOpen, onRemove, ...interaction 
                 {result.storyPoints != null ? <span className="rounded-md border border-zinc-200 px-1.5 py-0.5 text-zinc-500 dark:border-zinc-700 dark:text-zinc-300">{result.storyPoints} pts</span> : null}
                 {validDueDate ? <span className="inline-flex items-center gap-1 text-zinc-400"><CalendarDays className="h-3 w-3" aria-hidden />{format(validDueDate, "MMM d")}</span> : null}
             </span>
+        </ResultShell>
+    );
+}
+
+export function LinkSearchResultCard({ result, onOpen, onRemove, ...interaction }: ResultInteractionProps & { result: GlobalSearchLinkPreview; onOpen: (result: GlobalSearchPreview) => void; onRemove?: () => void }) {
+    return (
+        <ResultShell
+            {...interaction}
+            id={result.id}
+            onOpen={() => onOpen(result)}
+            onRemove={onRemove}
+            removeLabel={`Remove ${result.title} from recent searches`}
+            leading={<span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-zinc-100 text-zinc-500 dark:bg-zinc-900 dark:text-zinc-300">{result.iconKey ? <SocialPresenceIcon iconKey={result.iconKey as SocialPresenceIconKey} className="h-4 w-4" /> : <Link2 className="h-4 w-4" aria-hidden />}</span>}
+            ariaLabel={`Open project link ${result.title}: ${result.subtitle}`}
+        >
+            <span className="flex min-w-0 items-center gap-2">
+                <span className="truncate text-sm font-semibold text-zinc-950 dark:text-zinc-50">{result.title}</span>
+                {result.audience === "members" ? <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-medium text-zinc-500 dark:bg-zinc-800 dark:text-zinc-300">Members</span> : null}
+            </span>
+            <span className="mt-0.5 block truncate text-xs leading-5 text-zinc-500 dark:text-zinc-400">{result.subtitle}</span>
+            <span className="mt-1.5 block text-[11px] capitalize text-zinc-400">{result.purpose.replaceAll("-", " ")} · {result.platform}</span>
         </ResultShell>
     );
 }
