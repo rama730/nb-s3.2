@@ -7,7 +7,9 @@ import {
 } from "@/lib/projects/task-cache";
 import type { TaskSurfaceRecord } from "@/lib/projects/task-presentation";
 
-function buildTask(overrides: Partial<TaskSurfaceRecord> = {}): TaskSurfaceRecord {
+function buildTask(
+  overrides: Partial<TaskSurfaceRecord> = {},
+): TaskSurfaceRecord {
   return {
     id: overrides.id ?? "task-1",
     projectId: overrides.projectId ?? "project-1",
@@ -56,14 +58,22 @@ describe("task cache patching", () => {
     ) as typeof existing;
 
     assert.equal(patched.pages[0].tasks[0].title, "Updated task title");
-    assert.deepEqual(patched.pages[0].tasks[0].assignee, existing.pages[0].tasks[0].assignee);
+    assert.deepEqual(
+      patched.pages[0].tasks[0].assignee,
+      existing.pages[0].tasks[0].assignee,
+    );
   });
 
   it("removes backlog tasks from sprint scope when they lose sprint context", () => {
     const existing = {
       pages: [
         {
-          tasks: [buildTask({ sprintId: "sprint-1", sprint: { id: "sprint-1", name: "Sprint 1", status: "active" } })],
+          tasks: [
+            buildTask({
+              sprintId: "sprint-1",
+              sprint: { id: "sprint-1", name: "Sprint 1", status: "active" },
+            }),
+          ],
         },
       ],
       pageParams: [undefined],
@@ -86,13 +96,54 @@ describe("task cache patching", () => {
     const existing = {
       pages: [
         {
-          tasks: [buildTask(), buildTask({ id: "task-2", createdAt: "2026-04-17T02:00:00.000Z" })],
+          tasks: [
+            buildTask(),
+            buildTask({ id: "task-2", createdAt: "2026-04-17T02:00:00.000Z" }),
+          ],
         },
       ],
       pageParams: [undefined],
     };
 
-    const patched = removeTaskFromQueryData(existing, "task-1") as typeof existing;
-    assert.deepEqual(patched.pages[0].tasks.map((task) => task.id), ["task-2"]);
+    const patched = removeTaskFromQueryData(
+      existing,
+      "task-1",
+    ) as typeof existing;
+    assert.deepEqual(
+      patched.pages[0].tasks.map((task) => task.id),
+      ["task-2"],
+    );
+  });
+
+  it("keeps one task instance in one infinite page when patching multipage caches", () => {
+    const existing = {
+      pages: [
+        { tasks: [buildTask({ id: "task-1" })] },
+        { tasks: [buildTask({ id: "task-2" })] },
+      ],
+      pageParams: [undefined, "cursor-2"],
+    };
+
+    const patched = patchTaskQueryData(
+      existing,
+      buildTask({
+        id: "task-1",
+        title: "Patched once",
+        updatedAt: "2026-04-17T03:00:00.000Z",
+      }),
+      "all",
+    ) as typeof existing;
+
+    assert.equal(
+      patched.pages
+        .flatMap((page) => page.tasks)
+        .filter((task) => task.id === "task-1").length,
+      1,
+    );
+    assert.equal(patched.pages[0].tasks[0].title, "Patched once");
+    assert.deepEqual(
+      patched.pages[1].tasks.map((task) => task.id),
+      ["task-2"],
+    );
   });
 });
