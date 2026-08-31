@@ -47,6 +47,7 @@ interface MessagesV2OutboxState {
     upsertItem: (item: MessagesV2OutboxItem) => void;
     removeItem: (clientMessageId: string) => void;
     requeueSendingItems: (nextRetryAt: number) => void;
+    requeueExhaustedItems: (nextRetryAt: number) => void;
     markItem: (
         clientMessageId: string,
         patch: Partial<Pick<MessagesV2OutboxItem, 'attempts' | 'nextRetryAt' | 'state' | 'error' | 'conversationId' | 'contextChips' | 'structuredAction'>>,
@@ -78,6 +79,21 @@ export const useMessagesV2OutboxStore = create<MessagesV2OutboxState>()(
                             ? {
                                 ...item,
                                 state: 'queued',
+                                nextRetryAt,
+                            }
+                            : item,
+                    ),
+                })),
+            requeueExhaustedItems: (nextRetryAt) =>
+                set((state) => ({
+                    items: state.items.map((item) =>
+                        item.state === 'failed'
+                        && item.error === 'Max retries exceeded. Please resend manually.'
+                            ? {
+                                ...item,
+                                attempts: 0,
+                                state: 'queued',
+                                error: undefined,
                                 nextRetryAt,
                             }
                             : item,
