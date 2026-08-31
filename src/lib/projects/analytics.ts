@@ -266,6 +266,24 @@ export type ProjectAnalyticsRawEventInput = {
     createdAt?: string | Date | null;
 };
 
+export type ProjectAnalyticsTaskEventInput = {
+    id: string;
+    taskId: string;
+    actorId?: string | null;
+    eventType: string;
+    payload?: Record<string, unknown> | null;
+    createdAt?: string | Date | null;
+};
+
+export type ProjectAnalyticsSprintEventInput = {
+    id: string;
+    sprintId: string;
+    actorId?: string | null;
+    eventType: string;
+    payload?: Record<string, unknown> | null;
+    createdAt?: string | Date | null;
+};
+
 export type BuildProjectAnalyticsInput = {
     project: {
         id: string;
@@ -291,6 +309,8 @@ export type BuildProjectAnalyticsInput = {
     roles: ProjectAnalyticsRoleInput[];
     workflows: ProjectAnalyticsWorkflowInput[];
     events: ProjectAnalyticsRawEventInput[];
+    taskEvents?: ProjectAnalyticsTaskEventInput[];
+    sprintEvents?: ProjectAnalyticsSprintEventInput[];
 };
 
 export type ProjectAnalyticsTimelineFilters = {
@@ -443,6 +463,18 @@ export function filterProjectAnalyticsDatasetByContext(
                 taskIds.has(comment.taskId) &&
                 memberMatches(context, comment.userId) &&
                 withinContextWindow(comment.createdAt, context, now))
+            : [],
+        taskEvents: surfaceAllows(context, "tasks")
+            ? (sourceInput.taskEvents ?? []).filter((event) =>
+                taskIds.has(event.taskId) &&
+                memberMatches(context, event.actorId) &&
+                withinContextWindow(event.createdAt, context, now))
+            : [],
+        sprintEvents: surfaceAllows(context, "sprints")
+            ? (sourceInput.sprintEvents ?? []).filter((event) =>
+                sprints.some((sprint) => sprint.id === event.sprintId) &&
+                memberMatches(context, event.actorId) &&
+                withinContextWindow(event.createdAt, context, now))
             : [],
         applications: surfaceAllows(context, "applications")
             ? sourceInput.applications.filter((application) =>
@@ -983,7 +1015,32 @@ export function buildProjectAnalyticsTimeline(
     const person = (userId?: string | null) =>
         userId ? formatProjectAnalyticsPerson(profiles.get(userId), memberByUserId.get(userId) ?? null, input.project.ownerId) : null;
     const events: ProjectAnalyticsTimelineEvent[] = [];
+    const taskById = new Map(input.tasks.map((task) => [task.id, task]));
+    const taskIdsWithDurableHistory = new Set((input.taskEvents ?? []).map((event) => event.taskId));
+    for (const event of input.taskEvents ?? []) {
+        const task = taskById.get(event.taskId);
+        if (!task) continue;
+        const payload = event.payload ?? {};
+        const from = typeof payload.from === "string" ? payload.from.replaceAll("_", " ") : null;
+        const to = typeof payload.to === "string" ? payload.to.replaceAll("_", " ") : null;
+        const eventTitle = event.eventType === "status_changed"
+            ? "Status changed"
+            : event.eventType === "assigned"
+                ? "Assignee changed"
+                : event.eventType.replaceAll("_", " ");
+        events.push({
+            id: `task-event:${event.id}`,
+            type: "task",
+            sourceSurface: "tasks",
+            title: task.title || eventTitle,
+            description: from && to ? `${eventTitle}: ${from} → ${to}.` : `${eventTitle} on this task.`,
+            occurredAt: iso(event.createdAt),
+            actor: person(event.actorId),
+            actionLink: actionLink(input, "Open task", "workflow", task.id),
+        });
+    }
     for (const task of input.tasks) {
+        if (taskIdsWithDurableHistory.has(task.id)) continue;
         events.push({
             id: `task:${task.id}:updated`,
             type: "task",
@@ -995,7 +1052,25 @@ export function buildProjectAnalyticsTimeline(
             actionLink: actionLink(input, "Open task", "workflow", task.id),
         });
     }
+    const sprintById = new Map(input.sprints.map((sprint) => [sprint.id, sprint]));
+    const sprintIdsWithDurableHistory = new Set((input.sprintEvents ?? []).map((event) => event.sprintId));
+    for (const event of input.sprintEvents ?? []) {
+        const sprint = sprintById.get(event.sprintId);
+        if (!sprint) continue;
+        const eventTitle = event.eventType === "completed" ? "Sprint completed" : event.eventType === "created" ? "Sprint created" : "Sprint updated";
+        events.push({
+            id: `sprint-event:${event.id}`,
+            type: "sprint",
+            sourceSurface: "sprints",
+            title: sprint.name || eventTitle,
+            description: eventTitle,
+            occurredAt: iso(event.createdAt),
+            actor: person(event.actorId),
+            actionLink: actionLink(input, "Open sprint", "sprints", sprint.id),
+        });
+    }
     for (const sprint of input.sprints) {
+        if (sprintIdsWithDurableHistory.has(sprint.id)) continue;
         events.push({
             id: `sprint:${sprint.id}`,
             type: "sprint",
