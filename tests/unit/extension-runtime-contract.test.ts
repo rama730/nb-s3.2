@@ -47,7 +47,8 @@ describe("extension runtime contract", () => {
     assert.match(actionSource, /isNull\(extensionDeviceSessions\.revokedAt\)/, "settings revocation must update an active session atomically");
     assert.match(sessionRouteSource, /export async function GET/, "the extension needs a minimal revocation-status endpoint");
     assert.match(sessionRouteSource, /revoked tokens may read only their own liveness/, "status checks must not restore revoked bearer access");
-    assert.match(settingsQuerySource, /refetchInterval: EXTENSION_SESSION_POLL_MS/, "the active Integrations tab must reconcile IDE-side logout promptly");
+    assert.match(settingsQuerySource, /refetchOnWindowFocus: true/, "the active Integrations tab must reconcile IDE-side logout on focus");
+    assert.doesNotMatch(settingsQuerySource, /refetchInterval:\s*EXTENSION_SESSION_POLL_MS/, "idle settings must not poll every three seconds");
     assert.match(baselineMigration, /auth_code_issued/, "fresh databases should allow auth-code issuance events");
     assert.match(baselineMigration, /auth_code_consumed/, "fresh databases should allow auth-code consumption events");
     assert.match(repairMigration, /DROP CONSTRAINT IF EXISTS extension_device_session_events_event_type_check/, "existing databases should replace the stale event type check");
