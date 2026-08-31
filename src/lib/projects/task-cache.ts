@@ -24,7 +24,11 @@ type TaskInfiniteData = {
 type TaskScope = "all" | "backlog" | "sprint";
 
 function isInfiniteTaskData(value: unknown): value is TaskInfiniteData {
-  return !!value && typeof value === "object" && Array.isArray((value as TaskInfiniteData).pages);
+  return (
+    !!value &&
+    typeof value === "object" &&
+    Array.isArray((value as TaskInfiniteData).pages)
+  );
 }
 
 function matchesScope(task: TaskSurfaceRecord, scope: TaskScope) {
@@ -39,36 +43,32 @@ function patchTaskList(
   scope: TaskScope,
 ): TaskSurfaceRecord[] {
   const normalizedIncoming = normalizeTaskSurfaceRecord(incoming);
-  const next: TaskSurfaceRecord[] = [];
-  let seen = false;
+  const current = list.find((t) => t.id === incoming.id);
+  const normalizedCurrent = current
+    ? normalizeTaskSurfaceRecord(current)
+    : null;
 
-  for (const task of list) {
-    if (task.id !== normalizedIncoming.id) {
-      next.push(normalizeTaskSurfaceRecord(task));
-      continue;
-    }
+  const merged =
+    normalizedCurrent &&
+    taskSurfaceVersionMs(normalizedCurrent) >
+      taskSurfaceVersionMs(normalizedIncoming)
+      ? normalizedCurrent
+      : normalizedCurrent
+        ? mergeTaskSurfaceRecords(normalizedCurrent, normalizedIncoming)
+        : normalizedIncoming;
 
-    seen = true;
-    const current = normalizeTaskSurfaceRecord(task);
-    const merged =
-      taskSurfaceVersionMs(current) > taskSurfaceVersionMs(normalizedIncoming)
-        ? current
-        : mergeTaskSurfaceRecords(current, normalizedIncoming);
+  const nextList = list
+    .filter((t) => t.id !== incoming.id)
+    .map(normalizeTaskSurfaceRecord);
+  if (matchesScope(merged, scope)) nextList.push(merged);
 
-    if (matchesScope(merged, scope)) {
-      next.push(merged);
-    }
-  }
-
-  if (!seen && matchesScope(normalizedIncoming, scope)) {
-    next.push(normalizedIncoming);
-  }
-
-  return next.sort(compareTaskSurfaceRecords);
+  return nextList.sort(compareTaskSurfaceRecords);
 }
 
 function removeTaskFromList(list: TaskSurfaceRecord[], taskId: string) {
-  return list.filter((task) => task.id !== taskId).map(normalizeTaskSurfaceRecord);
+  return list
+    .filter((task) => task.id !== taskId)
+    .map(normalizeTaskSurfaceRecord);
 }
 
 export function patchTaskQueryData(
@@ -77,23 +77,46 @@ export function patchTaskQueryData(
   scope: TaskScope,
 ): unknown {
   if (Array.isArray(existing)) {
-    return patchTaskList(existing.map(normalizeTaskSurfaceRecord), incoming, scope);
+    return patchTaskList(
+      existing.map(normalizeTaskSurfaceRecord),
+      incoming,
+      scope,
+    );
   }
 
   if (isInfiniteTaskData(existing)) {
+    const existingPageIndex = existing.pages.findIndex((page) =>
+      (page.tasks ?? []).some((task) => task.id === incoming.id),
+    );
+    const targetPageIndex = existingPageIndex >= 0 ? existingPageIndex : 0;
+    const pages = existing.pages.map((page, pageIndex) => ({
+      ...page,
+      tasks:
+        pageIndex === targetPageIndex
+          ? patchTaskList(
+              (page.tasks ?? []).map(normalizeTaskSurfaceRecord),
+              incoming,
+              scope,
+            )
+          : removeTaskFromList(
+              (page.tasks ?? []).map(normalizeTaskSurfaceRecord),
+              incoming.id,
+            ),
+    }));
+
     return {
       ...existing,
-      pages: existing.pages.map((page) => ({
-        ...page,
-        tasks: patchTaskList((page.tasks ?? []).map(normalizeTaskSurfaceRecord), incoming, scope),
-      })),
+      pages,
     } satisfies TaskInfiniteData;
   }
 
   return existing;
 }
 
-export function removeTaskFromQueryData(existing: unknown, taskId: string): unknown {
+export function removeTaskFromQueryData(
+  existing: unknown,
+  taskId: string,
+): unknown {
   if (Array.isArray(existing)) {
     return removeTaskFromList(existing.map(normalizeTaskSurfaceRecord), taskId);
   }
@@ -103,7 +126,10 @@ export function removeTaskFromQueryData(existing: unknown, taskId: string): unkn
       ...existing,
       pages: existing.pages.map((page) => ({
         ...page,
-        tasks: removeTaskFromList((page.tasks ?? []).map(normalizeTaskSurfaceRecord), taskId),
+        tasks: removeTaskFromList(
+          (page.tasks ?? []).map(normalizeTaskSurfaceRecord),
+          taskId,
+        ),
       })),
     } satisfies TaskInfiniteData;
   }
@@ -115,42 +141,50 @@ export function patchProjectTaskCaches(
   queryClient: QueryClient,
   projectId: string,
   incoming: TaskSurfaceRecord,
+  options: { reconcile?: boolean } = {},
 ) {
   for (const scope of ["all", "backlog", "sprint"] as const) {
-    queryClient.setQueryData(queryKeys.project.detail.tasks(projectId, scope), (existing: unknown) =>
-      patchTaskQueryData(existing, incoming, scope),
+    queryClient.setQueryData(
+      queryKeys.project.detail.tasks(projectId, scope),
+      (existing: unknown) => patchTaskQueryData(existing, incoming, scope),
     );
   }
-  void queryClient.invalidateQueries({
-    queryKey: queryKeys.project.detail.tasksRoot(projectId),
-    predicate: (query) => query.queryKey.length > 5,
-    refetchType: "active",
-  });
-  void queryClient.invalidateQueries({
-    queryKey: queryKeys.globalSearch.projectRoot(),
-    refetchType: "active",
-  });
+  if (options.reconcile !== false) {
+    void queryClient.invalidateQueries({
+      queryKey: queryKeys.project.detail.tasksRoot(projectId),
+      predicate: (query) => query.queryKey.length > 5,
+      refetchType: "active",
+    });
+    void queryClient.invalidateQueries({
+      queryKey: queryKeys.globalSearch.projectRoot(),
+      refetchType: "active",
+    });
+  }
 }
 
 export function removeTaskFromProjectTaskCaches(
   queryClient: QueryClient,
   projectId: string,
   taskId: string,
+  options: { reconcile?: boolean } = {},
 ) {
   for (const scope of ["all", "backlog", "sprint"] as const) {
-    queryClient.setQueryData(queryKeys.project.detail.tasks(projectId, scope), (existing: unknown) =>
-      removeTaskFromQueryData(existing, taskId),
+    queryClient.setQueryData(
+      queryKeys.project.detail.tasks(projectId, scope),
+      (existing: unknown) => removeTaskFromQueryData(existing, taskId),
     );
   }
-  void queryClient.invalidateQueries({
-    queryKey: queryKeys.project.detail.tasksRoot(projectId),
-    predicate: (query) => query.queryKey.length > 5,
-    refetchType: "active",
-  });
-  void queryClient.invalidateQueries({
-    queryKey: queryKeys.globalSearch.projectRoot(),
-    refetchType: "active",
-  });
+  if (options.reconcile !== false) {
+    void queryClient.invalidateQueries({
+      queryKey: queryKeys.project.detail.tasksRoot(projectId),
+      predicate: (query) => query.queryKey.length > 5,
+      refetchType: "active",
+    });
+    void queryClient.invalidateQueries({
+      queryKey: queryKeys.globalSearch.projectRoot(),
+      refetchType: "active",
+    });
+  }
 }
 
 export function findTaskInProjectTaskCaches(
@@ -159,16 +193,22 @@ export function findTaskInProjectTaskCaches(
   taskId: string,
 ) {
   for (const scope of ["all", "backlog", "sprint"] as const) {
-    const data = queryClient.getQueryData(queryKeys.project.detail.tasks(projectId, scope));
+    const data = queryClient.getQueryData(
+      queryKeys.project.detail.tasks(projectId, scope),
+    );
     if (Array.isArray(data)) {
-      const task = data.map(normalizeTaskSurfaceRecord).find((entry) => entry.id === taskId);
+      const task = data
+        .map(normalizeTaskSurfaceRecord)
+        .find((entry) => entry.id === taskId);
       if (task) return task;
       continue;
     }
 
     if (isInfiniteTaskData(data)) {
       for (const page of data.pages) {
-        const task = (page.tasks ?? []).map(normalizeTaskSurfaceRecord).find((entry) => entry.id === taskId);
+        const task = (page.tasks ?? [])
+          .map(normalizeTaskSurfaceRecord)
+          .find((entry) => entry.id === taskId);
         if (task) return task;
       }
     }
