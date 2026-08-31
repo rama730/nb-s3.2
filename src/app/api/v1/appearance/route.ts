@@ -79,13 +79,9 @@ export async function GET(request: Request) {
     }
 
     try {
-        // Fetch fresh user data from the Supabase Auth server to bypass cached JWT metadata
-        const client = auth.supabase as any;
-        const getUserFromAuthServer = client.__getUserFromAuthServer ?? client.auth.getUser.bind(client.auth);
-        const { data: { user: freshUser } } = await getUserFromAuthServer();
-        const userToUse = freshUser ?? auth.user;
-
-        const snapshot = readAppearanceSnapshotFromMetadata(userToUse);
+        // requireAuthenticatedUser() already verifies the user with Supabase.
+        // ponytail: appearance is non-sensitive; avoid a second remote auth lookup.
+        const snapshot = readAppearanceSnapshotFromMetadata(auth.user);
         logApiRoute(request, {
             requestId,
             action: "appearance.get",
