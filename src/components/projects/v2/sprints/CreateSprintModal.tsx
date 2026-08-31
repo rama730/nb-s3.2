@@ -139,15 +139,48 @@ export default function SprintEditorModal({
   const [errorMessage, setErrorMessage] = React.useState("");
   const [pendingAction, setPendingAction] = React.useState<PendingAction>(null);
   const [confirmDelete, setConfirmDelete] = React.useState(false);
+  const firstFieldRef = React.useRef<HTMLInputElement>(null);
+  const previousFocusRef = React.useRef<HTMLElement | null>(null);
+  const pendingActionRef = React.useRef<PendingAction>(null);
+  const onCloseRef = React.useRef(onClose);
+  const initializedDraftKeyRef = React.useRef<string | null>(null);
+  const editorKey = `${mode}:${sprint?.id ?? "new"}`;
 
   React.useEffect(() => {
-    if (!isOpen) return;
+    pendingActionRef.current = pendingAction;
+  }, [pendingAction]);
+  React.useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
+  React.useEffect(() => {
+    if (!isOpen) {
+      initializedDraftKeyRef.current = null;
+      return;
+    }
+    if (initializedDraftKeyRef.current === editorKey) return;
+    initializedDraftKeyRef.current = editorKey;
     setDraft(buildSprintEditorDraft({ sprint, sprintCount }));
     setFieldErrors({});
     setErrorMessage("");
     setPendingAction(null);
     setConfirmDelete(false);
-  }, [isOpen, sprint, sprintCount]);
+  }, [editorKey, isOpen, sprint, sprintCount]);
+
+  React.useEffect(() => {
+    if (!isOpen) return;
+    previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const frame = window.requestAnimationFrame(() => firstFieldRef.current?.focus());
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !pendingActionRef.current) onCloseRef.current();
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener("keydown", handleKeyDown);
+      previousFocusRef.current?.focus();
+    };
+  }, [isOpen]);
 
   const scheduleSummary = React.useMemo(
     () => getSprintDurationSummary(draft.startDate, draft.endDate),
@@ -243,11 +276,14 @@ export default function SprintEditorModal({
         initial={{ scale: 0.95, opacity: 0, y: 10 }}
         animate={{ scale: 1, opacity: 1, y: 0 }}
         exit={{ scale: 0.95, opacity: 0, y: 10 }}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="sprint-editor-title"
         className="relative z-10 flex max-h-[90vh] w-full max-w-xl flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-2xl dark:border-zinc-700 dark:bg-zinc-950"
       >
         <div className="flex flex-shrink-0 items-center justify-between border-b border-zinc-200 px-6 py-4 dark:border-zinc-800">
           <div className="space-y-1">
-            <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+            <h3 id="sprint-editor-title" className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
               {mode === "create" ? "Create Sprint" : "Edit Sprint"}
             </h3>
             <p className="text-sm text-zinc-500 dark:text-zinc-400">
@@ -258,6 +294,7 @@ export default function SprintEditorModal({
           </div>
           <button
             type="button"
+            aria-label="Close Sprint editor"
             onClick={onClose}
             disabled={!!pendingAction}
             className="rounded-lg p-2 text-zinc-500 transition-colors hover:bg-zinc-100 disabled:opacity-50 dark:hover:bg-zinc-800"
@@ -281,6 +318,7 @@ export default function SprintEditorModal({
               <div className="space-y-4">
                 <Field label="Sprint Name" htmlFor="sprint-name" required error={fieldErrors.name}>
                   <input
+                    ref={firstFieldRef}
                     id="sprint-name"
                     required
                     value={draft.name}
@@ -384,7 +422,7 @@ export default function SprintEditorModal({
             {mode === "edit" ? (
               <Section
                 title="Danger zone"
-                description="Deleting a sprint keeps the tasks but removes their sprint assignment."
+                description="Only an empty Planning sprint can be deleted. Sprints with work history are archived instead."
                 tone="danger"
               >
                 <div className="space-y-4">
@@ -392,10 +430,10 @@ export default function SprintEditorModal({
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div className="space-y-1">
                         <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
-                          {deleteImpact?.affectedTaskCount ?? 0} work item{deleteImpact?.affectedTaskCount === 1 ? "" : "s"} will be unassigned
+                          {deleteImpact?.affectedTaskCount ?? 0} historical work item{deleteImpact?.affectedTaskCount === 1 ? "" : "s"}
                         </p>
                         <p className="text-xs leading-5 text-zinc-500 dark:text-zinc-400">
-                          Tasks and files stay in the project. Only the sprint record and sprint assignment are removed.
+                          Any work history makes this record permanent. Use the lifecycle menu to cancel, complete, or archive it.
                         </p>
                       </div>
                       <span className="rounded-full border border-zinc-200 px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.14em] text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
@@ -415,7 +453,7 @@ export default function SprintEditorModal({
                         Delete {deleteImpact.sprintName}?
                       </p>
                       <p className="text-sm leading-6 text-zinc-500 dark:text-zinc-400">
-                        This cannot be undone. The sprint will be removed and the affected work items will return to an unsprinted state.
+                        This cannot be undone. Only this empty Planning record will be removed; no task history is affected.
                       </p>
                       <div className="flex flex-wrap justify-end gap-2">
                         <button
