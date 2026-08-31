@@ -59,6 +59,8 @@ export interface MentionComposerProps {
     /** Called when the user hits Ctrl/Cmd + Enter while the menu is closed. */
     onSubmit?: () => void;
     className?: string;
+    /** Lets an embedding surface reuse the editor without duplicating mention behavior. */
+    editorClassName?: string;
     "aria-label"?: string;
 }
 
@@ -261,6 +263,7 @@ export function MentionComposer({
     onDraftChange,
     onSubmit,
     className,
+    editorClassName,
     ...rest
 }: MentionComposerProps) {
     const editorRef = React.useRef<HTMLDivElement | null>(null);
@@ -499,6 +502,7 @@ export function MentionComposer({
                     "mention-composer min-h-[96px] w-full resize-none rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm leading-6 text-zinc-900 outline-none transition focus:border-indigo-500   disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-950/60 dark:text-zinc-100",
                     "whitespace-pre-wrap break-words",
                     disabled && "pointer-events-none opacity-60",
+                    editorClassName,
                 )}
                 data-placeholder={placeholder}
             />
