@@ -1,4 +1,3 @@
-import { and, eq, isNotNull, isNull } from "drizzle-orm";
 import { messageWorkLinks, type MessageWorkLink, type NewMessageWorkLink } from "@/lib/db/schema";
 
 export type MessageWorkLinkInsert = Omit<NewMessageWorkLink, "id" | "createdAt" | "updatedAt" | "deletedAt">;
@@ -24,53 +23,35 @@ export async function upsertMessageWorkLink(
     executor: DbExecutor,
     values: MessageWorkLinkInsert,
 ): Promise<MessageWorkLink> {
-    const [inserted] = await executor
+    const [link] = await executor
         .insert(messageWorkLinks)
         .values({
             ...values,
             updatedAt: new Date(),
         })
-        .onConflictDoNothing({
+        .onConflictDoUpdate({
             target: [
                 messageWorkLinks.sourceMessageId,
                 messageWorkLinks.targetType,
                 messageWorkLinks.targetId,
             ],
-            where: isNull(messageWorkLinks.deletedAt),
+            set: {
+                sourceConversationId: values.sourceConversationId,
+                targetProjectId: values.targetProjectId ?? null,
+                visibility: values.visibility,
+                status: values.status,
+                ownerUserId: values.ownerUserId ?? null,
+                assigneeUserId: values.assigneeUserId ?? null,
+                createdBy: values.createdBy,
+                href: values.href ?? null,
+                metadata: values.metadata,
+                deletedAt: null,
+                updatedAt: new Date(),
+            },
         })
         .returning();
 
-    if (inserted) return inserted;
-
-    const [existing] = await executor
-        .select()
-        .from(messageWorkLinks)
-        .where(and(
-            eq(messageWorkLinks.sourceMessageId, values.sourceMessageId),
-            eq(messageWorkLinks.targetType, values.targetType),
-            eq(messageWorkLinks.targetId, values.targetId),
-            isNull(messageWorkLinks.deletedAt),
-        ))
-        .limit(1);
-
-    if (existing) return existing;
-
-    const [restored] = await executor
-        .update(messageWorkLinks)
-        .set({
-            ...values,
-            deletedAt: null,
-            updatedAt: new Date(),
-        })
-        .where(and(
-            eq(messageWorkLinks.sourceMessageId, values.sourceMessageId),
-            eq(messageWorkLinks.targetType, values.targetType),
-            eq(messageWorkLinks.targetId, values.targetId),
-            isNotNull(messageWorkLinks.deletedAt),
-        ))
-        .returning();
-
-    if (restored) return restored;
+    if (link) return link;
 
     throw new Error("Failed to create message work link");
 }
