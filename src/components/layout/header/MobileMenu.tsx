@@ -10,6 +10,8 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { MAIN_NAV_ITEMS, isMainNavRouteActive } from "./nav-items";
+import { ROUTES } from "@/constants/routes";
+import type { RealtimeHealthState } from "@/components/providers/RealtimeProvider";
 
 export default function MobileMenu(props: {
     isOpen: boolean;
@@ -21,13 +23,21 @@ export default function MobileMenu(props: {
     } | null;
     onSignOut?: () => void | Promise<void>;
     notificationUnreadCount?: number;
+    messageUnreadCount?: number;
     onOpenNotifications?: () => void;
     onOpenSearch?: () => void;
+    onOpenWorkspace?: () => void;
+    workspaceActionCount?: number;
+    connectionHealth?: RealtimeHealthState;
 }) {
     const pathname = usePathname();
     const [isSigningOut, setIsSigningOut] = useState(false);
     const [showSignOutConfirm, setShowSignOutConfirm] = useState(false);
     const unreadImportantCount = props.notificationUnreadCount ?? 0;
+    const messageUnreadCount = props.messageUnreadCount ?? 0;
+    const workspaceActionCount = props.workspaceActionCount ?? 0;
+    const connectionNeedsAttention = props.connectionHealth === "offline" || props.connectionHealth === "unavailable";
+    const connectionIsReconnecting = props.connectionHealth === "reconnecting";
 
     const handleSignOut = async () => {
         if (isSigningOut) return;
@@ -77,8 +87,22 @@ export default function MobileMenu(props: {
                         <Search className="h-4 w-4" />
                         Search current section
                     </button>
+                    <button
+                        type="button"
+                        onClick={props.onOpenWorkspace}
+                        className="flex min-h-11 items-center justify-between rounded-xl px-3 py-3 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-900"
+                    >
+                        <span className={cn(workspaceActionCount > 0 && "text-rose-500 dark:text-rose-400")}>Workspace</span>
+                        {workspaceActionCount > 0 ? (
+                            <span aria-label={`${workspaceActionCount} workspace items need attention`} className="inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-rose-500 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                                {workspaceActionCount > 99 ? "99+" : workspaceActionCount}
+                            </span>
+                        ) : null}
+                    </button>
                     {MAIN_NAV_ITEMS.map((item) => {
                         const isActive = isMainNavRouteActive(pathname, item.href);
+                        const hasUnreadMessages = item.href === ROUTES.MESSAGES && messageUnreadCount > 0;
+                        const isConnectionsItem = item.href === ROUTES.PEOPLE;
                         return (
                             <Link
                                 key={item.href}
@@ -93,9 +117,26 @@ export default function MobileMenu(props: {
                                 )}
                             >
                                 <span className="flex items-center gap-3">
-                                    <item.icon className="h-4 w-4" />
+                                    <item.icon className={cn(
+                                        "h-4 w-4",
+                                        isConnectionsItem && connectionNeedsAttention
+                                            ? "text-rose-500 dark:text-rose-400"
+                                            : isConnectionsItem && connectionIsReconnecting
+                                                ? "text-amber-500 dark:text-amber-400"
+                                                : hasUnreadMessages && !isActive
+                                                    ? "text-rose-500 dark:text-rose-400"
+                                                    : "",
+                                    )} />
                                     {item.label}
                                 </span>
+                                {hasUnreadMessages ? (
+                                    <span
+                                        aria-label={`${messageUnreadCount} unread messages`}
+                                        className="inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-rose-500 px-1.5 py-0.5 text-[10px] font-semibold text-white"
+                                    >
+                                        {messageUnreadCount > 99 ? "99+" : messageUnreadCount}
+                                    </span>
+                                ) : null}
                             </Link>
                         );
                     })}
