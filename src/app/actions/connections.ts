@@ -6,6 +6,7 @@ import { connectionSuggestionDismissals, connectionSuggestions, connections, mes
 import { getAuthUser } from '@/lib/supabase/auth-user';
 import { eq, and, or, desc, asc, sql, inArray, isNull } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
+import { after } from 'next/server';
 import { consumeRateLimit } from '@/lib/security/rate-limit';
 import { IdempotencyConflictError, runIdempotent } from '@/lib/security/idempotency';
 import {
@@ -17,14 +18,23 @@ import { runInFlightDeduped } from '@/lib/utils/inflight-dedupe';
 import { APPLICATION_BANNER_HIDE_AFTER_MS } from '@/lib/chat/banner-lifecycle';
 import { redis, getCachedData, cacheData } from '@/lib/redis';
 import {
+    applyConnectionPairsToRedis,
     invalidateDiscoverCacheForUsers,
     revalidateConnectionsPaths,
-    syncConnectionsToRedis,
 } from '@/lib/connections/internal-helpers';
 import { queueCounterRefreshBestEffort } from '@/lib/workspace/counter-buffer';
 import { recordPrivacyReadEvents } from '@/lib/privacy/audit';
 import { buildViewerScopedProfileView } from '@/lib/privacy/profile-views';
-import { resolvePrivacyRelationship, resolvePrivacyRelationships } from '@/lib/privacy/resolver';
+import {
+    resolvePrivacyRelationship,
+    resolvePrivacyRelationships,
+    resolvePrivacyRelationshipsFromProfiles,
+} from '@/lib/privacy/resolver';
+import type {
+    ConnectionPrivacySetting,
+    MessagePrivacySetting,
+    ProfileVisibilitySetting,
+} from '@/lib/privacy/relationship-state';
 import type { PrivacyRelationshipState } from '@/lib/privacy/relationship-state';
 import { emitConnectionAcceptedNotification, emitConnectionRequestReceivedNotification } from '@/lib/notifications/emitters';
 import { logger } from '@/lib/logger';
@@ -141,8 +151,21 @@ interface ConnectionsFeedStats {
 async function applySuggestedProfilePrivacy(
     viewerId: string,
     items: SuggestedProfile[],
+    preloadedProfiles?: Map<string, {
+        id: string;
+        visibility: ProfileVisibilitySetting | null;
+        messagePrivacy: MessagePrivacySetting | null;
+        connectionPrivacy: ConnectionPrivacySetting | null;
+    }>,
 ): Promise<SuggestedProfile[]> {
-    const relationships = await resolvePrivacyRelationships(viewerId, items.map((item) => item.id));
+    const profilesForItems = preloadedProfiles
+        ? items.map((item) => preloadedProfiles.get(item.id)).filter((profile) => profile !== undefined)
+        : [];
+    const relationships = profilesForItems.length === items.length
+        ? await resolvePrivacyRelationshipsFromProfiles(viewerId, profilesForItems, {
+            connectionsKnownAbsent: true,
+        })
+        : await resolvePrivacyRelationships(viewerId, items.map((item) => item.id));
 
     return items.map((item) => {
         const relationship = relationships.get(item.id) ?? null;
@@ -286,6 +309,18 @@ async function applyConnectionsCountDelta(tx: DbTransaction, userIds: string[], 
             updatedAt: new Date(),
         })
         .where(inArray(profiles.id, userIds));
+}
+
+async function applyConnectionsCountDeltas(tx: DbTransaction, deltas: Map<string, number>) {
+    const rows = Array.from(deltas, ([userId, amount]) => ({ userId, amount })).filter((row) => row.amount !== 0);
+    if (rows.length === 0) return;
+    await tx.execute(sql`
+        UPDATE profiles AS profile
+        SET connections_count = GREATEST(0, profile.connections_count + delta.amount),
+            updated_at = now()
+        FROM jsonb_to_recordset(${JSON.stringify(rows)}::jsonb) AS delta("userId" uuid, amount integer)
+        WHERE profile.id = delta."userId"
+    `);
 }
 
 const CONNECTIONS_CURSOR_DELIMITER = '|';
@@ -584,7 +619,10 @@ const connectionsFeedInputSchema = z.object({
     includeMeta: z.boolean().optional(),
 });
 
-async function getConnectionsFeedImpl(input: ConnectionsFeedInput) {
+async function getConnectionsFeedImpl(
+    input: ConnectionsFeedInput,
+    user: Awaited<ReturnType<typeof getAuthUser>>,
+) {
     const startedAt = performance.now();
     const validation = connectionsFeedInputSchema.safeParse(input);
     if (!validation.success) {
@@ -600,7 +638,6 @@ async function getConnectionsFeedImpl(input: ConnectionsFeedInput) {
     }
     input = validation.data;
 
-    const user = await getAuthUser();
     if (!user) {
         return {
             success: false as const,
@@ -649,9 +686,19 @@ async function getConnectionsFeedImpl(input: ConnectionsFeedInput) {
         }
     }
 
-    const stats = includeMeta
-        ? await getConnectionStatsForUser(user.id)
-        : { totalConnections: 0, pendingIncoming: 0, pendingSent: 0 };
+    // ponytail: statistics and the first page do not depend on each other.
+    const statsStartedAt = performance.now();
+    const statsPromise: Promise<ConnectionsFeedStats> = includeMeta
+        ? getConnectionStatsForUser(user.id)
+        : Promise.resolve({ totalConnections: 0, pendingIncoming: 0, pendingSent: 0 });
+    const metadataPromise = Promise.all([
+        includeMeta
+            ? db.select({ id: projects.id }).from(projects).where(eq(projects.ownerId, user.id)).limit(50)
+            : Promise.resolve([]),
+        includeMeta
+            ? db.select({ skills: profiles.skills }).from(profiles).where(eq(profiles.id, user.id)).limit(1)
+            : Promise.resolve([]),
+    ]);
     const searchPattern = safeSearch ? containsLikePattern(safeSearch.toLowerCase()) : undefined;
     const searchTokens = safeSearch ? tokenizeSearchQuery(safeSearch.toLowerCase()) : [];
     const rawParsedCursor = parseConnectionsCursor(input.cursor);
@@ -806,12 +853,21 @@ async function getConnectionsFeedImpl(input: ConnectionsFeedInput) {
                 },
             };
         });
-        await recordPrivacyReadEvents({
-            subjectUserIds: visibleItems.map((item) => item.otherUser.id),
-            viewerUserId: user.id,
-            eventType: 'network_profile_served',
-            route: 'connections.network',
-            metadata: { count: visibleItems.length },
+        after(async () => {
+            try {
+                await recordPrivacyReadEvents({
+                    subjectUserIds: visibleItems.map((item) => item.otherUser.id),
+                    viewerUserId: user.id,
+                    eventType: 'network_profile_served',
+                    route: 'connections.network',
+                    metadata: { count: visibleItems.length },
+                });
+            } catch (error) {
+                logger.error('connections.network_privacy_audit_failed', {
+                    module: 'connections',
+                    error: error instanceof Error ? error.message : String(error),
+                });
+            }
         });
 
         const nextCursor = hasMore && visibleItems.length > 0
@@ -825,6 +881,13 @@ async function getConnectionsFeedImpl(input: ConnectionsFeedInput) {
             : null;
 
         recordPreview(visibleItems.length > 0 ? 'success' : 'empty', visibleItems.length);
+        const stats = await statsPromise;
+        logger.metric('connections.feed', {
+            tab,
+            itemCount: visibleItems.length,
+            durationMs: Math.round(performance.now() - startedAt),
+            statsElapsedMs: Math.round(performance.now() - statsStartedAt),
+        });
         return { success: true as const, items: visibleItems, hasMore, nextCursor, stats };
     }
 
@@ -973,7 +1036,7 @@ async function getConnectionsFeedImpl(input: ConnectionsFeedInput) {
                     items[items.length - 1]!.id,
                 )
                 : null;
-            return { success: true as const, items, hasMore, nextCursor, stats };
+            return { success: true as const, items, hasMore, nextCursor, stats: await statsPromise };
         }
 
         const items = dedupedItems.slice(0, limit);
@@ -985,7 +1048,7 @@ async function getConnectionsFeedImpl(input: ConnectionsFeedInput) {
             )
             : null;
 
-        return { success: true as const, items, hasMore: rawHasMore, nextCursor, stats };
+        return { success: true as const, items, hasMore: rawHasMore, nextCursor, stats: await statsPromise };
     }
 
     let suggestionCursor: { score: number; id: string } | null = null;
@@ -1021,6 +1084,7 @@ async function getConnectionsFeedImpl(input: ConnectionsFeedInput) {
         discoverConditions.push(sql`EXISTS (SELECT 1 FROM ${projects} WHERE ${projects.ownerId} = ${profiles.id})`);
     }
 
+    const discoverQueryStartedAt = performance.now();
     const rows = searchPattern ? [] : await db
         .select({
             suggestedUserId: connectionSuggestions.suggestedUserId,
@@ -1034,6 +1098,7 @@ async function getConnectionsFeedImpl(input: ConnectionsFeedInput) {
             location: profiles.location,
             visibility: profiles.visibility,
             messagePrivacy: profiles.messagePrivacy,
+            connectionPrivacy: profiles.connectionPrivacy,
             experienceLevel: profiles.experienceLevel,
             lastActiveAt: profiles.lastActiveAt,
             skills: profiles.skills,
@@ -1045,7 +1110,14 @@ async function getConnectionsFeedImpl(input: ConnectionsFeedInput) {
         .where(and(...discoverConditions))
         .orderBy(desc(connectionSuggestions.score), desc(connectionSuggestions.suggestedUserId))
         .limit(limit + 1);
+    const discoverQueryMs = Math.round(performance.now() - discoverQueryStartedAt);
 
+    let privacyProfiles = new Map(rows.map((row) => [row.suggestedUserId, {
+        id: row.suggestedUserId,
+        visibility: (row.visibility || 'public') as ProfileVisibilitySetting,
+        messagePrivacy: (row.messagePrivacy || 'connections') as MessagePrivacySetting,
+        connectionPrivacy: (row.connectionPrivacy || 'everyone') as ConnectionPrivacySetting,
+    }]));
     let items = rows.slice(0, limit).map((row) => {
         const profileVisibility = (row.visibility || 'public') as SuggestedProfile['profileVisibility'];
         return {
@@ -1140,6 +1212,7 @@ async function getConnectionsFeedImpl(input: ConnectionsFeedInput) {
                 location: profiles.location,
                 visibility: profiles.visibility,
                 messagePrivacy: profiles.messagePrivacy,
+                connectionPrivacy: profiles.connectionPrivacy,
                 experienceLevel: profiles.experienceLevel,
                 lastActiveAt: profiles.lastActiveAt,
                 skills: profiles.skills,
@@ -1163,6 +1236,12 @@ async function getConnectionsFeedImpl(input: ConnectionsFeedInput) {
             .limit(limit + 1);
 
         const fallbackPageRows = fallbackRows.slice(0, limit);
+        privacyProfiles = new Map(fallbackPageRows.map((row) => [row.id, {
+            id: row.id,
+            visibility: (row.visibility || 'public') as ProfileVisibilitySetting,
+            messagePrivacy: (row.messagePrivacy || 'connections') as MessagePrivacySetting,
+            connectionPrivacy: (row.connectionPrivacy || 'everyone') as ConnectionPrivacySetting,
+        }]));
         if (searchPattern) {
             searchFallbackHasMore = fallbackRows.length > limit;
             const lastFallbackRow = fallbackPageRows[fallbackPageRows.length - 1];
@@ -1197,21 +1276,41 @@ async function getConnectionsFeedImpl(input: ConnectionsFeedInput) {
             };
         });
     }
-    const visibleItems = await applySuggestedProfilePrivacy(user.id, items);
-    const [viewerProjects, viewerProfiles] = await Promise.all([
-        includeMeta ? db.select({ id: projects.id }).from(projects).where(eq(projects.ownerId, user.id)).limit(50) : Promise.resolve([]),
-        includeMeta ? db.select({ skills: profiles.skills }).from(profiles).where(eq(profiles.id, user.id)).limit(1) : Promise.resolve([]),
-        recordPrivacyReadEvents({
-            subjectUserIds: visibleItems.map((item) => item.id),
-            viewerUserId: user.id,
-            eventType: 'discover_profile_served',
-            route: 'connections.discover.precomputed',
-            metadata: { count: visibleItems.length },
-        }),
-    ]);
+    const privacyStartedAt = performance.now();
+    const visibleItems = await applySuggestedProfilePrivacy(user.id, items, privacyProfiles);
+    const privacyMs = Math.round(performance.now() - privacyStartedAt);
+    const metadataStartedAt = performance.now();
+    const [viewerProjects, viewerProfiles] = await metadataPromise;
+    const metadataMs = Math.round(performance.now() - metadataStartedAt);
+    after(async () => {
+        try {
+            await recordPrivacyReadEvents({
+                subjectUserIds: visibleItems.map((item) => item.id),
+                viewerUserId: user.id,
+                eventType: 'discover_profile_served',
+                route: 'connections.discover.precomputed',
+                metadata: { count: visibleItems.length },
+            });
+        } catch (error) {
+            logger.error('connections.discover_privacy_audit_failed', {
+                module: 'connections',
+                error: error instanceof Error ? error.message : String(error),
+            });
+        }
+    });
     const hasMore = searchPattern ? searchFallbackHasMore : rows.length > limit;
     const last = rows[Math.min(limit - 1, rows.length - 1)];
     recordPreview(visibleItems.length > 0 ? 'success' : 'empty', visibleItems.length);
+    const stats = await statsPromise;
+    logger.metric('connections.feed', {
+        tab,
+        itemCount: visibleItems.length,
+        durationMs: Math.round(performance.now() - startedAt),
+        statsElapsedMs: Math.round(performance.now() - statsStartedAt),
+        discoverQueryMs,
+        privacyMs,
+        metadataMs,
+    });
     return {
         success: true as const,
         items: visibleItems,
@@ -1226,9 +1325,10 @@ async function getConnectionsFeedImpl(input: ConnectionsFeedInput) {
 }
 
 export async function getConnectionsFeed(input: ConnectionsFeedInput) {
+    const startedAt = performance.now();
     const user = await getAuthUser();
     if (!user) {
-        return getConnectionsFeedImpl(input);
+        return getConnectionsFeedImpl(input, null);
     }
     const safeSearch = input.search ? input.search.trim().replace(/\s+/g, ' ').slice(0, 100) : '';
     const includeMeta = input.includeMeta !== false;
@@ -1237,13 +1337,31 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
         : null;
 
     if (cacheKey) {
-        const cached = await getCachedData<any>(cacheKey);
+        const cached = await getCachedData<
+            Awaited<ReturnType<typeof getConnectionsFeedImpl>>
+        >(cacheKey);
         if (cached) {
             return cached as Awaited<ReturnType<typeof getConnectionsFeedImpl>>;
         }
     }
 
-    const result = await getConnectionsFeedImpl(input);
+    const dedupeKey = `connections:feed:${user.id}:${JSON.stringify({
+        tab: input.tab,
+        limit: input.limit ?? 20,
+        cursor: input.cursor ?? null,
+        search: safeSearch,
+        includeMeta,
+        sortBy: input.sortBy ?? 'recent',
+        filters: input.filters ?? null,
+        historyFilters: input.historyFilters ?? null,
+        requestSortBy: input.requestSortBy ?? null,
+    })}`;
+    const result = await runInFlightDeduped(dedupeKey, () => getConnectionsFeedImpl(input, user));
+    logger.metric('connections.feed.action', {
+        tab: input.tab,
+        durationMs: Math.round(performance.now() - startedAt),
+        includeMeta,
+    });
 
     if (cacheKey && result && result.success && result.items.length > 0) {
         await cacheData(cacheKey, result, 180);
@@ -1570,8 +1688,11 @@ export async function sendConnectionRequest(
             return await returnFailure('You have sent too many requests to this person. Please wait before trying again.');
         }
 
-        // PURE OPTIMIZATION: Dropped advisory lock for native connection pairs unique constraints
         const txResult = await db.transaction(async (tx) => {
+            const pairKey = [user.id, addresseeId].sort().join(":");
+            await tx.execute(sql`
+                SELECT pg_advisory_xact_lock(hashtext('connection-pair'), hashtext(${pairKey}))
+            `);
             const existing = await tx
                 .select({
                     id: connections.id,
@@ -1614,7 +1735,7 @@ export async function sendConnectionRequest(
                         }
                     }
 
-                    await tx
+                    const [reactivated] = await tx
                         .update(connections)
                         .set({
                             requesterId: user.id,
@@ -1624,7 +1745,14 @@ export async function sendConnectionRequest(
                             updatedAt: new Date(),
                             createdAt: new Date(), // PURE OPTIMIZATION: Reset createdAt so it bubbles to top of incoming feeds
                         })
-                        .where(eq(connections.id, conn.id));
+                        .where(and(
+                            eq(connections.id, conn.id),
+                            eq(connections.status, conn.status),
+                            eq(connections.requesterId, conn.requesterId),
+                            eq(connections.addresseeId, conn.addresseeId),
+                        ))
+                        .returning({ id: connections.id });
+                    if (!reactivated) return { error: 'Connection changed while retrying. Please try again.' };
                     return { connectionId: conn.id, status: 'created' as const };
                 }
             }
@@ -1766,16 +1894,23 @@ export async function acceptAllIncomingConnectionRequests(
                     status: 'accepted',
                     updatedAt: new Date(),
                 })
-                .where(inArray(connections.id, pendingIds))
+                .where(and(
+                    inArray(connections.id, pendingIds),
+                    eq(connections.addresseeId, user.id),
+                    eq(connections.status, 'pending'),
+                ))
                 .returning({
                     id: connections.id,
                     requesterId: connections.requesterId,
                     addresseeId: connections.addresseeId,
                 });
 
+            const counterDeltas = new Map<string, number>();
             for (const row of rows) {
-                await applyConnectionsCountDelta(tx, [row.requesterId, row.addresseeId], 1);
+                counterDeltas.set(row.requesterId, (counterDeltas.get(row.requesterId) ?? 0) + 1);
+                counterDeltas.set(row.addresseeId, (counterDeltas.get(row.addresseeId) ?? 0) + 1);
             }
+            await applyConnectionsCountDeltas(tx, counterDeltas);
             return rows;
         });
 
@@ -1792,7 +1927,7 @@ export async function acceptAllIncomingConnectionRequests(
             await queueCounterRefreshBestEffort([...affectedUserIds]);
             await invalidateDiscoverCacheForUsers(affectedUserIds);
             await Promise.allSettled([
-                ...[...affectedUserIds].map((userId) => syncConnectionsToRedis(userId)),
+                applyConnectionPairsToRedis(accepted, 'add'),
                 ...[...affectedUserIds].map((userId) =>
                     inngest.send({ name: 'workspace/connections.sync_suggestions', data: { userId } }),
                 ),
@@ -1854,7 +1989,11 @@ export async function rejectAllIncomingConnectionRequests(
                     rejectionReason: null,
                     updatedAt: new Date(),
                 })
-                .where(inArray(connections.id, pendingIds))
+                .where(and(
+                    inArray(connections.id, pendingIds),
+                    eq(connections.addresseeId, user.id),
+                    eq(connections.status, 'pending'),
+                ))
                 .returning({
                     requesterId: connections.requesterId,
                     addresseeId: connections.addresseeId,
@@ -2073,8 +2212,10 @@ export async function acceptConnectionRequest(
 
                 if (accepted.changed) {
                     await Promise.allSettled([
-                        syncConnectionsToRedis(acceptedRequesterId),
-                        syncConnectionsToRedis(acceptedAddresseeId),
+                        applyConnectionPairsToRedis([{
+                            requesterId: acceptedRequesterId,
+                            addresseeId: acceptedAddresseeId,
+                        }], 'add'),
                         inngest.send({ name: 'workspace/connections.sync_suggestions', data: { userId: acceptedRequesterId } }),
                         inngest.send({ name: 'workspace/connections.sync_suggestions', data: { userId: acceptedAddresseeId } }),
                     ]).catch(console.error);
@@ -2290,10 +2431,7 @@ export async function removeConnection(
         await invalidateDiscoverCacheForUsers([removed.requesterId, removed.addresseeId]);
 
         // Non-blocking sync to Redis Edge Cache (removes from set).
-        await Promise.allSettled([
-            syncConnectionsToRedis(removed.requesterId),
-            syncConnectionsToRedis(removed.addresseeId),
-        ]).catch(console.error);
+        await applyConnectionPairsToRedis([removed], 'remove').catch(console.error);
 
         await revalidateConnectionsPaths();
         return { success: true };
