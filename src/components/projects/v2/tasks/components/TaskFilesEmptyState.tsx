@@ -39,10 +39,10 @@ export function TaskFilesEmptyState({
           <CloudUpload className="h-6 w-6" />
         </div>
         <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-          {isDragActive ? "Drop to attach" : "No task files yet"}
+          {isDragActive ? "Drop to link" : "No task files yet"}
         </h3>
         <p className="max-w-xs text-xs text-zinc-500 dark:text-zinc-400">
-          Start by attaching the file or folder this task depends on. You can drag items here or
+          Start by linking the file or folder this task depends on. You can drag items here or
           use one guided entry point to add a new file, folder, or existing project item.
         </p>
       </div>
