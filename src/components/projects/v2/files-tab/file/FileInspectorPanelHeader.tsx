@@ -50,11 +50,10 @@ export function FileInspectorPanelHeader({
         onClick={onClose}
         aria-label={closeLabel}
         data-testid={closeTestId}
-        className="-mr-1 -mt-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-700 focus-visible:outline-none   dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+        className="-mr-1 -mt-1 inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-700 focus-visible:ring-2 focus-visible:ring-blue-500  dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
       >
         <X className="h-4 w-4" aria-hidden="true" />
       </button>
     </div>
   );
 }
-
