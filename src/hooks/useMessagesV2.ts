@@ -1,10 +1,11 @@
 'use client';
 
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useMemo, useEffect } from 'react';
+import { useMemo, useEffect, useState } from 'react';
 import { get as idbGet, set as idbSet } from 'idb-keyval';
 import {
     type InboxConversationV2,
+    type MessageThreadErrorCode,
     type MessageThreadPageV2,
     ensureDirectConversationV2,
     getConversationSummaryV2,
@@ -44,6 +45,7 @@ import {
     upsertInboxConversation,
     upsertThreadConversation,
     upsertThreadMessage,
+    getCachedInboxConversation,
 } from '@/lib/messages/v2-cache';
 import { refreshUnreadCache } from '@/lib/messages/v2-refresh';
 import { isTemporaryMessageId, mergeMessageCollections } from '@/lib/messages/utils';
@@ -66,6 +68,16 @@ import {
 } from '@/lib/messages/reactions';
 
 const EMPTY_OUTBOX_ITEMS: MessagesV2OutboxItem[] = [];
+
+export class MessageThreadQueryError extends Error {
+    readonly code: MessageThreadErrorCode;
+
+    constructor(message: string, code: MessageThreadErrorCode = 'FAILED') {
+        super(message);
+        this.name = 'MessageThreadQueryError';
+        this.code = code;
+    }
+}
 
 function buildOptimisticStructuredMessage(item: MessagesV2OutboxItem): StructuredMessagePayload | null {
     if (!item.structuredAction) {
@@ -120,32 +132,53 @@ function unwrapThreadPage(value: unknown): MessageThreadPageV2 | null {
     return page as MessageThreadPageV2;
 }
 
-export function useInbox(limit: number = 20, enabled: boolean = true) {
+export function useInbox(
+    limit: number = 20,
+    enabled: boolean = true,
+    scope: 'active' | 'archived' = 'active',
+) {
+    const { user } = useAuth();
     const queryClient = useQueryClient();
-    const queryKey = useMemo(() => queryKeys.messages.v2.inbox(limit), [limit]);
-    const storageKey = useMemo(() => queryKey.join('-'), [queryKey]);
+    const queryKey = useMemo(() => queryKeys.messages.v2.inbox(limit, scope), [limit, scope]);
+    const storageKey = useMemo(() => `${user?.id ?? 'anonymous'}:${queryKey.join('-')}:v2`, [queryKey, user?.id]);
+    const [cacheReady, setCacheReady] = useState(false);
 
     useEffect(() => {
-        if (!enabled) return;
+        let active = true;
+        setCacheReady(false);
+        if (!enabled || !user?.id) {
+            setCacheReady(true);
+            return () => { active = false; };
+        }
         idbGet(storageKey).then((cachedPage) => {
-            if (cachedPage) {
+            if (active && cachedPage) {
                 const currentData = queryClient.getQueryState(queryKey);
                 if (!currentData?.data) {
-                    queryClient.setQueryData(queryKey, {
-                        pages: [cachedPage],
-                        pageParams: [undefined],
-                    });
+                    // ponytail: IndexedDB is an instant visual fallback, not an
+                    // authoritative fresh inbox. Keeping its original age stale
+                    // guarantees the first visible list reconciles immediately.
+                    queryClient.setQueryData(
+                        queryKey,
+                        {
+                            pages: [cachedPage],
+                            pageParams: [undefined],
+                        },
+                        { updatedAt: 0 },
+                    );
                 }
             }
-        }).catch(() => {});
-    }, [enabled, queryClient, queryKey, storageKey]);
+        }).catch(() => {}).finally(() => {
+            if (active) setCacheReady(true);
+        });
+        return () => { active = false; };
+    }, [enabled, queryClient, queryKey, storageKey, user?.id]);
 
     const query = useInfiniteQuery({
         queryKey,
         initialPageParam: undefined as string | undefined,
-        enabled,
+        enabled: enabled && cacheReady,
         queryFn: async ({ pageParam }) => {
-            const result = await getInboxPageV2(limit, pageParam);
+            const result = await getInboxPageV2(limit, pageParam, scope);
             if (!result.success || !result.page) {
                 throw new Error(result.error || 'Failed to fetch inbox');
             }
@@ -156,6 +189,7 @@ export function useInbox(limit: number = 20, enabled: boolean = true) {
         },
         getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
         staleTime: 30_000,
+        refetchOnWindowFocus: false,
     });
 
     const conversations = useMemo(
@@ -182,32 +216,57 @@ export function useConversationThread(conversationId: string | null, limit: numb
     );
     const queryClient = useQueryClient();
     const queryKey = useMemo(() => queryKeys.messages.v2.thread(conversationId), [conversationId]);
-    const storageKey = useMemo(() => queryKey.join('-'), [queryKey]);
+    const storageKey = useMemo(
+        () => `${user?.id ?? 'anonymous'}:${queryKey.join('-')}:v2`,
+        [queryKey, user?.id],
+    );
+    const [cacheReady, setCacheReady] = useState(false);
 
     useEffect(() => {
-        if (!conversationId || conversationId.startsWith('draft:')) return;
+        let active = true;
+        setCacheReady(false);
+        if (!conversationId || conversationId.startsWith('draft:') || !user?.id) {
+            setCacheReady(true);
+            return () => { active = false; };
+        }
         idbGet(storageKey).then((cachedPage) => {
-            if (cachedPage) {
+            if (active && cachedPage) {
                 const currentData = queryClient.getQueryState(queryKey);
                 if (!currentData?.data) {
-                    queryClient.setQueryData(queryKey, {
-                        pages: [cachedPage],
-                        pageParams: [undefined],
-                    });
+                    const inboxSnapshot = getCachedInboxConversation(queryClient, conversationId);
+                    queryClient.setQueryData(
+                        queryKey,
+                        {
+                            pages: [{
+                                ...cachedPage,
+                                // ponytail: inbox previews are summaries, never thread messages.
+                                messages: cachedPage.messages,
+                                conversation: inboxSnapshot ?? cachedPage.conversation,
+                            }],
+                            pageParams: [undefined],
+                        },
+                        { updatedAt: 0 },
+                    );
                 }
             }
-        }).catch(() => {});
-    }, [queryClient, conversationId, queryKey, storageKey]);
+        }).catch(() => {}).finally(() => {
+            if (active) setCacheReady(true);
+        });
+        return () => { active = false; };
+    }, [queryClient, conversationId, queryKey, storageKey, user?.id]);
 
     const query = useInfiniteQuery({
         queryKey,
         initialPageParam: undefined as string | undefined,
-        enabled: Boolean(conversationId) && !conversationId?.startsWith('draft:'),
+        enabled: cacheReady && Boolean(conversationId) && !conversationId?.startsWith('draft:'),
         queryFn: async ({ pageParam }) => {
             if (!conversationId) throw new Error('Missing conversation');
             const result = await getConversationThreadPageV2(conversationId, pageParam, limit);
             if (!result.success || !result.page) {
-                throw new Error(result.error || 'Failed to fetch conversation');
+                throw new MessageThreadQueryError(
+                    result.error || 'Failed to fetch conversation',
+                    result.code,
+                );
             }
             if (!pageParam) {
                 idbSet(storageKey, result.page).catch(() => {});
@@ -291,15 +350,28 @@ export function useConversationThread(conversationId: string | null, limit: numb
 }
 
 export function useMessageSearch(query: string) {
-    return useQuery({
+    const normalizedQuery = query.normalize('NFKC').replace(/\s+/g, ' ').trim();
+    const hasCompleteOperator = /(?:^|\s)(?:from:"[^"]{1,80}"|from:\S+|has:(?:image|video|file|code|chip|chips)|kind:\S+|is:pinned|in:(?:project|project-group))(?:\s|$)/iu
+        .test(normalizedQuery);
+    const hasSearchableText = Array.from(
+        normalizedQuery.replace(/(?:^|\s)(?:from:"[^"]*"|from:\S+|has:\S+|kind:\S+|is:\S+|in:\S+)/giu, ' ').trim(),
+    ).length >= 2;
+
+    return useInfiniteQuery({
         queryKey: queryKeys.messages.v2.search(query),
-        enabled: query.trim().length > 0,
-        queryFn: async () => {
-            const result = await searchMessages(query);
+        initialPageParam: null as string | null,
+        enabled: hasCompleteOperator || hasSearchableText,
+        queryFn: async ({ pageParam }) => {
+            const result = await searchMessages(normalizedQuery, 20, pageParam);
             if (!result.success) throw new Error(result.error || 'Failed to search messages');
-            return result.results ?? [];
+            return {
+                results: result.results ?? [],
+                nextCursor: result.nextCursor ?? null,
+            };
         },
+        getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
         staleTime: 20_000,
+        refetchOnWindowFocus: false,
     });
 }
 
@@ -318,15 +390,20 @@ export function useMessagingStructuredCatalog(conversationId: string | null, tar
             return result.catalog;
         },
         staleTime: 30_000,
+        refetchOnWindowFocus: false,
     });
 }
 
-export function useApplicationsInbox(limit: number = 20) {
+export function useApplicationsInbox(
+    limit: number = 20,
+    status: 'all' | 'pending' | 'accepted' | 'rejected' = 'all',
+    sort: 'newest' | 'status' | 'unread' = 'newest',
+) {
     return useInfiniteQuery({
-        queryKey: queryKeys.messages.v2.applications(limit, 0),
-        initialPageParam: 0,
+        queryKey: queryKeys.messages.v2.applications(limit, status, sort),
+        initialPageParam: null as string | null,
         queryFn: async ({ pageParam }) => {
-            const result = await getInboxApplicationsAction(limit, pageParam);
+            const result = await getInboxApplicationsAction(limit, pageParam, { status, sort });
             if (!result.success) {
                 const errorMessage = 'error' in result && typeof result.error === 'string'
                     ? result.error
@@ -335,16 +412,19 @@ export function useApplicationsInbox(limit: number = 20) {
             }
             return result;
         },
-        getNextPageParam: (lastPage, _pages, lastOffset) =>
-            lastPage.success && lastPage.hasMore ? lastOffset + limit : undefined,
+        getNextPageParam: (lastPage) =>
+            lastPage.success && lastPage.hasMore && 'nextCursor' in lastPage
+                ? lastPage.nextCursor ?? undefined
+                : undefined,
         staleTime: 30_000,
+        refetchOnWindowFocus: false,
     });
 }
 
 export function useProjectGroups(limit: number = 20) {
     return useInfiniteQuery({
         queryKey: queryKeys.messages.v2.projectGroups(limit, 0),
-        initialPageParam: 0,
+        initialPageParam: null as string | null,
         queryFn: async ({ pageParam }) => {
             const result = await getProjectGroups(limit, pageParam);
             if (!result.success) {
@@ -355,9 +435,12 @@ export function useProjectGroups(limit: number = 20) {
             }
             return result;
         },
-        getNextPageParam: (lastPage, _pages, lastOffset) =>
-            lastPage.success && lastPage.hasMore ? lastOffset + limit : undefined,
+        getNextPageParam: (lastPage) =>
+            lastPage.success && lastPage.hasMore
+                ? lastPage.nextCursor ?? undefined
+                : undefined,
         staleTime: 30_000,
+        refetchOnWindowFocus: false,
     });
 }
 
@@ -409,7 +492,11 @@ export function useMessagesActions() {
                 requestedAtMs: Date.now(),
                 requestedMessageId: optimisticLastReadMessageId ?? params.lastReadMessageId ?? null,
             });
-            const optimisticClearedCount = Math.max(0, previousUnreadCount);
+            const optimisticClearedCount =
+                params.lastReadMessageId
+                && params.lastReadMessageId === currentConversation?.lastMessage?.id
+                    ? Math.max(0, previousUnreadCount)
+                    : 0;
             if (optimisticClearedCount > 0) {
                 patchThreadConversation(queryClient, params.conversationId, (conversation) => ({
                     ...conversation,
@@ -419,14 +506,6 @@ export function useMessagesActions() {
                 }));
                 patchUnreadSummary(queryClient, (count) => Math.max(0, count - optimisticClearedCount));
             }
-            console.debug('[messages-v2] read_commit_requested', {
-                conversationId: params.conversationId,
-                requestId,
-                requestedWatermark: isTemporaryMessageId(params.lastReadMessageId)
-                    ? 'latest-server-message'
-                    : params.lastReadMessageId ?? 'latest-server-message',
-                optimisticClearedCount,
-            });
             return {
                 previousUnreadCount,
                 previousLastReadAt,
@@ -447,10 +526,6 @@ export function useMessagesActions() {
                 }));
                 patchUnreadSummary(queryClient, (count) => count + optimisticClearedCount);
             }
-            console.warn('[messages-v2] read_commit_failed', {
-                conversationId: params.conversationId,
-                requestId: context?.requestId ?? null,
-            });
         },
         onSuccess: (result, params, context) => {
             const previousUnreadCount = context?.previousUnreadCount ?? 0;
@@ -459,14 +534,6 @@ export function useMessagesActions() {
                 ? Math.max(0, result.unreadCount)
                 : 0;
             clearPendingReadCommitState(queryClient, params.conversationId, context?.requestId);
-            console.debug('[messages-v2] read_commit_applied', {
-                conversationId: params.conversationId,
-                requestId: context?.requestId ?? null,
-                previousUnread: previousUnreadCount,
-                nextUnread: nextUnreadCount,
-                appliedWatermark: result.lastReadMessageId ?? 'latest-server-message',
-            });
-
             patchThreadConversation(queryClient, params.conversationId, (conversation) => ({
                 ...conversation,
                 unreadCount: nextUnreadCount,
@@ -489,11 +556,16 @@ export function useMessagesActions() {
     });
 
     const muteConversation = useMutation({
-        mutationFn: async (params: { conversationId: string; muted: boolean }) =>
-            setConversationMuted(params.conversationId, params.muted),
+        mutationFn: async (params: { conversationId: string; muted: boolean }) => {
+            const result = await setConversationMuted(params.conversationId, params.muted);
+            if (!result.success) throw new Error(result.error || 'Failed to update mute state');
+            return result;
+        },
         onMutate: async (params) => {
             await queryClient.cancelQueries({ queryKey: queryKeys.messages.v2.thread(params.conversationId) });
-            await queryClient.cancelQueries({ queryKey: queryKeys.messages.v2.inbox(20) });
+            await queryClient.cancelQueries({ queryKey: queryKeys.messages.v2.root() });
+            const previousInbox = queryClient.getQueriesData({ queryKey: ['chat-v2', 'inbox'] });
+            const previousThread = queryClient.getQueryData(queryKeys.messages.v2.thread(params.conversationId));
 
             const nextConversation = (conversation: InboxConversationV2) => ({
                 ...conversation,
@@ -501,15 +573,30 @@ export function useMessagesActions() {
             });
             patchInboxConversation(queryClient, params.conversationId, nextConversation);
             patchThreadConversation(queryClient, params.conversationId, nextConversation);
+            return { previousInbox, previousThread };
+        },
+        onError: (_error, params, context) => {
+            for (const [key, value] of context?.previousInbox ?? []) {
+                queryClient.setQueryData(key, value);
+            }
+            queryClient.setQueryData(
+                queryKeys.messages.v2.thread(params.conversationId),
+                context?.previousThread,
+            );
         },
     });
 
     const archiveConversation = useMutation({
-        mutationFn: async (params: { conversationId: string; archived: boolean }) =>
-            setConversationArchived(params.conversationId, params.archived),
+        mutationFn: async (params: { conversationId: string; archived: boolean }) => {
+            const result = await setConversationArchived(params.conversationId, params.archived);
+            if (!result.success) throw new Error(result.error || 'Failed to update conversation state');
+            return result;
+        },
         onMutate: async (params) => {
             await queryClient.cancelQueries({ queryKey: queryKeys.messages.v2.thread(params.conversationId) });
-            await queryClient.cancelQueries({ queryKey: queryKeys.messages.v2.inbox(20) });
+            await queryClient.cancelQueries({ queryKey: queryKeys.messages.v2.root() });
+            const previousInbox = queryClient.getQueriesData({ queryKey: ['chat-v2', 'inbox'] });
+            const previousThreadData = queryClient.getQueryData(queryKeys.messages.v2.thread(params.conversationId));
 
             const currentThread = queryClient.getQueryData<{ pages: MessageThreadPageV2[] }>(
                 queryKeys.messages.v2.thread(params.conversationId),
@@ -528,14 +615,28 @@ export function useMessagesActions() {
                 if (unreadBefore > 0) {
                     patchUnreadSummary(queryClient, (count) => Math.max(0, count - unreadBefore));
                 }
-                return;
+                return { previousInbox, previousThreadData, unreadBefore };
             }
 
+            removeInboxConversation(queryClient, params.conversationId);
             if (cachedConversation) {
                 patchThreadConversation(queryClient, params.conversationId, (conversation) => ({
                     ...conversation,
                     lifecycleState: 'active',
                 }));
+            }
+            return { previousInbox, previousThreadData, unreadBefore: 0 };
+        },
+        onError: (_error, params, context) => {
+            for (const [key, value] of context?.previousInbox ?? []) {
+                queryClient.setQueryData(key, value);
+            }
+            queryClient.setQueryData(
+                queryKeys.messages.v2.thread(params.conversationId),
+                context?.previousThreadData,
+            );
+            if ((context?.unreadBefore ?? 0) > 0) {
+                patchUnreadSummary(queryClient, (count) => count + context!.unreadBefore);
             }
         },
         onSuccess: async (_result, params) => {
@@ -543,6 +644,7 @@ export function useMessagesActions() {
                 await refreshUnreadCache(queryClient);
                 return;
             }
+            // Realtime participant updates will handle the rest, no need for full inbox invalidation.
             const refreshedConversation = await getConversationSummaryV2(params.conversationId);
             if (refreshedConversation.success && refreshedConversation.conversation) {
                 upsertThreadConversation(queryClient, refreshedConversation.conversation);
@@ -857,14 +959,19 @@ export function useToggleReaction(conversationId: string | null) {
             // Rollback: restore previous message state
             patchThreadMessage(queryClient, conversationId, params.messageId, () => context.previousMessage);
         },
-        onSettled: () => {
-            // Optionally invalidate to sync with server state
-            if (conversationId) {
-                void queryClient.invalidateQueries({
-                    queryKey: queryKeys.messages.v2.thread(conversationId),
-                    exact: false,
-                });
-            }
+        onSuccess: (result, params) => {
+            if (!conversationId || !result.reactionSummary) return;
+
+            // The server is authoritative when a user switches their one
+            // reaction to another emoji; the optimistic toggle only knows the
+            // emoji the user pressed, not the previous server-side choice.
+            patchThreadMessage(queryClient, conversationId, params.messageId, (message) => ({
+                ...message,
+                metadata: withReactionSummaryMetadata(
+                    message.metadata as Record<string, unknown> | null,
+                    result.reactionSummary ?? [],
+                ),
+            }));
         },
     });
 }
