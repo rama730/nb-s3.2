@@ -9,6 +9,7 @@ export {
     getConversations,
     hydrateConversationLastMessageDeliveryMetadata,
     getOrCreateDMConversation,
+    isDirectMessagingAllowed,
     markConversationAsRead,
     setConversationArchived,
     setConversationMuted,
@@ -18,7 +19,6 @@ export {
     // Messages
     getMessages,
     getMessageContext,
-    sendMessage,
     editMessage,
     deleteMessage,
 
@@ -41,12 +41,11 @@ export type {
     UploadedAttachment,
 } from './_all'
 
-// Features: Reactions, Reports, Read Receipts, Delivery Receipts, Pinning
+// Features: Reactions, Reports, Delivery Receipts, Pinning
 export {
     toggleReaction,
     getMessageReactions,
     reportMessage,
-    recordReadReceipts,
     recordDeliveryReceipts,
 } from './features'
 
