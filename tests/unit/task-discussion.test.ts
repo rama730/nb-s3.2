@@ -36,21 +36,6 @@ function createEntry(overrides: Partial<TaskDiscussionBaseEntry> = {}): TaskDisc
   };
 }
 
-function createPage(commentIds: string[]): TaskDiscussionThreadPage {
-  return {
-    comments: commentIds.map((id, index) => ({
-      ...createEntry({
-        id,
-        createdAt: `2026-04-18T00:0${index}:00.000Z`,
-        updatedAt: `2026-04-18T00:0${index}:00.000Z`,
-      }),
-      replies: [],
-    })),
-    nextCursor: null,
-    totalCount: commentIds.length,
-  };
-}
-
 test("reconcileTaskDiscussionInsert replaces a matching optimistic top-level comment", () => {
   const optimistic = buildOptimisticTaskDiscussionEntry({
     id: "optimistic:1",
@@ -79,7 +64,7 @@ test("reconcileTaskDiscussionInsert replaces a matching optimistic top-level com
   assert.equal(inserted.totalCount, 1);
 });
 
-test("mergeTaskDiscussionPage prepends older comments without duplicating replies", () => {
+test("mergeTaskDiscussionPage appends older comments without duplicating replies", () => {
   const current = {
     comments: [
       {
@@ -120,10 +105,10 @@ test("mergeTaskDiscussionPage prepends older comments without duplicating replie
     totalCount: 3,
   } satisfies TaskDiscussionThreadPage;
 
-  const merged = mergeTaskDiscussionPage(current, incoming, "prepend_older");
+  const merged = mergeTaskDiscussionPage(current, incoming, "append_older");
 
-  assert.deepEqual(merged.comments.map((comment) => comment.id), ["comment-1", "comment-2"]);
-  assert.equal(merged.comments[1]?.replies.length, 1);
+  assert.deepEqual(merged.comments.map((comment) => comment.id), ["comment-2", "comment-1"]);
+  assert.equal(merged.comments[0]?.replies.length, 1);
   assert.equal(merged.totalCount, 3);
 });
 
@@ -186,7 +171,14 @@ test("removeTaskDiscussionEntry removes replies without deleting the parent", ()
   assert.equal(next.totalCount, 1);
 });
 
-test("createPage helper keeps chronological order assumptions honest", () => {
-  const page = createPage(["comment-1", "comment-2"]);
-  assert.deepEqual(page.comments.map((comment) => comment.id), ["comment-1", "comment-2"]);
+test("appendTaskDiscussionEntry places newer top-level comments first", () => {
+  const page = appendTaskDiscussionEntry(
+    appendTaskDiscussionEntry(
+      createEmptyTaskDiscussionPage(),
+      createEntry({ id: "comment-1", createdAt: "2026-04-18T00:00:00.000Z" }),
+    ),
+    createEntry({ id: "comment-2", createdAt: "2026-04-18T00:01:00.000Z" }),
+  );
+
+  assert.deepEqual(page.comments.map((comment) => comment.id), ["comment-2", "comment-1"]);
 });
