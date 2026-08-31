@@ -265,12 +265,12 @@ const SIDEBAR_SOURCE = readFileSync(
 );
 
 describe("FilesTabSidebar — structural contracts (source-level)", () => {
-  it("renders a <input type=\"text\"> for inline search (Req 2.2)", () => {
+  it("renders a <input type=\"search\"> for inline search (Req 2.2)", () => {
     // The search input is a text input, NOT a checkbox (Q1 drop).
     assert.match(
       SIDEBAR_SOURCE,
-      /type="text"/,
-      "inline search input must be declared with type=\"text\"",
+      /type="search"/,
+      "inline search input must be declared with type=\"search\"",
     );
   });
 
