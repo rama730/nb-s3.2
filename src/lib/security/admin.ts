@@ -8,7 +8,7 @@
 // regression is caught in development instead of in production.
 export function isAdminUser(user: { id: string; app_metadata?: Record<string, unknown> } | null | undefined): boolean {
     if (typeof window !== 'undefined') {
-        // eslint-disable-next-line no-console
+
         console.error('[security] isAdminUser() must never run in the browser. Refusing.')
         return false
     }
