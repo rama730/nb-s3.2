@@ -100,8 +100,8 @@ describe("sprint validation", () => {
         sprintName: "Sprint 1",
         sprintStatus: "completed",
         affectedTaskCount: 3,
-        canDelete: true,
-        reason: null,
+        canDelete: false,
+        reason: "Sprints with work history are archived instead of deleted.",
       },
     );
 
@@ -114,7 +114,7 @@ describe("sprint validation", () => {
       affectedTaskCount: 5,
     });
     assert.equal(blocked.canDelete, false);
-    assert.match(blocked.reason ?? "", /completed before/i);
+    assert.match(blocked.reason ?? "", /work history.*archived/i);
 
     assert.deepEqual(getSprintDurationSummary("2026-04-09", "2026-04-23"), {
       durationDays: 14,
