@@ -10,6 +10,7 @@ import type {
 
 const KIND_REASON: Record<NotificationKind, NotificationReason> = {
     message_burst: "message",
+    message_reaction: "message",
     workflow_assigned: "workflow",
     workflow_resolved: "workflow",
     application_received: "application",
@@ -68,6 +69,7 @@ export function getNotificationReasonLabel(reason: NotificationReason) {
 
 const AGGREGATE_NOUNS: Record<NotificationKind, { singular: string; plural: string }> = {
     message_burst: { singular: "message", plural: "messages" },
+    message_reaction: { singular: "reaction", plural: "reactions" },
     workflow_assigned: { singular: "workflow", plural: "workflows" },
     workflow_resolved: { singular: "resolution", plural: "resolutions" },
     application_received: { singular: "application", plural: "applications" },
@@ -138,7 +140,7 @@ function bundleKeyFor(item: NotificationItem): string {
 /**
  * Roll adjacent notifications that share a bundle key and fall within a 1h
  * window into a single visual bundle. Input must be pre-sorted DESC by
- * updatedAt (as it is from the feed query). Totals in aggregate_count are
+ * activityAt (as it is from the feed query). Totals in aggregate_count are
  * preserved on each child item so per-row counts stay truthful.
  */
 export function bundleNotifications(items: NotificationItem[]): NotificationBundle[] {
@@ -147,11 +149,11 @@ export function bundleNotifications(items: NotificationItem[]): NotificationBund
     for (const item of items) {
         const key = bundleKeyFor(item);
         const existing = byKey.get(key);
-        const itemTime = new Date(item.updatedAt).getTime();
+        const itemTime = new Date(item.activityAt).getTime();
         if (
             existing
             && !Number.isNaN(itemTime)
-            && new Date(existing.lead.updatedAt).getTime() - itemTime <= BUNDLE_WINDOW_MS
+            && new Date(existing.lead.activityAt).getTime() - itemTime <= BUNDLE_WINDOW_MS
         ) {
             existing.items.push(item);
             continue;
@@ -193,7 +195,7 @@ export function getBundleSummary(bundle: NotificationBundle): string {
 }
 
 export function bundleUnreadCount(bundle: NotificationBundle): number {
-    return bundle.items.reduce((acc, item) => (item.readAt ? acc : acc + 1), 0);
+    return bundle.items.reduce((acc, item) => (item.seenAt ? acc : acc + 1), 0);
 }
 
 export function formatAbsoluteTimestamp(value: string): string | null {
@@ -209,7 +211,7 @@ export function formatAbsoluteTimestamp(value: string): string | null {
 }
 
 export function filterNotifications(items: NotificationItem[], filter: NotificationTrayFilter) {
-    if (filter === "unread") return items.filter((item) => !item.readAt);
+    if (filter === "unread") return items.filter((item) => !item.seenAt);
     return items;
 }
 
@@ -218,9 +220,9 @@ function startOfToday(now: Date) {
 }
 
 function groupFor(item: NotificationItem, now: Date): NotificationTimeGroup {
-    if (!item.seenAt && !item.readAt) return "new";
-    const updatedAt = new Date(item.updatedAt);
-    if (!Number.isNaN(updatedAt.getTime()) && updatedAt >= startOfToday(now)) return "today";
+    if (!item.seenAt) return "new";
+    const activityAt = new Date(item.activityAt);
+    if (!Number.isNaN(activityAt.getTime()) && activityAt >= startOfToday(now)) return "today";
     return "earlier";
 }
 
@@ -266,10 +268,34 @@ export function resolveMuteScope(item: NotificationItem): NotificationMuteScope 
 }
 
 export function buildNotificationHref(item: NotificationItem): string | null {
+    const conversationId = item.entityRefs?.conversationId;
+    const sourceMessageId = item.entityRefs?.sourceMessageId;
+    const isApplicationNotification = typeof item.entityRefs?.applicationId === "string"
+        && Boolean(item.entityRefs.applicationId.trim());
+    if (
+        !isApplicationNotification
+        &&
+        typeof conversationId === "string"
+        && conversationId.trim()
+        && typeof sourceMessageId === "string"
+        && sourceMessageId.trim()
+    ) {
+        return `/messages?conversationId=${encodeURIComponent(conversationId)}&messageId=${encodeURIComponent(sourceMessageId)}`;
+    }
+
     const href = item.href?.trim();
     if (!href) return null;
     if (!href.startsWith("/")) return null;
     if (href.startsWith("//")) return null;
+    // Application events previously stored message-specific links. Ignore that
+    // target for existing notifications so they return to the normal chat route.
+    if (isApplicationNotification && href.startsWith("/messages?")) {
+        const [pathname, query = ""] = href.split("?", 2);
+        const params = new URLSearchParams(query);
+        params.delete("messageId");
+        const remaining = params.toString();
+        return `${pathname}${remaining ? `?${remaining}` : ""}`;
+    }
     return href;
 }
 
@@ -307,19 +333,19 @@ export function shouldSuppressNotificationToast(params: {
         documentVisible = true,
     } = params;
     if (trayOpen || documentVisible === false) return true;
-    if (item.kind !== "message_burst" && item.importance !== "important") return true;
-    if (item.readAt) return true;
+    if (item.kind !== "message_burst" && item.kind !== "message_reaction" && item.importance !== "important") return true;
+    if (item.seenAt) return true;
 
     const normalizedSearch = search ? (search.startsWith("?") ? search : `?${search}`) : "";
     const activePath = `${pathname ?? ""}${normalizedSearch}`;
     if (item.href && activePath && item.href === activePath) return true;
 
     const searchParams = new URLSearchParams(search.startsWith("?") ? search.slice(1) : search);
-    if (item.kind === "message_burst" && pathname?.startsWith("/messages")) {
+    if ((item.kind === "message_burst" || item.kind === "message_reaction") && pathname?.startsWith("/messages")) {
         const conversationId = item.entityRefs?.conversationId;
         if (conversationId && searchParams.get("conversationId") === conversationId) return true;
     }
-    if (item.kind === "message_burst") {
+    if (item.kind === "message_burst" || item.kind === "message_reaction") {
         const conversationId = item.entityRefs?.conversationId;
         if (conversationId && activeConversationId === conversationId) return true;
     }
