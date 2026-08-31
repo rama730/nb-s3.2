@@ -7,14 +7,22 @@ import { createClient } from "@/lib/supabase/server";
 import { notifyTaskParticipantsForFileEvent } from "@/lib/notifications/task-file";
 import {
     assertProjectFileReadAccess,
+    canReadProjectTaskFiles,
     assertProjectWriteAccess,
+    assertProjectWriteAccessTx,
     getTaskProjectId,
 } from "@/lib/files/internal-helpers";
+import {
+    replaceTaskFileRoleTag,
+    type TaskFileRole,
+} from "@/lib/projects/task-file-intelligence";
+import { getFileAttributionByNodeId } from "@/lib/files/file-attribution";
 
 export async function getTaskLinkCounts(projectId: string, nodeIds: string[]) {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
-    await assertProjectFileReadAccess(projectId, user?.id ?? null);
+    const access = await assertProjectFileReadAccess(projectId, user?.id ?? null);
+    if (!canReadProjectTaskFiles(access)) return {} as Record<string, number>;
 
     const unique = Array.from(new Set(nodeIds)).filter(Boolean);
     if (unique.length === 0) return {} as Record<string, number>;
@@ -30,7 +38,8 @@ export async function getTaskLinkCounts(projectId: string, nodeIds: string[]) {
             })
             .from(taskNodeLinks)
             .innerJoin(projectNodes, eq(taskNodeLinks.nodeId, projectNodes.id))
-            .where(and(eq(projectNodes.projectId, projectId), inArray(taskNodeLinks.nodeId, chunk)))
+            .innerJoin(tasks, eq(taskNodeLinks.taskId, tasks.id))
+            .where(and(eq(projectNodes.projectId, projectId), eq(tasks.projectId, projectId), isNull(projectNodes.deletedAt), isNull(tasks.deletedAt), inArray(taskNodeLinks.nodeId, chunk)))
             .groupBy(taskNodeLinks.nodeId);
 
         for (const r of rows) out[r.nodeId] = Number(r.count) || 0;
@@ -52,7 +61,8 @@ export interface LinkedTask {
 export async function getTaskLinksForNode(projectId: string, nodeId: string): Promise<LinkedTask[]> {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
-    await assertProjectFileReadAccess(projectId, user?.id ?? null);
+    const access = await assertProjectFileReadAccess(projectId, user?.id ?? null);
+    if (!canReadProjectTaskFiles(access)) return [];
 
     // Confirm the node belongs to the project
     const node = await db.query.projectNodes.findFirst({
@@ -93,7 +103,11 @@ export async function getTaskLinksForNode(projectId: string, nodeId: string): Pr
 export async function linkNodeToTask(
     taskId: string,
     nodeId: string,
-    options?: { notificationKind?: "task_file_replaced" | "task_file_needs_review" },
+    options?: {
+        notificationKind?: "task_file_replaced" | "task_file_needs_review";
+        annotation?: string | null;
+        role?: TaskFileRole;
+    },
 ) {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
@@ -109,13 +123,36 @@ export async function linkNodeToTask(
     });
     if (!node) throw new Error("File not found");
 
-    const inserted = await db.insert(taskNodeLinks).values({
-        taskId,
-        nodeId,
-        createdBy: user.id
-    }).onConflictDoNothing({
-        target: [taskNodeLinks.taskId, taskNodeLinks.nodeId],
-    }).returning();
+    const existingLinks = await db.query.taskNodeLinks.findMany({
+        where: eq(taskNodeLinks.taskId, taskId),
+    });
+    const link = existingLinks.find(l => l.nodeId === nodeId);
+
+    let inserted;
+    if (!link) {
+        const order = Math.max(0, ...existingLinks.map(l => l.order ?? 0)) + 1;
+        inserted = await db.insert(taskNodeLinks).values({
+            taskId,
+            nodeId,
+            createdBy: user.id,
+            order,
+            annotation: options?.annotation ?? null,
+            // A task link is context supplied to a task unless the caller says otherwise.
+            tags: replaceTaskFileRoleTag([], options?.role ?? "reference"),
+        }).onConflictDoNothing({
+            target: [taskNodeLinks.taskId, taskNodeLinks.nodeId],
+        }).returning();
+    } else if (options?.annotation !== undefined || options?.role) {
+        inserted = await db.update(taskNodeLinks)
+            .set({
+                ...(options.annotation !== undefined && { annotation: options.annotation }),
+                ...(options.role && { tags: replaceTaskFileRoleTag(link.tags, options.role) }),
+            })
+            .where(and(eq(taskNodeLinks.taskId, taskId), eq(taskNodeLinks.nodeId, nodeId)))
+            .returning();
+    } else {
+        inserted = [link];
+    }
 
     if (inserted[0]) {
         if (options?.notificationKind) {
@@ -147,20 +184,31 @@ export async function unlinkNodeFromTask(taskId: string, nodeId: string) {
     // Ensure node belongs to the same project (prevents unlinking arbitrary links across projects)
     const node = await db.query.projectNodes.findFirst({
         where: and(eq(projectNodes.id, nodeId), eq(projectNodes.projectId, projectId)),
-        columns: { id: true }
+        columns: { id: true, taskId: true }
     });
     if (!node) throw new Error("File not found");
 
-    await db.delete(taskNodeLinks).where(and(eq(taskNodeLinks.taskId, taskId), eq(taskNodeLinks.nodeId, nodeId)));
+    // Removing from a task must never delete a project file. Deletion remains an
+    // explicit Files action; this operation only removes the task relationship.
+    await db.transaction(async tx => {
+        await assertProjectWriteAccessTx(tx, projectId, user.id);
+        await tx.delete(taskNodeLinks).where(and(eq(taskNodeLinks.taskId, taskId), eq(taskNodeLinks.nodeId, nodeId)));
+        // Legacy ownership is only a fallback relationship. Remember an explicit unlink
+        // so the collection cannot resurrect it from task_id or the storage folder.
+        await tx.update(projectNodes).set({
+            metadata: sql`coalesce(${projectNodes.metadata}, '{}'::jsonb) || jsonb_build_object('taskFileDetachedFrom', ${taskId}::text)`,
+        }).where(and(eq(projectNodes.id, nodeId), eq(projectNodes.projectId, projectId),
+            sql`(${projectNodes.taskId} = ${taskId}::uuid OR ${projectNodes.path} LIKE ${`/.system/tasks/${taskId}/%`})`));
+    });
 }
 
-export async function getTaskAttachments(taskId: string) {
+export async function getTaskAttachments(projectId: string, taskId: string) {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) throw new Error("Unauthorized");
 
-    const projectId = await getTaskProjectId(taskId);
-    await assertProjectFileReadAccess(projectId, user.id);
+    const access = await assertProjectFileReadAccess(projectId, user.id);
+    if (!canReadProjectTaskFiles(access)) throw new Error("Task files are not available to this viewer.");
 
     const rows = await db
         .select({
@@ -168,21 +216,29 @@ export async function getTaskAttachments(taskId: string) {
             linkedAt: taskNodeLinks.linkedAt,
             order: taskNodeLinks.order,
             annotation: taskNodeLinks.annotation,
+            tags: taskNodeLinks.tags,
         })
         .from(taskNodeLinks)
+        .innerJoin(tasks, eq(taskNodeLinks.taskId, tasks.id))
         .innerJoin(projectNodes, eq(taskNodeLinks.nodeId, projectNodes.id))
-        .where(and(eq(taskNodeLinks.taskId, taskId), eq(projectNodes.projectId, projectId), isNull(projectNodes.deletedAt)))
+        .where(and(eq(taskNodeLinks.taskId, taskId), eq(tasks.projectId, projectId), isNull(tasks.deletedAt), eq(projectNodes.projectId, projectId), isNull(projectNodes.deletedAt)))
         .orderBy(taskNodeLinks.order, desc(taskNodeLinks.linkedAt));
+
+    const attributionByNodeId = await getFileAttributionByNodeId(
+        rows.map((row) => row.node),
+    );
 
     return rows.map((r) => ({
         ...r.node,
         linkedAt: r.linkedAt,
         order: r.order,
         annotation: r.annotation,
+        tags: r.tags,
+        ...(attributionByNodeId.get(r.node.id) ?? {}),
     }));
 }
 
-export async function updateTaskNodeLink(taskId: string, nodeId: string, updates: { order?: number, annotation?: string | null }) {
+export async function updateTaskNodeLink(taskId: string, nodeId: string, updates: { order?: number, annotation?: string | null, tags?: string[] }) {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) throw new Error("Unauthorized");
@@ -202,14 +258,14 @@ export async function updateTaskNodeLink(taskId: string, nodeId: string, updates
     const previous = typeof updates.annotation === "string"
         ? await db.query.taskNodeLinks.findFirst({
             where: and(eq(taskNodeLinks.taskId, taskId), eq(taskNodeLinks.nodeId, nodeId)),
-            columns: { annotation: true },
+            columns: { annotation: true, tags: true },
         })
         : null;
 
     const updated = await db.update(taskNodeLinks)
         .set(updates)
         .where(and(eq(taskNodeLinks.taskId, taskId), eq(taskNodeLinks.nodeId, nodeId)))
-        .returning({ annotation: taskNodeLinks.annotation });
+        .returning({ annotation: taskNodeLinks.annotation, tags: taskNodeLinks.tags });
 
     if (updated.length === 0) return;
 
@@ -256,24 +312,6 @@ export async function updateTaskNodeLinksOrder(taskId: string, updates: { nodeId
         }
     });
 }
-
-export async function countTaskAttachments(taskId: string) {
-    const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) throw new Error("Unauthorized");
-
-    const projectId = await getTaskProjectId(taskId);
-    await assertProjectFileReadAccess(projectId, user.id);
-
-    const rows = await db
-        .select({ count: sql<number>`count(*)` })
-        .from(taskNodeLinks)
-        .innerJoin(projectNodes, eq(taskNodeLinks.nodeId, projectNodes.id))
-        .where(and(eq(taskNodeLinks.taskId, taskId), eq(projectNodes.projectId, projectId), isNull(projectNodes.deletedAt)));
-
-    return Number(rows[0]?.count ?? 0);
-}
-
 
 export interface SearchableTask {
     id: string;
