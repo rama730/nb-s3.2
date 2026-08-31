@@ -1,13 +1,13 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDebounce } from "use-debounce";
 import { get as getIdb, set as setIdb } from "idb-keyval";
 
 import { getConnectionsFeed, type SuggestedProfile } from "@/app/actions/connections";
 import { fetchHubProjectsAction } from "@/app/actions/hub";
-import { fetchProjectTaskPreviewsAction } from "@/app/actions/project";
+import { fetchProjectLinkPreviewsAction, fetchProjectTaskPreviewsAction } from "@/app/actions/project";
 import { FILTER_VIEWS, PROJECT_STATUS, PROJECT_TYPE, SORT_OPTIONS } from "@/constants/hub";
 import { normalizeGlobalSearchQuery, type GlobalSearchContext, type PeopleSearchScope } from "@/components/layout/header/global-search";
 import { profileHref } from "@/lib/routing/identifiers";
@@ -64,7 +64,15 @@ export type GlobalSearchSkillPreview = GlobalSearchPreviewBase & {
     kind: "skill";
 };
 
-export type GlobalSearchPreview = GlobalSearchProjectPreview | GlobalSearchProfilePreview | GlobalSearchTaskPreview | GlobalSearchSkillPreview;
+export type GlobalSearchLinkPreview = GlobalSearchPreviewBase & {
+    kind: "link";
+    platform: string;
+    iconKey: string | null;
+    purpose: string;
+    audience: "public" | "members";
+};
+
+export type GlobalSearchPreview = GlobalSearchProjectPreview | GlobalSearchProfilePreview | GlobalSearchTaskPreview | GlobalSearchSkillPreview | GlobalSearchLinkPreview;
 
 function isNullableString(value: unknown): value is string | null {
     return value === null || typeof value === "string";
@@ -86,6 +94,12 @@ export function isGlobalSearchPreview(value: unknown): value is GlobalSearchPrev
     if (!isPreviewBase(value)) return false;
     const preview = value as Record<string, unknown> & GlobalSearchPreviewBase;
     if (preview.kind === "skill") return true;
+    if (preview.kind === "link") {
+        return typeof preview.platform === "string"
+            && isNullableString(preview.iconKey)
+            && typeof preview.purpose === "string"
+            && (preview.audience === "public" || preview.audience === "members");
+    }
     if (preview.kind === "project") {
         return isNullableString(preview.username)
             && Array.isArray(preview.skills) && preview.skills.every((skill) => typeof skill === "string")
@@ -272,6 +286,26 @@ async function fetchTaskPreviews(projectIdentifier: string, query: string): Prom
     });
 }
 
+async function fetchProjectContextPreviews(projectIdentifier: string, query: string): Promise<GlobalSearchPreview[]> {
+    const [tasks, linkResult] = await Promise.all([
+        fetchTaskPreviews(projectIdentifier, query),
+        fetchProjectLinkPreviewsAction({ slugOrId: projectIdentifier, search: query, limit: PREVIEW_LIMIT }),
+    ]);
+    const links = linkResult.success ? linkResult.links.map((link) => ({
+        id: `link:${link.id}`,
+        kind: "link" as const,
+        title: link.title,
+        subtitle: link.subtitle,
+        href: link.href,
+        platform: link.platform,
+        iconKey: link.iconKey,
+        purpose: link.purpose,
+        audience: link.audience,
+        matchReason: `Matched project link · ${link.purpose.replaceAll('-', ' ')}`,
+    })) : [];
+    return [...links, ...tasks].slice(0, PREVIEW_LIMIT * 2);
+}
+
 export function useGlobalSearchPreviews({
     context,
     query,
@@ -292,6 +326,14 @@ export function useGlobalSearchPreviews({
     );
     const previewContext = context === "default" ? "hub" : context;
     const supportsPreviews = previewContext === "hub" || previewContext === "people" || (previewContext === "project" && Boolean(projectIdentifier));
+    const [cooldownUntil, setCooldownUntil] = useState(globalCooldownUntil);
+
+    useEffect(() => {
+        if (!cooldownUntil) return;
+        const remaining = Math.max(cooldownUntil - Date.now(), 0);
+        const timeout = window.setTimeout(() => setCooldownUntil(0), remaining);
+        return () => window.clearTimeout(timeout);
+    }, [cooldownUntil]);
 
     useEffect(() => {
         if (!enabled || debouncedQuery.length < 2) return;
@@ -308,7 +350,7 @@ export function useGlobalSearchPreviews({
                 queryFn: () => ctx === "people"
                     ? fetchProfilePreviews(debouncedQuery, peopleScope)
                     : ctx === "project" && projectIdentifier
-                        ? fetchTaskPreviews(projectIdentifier, debouncedQuery)
+                        ? fetchProjectContextPreviews(projectIdentifier, debouncedQuery)
                         : fetchProjectPreviews(debouncedQuery),
                 staleTime: ctx === "hub" ? 60_000 : ctx === "people" ? 30_000 : 15_000,
             });
@@ -331,7 +373,7 @@ export function useGlobalSearchPreviews({
                 const results = await (previewContext === "people"
                     ? fetchProfilePreviews(debouncedQuery, peopleScope)
                     : previewContext === "project" && projectIdentifier
-                        ? fetchTaskPreviews(projectIdentifier, debouncedQuery)
+                        ? fetchProjectContextPreviews(projectIdentifier, debouncedQuery)
                         : fetchProjectPreviews(debouncedQuery));
                 
                 void setIdb(cacheKey, results).catch(() => {});
@@ -344,12 +386,14 @@ export function useGlobalSearchPreviews({
                     } catch {}
                 }
                 if (error instanceof SearchPreviewError && error.code === "RATE_LIMITED") {
-                    globalCooldownUntil = Date.now() + (error.retryAfterMs ?? 2000);
+                    const nextCooldownUntil = Date.now() + (error.retryAfterMs ?? 2000);
+                    globalCooldownUntil = nextCooldownUntil;
+                    setCooldownUntil(nextCooldownUntil);
                 }
                 throw error;
             }
         },
-        enabled: enabled && supportsPreviews && debouncedQuery.length >= 2 && Date.now() > globalCooldownUntil,
+        enabled: enabled && supportsPreviews && debouncedQuery.length >= 2 && cooldownUntil === 0,
         staleTime: previewContext === "hub" ? 60_000 : previewContext === "people" ? 30_000 : 15_000,
         gcTime: 5 * 60_000,
         retry: (failureCount, error) => failureCount < 1 && isRetryableSearchError(error),
