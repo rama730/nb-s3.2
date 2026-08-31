@@ -1,7 +1,8 @@
 'use client';
 
-import { Loader2, RotateCcw, X } from 'lucide-react';
+import { FileText, Film, RotateCcw, X } from 'lucide-react';
 import type { PendingAttachment } from './message-composer-v2-shared';
+import { cn } from '@/lib/utils';
 
 interface ComposerAttachmentsPanelProps {
     attachments: PendingAttachment[];
@@ -21,81 +22,95 @@ export function ComposerAttachmentsPanel({
     }
 
     return (
-        <div className="mb-3 space-y-2">
+        <div className="mb-3 space-y-2 pointer-events-auto">
             <div className="flex items-center justify-between">
                 <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Attachments</div>
             </div>
-            <div className="grid gap-2 sm:grid-cols-2">
+            <div className="flex gap-2 overflow-x-auto pb-1">
                 {attachments.map((attachment) => {
                     const hasRetriesRemaining = attachment.attempts < maxUploadRetries;
+                    const isVideo = attachment.file.type.startsWith('video/');
 
                     return (
-                        <div key={attachment.id} className="rounded-2xl border border-zinc-200 bg-zinc-50 p-2.5 dark:border-zinc-800 dark:bg-zinc-900">
-                            <div className="flex items-start justify-between gap-3">
-                                <div className="min-w-0">
-                                    <div className="truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">
-                                        {attachment.file.name}
-                                    </div>
-                                    <div className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-                                        {attachment.status === 'uploading'
-                                            ? 'Uploading...'
-                                            : attachment.status === 'uploaded'
-                                                ? 'Ready'
-                                                : attachment.status === 'failed'
-                                                    ? attachment.error || 'Upload failed'
-                                                    : 'Waiting'}
-                                    </div>
-                                </div>
-                                <button
-                                    type="button"
-                                    onClick={() => onRemoveAttachment(attachment.id)}
-                                    className="rounded-full p-1 text-zinc-400 hover:bg-zinc-200 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
-                                    aria-label={`Remove ${attachment.file.name}`}
-                                >
-                                    <X className="h-4 w-4" />
-                                </button>
-                            </div>
+                        <div
+                            key={attachment.id}
+                            className="group relative flex-none h-16 w-16 overflow-hidden rounded-xl border border-zinc-200 bg-zinc-100 dark:border-zinc-800 dark:bg-zinc-900 transition-all select-none"
+                            title={attachment.file.name}
+                        >
+                            {/* PREVIEW */}
                             {attachment.preview ? (
-                                <div className="mt-2 flex max-h-52 items-center justify-center overflow-hidden rounded-lg border border-zinc-200 bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-950">
-                                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                                isVideo ? (
+                                    <div className="h-full w-full relative bg-black">
+                                        <video
+                                            src={attachment.preview}
+                                            className="h-full w-full object-cover opacity-75"
+                                        />
+                                        <div className="absolute inset-0 flex items-center justify-center">
+                                            <Film className="h-4 w-4 text-white/80 drop-shadow-md" />
+                                        </div>
+                                    </div>
+                                ) : (
+                                    /* eslint-disable-next-line @next/next/no-img-element */
                                     <img
                                         src={attachment.preview}
-                                        alt={attachment.file.name}
-                                        className="block h-auto max-h-52 w-auto max-w-full object-contain"
+                                        alt=""
+                                        className="h-full w-full object-cover"
                                     />
+                                )
+                            ) : (
+                                <div className="flex h-full w-full items-center justify-center">
+                                    <FileText className="h-6 w-6 text-zinc-400" />
                                 </div>
-                            ) : null}
-                            {attachment.status === 'uploading' ? (
-                                <div className="mt-2 h-1 w-full overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-700">
-                                    <div
-                                        className="h-full rounded-full bg-primary transition-[width] duration-150"
-                                        style={{ width: `${attachment.progress || 0}%` }}
-                                    />
+                            )}
+
+                            {/* UPLOADING STATE (Circular Progress overlay) */}
+                            {attachment.status === 'uploading' && (
+                                <div className="absolute inset-0 flex items-center justify-center bg-black/40 backdrop-blur-[1px]">
+                                    <div className="relative flex h-8 w-8 items-center justify-center">
+                                        <svg className="h-full w-full -rotate-90" viewBox="0 0 36 36">
+                                            <circle cx="18" cy="18" r="16" fill="none" className="stroke-white/20" strokeWidth="3" />
+                                            <circle
+                                                cx="18" cy="18" r="16"
+                                                fill="none"
+                                                className="stroke-white transition-all duration-150"
+                                                strokeWidth="3"
+                                                strokeDasharray="100"
+                                                strokeDashoffset={100 - (attachment.progress || 0)}
+                                                strokeLinecap="round"
+                                            />
+                                        </svg>
+                                    </div>
                                 </div>
-                            ) : null}
-                            {attachment.status === 'failed' || (attachment.attempts > 0 && (attachment.status === 'uploading' || attachment.status === 'queued')) ? (
-                                <div className="mt-2 flex items-center gap-2">
+                            )}
+
+                            {/* FAILED STATE */}
+                            {attachment.status === 'failed' && (
+                                <div className="absolute inset-0 flex items-center justify-center bg-red-500/80 backdrop-blur-[1px]">
                                     <button
                                         type="button"
-                                        onClick={() => onRetryAttachment(attachment.id)}
-                                        disabled={!hasRetriesRemaining || attachment.status !== 'failed'}
-                                        aria-disabled={!hasRetriesRemaining || attachment.status !== 'failed'}
-                                        className="inline-flex items-center gap-1 rounded-md border border-zinc-200 px-2 py-1 text-xs hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                                        onClick={(e) => { e.stopPropagation(); onRetryAttachment(attachment.id); }}
+                                        disabled={!hasRetriesRemaining}
+                                        className="rounded-full bg-white/20 p-1.5 text-white hover:bg-white/30 transition-colors"
+                                        aria-label="Retry upload"
                                     >
-                                        {attachment.status !== 'failed' ? (
-                                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                        ) : (
-                                            <RotateCcw className="h-3.5 w-3.5" />
-                                        )}
-                                        {attachment.status !== 'failed' ? 'Retrying...' : 'Retry'}
+                                        <RotateCcw className="h-4 w-4" />
                                     </button>
-                                    {!hasRetriesRemaining ? (
-                                        <span className="text-xs text-amber-600 dark:text-amber-400">
-                                            Max retries exceeded
-                                        </span>
-                                    ) : null}
                                 </div>
-                            ) : null}
+                            )}
+
+                            {/* REMOVE BUTTON (Hover) */}
+                            <button
+                                type="button"
+                                onClick={(e) => { e.stopPropagation(); onRemoveAttachment(attachment.id); }}
+                                className={cn(
+                                    "absolute top-1 right-1 flex h-4 w-4 items-center justify-center rounded-full bg-black/60 text-white shadow-sm ring-1 ring-white/20 backdrop-blur-sm transition-all hover:bg-black/80",
+                                    "opacity-0 scale-90 group-hover:opacity-100 group-hover:scale-100",
+                                    (attachment.status === 'uploading' || attachment.status === 'failed') && "opacity-100 scale-100" // Always show X if uploading/failed so they can cancel
+                                )}
+                                aria-label="Remove attachment"
+                            >
+                                <X className="h-2.5 w-2.5" />
+                            </button>
                         </div>
                     );
                 })}
