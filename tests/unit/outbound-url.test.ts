@@ -39,12 +39,14 @@ describe("outbound URL safeguards", () => {
   });
 
   it("accepts public URLs when DNS resolves to public addresses", async () => {
-    const url = await assertPublicNetworkUrl("https://example.com/path?q=1", {
+    const url = await assertPublicNetworkUrl("https://example.com/path?q=1#section", {
       resolveAddresses: async () => ["93.184.216.34"],
     });
 
     assert.equal(url.hostname, "example.com");
     assert.equal(url.pathname, "/path");
+    assert.equal(url.search, "?q=1");
+    assert.equal(url.hash, "#section");
   });
 
   it("rejects hosts that resolve to private addresses", async () => {
