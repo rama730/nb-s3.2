@@ -1,5 +1,6 @@
 import type { ProfileCollaborationContribution } from "@/lib/profile/collaboration";
 import type { ProfileContributionMutation } from "@/lib/profile/contribution-contract";
+import { isSafeHttpUrl } from "@/lib/security/urls";
 
 export type ContributionEditorEntry = {
   draftId: string;
@@ -91,6 +92,27 @@ export function contributionEntryChanged(
 ) {
   if (!original) return true;
   return JSON.stringify(comparable(current)) !== JSON.stringify(comparable(original));
+}
+
+/**
+ * Fast client-side feedback for the fields a person edits in the contribution
+ * modal. The batch action remains the authoritative validator and enforces the
+ * same rules for every caller.
+ */
+export function validateContributionEditorEntry(entry: ContributionEditorEntry) {
+  if (entry.kind === "external" && !entry.projectTitle.trim()) {
+    return "Project name is required.";
+  }
+  if (entry.startedAt && entry.endedAt && entry.endedAt < entry.startedAt) {
+    return "Ended date cannot be earlier than Joined date.";
+  }
+  if (entry.projectUrl.trim() && !isSafeHttpUrl(entry.projectUrl)) {
+    return "Project URL must use http(s) and point to a public host.";
+  }
+  if (entry.repositoryUrl.trim() && !isSafeHttpUrl(entry.repositoryUrl)) {
+    return "Repository URL must use http(s) and point to a public host.";
+  }
+  return null;
 }
 
 export function buildContributionMutations(
