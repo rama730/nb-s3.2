@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { createHash } from "node:crypto";
 import { and, eq, isNull } from "drizzle-orm";
 
 import { db } from "@/lib/db";
@@ -11,6 +12,12 @@ import { isLooseUuid } from "@/lib/validations/uuid";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+const PRIVATE_CACHE_SECONDS = 5 * 60;
+
+function coverVersion(storageKey: string) {
+    return createHash("sha256").update(storageKey).digest("base64url").slice(0, 16);
+}
 
 export async function GET(
     request: NextRequest,
@@ -44,6 +51,28 @@ export async function GET(
 
     if (!project?.bucket || !project.key) {
         return jsonError("Not found", 404, "NOT_FOUND");
+    }
+
+    const version = coverVersion(project.key);
+    const isPublicRequest = !user && access.canRead;
+    const cacheControl = isPublicRequest
+        ? "public, max-age=300, s-maxage=86400, stale-while-revalidate=3600"
+        : `private, max-age=${PRIVATE_CACHE_SECONDS}, stale-while-revalidate=60`;
+    if (request.nextUrl.searchParams.get("v") !== version) {
+        const canonicalUrl = request.nextUrl.clone();
+        canonicalUrl.searchParams.set("v", version);
+        return new Response(null, {
+            status: 307,
+            headers: { Location: canonicalUrl.toString(), "Cache-Control": cacheControl, Vary: "Cookie, Authorization" },
+        });
+    }
+
+    const etag = `"project-cover-${projectId}-${version}"`;
+    if (request.headers.get("if-none-match") === etag) {
+        return new Response(null, {
+            status: 304,
+            headers: { ETag: etag, "Cache-Control": cacheControl, Vary: "Cookie, Authorization" },
+        });
     }
 
     const admin = await createAdminClient();
@@ -82,14 +111,13 @@ export async function GET(
         return jsonError("Not found", 404, "NOT_FOUND");
     }
 
-    const isPublicRequest = !user && access.canRead;
     return new Response(res.body, {
         status: 200,
         headers: {
             "Content-Type": res.headers.get("content-type") || "image/jpeg",
-            "Cache-Control": isPublicRequest
-                ? "public, max-age=300, s-maxage=86400, stale-while-revalidate=3600"
-                : "private, no-store",
+            "Cache-Control": cacheControl,
+            ETag: etag,
+            Vary: "Cookie, Authorization",
             "X-Content-Type-Options": "nosniff",
         },
     });
