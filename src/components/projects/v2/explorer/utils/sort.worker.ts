@@ -1,5 +1,6 @@
 import type { ProjectNode } from "@/lib/db/schema";
 import type { ExplorerSort } from "@/stores/files/types";
+import { compareFolderListNodes } from "../../files-tab/folder/sort";
 
 export type SortWorkerPayload = {
     jobId: string;
@@ -18,16 +19,7 @@ self.onmessage = (e: MessageEvent<SortWorkerPayload>) => {
     const { jobId, nodesById, childrenByParentId, sort, foldersFirst } = e.data;
 
     try {
-        const cmp = (a: ProjectNode, b: ProjectNode) => {
-            if (foldersFirst && a.type !== b.type) return a.type === "folder" ? -1 : 1;
-            if (sort === "updated") {
-                const aTime = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
-                const bTime = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
-                return bTime - aTime;
-            }
-            if (sort === "type") return (a.mimeType || "").localeCompare(b.mimeType || "");
-            return a.name.localeCompare(b.name);
-        };
+        const cmp = (a: ProjectNode, b: ProjectNode) => compareFolderListNodes(a, b, sort, foldersFirst);
 
         const sortedChildrenByParentId: Record<string, string[]> = {};
 
