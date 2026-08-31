@@ -15,6 +15,7 @@ export interface PendingAttachment {
     id: string;
     file: File;
     preview?: string;
+    tinyBase64?: string;
     status: UploadStatus;
     progress: number;
     attempts: number;
