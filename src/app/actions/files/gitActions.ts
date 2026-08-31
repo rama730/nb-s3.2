@@ -1,7 +1,7 @@
 'use server';
 
 import { db } from '@/lib/db';
-import { projectGitDeltas, projectNodeConflicts, projectNodes, fileVersions } from '@/lib/db/schema';
+import { projectGitDeltas, projectNodeConflicts, projectNodes, fileVersions, projects } from '@/lib/db/schema';
 import { and, eq } from 'drizzle-orm';
 import { createAdminClient, createClient } from '@/lib/supabase/server';
 import { buildProjectFileKey } from '@/lib/storage/project-file-key';
@@ -16,11 +16,17 @@ function computeSha256(content: string): string {
     return createHash('sha256').update(content).digest('hex');
 }
 
+async function assertGitOwner(projectId: string, userId: string) {
+    const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId), columns: { ownerId: true } });
+    if (!project || project.ownerId !== userId) throw new Error('Forbidden');
+}
+
 export async function getPendingDeltasAction(projectId: string, targetBranch: string) {
     try {
         const supabase = await createClient();
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) throw new Error('Unauthorized');
+        await assertGitOwner(projectId, user.id);
 
         const deltas = await db.query.projectGitDeltas.findMany({
             where: and(
@@ -42,6 +48,7 @@ export async function getProjectConflictsAction(projectId: string, targetBranch:
         const supabase = await createClient();
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) throw new Error('Unauthorized');
+        await assertGitOwner(projectId, user.id);
 
         const conflicts = await db.query.projectNodeConflicts.findMany({
             where: and(
@@ -91,6 +98,7 @@ export async function resolveConflictAction(
             where: eq(projectNodes.id, conflict.nodeId),
         });
         if (!node) throw new Error('Node not found');
+        await assertGitOwner(node.projectId, user.id);
 
         let finalContent = '';
         if (resolution === 'keep_mine') {
@@ -133,6 +141,7 @@ export async function resolveConflictAction(
                     .from('project-files')
                     .upload(storageKey, Buffer.from(finalContent, 'utf8'), {
                         contentType: node.mimeType || 'text/plain',
+                        cacheControl: '31536000',
                     });
 
                 if (uploadError) {
