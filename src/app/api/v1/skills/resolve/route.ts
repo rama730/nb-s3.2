@@ -3,8 +3,11 @@ import { enforceRouteLimit, requireAuthenticatedUser } from '@/app/api/v1/_share
 import { normalizeSkillInputList } from '@/lib/skills/normalization'
 import { summarizeSkillLabels } from '@/lib/skills/service'
 import { SKILL_CATALOG_VERSION } from '@/lib/skills/catalog'
+import { validateCsrf } from '@/lib/security/csrf'
 
 export async function POST(request: Request) {
+    const csrfError = validateCsrf(request)
+    if (csrfError) return csrfError
     const limited = await enforceRouteLimit(request, 'skills:resolve', 60, 60)
     if (limited) return limited
     const auth = await requireAuthenticatedUser()
