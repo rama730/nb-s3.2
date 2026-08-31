@@ -25,7 +25,7 @@ export function LinkPreviewCard({
             href={preview.url}
             target="_blank"
             rel="noopener noreferrer nofollow ugc"
-            className={`msg-rich-content mt-2 flex w-full max-w-full min-w-0 sm:max-w-sm flex-row items-center overflow-hidden rounded-xl border ${
+            className={`msg-rich-content mt-2 flex min-h-[80px] w-full max-w-full min-w-0 sm:max-w-sm flex-row items-center overflow-hidden rounded-xl border ${
                 isOwn
                     ? 'border-white/20 bg-white/10 hover:bg-white/15'
                     : 'border-zinc-200 bg-zinc-50 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-800/50 dark:hover:bg-zinc-800/80'
