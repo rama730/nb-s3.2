@@ -80,6 +80,7 @@ interface FileTreeRowProps {
     isInSelectionMode?: boolean;
     isSelectedInMode?: boolean;
     canEdit: boolean;
+    canMove: boolean;
 
     // Inline rename
     isRenaming?: boolean;
@@ -114,6 +115,7 @@ function arePropsEqual(prev: FileTreeRowProps, next: FileTreeRowProps) {
         prev.isInSelectionMode !== next.isInSelectionMode ||
         prev.isSelectedInMode !== next.isSelectedInMode ||
         prev.canEdit !== next.canEdit ||
+        prev.canMove !== next.canMove ||
         prev.badge !== next.badge || 
         prev.isRenaming !== next.isRenaming ||
         prev.renameValue !== next.renameValue ||
@@ -146,6 +148,7 @@ export const FileTreeRow = React.memo(function FileTreeRow({
     isInSelectionMode,
     isSelectedInMode,
     canEdit,
+    canMove,
     isRenaming,
     renameValue,
     onRenameChange,
@@ -208,19 +211,24 @@ export const FileTreeRow = React.memo(function FileTreeRow({
             onMouseEnter={handleMouseEnter}
             onMouseLeave={handleMouseLeave}
             onContextMenu={onContextMenu}
-            draggable={canEdit && !isRenaming}
+            draggable={canMove && !isRenaming}
             onDragStart={(e) => {
-                if (!canEdit || isRenaming) return;
+                if (!canMove || isRenaming) return;
                 e.dataTransfer.setData(NODE_DRAG_MIME, node.id);
                 e.dataTransfer.effectAllowed = "move";
                 onDragStart(node.id);
             }}
             onDragEnd={onDragEnd}
             onDragOver={(e) => {
-                e.preventDefault();
                 // Accept desktop file drops on folders
-                const hasFiles = e.dataTransfer.types.includes("Files");
-                const hasNodeDrag = e.dataTransfer.types.includes(NODE_DRAG_MIME);
+                const hasFiles =
+                    canEdit &&
+                    Boolean(onDesktopDrop) &&
+                    e.dataTransfer.types.includes("Files");
+                const hasNodeDrag =
+                    canMove && e.dataTransfer.types.includes(NODE_DRAG_MIME);
+                if (!isFolder || (!hasFiles && !hasNodeDrag)) return;
+                e.preventDefault();
                 if (isFolder && hasFiles) {
                     e.dataTransfer.dropEffect = "copy";
                 } else if (isFolder && hasNodeDrag) {
@@ -244,6 +252,7 @@ export const FileTreeRow = React.memo(function FileTreeRow({
                 }
  
                 if (!e.dataTransfer.types.includes(NODE_DRAG_MIME)) return;
+                if (!canMove) return;
                 const draggedId = extractDraggedNodeId(e.dataTransfer);
                 if (!draggedId || draggedId === node.id) return;
                 onDrop(node.id, draggedId);
