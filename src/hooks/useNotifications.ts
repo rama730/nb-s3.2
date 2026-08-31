@@ -13,17 +13,16 @@ import { toast } from "sonner";
 
 import {
     dismissNotificationAction,
-    markAllNotificationsReadAction,
     markNotificationReadAction,
     markNotificationUnreadAction,
+    markNotificationsSeenAction,
     muteNotificationScopeAction,
-    pauseNotificationsAction,
     readNotificationUnreadCountAction,
     readNotificationsAction,
     snoozeNotificationAction,
 } from "@/app/actions/notifications";
 import {
-    markAllNotificationsReadInInfiniteData,
+    markNotificationsSeenInInfiniteData,
     patchNotificationReadStateInInfiniteData,
     removeNotificationFromInfiniteData,
     upsertNotificationInInfiniteData,
@@ -46,9 +45,13 @@ import { queryKeys } from "@/lib/query-keys";
 import { useRealtime } from "@/components/providers/RealtimeProvider";
 import { useAuth } from "@/lib/hooks/use-auth";
 import { useMessagesV2UiStore } from "@/stores/messagesV2UiStore";
-import { extractMessageBurstConversationId, type MessageAttentionState } from "@/lib/messages/attention";
+import { recordMessagesOpen } from "@/lib/messages/observability";
 
 const DEFAULT_LIMIT = 20;
+// Mirrors the server-side upper bound in markNotificationsSeen. Keeping the
+// client batches within it prevents a large review session from being marked
+// optimistically while only its first 50 rows are persisted.
+const QUALIFIED_VIEW_BATCH_SIZE = 50;
 const TOAST_BATCH_MS = 1_200;
 const IDLE_THRESHOLD_MS = 5 * 60 * 1000;
 const IDLE_FLUSH_DEBOUNCE_MS = 400;
@@ -64,7 +67,8 @@ function normalizeRealtimeNotificationRow(value: unknown): NotificationItem | nu
     const dedupeKey = typeof row.dedupe_key === "string" ? row.dedupe_key : null;
     const createdAt = typeof row.created_at === "string" ? row.created_at : null;
     const updatedAt = typeof row.updated_at === "string" ? row.updated_at : createdAt;
-    if (!id || !userId || !kind || !title || !dedupeKey || !createdAt || !updatedAt) {
+    const activityAt = typeof row.activity_at === "string" ? row.activity_at : updatedAt;
+    if (!id || !userId || !kind || !title || !dedupeKey || !createdAt || !updatedAt || !activityAt) {
         return null;
     }
     const entityRefs = row.entity_refs && typeof row.entity_refs === "object" ? row.entity_refs as NotificationItem["entityRefs"] : null;
@@ -87,6 +91,7 @@ function normalizeRealtimeNotificationRow(value: unknown): NotificationItem | nu
         seenAt: typeof row.seen_at === "string" ? row.seen_at : null,
         dismissedAt: typeof row.dismissed_at === "string" ? row.dismissed_at : null,
         createdAt,
+        activityAt,
         updatedAt,
         snoozedUntil: typeof row.snoozed_until === "string" ? row.snoozed_until : null,
     };
@@ -99,21 +104,7 @@ function isActivelySnoozed(item: NotificationItem | null): boolean {
 }
 
 function isUnreadVisible(item: NotificationItem | null) {
-    return Boolean(item && !item.readAt && !item.dismissedAt);
-}
-
-function buildMessageAttentionFromNotification(item: NotificationItem): MessageAttentionState | null {
-    const conversationId = extractMessageBurstConversationId(item);
-    if (!conversationId || item.readAt || item.dismissedAt) return null;
-    return {
-        conversationId,
-        hasNewMessages: true,
-        firstNewMessageId: null,
-        latestNewMessageId: null,
-        source: "notification",
-        clearing: false,
-        updatedAt: Date.now(),
-    };
+    return Boolean(item && !item.seenAt && !item.dismissedAt);
 }
 
 type UnreadCounts = { total: number; important: number };
@@ -126,7 +117,7 @@ function deriveUnreadCounts(data: InfiniteData<NotificationFeedPage> | undefined
     if (head && (head.unreadCount > 0 || head.unreadImportantCount > 0)) {
         return { total: head.unreadCount, important: head.unreadImportantCount };
     }
-    const unread = data.pages.flatMap((page) => page.items).filter((item) => !item.readAt && !item.dismissedAt);
+    const unread = data.pages.flatMap((page) => page.items).filter((item) => !item.seenAt && !item.dismissedAt);
     return {
         total: unread.length,
         important: unread.filter((item) => item.importance === "important").length,
@@ -156,25 +147,25 @@ export function useNotifications(limit: number = DEFAULT_LIMIT) {
     const router = useRouter();
     const pathname = usePathname();
     const { user, isAuthenticated } = useAuth();
-    const { isConnected, subscribeUserNotifications } = useRealtime();
+    const { isConnected, notificationStatus, subscribeUserNotifications } = useRealtime();
     const [isTrayOpen, setIsTrayOpen] = useState(false);
     const [activeFilter, setActiveFilter] = useState<NotificationTrayFilter>("unread");
-    const [isRealtimeHealthy, setIsRealtimeHealthy] = useState(false);
     const [isIdle, setIsIdle] = useState(false);
     const activePopupConversationId = useMessagesV2UiStore((state) =>
-        state.popupOpen && !state.popupMinimized ? state.selectedConversationId : null,
+        state.popupState === "open" ? state.selectedConversationId : null,
     );
-    const openPopupConversationList = useMessagesV2UiStore((state) => state.openPopupConversationList);
-    const upsertMessageAttention = useMessagesV2UiStore((state) => state.upsertMessageAttention);
-    const clearMessageAttentionSmooth = useMessagesV2UiStore((state) => state.clearMessageAttentionSmooth);
     const isTrayOpenRef = useRef(false);
+    const viewedNotificationIdsRef = useRef(new Set<string>());
     const toastQueueRef = useRef<NotificationItem[]>([]);
     const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const queueImportantToastRef = useRef<(item: NotificationItem) => void>(() => { });
     const isIdleRef = useRef(false);
     const browserDeliveryEnabledRef = useRef<boolean>(false);
     const preferencesQuery = useNotificationPreferences({
-        enabled: Boolean(isAuthenticated && user?.id && isTrayOpen),
+        // Browser delivery is evaluated when a realtime row arrives. Fetching
+        // it only while the tray is open made the preference ineffective for
+        // the normal (closed-bell) state.
+        enabled: Boolean(isAuthenticated && user?.id),
     });
     useEffect(() => {
         isTrayOpenRef.current = isTrayOpen;
@@ -202,30 +193,12 @@ export function useNotifications(limit: number = DEFAULT_LIMIT) {
             InfiniteData<NotificationFeedPage> | undefined,
     ) => {
         queryClient.setQueryData<InfiniteData<NotificationFeedPage>>(notificationsQueryKey, (existing) => {
-            const next = updater(existing);
-            if (next) {
-                queryClient.setQueryData<UnreadCounts>(unreadCountQueryKey, deriveUnreadCounts(next));
-            }
-            return next;
+            // The loaded feed can be only one page, while the bell counter is a
+            // global value. Mutations adjust that counter explicitly; deriving
+            // from this partial cache would both under-count and double-apply.
+            return updater(existing);
         });
-    }, [notificationsQueryKey, queryClient, unreadCountQueryKey]);
-
-    const invalidateMessageAttentionQueries = useCallback((conversationIds: string[]) => {
-        if (conversationIds.length === 0) return;
-        void queryClient.invalidateQueries({ queryKey: queryKeys.messages.v2.root() });
-    }, [queryClient]);
-
-    const syncMessageAttentionFromNotification = useCallback((item: NotificationItem) => {
-        const conversationId = extractMessageBurstConversationId(item);
-        if (!conversationId) return;
-        const attention = buildMessageAttentionFromNotification(item);
-        if (attention) {
-            upsertMessageAttention(conversationId, attention);
-        } else {
-            clearMessageAttentionSmooth(conversationId);
-            invalidateMessageAttentionQueries([conversationId]);
-        }
-    }, [clearMessageAttentionSmooth, invalidateMessageAttentionQueries, upsertMessageAttention]);
+    }, [notificationsQueryKey, queryClient]);
 
     const unreadCountQuery = useQuery<UnreadCounts>({
         queryKey: unreadCountQueryKey,
@@ -263,9 +236,11 @@ export function useNotifications(limit: number = DEFAULT_LIMIT) {
         refetchOnReconnect: true,
     });
 
-    const openItem = useCallback(async (item: NotificationItem) => {
+    const openItem = useCallback(async (
+        item: NotificationItem,
+        source: "notification_bell" | "notification_toast" = "notification_bell",
+    ) => {
         const href = buildNotificationHref(item);
-        if (!href) return false;
         if (!item.readAt) {
             await queryClient.cancelQueries({ queryKey: notificationsQueryKey });
             const previous = queryClient.getQueryData<InfiniteData<NotificationFeedPage>>(notificationsQueryKey);
@@ -276,18 +251,15 @@ export function useNotifications(limit: number = DEFAULT_LIMIT) {
                 readAt,
                 seenAt: item.seenAt ?? readAt,
             }));
-            adjustUnreadCounts({ total: -1, important: item.importance === "important" ? -1 : 0 });
+            if (!item.seenAt) {
+                adjustUnreadCounts({ total: -1, important: item.importance === "important" ? -1 : 0 });
+            }
             try {
                 const result = await markNotificationReadAction(item.id);
                 if (!result.success || !result.item) {
                     throw new Error(result.error || "Failed to mark notification read");
                 }
                 patchNotificationCache((existing) => patchNotificationReadStateInInfiniteData(existing, result.item!));
-                const conversationId = extractMessageBurstConversationId(result.item);
-                if (conversationId) {
-                    clearMessageAttentionSmooth(conversationId);
-                    invalidateMessageAttentionQueries([conversationId]);
-                }
             } catch (error) {
                 if (previous) {
                     queryClient.setQueryData(notificationsQueryKey, previous);
@@ -300,13 +272,21 @@ export function useNotifications(limit: number = DEFAULT_LIMIT) {
                 toast.error(error instanceof Error ? error.message : "Failed to mark notification read");
             }
         }
+        if (!href) return false;
+        if (href.startsWith("/messages")) {
+            recordMessagesOpen({
+                source,
+                surface: "notification",
+                hasMessageTarget: href.includes("messageId="),
+            });
+        }
         router.push(href);
+        viewedNotificationIdsRef.current.clear();
+        isTrayOpenRef.current = false;
         setIsTrayOpen(false);
         return true;
     }, [
         adjustUnreadCounts,
-        clearMessageAttentionSmooth,
-        invalidateMessageAttentionQueries,
         notificationsQueryKey,
         patchNotificationCache,
         queryClient,
@@ -324,27 +304,16 @@ export function useNotifications(limit: number = DEFAULT_LIMIT) {
         const title = queued.length === 1
             ? first.title
             : `${queued.length} new updates in ${context}`;
-        const messageConversationId = extractMessageBurstConversationId(first);
-        const isMessageToast = Boolean(messageConversationId && first.kind === "message_burst" && !pathname?.startsWith("/messages"));
         toast(title, {
             description: queued.length === 1 ? first.body ?? undefined : "Open the bell to review the grouped updates.",
-            action: isMessageToast && messageConversationId
+            action: first.href
                 ? {
                     label: "Open",
-                    onClick: () => {
-                        const attention = buildMessageAttentionFromNotification(first);
-                        if (attention) upsertMessageAttention(messageConversationId, attention);
-                        openPopupConversationList({ highlightConversationId: messageConversationId });
-                    },
-                }
-                : first.href
-                ? {
-                    label: "Open",
-                    onClick: () => void openItem(first),
+                    onClick: () => void openItem(first, "notification_toast"),
                 }
                 : undefined,
         });
-    }, [openItem, openPopupConversationList, pathname, upsertMessageAttention]);
+    }, [openItem]);
 
     const queueImportantToast = useCallback((item: NotificationItem) => {
         if (shouldSuppressNotificationToast({
@@ -357,16 +326,12 @@ export function useNotifications(limit: number = DEFAULT_LIMIT) {
         })) {
             return;
         }
-        const attention = buildMessageAttentionFromNotification(item);
-        if (attention) {
-            upsertMessageAttention(attention.conversationId, attention);
-        }
         toastQueueRef.current.push(item);
         // Idle users get a single flush on return, not a cascade of toasts mid-AFK.
         if (isIdleRef.current) return;
         if (toastTimerRef.current) return;
         toastTimerRef.current = setTimeout(flushToastQueue, TOAST_BATCH_MS);
-    }, [activePopupConversationId, flushToastQueue, getCurrentSearch, isTrayOpen, pathname, upsertMessageAttention]);
+    }, [flushToastQueue, getCurrentSearch, isTrayOpen, pathname]);
 
     useEffect(() => {
         queueImportantToastRef.current = queueImportantToast;
@@ -426,13 +391,16 @@ export function useNotifications(limit: number = DEFAULT_LIMIT) {
     }, [flushToastQueue]);
 
     useEffect(() => {
-        setIsRealtimeHealthy(isConnected);
         if (!isConnected) return;
         void queryClient.invalidateQueries({ queryKey: unreadCountQueryKey });
         if (isTrayOpenRef.current) {
             void queryClient.invalidateQueries({ queryKey: notificationsQueryKey });
         }
     }, [isConnected, notificationsQueryKey, queryClient, unreadCountQueryKey]);
+
+    // Authentication hydration and a cold Realtime tenant are normal startup
+    // states. Only a terminal channel status should be presented as a failure.
+    const isRealtimeHealthy = notificationStatus !== 'disconnected';
 
     useEffect(() => {
         if (!user?.id || !isAuthenticated) return;
@@ -465,7 +433,6 @@ export function useNotifications(limit: number = DEFAULT_LIMIT) {
                     return;
                 }
 
-                syncMessageAttentionFromNotification(newItem);
                 patchNotificationCache((existing) => upsertNotificationInInfiniteData(existing, newItem));
                 const newVisible = isUnreadVisible(newItem);
                 const oldVisible = isUnreadVisible(oldItem) && !isActivelySnoozed(oldItem);
@@ -475,9 +442,9 @@ export function useNotifications(limit: number = DEFAULT_LIMIT) {
                     const oldImportant = oldVisible && oldItem?.importance === "important" ? 1 : 0;
                     adjustUnreadCounts({ total: delta, important: newImportant - oldImportant });
                 }
-                const isFreshInsert = event.payload.eventType === "INSERT" || (event.payload.eventType === "UPDATE" && !oldItem?.updatedAt);
-                const isUnreadUpdate = event.payload.eventType === "UPDATE" && oldItem?.updatedAt !== newItem.updatedAt && !oldItem?.readAt;
-                if (isFreshInsert || isUnreadUpdate) {
+                const isFreshInsert = event.payload.eventType === "INSERT" || (event.payload.eventType === "UPDATE" && !oldItem?.activityAt);
+                const isNewActivity = event.payload.eventType === "UPDATE" && oldItem?.activityAt !== newItem.activityAt && !newItem.seenAt;
+                if (isFreshInsert || isNewActivity) {
                     queueImportantToastRef.current(newItem);
                     if (browserDeliveryEnabledRef.current) {
                         showBrowserNotification({
@@ -496,6 +463,11 @@ export function useNotifications(limit: number = DEFAULT_LIMIT) {
                         });
                     }
                 }
+                if (isTrayOpenRef.current) {
+                    // Re-fetch once so the feed can resolve the actor profile rather
+                    // than relying on an incomplete realtime preview snapshot.
+                    void queryClient.invalidateQueries({ queryKey: notificationsQueryKey });
+                }
             });
     }, [
         isAuthenticated,
@@ -504,37 +476,10 @@ export function useNotifications(limit: number = DEFAULT_LIMIT) {
         patchNotificationCache,
         router,
         subscribeUserNotifications,
-        syncMessageAttentionFromNotification,
         user?.id,
     ]);
 
-    useEffect(() => {
-        if (!user?.id || !isAuthenticated || typeof window === "undefined") return;
-        const reconcile = () => {
-            void queryClient.invalidateQueries({ queryKey: unreadCountQueryKey });
-            if (isTrayOpen) {
-                void queryClient.invalidateQueries({ queryKey: notificationsQueryKey });
-            }
-        };
-        const handleVisibility = () => {
-            if (document.visibilityState === "visible") reconcile();
-        };
-        window.addEventListener("focus", reconcile);
-        window.addEventListener("online", reconcile);
-        document.addEventListener("visibilitychange", handleVisibility);
-        return () => {
-            window.removeEventListener("focus", reconcile);
-            window.removeEventListener("online", reconcile);
-            document.removeEventListener("visibilitychange", handleVisibility);
-        };
-    }, [
-        isAuthenticated,
-        isTrayOpen,
-        notificationsQueryKey,
-        queryClient,
-        unreadCountQueryKey,
-        user?.id,
-    ]);
+
 
     useEffect(() => {
         return () => {
@@ -542,43 +487,40 @@ export function useNotifications(limit: number = DEFAULT_LIMIT) {
         };
     }, []);
 
-    const markReadMutation = useMutation({
-        mutationFn: async (notificationId: string) => {
-            const result = await markNotificationReadAction(notificationId);
-            if (!result.success || !result.item) {
-                throw new Error(result.error || "Failed to mark notification read");
+    const markVisibleSeenMutation = useMutation({
+        mutationFn: async (notificationIds: string[]) => {
+            const result = await markNotificationsSeenAction(notificationIds);
+            if (!result.success) {
+                throw new Error(result.error || "Failed to mark notifications seen");
             }
-            return result.item;
+            return result;
         },
-        onMutate: async (notificationId) => {
+        onMutate: async (notificationIds) => {
             await queryClient.cancelQueries({ queryKey: notificationsQueryKey });
-            const previous = queryClient.getQueryData<InfiniteData<NotificationFeedPage>>(notificationsQueryKey);
-            const readAt = new Date().toISOString();
-            const target = previous?.pages.flatMap((page) => page.items).find((item) => item.id === notificationId);
-            patchNotificationCache((existing) => {
-                if (!target) return existing;
-                return patchNotificationReadStateInInfiniteData(existing, {
-                    ...target,
-                    readAt,
-                    seenAt: target.seenAt ?? readAt,
+            const current = queryClient.getQueryData<InfiniteData<NotificationFeedPage>>(notificationsQueryKey);
+            const seenAt = new Date().toISOString();
+            const targets = current?.pages
+                .flatMap((page) => page.items)
+                .filter((item) => notificationIds.includes(item.id) && !item.seenAt) ?? [];
+            if (targets.length > 0) {
+                patchNotificationCache((existing) => markNotificationsSeenInInfiniteData(existing, targets.map((item) => item.id), seenAt));
+                adjustUnreadCounts({
+                    total: -targets.length,
+                    important: -targets.filter((item) => item.importance === "important").length,
                 });
-            });
-            if (target && !target.readAt) {
-                adjustUnreadCounts({ total: -1, important: target.importance === "important" ? -1 : 0 });
             }
-            return { previous, target };
+            return { targetIds: targets.map((item) => item.id) };
         },
-        onError: (error, _notificationId, context) => {
-            if (context?.previous) queryClient.setQueryData(notificationsQueryKey, context.previous);
+        onError: (error) => {
+            // Do not restore an old snapshot: another visible batch may have
+            // succeeded meanwhile. The authoritative refetch repairs the cache.
+            void queryClient.invalidateQueries({ queryKey: notificationsQueryKey });
             void queryClient.invalidateQueries({ queryKey: unreadCountQueryKey });
-            toast.error(error instanceof Error ? error.message : "Failed to mark notification read");
+            toast.error(error instanceof Error ? error.message : "Failed to update notification state");
         },
-        onSuccess: (item) => {
-            patchNotificationCache((existing) => patchNotificationReadStateInInfiniteData(existing, item));
-            const conversationId = extractMessageBurstConversationId(item);
-            if (conversationId) {
-                clearMessageAttentionSmooth(conversationId);
-                invalidateMessageAttentionQueries([conversationId]);
+        onSuccess: (result) => {
+            for (const item of result.items) {
+                patchNotificationCache((existing) => patchNotificationReadStateInInfiniteData(existing, item));
             }
         },
     });
@@ -600,9 +542,10 @@ export function useNotifications(limit: number = DEFAULT_LIMIT) {
                 return patchNotificationReadStateInInfiniteData(existing, {
                     ...target,
                     readAt: null,
+                    seenAt: null,
                 });
             });
-            if (target?.readAt) {
+            if (target?.seenAt) {
                 adjustUnreadCounts({ total: 1, important: target.importance === "important" ? 1 : 0 });
             }
             return { previous, target };
@@ -630,7 +573,7 @@ export function useNotifications(limit: number = DEFAULT_LIMIT) {
             const previous = queryClient.getQueryData<InfiniteData<NotificationFeedPage>>(notificationsQueryKey);
             const target = previous?.pages.flatMap((page) => page.items).find((item) => item.id === notificationId);
             patchNotificationCache((existing) => removeNotificationFromInfiniteData(existing, notificationId));
-            if (target && !target.readAt) {
+            if (target && !target.seenAt) {
                 adjustUnreadCounts({ total: -1, important: target.importance === "important" ? -1 : 0 });
             }
             return { previous };
@@ -639,52 +582,6 @@ export function useNotifications(limit: number = DEFAULT_LIMIT) {
             if (context?.previous) queryClient.setQueryData(notificationsQueryKey, context.previous);
             void queryClient.invalidateQueries({ queryKey: unreadCountQueryKey });
             toast.error(error instanceof Error ? error.message : "Failed to dismiss notification");
-        },
-    });
-
-    const markAllReadMutation = useMutation({
-        mutationFn: async () => {
-            const result = await markAllNotificationsReadAction();
-            if (!result.success) {
-                throw new Error(result.error || "Failed to mark all notifications read");
-            }
-            return {
-                readAt: result.readAt ?? null,
-                messageConversationIds: result.messageConversationIds ?? [],
-            };
-        },
-        onMutate: async () => {
-            await queryClient.cancelQueries({ queryKey: notificationsQueryKey });
-            const previous = queryClient.getQueryData<InfiniteData<NotificationFeedPage>>(notificationsQueryKey);
-            const readAt = new Date().toISOString();
-            const messageConversationIds = Array.from(new Set(
-                previous?.pages
-                    .flatMap((page) => page.items)
-                    .map((item) => extractMessageBurstConversationId(item))
-                    .filter((conversationId): conversationId is string => Boolean(conversationId)) ?? [],
-            ));
-            patchNotificationCache((existing) => markAllNotificationsReadInInfiniteData(existing, readAt));
-            queryClient.setQueryData<UnreadCounts>(unreadCountQueryKey, ZERO_COUNTS);
-            if (messageConversationIds.length > 0) {
-                clearMessageAttentionSmooth(messageConversationIds);
-                invalidateMessageAttentionQueries(messageConversationIds);
-            }
-            return { previous, messageConversationIds };
-        },
-        onError: (error, _variables, context) => {
-            if (context?.previous) queryClient.setQueryData(notificationsQueryKey, context.previous);
-            void queryClient.invalidateQueries({ queryKey: unreadCountQueryKey });
-            toast.error(error instanceof Error ? error.message : "Failed to mark all notifications read");
-        },
-        onSuccess: (result) => {
-            if (result.readAt) {
-                patchNotificationCache((existing) => markAllNotificationsReadInInfiniteData(existing, result.readAt!));
-            }
-            if (result.messageConversationIds.length > 0) {
-                clearMessageAttentionSmooth(result.messageConversationIds);
-                invalidateMessageAttentionQueries(result.messageConversationIds);
-            }
-            queryClient.setQueryData<UnreadCounts>(unreadCountQueryKey, ZERO_COUNTS);
         },
     });
 
@@ -712,7 +609,7 @@ export function useNotifications(limit: number = DEFAULT_LIMIT) {
             const previous = queryClient.getQueryData<InfiniteData<NotificationFeedPage>>(notificationsQueryKey);
             const target = previous?.pages.flatMap((page) => page.items).find((item) => item.id === notificationId);
             patchNotificationCache((existing) => removeNotificationFromInfiniteData(existing, notificationId));
-            if (target && !target.readAt) {
+            if (target && !target.seenAt) {
                 adjustUnreadCounts({ total: -1, important: target.importance === "important" ? -1 : 0 });
             }
             return { previous };
@@ -727,34 +624,6 @@ export function useNotifications(limit: number = DEFAULT_LIMIT) {
         },
     });
 
-    const pauseMutation = useMutation({
-        mutationFn: async (pausedUntil: string | null) => {
-            const result = await pauseNotificationsAction(pausedUntil);
-            if (!result.success) throw new Error(result.error || "Failed to pause notifications");
-            return result.preferences;
-        },
-        onMutate: async (pausedUntil) => {
-            await queryClient.cancelQueries({ queryKey: queryKeys.settings.notifications() });
-            const previous = queryClient.getQueryData<any>(queryKeys.settings.notifications());
-            if (previous) {
-                queryClient.setQueryData(queryKeys.settings.notifications(), {
-                    ...previous,
-                    pause: { ...previous.pause, pausedUntil },
-                });
-            }
-            return { previous };
-        },
-        onError: (error, _variables, context) => {
-            if (context?.previous) {
-                queryClient.setQueryData(queryKeys.settings.notifications(), context.previous);
-            }
-            toast.error(error instanceof Error ? error.message : "Failed to pause notifications");
-        },
-        onSuccess: (preferences) => {
-            queryClient.setQueryData(queryKeys.settings.notifications(), preferences);
-        }
-    });
-
     const items = useMemo(
         () => query.data?.pages.flatMap((page) => page.items).filter((item) => !item.dismissedAt) ?? [],
         [query.data?.pages],
@@ -762,17 +631,48 @@ export function useNotifications(limit: number = DEFAULT_LIMIT) {
     const unreadCounts = unreadCountQuery.data ?? deriveUnreadCounts(query.data);
     const unreadCount = unreadCounts.total;
     const unreadImportantCount = unreadCounts.important;
-    const openTray = useCallback(() => setIsTrayOpen(true), []);
-    const closeTray = useCallback(() => setIsTrayOpen(false), []);
     const loadMore = useCallback(() => query.fetchNextPage(), [query]);
     const refresh = useCallback(() => query.refetch(), [query]);
-    const markRead = useCallback((notificationId: string) => markReadMutation.mutateAsync(notificationId), [markReadMutation]);
+    const commitViewedNotifications = useCallback((notificationIds: string[]) => {
+        const ids = Array.from(new Set(notificationIds.filter(Boolean)));
+        if (ids.length === 0) return;
+        void (async () => {
+            for (let index = 0; index < ids.length; index += QUALIFIED_VIEW_BATCH_SIZE) {
+                try {
+                    await markVisibleSeenMutation.mutateAsync(ids.slice(index, index + QUALIFIED_VIEW_BATCH_SIZE));
+                } catch {
+                    // The mutation already restores/revalidates and shows the
+                    // actionable failure. Continue so one failed batch cannot
+                    // strand later, independently reviewed notifications.
+                }
+            }
+        })();
+    }, [markVisibleSeenMutation]);
+    const stageViewedNotifications = useCallback((notificationIds: string[]) => {
+        if (!isTrayOpenRef.current) return;
+        for (const notificationId of notificationIds) {
+            if (notificationId) viewedNotificationIdsRef.current.add(notificationId);
+        }
+    }, []);
+    const setTrayOpen = useCallback((open: boolean) => {
+        if (open) {
+            viewedNotificationIdsRef.current.clear();
+            isTrayOpenRef.current = true;
+            setIsTrayOpen(true);
+            return;
+        }
+        const viewedIds = Array.from(viewedNotificationIdsRef.current);
+        viewedNotificationIdsRef.current.clear();
+        isTrayOpenRef.current = false;
+        setIsTrayOpen(false);
+        commitViewedNotifications(viewedIds);
+    }, [commitViewedNotifications]);
+    const openTray = useCallback(() => setTrayOpen(true), [setTrayOpen]);
+    const closeTray = useCallback(() => setTrayOpen(false), [setTrayOpen]);
     const markUnread = useCallback((notificationId: string) => markUnreadMutation.mutateAsync(notificationId), [markUnreadMutation]);
-    const markAllRead = useCallback(() => markAllReadMutation.mutateAsync(), [markAllReadMutation]);
     const dismiss = useCallback((notificationId: string) => dismissMutation.mutateAsync(notificationId), [dismissMutation]);
     const muteScope = useCallback((scope: NotificationMuteScope) => muteMutation.mutateAsync(scope), [muteMutation]);
     const muteItemType = useCallback((item: NotificationItem) => muteMutation.mutateAsync(getNarrowestNotificationMuteScope(item)), [muteMutation]);
-    const pause = useCallback((pausedUntil: string | null) => pauseMutation.mutateAsync(pausedUntil), [pauseMutation]);
     const snooze = useCallback((notificationId: string, snoozedUntil: string) =>
         snoozeMutation.mutateAsync({ notificationId, snoozedUntil }), [snoozeMutation]);
 
@@ -786,22 +686,19 @@ export function useNotifications(limit: number = DEFAULT_LIMIT) {
         isIdle,
         hasMore: Boolean(query.hasNextPage),
         isLoadingMore: query.isFetchingNextPage,
-        isMarkingAllRead: markAllReadMutation.isPending,
         activeFilter,
         setActiveFilter,
         isTrayOpen,
         openTray,
         closeTray,
-        setTrayOpen: setIsTrayOpen,
+        setTrayOpen,
         loadMore,
         refresh,
-        markRead,
+        stageViewedNotifications,
         markUnread,
-        markAllRead,
         dismiss,
         muteScope,
         muteItemType,
-        pause,
         snooze,
         openItem,
     }), [
@@ -814,20 +711,18 @@ export function useNotifications(limit: number = DEFAULT_LIMIT) {
         isIdle,
         query.hasNextPage,
         query.isFetchingNextPage,
-        markAllReadMutation.isPending,
         activeFilter,
         isTrayOpen,
         openTray,
         closeTray,
+        setTrayOpen,
         loadMore,
         refresh,
-        markRead,
+        stageViewedNotifications,
         markUnread,
-        markAllRead,
         dismiss,
         muteScope,
         muteItemType,
-        pause,
         snooze,
         openItem,
     ]);
