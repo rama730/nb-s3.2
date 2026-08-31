@@ -107,5 +107,44 @@
       "mitigation": "Dedicated worker autoscaling, queue partitioning, or budget tuning."
     }
   ],
+  "supabaseUsage": {
+    "periodStart": "2026-03-01T00:00:00.000Z",
+    "periodEnd": "2026-04-01T00:00:00.000Z",
+    "regularEgressBytes": 0,
+    "cachedEgressBytes": 0,
+    "realtimeMessages": 0,
+    "realtimePeakConnections": 0,
+    "monthlyActiveUsers": 0,
+    "storageBytes": 0,
+    "databaseBytes": 0,
+    "storageConcentration": {
+      "largestOwnerBytes": 0,
+      "largestProjectBytes": 0,
+      "documentedFixtureBytes": 0,
+      "perOwnerSoftBudgetBytes": 1073741824,
+      "perProjectSoftBudgetBytes": 1073741824
+    },
+    "edgeInvocations": 0,
+    "peakPresenceRoomsPerTab": 0,
+    "signedUrlReuseRate": 0,
+    "attributionDimensions": ["environment", "route", "resource", "table", "channel", "cache_status", "byte_band"],
+    "attributionCoverage": 0,
+    "projectedRegularEgressBytesAtPeriodEnd": 0,
+    "projectedCachedEgressBytesAtPeriodEnd": 0
+  },
+  "alerts": [
+    { "metric": "regular_egress_bytes", "warningThreshold": 0, "criticalThreshold": 0, "owner": "platform" },
+    { "metric": "cached_egress_bytes", "warningThreshold": 0, "criticalThreshold": 0, "owner": "platform" },
+    { "metric": "realtime_messages", "warningThreshold": 0, "criticalThreshold": 0, "owner": "platform" },
+    { "metric": "realtime_peak_connections", "warningThreshold": 0, "criticalThreshold": 0, "owner": "platform" },
+    { "metric": "monthly_active_users", "warningThreshold": 0, "criticalThreshold": 0, "owner": "platform" },
+    { "metric": "storage_bytes", "warningThreshold": 0, "criticalThreshold": 0, "owner": "platform" },
+    { "metric": "database_bytes", "warningThreshold": 0, "criticalThreshold": 0, "owner": "platform" },
+    { "metric": "edge_invocations", "warningThreshold": 0, "criticalThreshold": 0, "owner": "platform" },
+    { "metric": "presence_rooms_per_tab", "warningThreshold": 0, "criticalThreshold": 0, "owner": "platform" },
+    { "metric": "signed_url_reuse_rate", "warningThreshold": 0, "criticalThreshold": 0, "owner": "platform" },
+    { "metric": "largest_owner_storage_bytes", "warningThreshold": 0, "criticalThreshold": 0, "owner": "platform" },
+    { "metric": "largest_project_storage_bytes", "warningThreshold": 0, "criticalThreshold": 0, "owner": "platform" }
+  ],
   "globalBlockers": []
 }
