@@ -206,7 +206,9 @@ test("top-nav keeps one accessible, route-aligned implementation", () => {
   const hubData = source("src/lib/data/hub.ts");
 
   assert.match(topNav, /e\.key\.toLowerCase\(\) === "k"/);
-  assert.match(topNav, /OPEN_MESSAGES_SEARCH_EVENT/);
+  assert.match(topNav, /setMessageSearchOpen\(true\)/);
+  assert.match(topNav, /\[data-messages-surface\]/);
+  assert.doesNotMatch(topNav, /OPEN_MESSAGES_SEARCH_EVENT|open-messages-local-search/);
   assert.match(topNav, /MAIN_NAV_ITEMS/);
   assert.match(topNav, /hidden min-w-0 flex-1 items-center justify-end gap-4 md:flex/);
   assert.match(topNav, /className="flex shrink-0 items-center gap-1"/);
@@ -214,14 +216,16 @@ test("top-nav keeps one accessible, route-aligned implementation", () => {
   assert.match(navLink, /aria-current=\{isActive \? "page" : undefined\}/);
   assert.match(mobileMenu, /<Dialog open=\{props\.isOpen\}/);
   assert.match(notifications, /href=\{settingsTabHref\("notifications"\)\}/);
-  assert.match(notifications, /isMarkingAllRead/);
+  assert.match(notifications, /onItemsViewed/);
+  assert.match(notifications, /data-\[state=open\]/);
+  assert.doesNotMatch(notifications, /Mark all read/);
   assert.match(runtime, /<PeopleNotificationsProvider>/);
   assert.doesNotMatch(runtime, /PresencePublisher|startPresenceHeartbeat/);
   assert.match(realtime, /resourceType: 'profile'/);
   assert.doesNotMatch(realtime, /table: 'tasks'/);
   assert.match(chat, /usePublishOnlinePresence\(\)/);
   assert.match(layout, /WorkspaceDrawerHost/);
-  assert.match(messages, /open-messages-local-search|OPEN_MESSAGES_SEARCH_EVENT/);
+  assert.doesNotMatch(messages, /open-messages-local-search|OPEN_MESSAGES_SEARCH_EVENT/);
   assert.match(people, /searchParams\?\.get\("q"\)/);
   assert.match(people, /searchQuery=\{routeQuery\}/);
   assert.doesNotMatch(discoverPeople, /type="search"|Search people by name/);
@@ -294,9 +298,10 @@ test("top-nav keeps one accessible, route-aligned implementation", () => {
   assert.match(searchPreviews, /fetchProjectTaskPreviewsAction/);
   assert.match(connectionsAction, /accepted_connection\.status = 'accepted'/);
   assert.match(connectionsAction, /blocked_connection\.status = 'blocked'/);
-  assert.match(connectionsAction, /applySuggestedProfilePrivacy\(user\.id, items\)/);
+  assert.match(connectionsAction, /applySuggestedProfilePrivacy\(user\.id, items, privacyProfiles\)/);
+  assert.match(connectionsAction, /resolvePrivacyRelationshipsFromProfiles/);
   assert.match(personCard, /onDismiss && status === "none"/);
-  assert.match(searchPreviews, /useDebounce\(normalizeGlobalSearchQuery\(query\), 300\)/);
+  assert.match(searchPreviews, /query\.trim\(\)\.length <= 3 \? 450 : 250/);
   assert.match(searchPreviews, /debouncedQuery\.length >= 2/);
   assert.match(searchPreviews, /previewContext === "hub" \? 60_000/);
   assert.match(searchPreviews, /queryKeys\.globalSearch\.preview/);
