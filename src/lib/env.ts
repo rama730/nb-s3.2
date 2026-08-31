@@ -7,6 +7,7 @@ const envSchema = z.object({
     NEXT_PUBLIC_APP_URL: z.string().url().optional(),
     NEXT_PUBLIC_SUPABASE_URL: z.string().url(),
     NEXT_PUBLIC_SUPABASE_ANON_KEY: z.string().min(1),
+    NEXT_PUBLIC_REALTIME_AUTHORIZATION_ENABLED: z.string().optional(),
     SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
     CSRF_TOKEN_SECRET: z.string().min(1).optional(),
     SECURITY_STEPUP_SECRET: z.string().min(1).optional(),
@@ -32,6 +33,7 @@ const envSchema = z.object({
     DB_CONNECT_TIMEOUT_SECONDS: z.coerce.number().int().min(2).max(60).optional(),
     DB_PREPARE_STATEMENTS: z.string().optional(),
     DB_USE_SUPAVISOR_PORT: z.string().optional(),
+    SUPABASE_STORAGE_IMAGE_TRANSFORMATIONS_ENABLED: z.string().optional(),
     RATE_LIMIT_MODE: z.enum(['best-effort', 'distributed-only']).optional(),
     EXECUTION_BACKEND_URL: z.string().url().optional(),
 })
