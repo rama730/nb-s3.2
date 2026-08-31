@@ -55,28 +55,14 @@ export const reconcileWorkspaceProfileCounters = inngest.createFunction(
                     LEFT JOIN task_counts tc ON tc.user_id = p.${sql.raw('"id"')}
                     LEFT JOIN connection_counts cc ON cc.user_id = p.${sql.raw('"id"')}
                 )
-                INSERT INTO ${sql.raw('"profile_counters"')} (
-                    ${sql.raw('"user_id"')},
-                    ${sql.raw('"workspace_inbox_count"')},
-                    ${sql.raw('"workspace_due_today_count"')},
-                    ${sql.raw('"workspace_overdue_count"')},
-                    ${sql.raw('"workspace_in_progress_count"')},
-                    ${sql.raw('"updated_at"')}
-                )
-                SELECT
-                    user_id,
-                    inbox_count,
-                    due_today_count,
-                    overdue_count,
-                    in_progress_count,
-                    NOW()
+                UPDATE ${sql.raw('"profiles"')} profile
+                SET ${sql.raw('"workspace_inbox_count"')} = counts.inbox_count,
+                    ${sql.raw('"workspace_due_today_count"')} = counts.due_today_count,
+                    ${sql.raw('"workspace_overdue_count"')} = counts.overdue_count,
+                    ${sql.raw('"workspace_in_progress_count"')} = counts.in_progress_count,
+                    ${sql.raw('"updated_at"')} = NOW()
                 FROM counts
-                ON CONFLICT (${sql.raw('"user_id"')}) DO UPDATE SET
-                    ${sql.raw('"workspace_inbox_count"')} = EXCLUDED.${sql.raw('"workspace_inbox_count"')},
-                    ${sql.raw('"workspace_due_today_count"')} = EXCLUDED.${sql.raw('"workspace_due_today_count"')},
-                    ${sql.raw('"workspace_overdue_count"')} = EXCLUDED.${sql.raw('"workspace_overdue_count"')},
-                    ${sql.raw('"workspace_in_progress_count"')} = EXCLUDED.${sql.raw('"workspace_in_progress_count"')},
-                    ${sql.raw('"updated_at"')} = EXCLUDED.${sql.raw('"updated_at"')}
+                WHERE profile.${sql.raw('"id"')} = counts.user_id
             `)
         })
 
