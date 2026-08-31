@@ -3,7 +3,8 @@ import { normalizeUsername, validateUsername } from '@/lib/validations/username'
 import { isSafeHttpUrl } from '@/lib/security/urls'
 import {
     normalizeOptionalProfileUrl,
-    normalizeSocialLinkRecord,
+    type SocialLinkStorage,
+    validateSocialLinkCollection,
     SOCIAL_LINK_PLATFORMS,
     type SocialLinkPlatform,
 } from '@/lib/profile/normalization'
@@ -77,12 +78,20 @@ export const profileUpdateSchema = z.object({
         .optional(),
     skills: z.array(z.string()).optional(),
     interests: z.array(z.string()).optional(),
-    // SEC-H9: only accept values for the well-known platforms, reject any
-    // other key (including `__proto__`, `constructor`, `prototype`). Each
-    // value is range-checked and re-validated via `isSafeHttpUrl` inside the
-    // normaliser so we never persist a non-http(s) URL.
+    // Legacy key/value records are accepted for existing onboarding and
+    // imports. The current editor writes an ordered V2 array so a person can
+    // keep more than one custom site without inventing fake provider names.
     socialLinks: z
-        .record(z.string().min(1).max(32), z.string().max(PROFILE_LIMITS.websiteMax))
+        .union([
+            z.record(z.string().min(1).max(64), z.string().max(PROFILE_LIMITS.websiteMax)),
+            z.array(z.object({
+                id: z.string().min(1).max(64),
+                url: z.string().max(PROFILE_LIMITS.websiteMax),
+                platform: z.string().min(1).max(32).optional(),
+                label: z.string().max(80).optional(),
+                order: z.number().int().min(0).max(1000).optional(),
+            })).max(20),
+        ])
         .optional(),
     visibility: z.enum(['public', 'connections', 'private']).optional(),
     openTo: z.array(z.string()).optional(),
@@ -107,7 +116,7 @@ type ProfileLike = {
     location?: string | null
     website?: string | null
     skills?: string[] | null
-    socialLinks?: Record<string, string> | null
+    socialLinks?: SocialLinkStorage | null
 }
 
 function normalizeList(values: string[] | undefined): string[] | undefined {
@@ -127,6 +136,7 @@ function normalizeList(values: string[] | undefined): string[] | undefined {
 }
 
 export function normalizeProfileUpdateInput(input: ProfileUpdateInput): ProfileUpdateInput {
+    const socialValidation = input.socialLinks === undefined ? null : validateSocialLinkCollection(input.socialLinks)
     return {
         ...input,
         fullName: input.fullName?.trim(),
@@ -139,7 +149,7 @@ export function normalizeProfileUpdateInput(input: ProfileUpdateInput): ProfileU
         openTo: normalizeList(input.openTo),
         openToCustomRoles: normalizeList(input.openToCustomRoles),
         preferredCategories: normalizeList(input.preferredCategories),
-        socialLinks: normalizeSocialLinkRecord(input.socialLinks),
+        socialLinks: socialValidation?.success ? socialValidation.links : undefined,
     }
 }
 
@@ -183,7 +193,9 @@ export function calculateProfileCompletion(profile: ProfileLike): { score: numbe
         ['Add location', Boolean(profile.location)],
         ['Add website', Boolean(profile.website)],
         ['Add at least 3 skills', (profile.skills?.length || 0) >= 3],
-        ['Add at least 1 social link', Object.keys(profile.socialLinks || {}).length >= 1],
+        ['Add at least 1 social link', Array.isArray(profile.socialLinks)
+            ? profile.socialLinks.length >= 1
+            : Object.keys(profile.socialLinks || {}).length >= 1],
     ]
 
     const completed = checks.filter((item) => item[1]).length
