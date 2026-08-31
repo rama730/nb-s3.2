@@ -44,6 +44,7 @@ export interface FolderContents {
   status: FolderContentsStatus;
   children: ProjectNode[];
   retry: () => void;
+  refreshError?: boolean;
 }
 
 export type LoadFolderContent = (
@@ -97,18 +98,16 @@ export interface DeriveFolderContentsInput {
  * in `enforceNodesBudget` can legitimately orphan a child id).
  */
 export function deriveFolderContents(input: DeriveFolderContentsInput): FolderContents {
+  const cached = input.childIds.flatMap(id => input.nodesById[id] ? [input.nodesById[id]!] : []);
   if (input.hasError) {
-    return { status: "error", children: [], retry: input.retry };
+    return cached.length > 0
+      ? { status: "ready", children: cached, retry: input.retry, refreshError: true }
+      : { status: "error", children: [], retry: input.retry };
   }
-  if (!input.loaded) {
+  if (!input.loaded || cached.length !== input.childIds.length) {
     return { status: "loading", children: [], retry: input.retry };
   }
-  const children: ProjectNode[] = [];
-  for (const id of input.childIds) {
-    const node = input.nodesById[id];
-    if (node) children.push(node);
-  }
-  return { status: "ready", children, retry: input.retry };
+  return { status: "ready", children: cached, retry: input.retry };
 }
 
 // ─── Retry coordinator (unit-testable without React) ─────────────────
@@ -163,6 +162,7 @@ const EMPTY_NODES: Record<string, ProjectNode> = Object.freeze({}) as Record<str
 export function useFolderContents(
   projectId: string,
   folderId: string | null,
+  enabled = true,
 ): FolderContents {
   const key = filesParentKey(folderId);
 
@@ -181,12 +181,11 @@ export function useFolderContents(
 
   const boot = useContext(FilesTabBootContext);
   const [hasError, setHasError] = useState(false);
-  const inFlightRef = useRef(false);
-  // Monotonically-increasing id per load invocation. `runFolderLoad`'s
-  // error branch only fires when the invocation's captured id still matches
-  // this ref, preventing a stale load from flipping the error flag after
-  // the folder has changed.
-  const requestIdRef = useRef(0);
+  const [retryCount, setRetryCount] = useState(0);
+  const requestedRetry = useRef(0);
+  const complete = loaded && childIds.every(id => Boolean(nodesById[id]));
+  const loadFolderContent = boot?.loadFolderContent;
+  const isBooting = boot?.isBooting;
 
   // Reset the transient error whenever the target folder changes so an
   // unrelated folder does not inherit a prior failure.
@@ -194,29 +193,26 @@ export function useFolderContents(
     setHasError(false);
   }, [folderId]);
 
-  const runLoad = useCallback(() => {
-    if (!boot) return;
-    if (inFlightRef.current) return;
-    inFlightRef.current = true;
-    const myRequest = ++requestIdRef.current;
-    void runFolderLoad({
-      load: boot.loadFolderContent,
-      folderId,
-      onBeforeLoad: () => setHasError(false),
-      onError: () => setHasError(true),
-      isStillCurrent: () => requestIdRef.current === myRequest,
-    }).finally(() => {
-      inFlightRef.current = false;
-    });
-  }, [boot, folderId]);
+  const retry = useCallback(() => {
+    setHasError(false);
+    setRetryCount(count => count + 1);
+  }, []);
 
-  // Auto-load: if the folder is not yet loaded (and not already errored),
-  // kick off a refresh. The ref guard in `runLoad` prevents duplicate calls
-  // if this effect runs more than once before the promise settles.
+  // Each load belongs to this effect instance. Cleanup marks it stale before
+  // another folder or retry can settle, so an old request cannot change the
+  // error state of the newly selected folder.
   useEffect(() => {
-    if (loaded || hasError) return;
-    runLoad();
-  }, [loaded, hasError, runLoad]);
+    if (!enabled || !loadFolderContent || isBooting || (complete && requestedRetry.current === retryCount) || hasError) return;
+    let cancelled = false;
+    requestedRetry.current = retryCount;
+    void loadFolderContent(folderId, "refresh")
+      .catch(() => {
+        if (!cancelled) setHasError(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [enabled, loadFolderContent, isBooting, folderId, retryCount, hasError, complete]);
 
   // Memoize so consumers get a stable `FolderContents` reference when the
   // underlying inputs have not moved. The `children` array is rebuilt each
@@ -229,8 +225,8 @@ export function useFolderContents(
         childIds,
         nodesById,
         hasError,
-        retry: runLoad,
+        retry,
       }),
-    [loaded, childIds, nodesById, hasError, runLoad],
+    [loaded, childIds, nodesById, hasError, retry],
   );
 }
