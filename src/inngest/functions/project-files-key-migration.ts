@@ -85,6 +85,7 @@ export const migrateProjectFileLegacyKeys = inngest.createFunction(
                 .from("project-files")
                 .upload(newKey, body, {
                     contentType: "application/octet-stream",
+                    cacheControl: "3600",
                     upsert: false,
                 });
 
