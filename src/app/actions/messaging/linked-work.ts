@@ -3,7 +3,7 @@
 import { and, eq, inArray, isNull, or } from "drizzle-orm";
 import { createClient } from "@/lib/supabase/server";
 import { db } from "@/lib/db";
-import { conversationParticipants, messageWorkLinks } from "@/lib/db/schema";
+import { conversationParticipants, messageWorkLinks, tasks } from "@/lib/db/schema";
 import { assertProjectReadAccess } from "@/lib/files/internal-helpers";
 import {
     groupLinkedWorkByMessage,
@@ -90,11 +90,19 @@ export async function readTaskSourceMessageLinksAction(projectId: string, taskId
         await assertProjectReadAccess(projectId, userId);
 
         const rows = await db
-            .select()
+            .select({ link: messageWorkLinks })
             .from(messageWorkLinks)
+            .innerJoin(
+                tasks,
+                and(
+                    eq(tasks.id, messageWorkLinks.targetId),
+                    eq(tasks.projectId, projectId),
+                ),
+            )
             .where(and(
                 eq(messageWorkLinks.targetType, "task"),
                 eq(messageWorkLinks.targetId, taskId),
+                eq(messageWorkLinks.targetProjectId, projectId),
                 isNull(messageWorkLinks.deletedAt),
                 or(
                     eq(messageWorkLinks.visibility, "shared"),
@@ -107,7 +115,7 @@ export async function readTaskSourceMessageLinksAction(projectId: string, taskId
 
         return {
             success: true as const,
-            links: rows.map(mapMessageWorkLinkToSummary),
+            links: rows.map((row) => mapMessageWorkLinkToSummary(row.link)),
         };
     } catch (error) {
         logger.error("messages.task_source_links_read_failed", {
