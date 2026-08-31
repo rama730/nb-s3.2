@@ -409,6 +409,7 @@ export async function uploadToStorageAndDB(
                     .from('project-files')
                     .upload(s3Key, content, {
                         contentType: file.mimeType,
+                        cacheControl: '3600',
                         upsert: true
                     });
 
@@ -576,6 +577,7 @@ export async function uploadRepoFiles(
                         .from('project-files')
                         .upload(s3Key, content, {
                             contentType: f.mimeType,
+                            cacheControl: '3600',
                             upsert: true
                         });
                     if (uploadError) {
@@ -614,6 +616,7 @@ export async function uploadRepoFiles(
                     .from('project-files')
                     .upload(s3Key, content, {
                         contentType: f.mimeType,
+                        cacheControl: '3600',
                         upsert: true
                     });
                 if (uploadError) {
