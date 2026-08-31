@@ -17,6 +17,8 @@ export type Role = "Role_Owner" | "Role_Member" | "Role_Viewer";
 export interface FilesTabRoleContextValue {
   role: Role;
   canEdit: boolean;
+  canManageFiles: boolean;
+  canReadTasks?: boolean;
 }
 
 /**
@@ -31,6 +33,8 @@ export const FilesTabRoleContext =
 export interface FilesTabRoleProviderProps {
   role: Role;
   canEdit: boolean;
+  canManageFiles?: boolean;
+  canReadTasks?: boolean;
   children: ReactNode;
 }
 
@@ -46,11 +50,13 @@ export interface FilesTabRoleProviderProps {
 export function FilesTabRoleProvider({
   role,
   canEdit,
+  canManageFiles = false,
+  canReadTasks = role !== "Role_Viewer",
   children,
 }: FilesTabRoleProviderProps): React.JSX.Element {
   const value = useMemo<FilesTabRoleContextValue>(
-    () => ({ role, canEdit }),
-    [role, canEdit],
+    () => ({ role, canEdit, canManageFiles, canReadTasks }),
+    [role, canEdit, canManageFiles, canReadTasks],
   );
   return (
     <FilesTabRoleContext.Provider value={value}>
