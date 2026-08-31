@@ -37,6 +37,19 @@ describe("task editor draft", () => {
     assert.equal("tags" in parsed, false);
   });
 
+  it("accepts the modal's null values for optional relationships and dates", () => {
+    const parsed = taskEditorDraftSchema.parse({
+      title: "Create from the task tab",
+      sprintId: null,
+      assigneeId: null,
+      dueDate: null,
+    });
+
+    assert.equal(parsed.sprintId, null);
+    assert.equal(parsed.assigneeId, null);
+    assert.equal(parsed.dueDate, null);
+  });
+
   it("maps legacy task shape into the canonical draft model", () => {
     assert.deepEqual(
       buildTaskEditorDraft({
