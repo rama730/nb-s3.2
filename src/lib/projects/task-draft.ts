@@ -12,19 +12,29 @@ const optionalTrimmedText = z
 const optionalUuid = z
   .string()
   .trim()
-  .optional()
+  .nullish()
   .transform((value) => (value && value.length > 0 ? value : null))
-  .refine((value) => value === null || z.string().uuid().safeParse(value).success, "Invalid value");
+  .refine(
+    (value) => value === null || z.string().uuid().safeParse(value).success,
+    "Invalid value",
+  );
 
 const optionalDate = z
   .string()
   .trim()
-  .optional()
+  .nullish()
   .transform((value) => (value && value.length > 0 ? value : null))
-  .refine((value) => value === null || Number.isFinite(Date.parse(value)), "Invalid due date");
+  .refine(
+    (value) => value === null || Number.isFinite(Date.parse(value)),
+    "Invalid due date",
+  );
 
 export const taskEditorDraftSchema = z.object({
-  title: z.string().trim().min(1, "Task title is required").max(500, "Task title is too long"),
+  title: z
+    .string()
+    .trim()
+    .min(1, "Task title is required")
+    .max(500, "Task title is too long"),
   description: optionalTrimmedText,
   sprintId: optionalUuid,
   status: taskStatusEnum.default("todo"),
@@ -69,7 +79,10 @@ export function buildTaskEditorDraft(input?: {
         ? (task.priority as TaskEditorDraft["priority"])
         : "medium",
     assigneeId: task?.assigneeId ?? task?.assignee_id ?? null,
-    dueDate: typeof dueDateValue === "string" && dueDateValue ? dueDateValue.slice(0, 10) : null,
+    dueDate:
+      typeof dueDateValue === "string" && dueDateValue
+        ? dueDateValue.slice(0, 10)
+        : null,
   };
 }
 
