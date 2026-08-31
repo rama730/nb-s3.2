@@ -206,6 +206,10 @@ export type ProjectWorkspaceState = {
 
   // Transient UI state
   requestedScrollPosition: { nodeId: string; line: number } | null;
+  /** Current text editor with unsaved changes. Transient and never persisted. */
+  dirtyFileId: string | null;
+  /** Destination awaiting confirmation while an editor has unsaved changes. */
+  pendingNavigation: { nodeId: string | null } | null;
 
   // Git
   git: GitState;
@@ -286,6 +290,11 @@ export type FilesWorkspaceState = {
    * Tasks tab's selection surface (Req 21.7).
    */
   setCurrentLocation: (projectId: string, nodeId: string | null) => void;
+  setDirtyFile: (projectId: string, nodeId: string, dirty: boolean) => void;
+  setPendingNavigation: (
+    projectId: string,
+    pending: { nodeId: string | null } | null,
+  ) => void;
 
   // explorer cleanup
   /** FW9: Remove expandedFolderIds entries whose node no longer exists */
@@ -398,6 +407,8 @@ export function defaultWorkspace(): ProjectWorkspaceState {
 
     activeFileSymbols: [],
     requestedScrollPosition: null,
+    dirtyFileId: null,
+    pendingNavigation: null,
 
     git: { ...DEFAULT_GIT_STATE },
     ui: { ...DEFAULT_UI_STATE },
