@@ -25,6 +25,7 @@ import { resolveRecoverySessionsWithoutDrafts } from "@/lib/extension/recovery-s
 import { logger } from "@/lib/logger";
 import { buildProjectFileKey, normalizeProjectFileRelativePath } from "@/lib/storage/project-file-key";
 import { createAdminClient } from "@/lib/supabase/server";
+import { validateCsrf } from "@/lib/security/csrf";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -235,6 +236,8 @@ async function finalizeIntent(userId: string, body: z.infer<typeof finalizeSchem
 }
 
 export async function POST(request: Request) {
+  const csrfError = validateCsrf(request);
+  if (csrfError) return csrfError;
   const limited = await enforceRouteLimit(request, "api:v1:extension:recovery-drafts:write", 180, 60);
   if (limited) return limited;
   const auth = await requireAuthenticatedUser();
@@ -366,6 +369,8 @@ export async function GET(request: Request) {
 }
 
 export async function DELETE(request: Request) {
+  const csrfError = validateCsrf(request);
+  if (csrfError) return csrfError;
   const limited = await enforceRouteLimit(request, "api:v1:extension:recovery-drafts:delete", 60, 60);
   if (limited) return limited;
   const auth = await requireAuthenticatedUser();
