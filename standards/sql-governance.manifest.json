@@ -2,6 +2,7 @@
   "policyVersion": 1,
   "defaultChangeKind": "append_only",
   "migrationDirectory": "drizzle",
+  "strictLineageFromIndex": 152,
   "existingMigrationFiles": [
     "drizzle/0000_medical_the_liberteens.sql",
     "drizzle/0001_remarkable_mattie_franklin.sql",
@@ -129,7 +130,40 @@
     "drizzle/0124_ponytail_storage_bucket_contracts.sql",
     "drizzle/0125_ponytail_realtime_publication_trim.sql",
     "drizzle/0126_extension_session_disconnect_callback.sql",
-    "drizzle/0127_profile_contribution_authority.sql"
+    "drizzle/0127_profile_contribution_authority.sql",
+    "drizzle/0128_notification_activity_state_contract.sql",
+    "drizzle/0129_messages_data_authority.sql",
+    "drizzle/0130_messages_fk_support_indexes.sql",
+    "drizzle/0131_messages_native_payload_contract.sql",
+    "drizzle/0132_message_notification_preview_redaction.sql",
+    "drizzle/0133_message_preview_lifecycle.sql",
+    "drizzle/0134_message_reaction_activity.sql",
+    "drizzle/0135_project_custom_workflow.sql",
+    "drizzle/0136_task_board_read_index.sql",
+    "drizzle/0137_task_activity_events.sql",
+    "drizzle/0138_task_activity_actor_index.sql",
+    "drizzle/0139_project_workflow_columns.sql",
+    "drizzle/0140_project_workflow_defaults_trigger.sql",
+    "drizzle/0141_project_workflow_legacy_presentation_backfill.sql",
+    "drizzle/0142_project_workflow_columns_realtime.sql",
+    "drizzle/0143_project_guidance_invitations.sql",
+    "drizzle/0144_project_social_links.sql",
+    "drizzle/0145_project_sprint_events.sql",
+    "drizzle/0146_sprint_activity_history.sql",
+    "drizzle/0147_foreign_key_leading_indexes.sql",
+    "drizzle/0148_sprint_timeline_origin.sql",
+    "drizzle/0149_sprint_lifecycle_memberships.sql",
+    "drizzle/0150_task_file_tags.sql",
+    "drizzle/0151_retire_project_custom_workflow.sql",
+    "drizzle/0125_ponytail_allow_office_mimes.sql",
+    "drizzle/0153_task_server_table_lineage.sql",
+    "drizzle/0154_native_database_security_hardening.sql",
+    "drizzle/0155_account_deletion_privacy.sql",
+    "drizzle/0156_profile_counter_authority.sql",
+    "drizzle/0157_storage_realtime_contract_alignment.sql",
+    "drizzle/0158_lifecycle_retention_indexes.sql",
+    "drizzle/0159_presence_project_members_authorization.sql",
+    "drizzle/0160_realtime_authorization_activation.sql"
   ],
   "legacyDatabaseTags": [
     "0073_notification_snooze",
@@ -140,8 +174,13 @@
     "0078_notification_deliveries",
     "0079_job_heartbeats"
   ],
-  "allowedUtilitySqlFiles": [
-    "scripts/setup-partitioning.sql"
-  ],
-  "breakGlassExceptions": []
+  "allowedUtilitySqlFiles": [],
+  "breakGlassExceptions": [
+    {
+      "path": "drizzle/0152_message_preview_backfill.sql",
+      "reason": "Quarantined duplicate pending exact environment verification after connector quota reset; never deploy from this file.",
+      "approvedBy": "complete-sql-supabase-audit-2026-08-13",
+      "expiresOn": "2026-08-20"
+    }
+  ]
 }
