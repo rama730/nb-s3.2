@@ -11,6 +11,8 @@ export interface MessagePreviewSource {
     metadata?: PreviewMetadata;
     senderId?: string | null;
     createdAt?: Date | string | null;
+    deletedAt?: Date | string | null;
+    replyToMessageId?: string | null;
 }
 
 export interface ConversationParticipantPreviewUpdate {
@@ -53,8 +55,14 @@ export function buildConversationParticipantPreview(
             content: message.content,
             type: message.type,
             metadata: message.metadata ?? null,
+            deletedAt: message.deletedAt,
+            replyToMessageId: message.replyToMessageId,
         }),
-        lastMessageType: getStructuredPreviewType(message),
+        lastMessageType: message.deletedAt
+            ? 'deleted'
+            : (typeof message.metadata?.previewKind === 'string'
+                ? message.metadata.previewKind
+                : getStructuredPreviewType(message)),
         lastMessageSenderId: message.senderId ?? null,
     };
 }
@@ -77,10 +85,16 @@ export function buildConversationLastMessageSnapshot(
             content: message.content,
             type: message.type,
             metadata: message.metadata ?? null,
+            deletedAt: message.deletedAt,
+            replyToMessageId: message.replyToMessageId,
         }),
         senderId: message.senderId ?? null,
         createdAt: new Date(epoch),
-        type: getStructuredPreviewType(message) ?? 'message',
+        type: message.deletedAt
+            ? 'deleted'
+            : (typeof message.metadata?.previewKind === 'string'
+                ? message.metadata.previewKind
+                : getStructuredPreviewType(message) ?? 'message'),
         metadata: message.metadata ?? null,
     };
 }
