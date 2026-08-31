@@ -3,10 +3,10 @@ import type { InfiniteData } from "@tanstack/react-query";
 import type { NotificationFeedPage, NotificationItem } from "@/lib/notifications/types";
 
 function compareNotifications(a: NotificationItem, b: NotificationItem) {
-    if (a.updatedAt === b.updatedAt) {
+    if (a.activityAt === b.activityAt) {
         return a.id < b.id ? 1 : -1;
     }
-    return a.updatedAt < b.updatedAt ? 1 : -1;
+    return a.activityAt < b.activityAt ? 1 : -1;
 }
 
 function partitionItems(
@@ -80,7 +80,7 @@ export function upsertNotificationInInfiniteData(
     }
     deduped.set(item.id, item);
     const items = Array.from(deduped.values()).sort(compareNotifications);
-    const unreadItems = items.filter((entry) => !entry.readAt);
+    const unreadItems = items.filter((entry) => !entry.seenAt);
     const unreadCount = unreadCountOverride ?? unreadItems.length;
     const unreadImportantCount = unreadItems.filter((entry) => entry.importance === "important").length;
     return rebuildInfiniteData(data, items, unreadCount, unreadImportantCount);
@@ -95,7 +95,7 @@ export function removeNotificationFromInfiniteData(
     const items = data.pages
         .flatMap((page) => page.items)
         .filter((entry) => entry.id !== notificationId);
-    const unreadItems = items.filter((entry) => !entry.readAt);
+    const unreadItems = items.filter((entry) => !entry.seenAt);
     const unreadCount = unreadCountOverride ?? unreadItems.length;
     const unreadImportantCount = unreadItems.filter((entry) => entry.importance === "important").length;
     return rebuildInfiniteData(data, items, unreadCount, unreadImportantCount);
@@ -109,6 +109,32 @@ export function patchNotificationReadStateInInfiniteData(
     return upsertNotificationInInfiniteData(data, item);
 }
 
+/** Patch a completed tray-review session without touching source-event ordering. */
+export function markNotificationsSeenInInfiniteData(
+    data: InfiniteData<NotificationFeedPage> | undefined,
+    notificationIds: readonly string[],
+    seenAt: string,
+) {
+    if (!data || notificationIds.length === 0) return data;
+    const ids = new Set(notificationIds);
+    const items = data.pages
+        .flatMap((page) => page.items)
+        .map((item) => {
+            if (!ids.has(item.id) || item.seenAt) return item;
+            return {
+                ...item,
+                seenAt,
+            };
+        });
+    const unreadItems = items.filter((item) => !item.seenAt);
+    return rebuildInfiniteData(
+        data,
+        items,
+        unreadItems.length,
+        unreadItems.filter((item) => item.importance === "important").length,
+    );
+}
+
 export function markAllNotificationsReadInInfiniteData(
     data: InfiniteData<NotificationFeedPage> | undefined,
     readAt: string,
@@ -117,12 +143,11 @@ export function markAllNotificationsReadInInfiniteData(
     const items = data.pages
         .flatMap((page) => page.items)
         .map((item) => {
-            if (item.readAt) return item;
+            if (item.readAt && item.seenAt) return item;
             return {
                 ...item,
-                readAt,
+                readAt: item.readAt ?? readAt,
                 seenAt: item.seenAt ?? readAt,
-                updatedAt: item.updatedAt,
             };
         });
     return rebuildInfiniteData(data, items, 0, 0);
