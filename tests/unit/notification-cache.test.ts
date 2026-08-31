@@ -4,6 +4,7 @@ import type { InfiniteData } from "@tanstack/react-query";
 
 import {
   markAllNotificationsReadInInfiniteData,
+  markNotificationsSeenInInfiniteData,
   patchNotificationReadStateInInfiniteData,
   upsertNotificationInInfiniteData,
 } from "@/lib/notifications/cache";
@@ -30,13 +31,14 @@ function item(overrides: Partial<NotificationItem> & Pick<NotificationItem, "id"
     dismissedAt: null,
     snoozedUntil: null,
     createdAt: updatedAt,
+    activityAt: updatedAt,
     updatedAt,
     ...rest,
   };
 }
 
-function page(items: NotificationItem[], unreadCount = items.filter((entry) => !entry.readAt).length): NotificationFeedPage {
-  const unreadImportantCount = items.filter((entry) => !entry.readAt && entry.importance === "important").length;
+function page(items: NotificationItem[], unreadCount = items.filter((entry) => !entry.seenAt).length): NotificationFeedPage {
+  const unreadImportantCount = items.filter((entry) => !entry.seenAt && entry.importance === "important").length;
   return {
     items,
     nextCursor: null,
@@ -51,7 +53,7 @@ test("upsertNotificationInInfiniteData prepends newer realtime rows and derives 
     pageParams: [undefined],
     pages: [
       page([
-        item({ id: "older", updatedAt: "2026-04-21T01:00:00.000Z", readAt: "2026-04-21T01:05:00.000Z" }),
+        item({ id: "older", updatedAt: "2026-04-21T01:00:00.000Z", readAt: "2026-04-21T01:05:00.000Z", seenAt: "2026-04-21T01:05:00.000Z" }),
       ], 0),
     ],
   };
@@ -83,6 +85,22 @@ test("patchNotificationReadStateInInfiniteData updates rows in place without dup
   assert.equal(next?.pages[0]?.unreadCount, 0);
 });
 
+test("completed tray reviews preserve source activity and linked-content read state", () => {
+  const newest = item({ id: "newest", updatedAt: "2026-04-21T02:00:00.000Z" });
+  const older = item({ id: "older", updatedAt: "2026-04-21T01:00:00.000Z" });
+  const data: InfiniteData<NotificationFeedPage> = {
+    pageParams: [undefined],
+    pages: [page([newest, older], 2)],
+  };
+
+  const next = markNotificationsSeenInInfiniteData(data, [older.id], "2026-04-21T03:00:00.000Z");
+
+  assert.deepEqual(next?.pages[0]?.items.map((entry) => entry.id), ["newest", "older"]);
+  assert.equal(next?.pages[0]?.items[1]?.readAt, null);
+  assert.equal(next?.pages[0]?.items[1]?.seenAt, "2026-04-21T03:00:00.000Z");
+  assert.equal(next?.pages[0]?.unreadCount, 1);
+});
+
 test("markAllNotificationsReadInInfiniteData patches every unread row optimistically", () => {
   const readAt = "2026-04-21T03:00:00.000Z";
   const data: InfiniteData<NotificationFeedPage> = {
@@ -90,7 +108,7 @@ test("markAllNotificationsReadInInfiniteData patches every unread row optimistic
     pages: [
       page([
         item({ id: "n-1", updatedAt: "2026-04-21T02:00:00.000Z" }),
-        item({ id: "n-2", updatedAt: "2026-04-21T01:00:00.000Z", readAt: "2026-04-21T01:05:00.000Z" }),
+        item({ id: "n-2", updatedAt: "2026-04-21T01:00:00.000Z", readAt: "2026-04-21T01:05:00.000Z", seenAt: "2026-04-21T01:05:00.000Z" }),
       ], 1),
     ],
   };
