@@ -113,8 +113,7 @@ export function useHubProjectsSimple(
         },
         initialPageParam: undefined as string | undefined,
         getNextPageParam: (lastPage) => lastPage.hasMore ? lastPage.nextCursor : undefined,
-        // Keep previous data when fetching new filters for smooth transition
-        placeholderData: (previousData) => previousData,
+        staleTime: 60_000,
         // Use initial data if provided and filters match default (empty/all)
         // Note: infinite query initialData structure needs { pages: [...], pageParams: [...] }
         initialData: (initialProjectsPage && view === 'all' && isDefaultFilters(filters)) ? {
