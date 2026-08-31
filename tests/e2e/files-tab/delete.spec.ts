@@ -6,23 +6,9 @@
  *   - `permanent delete`   — the distinct "Delete permanently" confirmation
  *                            flow mandated by Req 7.5.
  *
- * Behaviour contract (design.md § Migration and Rollout, § Open Question 3):
- *   - `ProjectFilesWorkspace` always mounts `FilesTabRoot` (the V3 surface
- *     is unconditional post-rollout).
- *   - Q3 ("Trash → remove trash surface from Files tab") removed the in-tab
- *     trash browser. As a result, V3 does not currently ship a
- *     "Delete permanently" affordance inside the Files Tab; that affordance
- *     lives in the legacy `ExplorerShell` trash mode which is out of scope
- *     for V3. The spec therefore records `permanent delete` as
- *     `not_applicable` with a non-empty justification (Req 18.3) when the
- *     affordance is genuinely absent, and as `pass` if a future revision
- *     re-introduces it.
- *
- * Fallbacks:
- *   - No `E2E_USER_EMAIL` / `E2E_USER_PASSWORD`           → not_applicable
- *   - V3 root not rendered                                → not_applicable
- *   - Unexpected Playwright / browser launch failure      → fail (caught at
- *                                                            test level)
+ * Trash is a required Files collection. Missing menus are test failures, not
+ * "not applicable". Only disposable files created by this test may be purged.
+ * Missing authentication credentials are the only environment skip.
  *
  * Requirements traceability: Req 7.5, Req 14.9, Req 18.1, Req 18.3.
  */
@@ -95,6 +81,7 @@ async function openFilesTabV3(page: Page): Promise<Locator | null> {
   await expect(page.getByTestId("files-tab-sidebar").first()).toBeVisible({
     timeout: 10_000,
   });
+  await page.getByRole("navigation", { name: "File collections" }).getByRole("button", { name: "Project files", exact: true }).click();
   return v3Root;
 }
 
@@ -180,28 +167,13 @@ test.describe("Files Tab V3 — delete flows (Task 12.5)", () => {
       try {
         await login(page);
         const root = await openFilesTabV3(page);
-        if (!root) {
-          return {
-            result: "not_applicable",
-            justification:
-              "V3 Files Tab root (data-testid='files-tab-root') was not rendered — " +
-              "the V3 delete flow cannot be exercised.",
-          };
-        }
+        expect(root, "Files workspace must render for the authenticated fixture").not.toBeNull();
 
         const createdName = await createDisposableFile(page);
-        if (!createdName) {
-          return {
-            result: "not_applicable",
-            justification:
-              "Could not provision a disposable child node in the seeded 'workspace' folder " +
-              "(context menu did not expose a usable 'New file' affordance). The soft-delete " +
-              "path depends on the creation surface covered by Task 12.2.",
-          };
-        }
+        expect(createdName, "Disposable test-file creation must succeed").toBeTruthy();
 
         // Right-click the newly created row → "Move to trash".
-        const opened = await openContextMenuForRow(page, createdName);
+        const opened = await openContextMenuForRow(page, createdName!);
         expect(opened, "expected context menu to open for the disposable node").toBe(true);
 
         const deleteItem = page
@@ -225,7 +197,7 @@ test.describe("Files Tab V3 — delete flows (Task 12.5)", () => {
         const removedRow = page
           .getByTestId("files-tab-sidebar")
           .locator('[role="treeitem"]')
-          .filter({ hasText: createdName });
+          .filter({ hasText: createdName! });
         await expect(removedRow).toHaveCount(0, { timeout: 10_000 });
 
         await monitor.assertNoViolations();
@@ -264,70 +236,30 @@ test.describe("Files Tab V3 — delete flows (Task 12.5)", () => {
       try {
         await login(page);
         const root = await openFilesTabV3(page);
-        if (!root) {
-          return {
-            result: "not_applicable",
-            justification:
-              "V3 Files Tab root (data-testid='files-tab-root') was not rendered — " +
-              "the V3 permanent-delete flow cannot be exercised.",
-          };
-        }
+        expect(root, "Files workspace must render for the authenticated fixture").not.toBeNull();
 
-        // Req 7.5 demands a distinct "Delete permanently" confirmation flow.
-        // Look for any affordance matching that wording in the V3 surface.
-        // Primary probe: context menu on the seeded root.
-        const opened = await openContextMenuForRow(page, ROOT_FOLDER_NAME);
-        let affordancePresent = false;
-        let affordanceLocator: Locator | null = null;
-        if (opened) {
-          const menuDeleteForever = page
-            .getByRole("menuitem", { name: /delete permanently|delete forever|permanently delete/i })
-            .first();
-          if (await menuDeleteForever.count()) {
-            affordancePresent = true;
-            affordanceLocator = menuDeleteForever;
-          }
-          // Close menu so we can probe other surfaces.
-          await page.keyboard.press("Escape");
-        }
+        const createdName = await createDisposableFile(page);
+        expect(createdName, "a disposable file is required; never delete seeded or user data").toBeTruthy();
+        expect(await openContextMenuForRow(page, createdName!)).toBe(true);
+        await page.getByRole("menuitem", { name: /move to trash/i }).first().click();
+        await page.getByRole("dialog").getByRole("button", { name: /^move to trash$/i }).click();
+        await expect(page.getByRole("dialog")).toHaveCount(0);
+        await page.getByRole("button", { name: "Back to Files", exact: true }).click();
+        await page.getByRole("navigation", { name: "File collections" }).getByRole("button", { name: "Trash", exact: true }).click();
+        const row = page.getByRole("region", { name: "Trash", exact: true }).getByRole("listitem").filter({ hasText: createdName! });
+        await expect(row).toBeVisible();
+        await row.getByRole("button", { name: /actions for/i }).click();
+        await page.getByRole("menuitem", { name: /delete permanently/i }).click();
+        const dialog = page.getByRole("dialog");
+        await expect(dialog.getByRole("heading", { name: /permanently delete/i })).toBeVisible();
+        await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+        await expect(row).toBeVisible();
+        await row.getByRole("button", { name: /actions for/i }).click();
+        await page.getByRole("menuitem", { name: /delete permanently/i }).click();
+        await dialog.getByRole("button", { name: /delete permanently/i }).click();
+        await expect(dialog).toHaveCount(0, { timeout: 30_000 });
+        await expect(row).toHaveCount(0, { timeout: 30_000 });
 
-        if (!affordancePresent) {
-          // Secondary probe: anywhere in the V3 root subtree.
-          const globalProbe = root.getByRole("button", {
-            name: /delete permanently|delete forever|permanently delete/i,
-          });
-          if (await globalProbe.count()) {
-            affordancePresent = true;
-            affordanceLocator = globalProbe.first();
-          }
-        }
-
-        if (!affordancePresent) {
-          return {
-            result: "not_applicable",
-            justification:
-              "Req 7.5 was reconciled with design.md § Open Question 3: the Files tab ships only the " +
-              "soft-delete 'Move to trash' flow; a separate trash UI (outside the Files tab) owns the " +
-              "permanent-delete confirmation. Recording not_applicable by design — this is the expected " +
-              "outcome and should remain not_applicable indefinitely.",
-          };
-        }
-
-        // Affordance present — exercise the confirmation flow.
-        await affordanceLocator!.click();
-
-        const confirmDialog = page
-          .getByRole("heading", { name: /delete permanently|permanently delete|delete forever/i })
-          .first();
-        await expect(confirmDialog).toBeVisible({ timeout: 5_000 });
-
-        const confirmBtn = page
-          .getByRole("button", { name: /delete permanently|delete forever|permanently delete/i })
-          .first();
-        await expect(confirmBtn).toBeVisible();
-        await confirmBtn.click();
-
-        await expect(confirmDialog).toHaveCount(0, { timeout: 10_000 });
         await monitor.assertNoViolations();
         return { result: "pass" };
       } finally {
