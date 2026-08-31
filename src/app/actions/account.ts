@@ -22,7 +22,6 @@ import { eq, or, and, inArray, isNull, sql, desc, ne } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { queueCounterRefreshBestEffort } from '@/lib/workspace/counter-buffer';
 import { logger } from '@/lib/logger';
-import { randomBytes } from 'crypto';
 import { createSignedJobRequestToken } from '@/lib/security/job-request';
 import { consumeRateLimit } from '@/lib/security/rate-limit';
 import { resolveSecurityStepUp } from '@/lib/security/step-up';
@@ -31,7 +30,6 @@ import { z } from 'zod';
 
 const ACCOUNT_DELETE_CONFIRM_TEXT = 'DELETE';
 const GRACE_PERIOD_DAYS = 30;
-const CONFIRMATION_TOKEN_EXPIRY_HOURS = 1;
 const ACCOUNT_EXPORT_MESSAGE_LIMIT = 10_000;
 
 type AccountExportMessageRow = {
@@ -110,8 +108,6 @@ export async function scheduleAccountDeletion(
         const userEmail = user.email || '';
         const now = new Date();
         const hardDeleteAt = new Date(now.getTime() + GRACE_PERIOD_DAYS * 24 * 60 * 60 * 1000);
-        const tokenExpiresAt = new Date(now.getTime() + CONFIRMATION_TOKEN_EXPIRY_HOURS * 60 * 60 * 1000);
-        const confirmationToken = randomBytes(32).toString('hex');
 
         // Check for existing pending deletion
         const existingDeletion = await db
@@ -183,8 +179,6 @@ export async function scheduleAccountDeletion(
                     reason: reason || null,
                     scheduledAt: now,
                     hardDeleteAt,
-                    confirmationToken,
-                    tokenExpiresAt,
                     cleanupStatus: 'pending',
                     metadata: {
                         userAgent: '',
