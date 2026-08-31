@@ -12,7 +12,10 @@ describe("Files tab revision experience", () => {
     const fileView = source("src/components/projects/v2/files-tab/file/FileView.tsx");
     const header = source("src/components/projects/v2/files-tab/file/FileInspectorPanelHeader.tsx");
 
-    assert.match(fileView, /type FileInspectorPanel = "linked_tasks" \| "version_history" \| null/);
+    assert.match(fileView, /workspace\?\.inspector/);
+    const workspace = source("src/components/projects/v2/files-tab/FilesWorkspaceViews.tsx");
+    for (const panel of ["details", "linked_tasks", "version_history", "github"]) assert.ok(workspace.includes(`| "${panel}"`));
+    assert.match(fileView, /FileInspectorContainer/);
     assert.match(fileView, /setActiveInspectorPanel/);
     assert.doesNotMatch(fileView, /setIsLinkedTasksPanelOpen/);
     assert.doesNotMatch(fileView, /setIsVersionHistoryPanelOpen/);
@@ -69,17 +72,17 @@ describe("Files tab revision experience", () => {
     }
   });
 
-  it("reconciles version, timestamp, bytes, and uploader as one realtime snapshot", () => {
+  it("reconciles version metadata through bounded authoritative reads", () => {
     const nodes = source("src/app/actions/files/nodes.ts");
+    const attribution = source("src/lib/files/file-attribution.ts");
     const channel = source("src/lib/realtime/project-files-channel.ts");
     const root = source("src/components/projects/v2/files-tab/FilesTabRoot.tsx");
 
-    assert.match(nodes, /pn\.current_version = fv\.version/);
-    assert.match(channel, /event: '\*'[\s\S]*table: 'file_versions'/);
-    assert.match(channel, /eventType !== 'INSERT'[\s\S]*eventType !== 'UPDATE'[\s\S]*eventType !== 'DELETE'/);
-    assert.match(root, /pendingVersionNodeIds/);
-    assert.match(root, /getNodeMetadataBatch\(projectId, nodeIds\)/);
-    assert.match(root, /upsertNodes\(projectId, result\.data\.nodes\)/);
-    assert.doesNotMatch(root, /onFileVersionChange:[\s\S]{0,160}patchNodeVersion/);
+    assert.match(nodes, /getFileAttributionByNodeId/);
+    assert.match(attribution, /pn\.current_version = fv\.version/);
+    assert.doesNotMatch(channel, /table: 'file_versions'/);
+    assert.match(root, /loadFolderContent\(visibleFolderId, "refresh"\)/);
+    assert.match(root, /document\.visibilityState !== "visible"/);
+    assert.match(root, /void supabase\.removeChannel\(channel\)/);
   });
 });
