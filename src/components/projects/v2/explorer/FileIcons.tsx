@@ -11,7 +11,13 @@ import {
   Globe,
   Package,
   Hash,
-  Info,
+  BookOpen,
+  Scale,
+  FileVideo,
+  FileAudio,
+  FileArchive,
+  FileSpreadsheet,
+  Presentation,
   GitGraph,
   Code2,
   Folder,
@@ -32,14 +38,21 @@ const FILE_ICONS: Record<string, { icon: React.ElementType; color: string }> = {
   "tailwind.config.js": { icon: Box, color: "text-cyan-500" },
   "tailwind.config.ts": { icon: Box, color: "text-cyan-500" },
   "postcss.config.js": { icon: Box, color: "text-pink-500" },
-  "README.md": { icon: Info, color: "text-blue-400" },
-  "LICENSE": { icon: Scale, color: "text-yellow-600" }, // Scale not in lucide imports, fixing below
+  "README.md": { icon: BookOpen, color: "text-blue-400" },
+  "LICENSE": { icon: Scale, color: "text-yellow-600" },
   "Dockerfile": { icon: Box, color: "text-blue-600" },
   "docker-compose.yml": { icon: Box, color: "text-blue-600" },
 };
 
 // Mapping of extensions to icons and colors
 const EXT_ICONS: Record<string, { icon: React.ElementType; color: string }> = {
+  ...Object.fromEntries(["pdf", "doc", "docx", "odt", "rtf"].map(ext => [ext, { icon: FileText, color: "text-blue-500" }])),
+  ...Object.fromEntries(["mp4", "mov", "webm", "mkv", "avi"].map(ext => [ext, { icon: FileVideo, color: "text-violet-500" }])),
+  ...Object.fromEntries(["mp3", "wav", "ogg", "m4a", "flac"].map(ext => [ext, { icon: FileAudio, color: "text-violet-500" }])),
+  ...Object.fromEntries(["zip", "tar", "gz", "7z", "rar"].map(ext => [ext, { icon: FileArchive, color: "text-amber-600" }])),
+  ...Object.fromEntries(["csv", "xls", "xlsx", "ods"].map(ext => [ext, { icon: FileSpreadsheet, color: "text-emerald-600" }])),
+  ...Object.fromEntries(["ppt", "pptx", "odp"].map(ext => [ext, { icon: Presentation, color: "text-orange-500" }])),
+  ...Object.fromEntries(["webp", "gif", "avif", "heic", "bmp", "tiff"].map(ext => [ext, { icon: FileImage, color: "text-purple-400" }])),
   ts: { icon: FileCode, color: "text-blue-500" },
   tsx: { icon: Code2, color: "text-blue-400" },
   js: { icon: FileCode, color: "text-yellow-400" },
@@ -58,10 +71,6 @@ const EXT_ICONS: Record<string, { icon: React.ElementType; color: string }> = {
   rs: { icon: Settings, color: "text-orange-600" }, // Rust
   go: { icon: Box, color: "text-cyan-500" },
 };
-
-function Scale(props: React.ComponentProps<typeof FileText>) {
-    return <FileText {...props} />; // Fallback since Scale isn't imported potentially or I missed it.
-}
 
 export function FileIcon({ name, isFolder, isOpen, size = "w-4 h-4", className }: { name: string; isFolder: boolean; isOpen?: boolean; size?: string; className?: string }) {
   if (isFolder) {
@@ -83,7 +92,7 @@ export function FileIcon({ name, isFolder, isOpen, size = "w-4 h-4", className }
   const exact = FILE_ICONS[name];
   if (exact) {
     const Icon = exact.icon;
-    return <Icon className={cn(size, className, exact.color)} />;
+    return <Icon aria-hidden="true" className={cn(size, className, exact.color)} />;
   }
 
   const parts = name.split(".");
@@ -92,11 +101,11 @@ export function FileIcon({ name, isFolder, isOpen, size = "w-4 h-4", className }
 
   if (match) {
     const Icon = match.icon;
-    return <Icon className={cn(size, className, match.color)} />;
+    return <Icon aria-hidden="true" className={cn(size, className, match.color)} />;
   }
 
   // Default file
-  return <File className={cn(size, className, "text-zinc-400")} />;
+  return <File aria-hidden="true" className={cn(size, className, "text-zinc-400")} />;
 }
 const FolderIcon = Folder;
 const FolderOpenIcon = FolderOpen;
