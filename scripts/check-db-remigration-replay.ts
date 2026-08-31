@@ -52,8 +52,16 @@ function collectTableMatches(source: string, pattern: RegExp) {
   return tables;
 }
 
+function drizzleSchemaTables() {
+  return [...readText("src/lib/db/schema/index.ts").matchAll(/\bpgTable\(\s*["']([^"']+)["']/g)]
+    .map((match) => match[1]!)
+    .sort();
+}
+
 function collectReplayRequiredState(): ReplayRequiredState {
-  const tables = new Set<string>();
+  // The ORM declaration is the application catalog authority. Deriving this
+  // set from migrations made objects absent from both sources invisible.
+  const tables = new Set(drizzleSchemaTables());
   const rlsTables = new Set<string>();
   const policies = new Set<string>();
   const realtimePublicationTables = new Set<string>();
@@ -61,32 +69,16 @@ function collectReplayRequiredState(): ReplayRequiredState {
   for (const source of migrationSourcesInJournalOrder()) {
     for (const tableName of collectTableMatches(
       source,
-      /\bCREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:public\.)?(?:"([^"]+)"|([a-z_][\w$]*))/gi,
-    )) {
-      tables.add(tableName);
-    }
-
-    for (const tableName of collectTableMatches(
-      source,
-      /\bDROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:public\.)?(?:"([^"]+)"|([a-z_][\w$]*))/gi,
-    )) {
-      tables.delete(tableName);
-      rlsTables.delete(tableName);
-      realtimePublicationTables.delete(tableName);
-    }
-
-    for (const tableName of collectTableMatches(
-      source,
       /\bALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?(?:public\.)?(?:"([^"]+)"|([a-z_][\w$]*))\s+ENABLE\s+ROW\s+LEVEL\s+SECURITY/gi,
     )) {
       rlsTables.add(tableName);
     }
 
-    for (const match of source.matchAll(/\bCREATE\s+POLICY\s+"([^"]+)"/gi)) {
-      policies.add(match[1]!);
+    for (const match of source.matchAll(/\bCREATE\s+POLICY\s+(?:"([^"]+)"|([a-z_][\w$]*))/gi)) {
+      policies.add((match[1] || match[2])!);
     }
-    for (const match of source.matchAll(/\bDROP\s+POLICY\s+(?:IF\s+EXISTS\s+)?"([^"]+)"/gi)) {
-      policies.delete(match[1]!);
+    for (const match of source.matchAll(/\bDROP\s+POLICY\s+(?:IF\s+EXISTS\s+)?(?:"([^"]+)"|([a-z_][\w$]*))/gi)) {
+      policies.delete((match[1] || match[2])!);
     }
 
     for (const tableName of collectTableMatches(
@@ -163,16 +155,27 @@ async function validateDatabase(
 ) {
   const sql = postgres(databaseUrl, { ssl: "require", prepare: false, max: 1 });
   try {
-    const [tablesRow] = await sql<{ count: number }[]>`
-        SELECT count(*)::int AS count
+    const tableRows = await sql<{ tableName: string }[]>`
+      SELECT table_name AS "tableName"
       FROM information_schema.tables
       WHERE table_schema = 'public'
-        AND table_name IN ${sql(REQUIRED_STATE.tables)}
+        AND table_type = 'BASE TABLE'
     `;
-    if (options.strict && (tablesRow?.count ?? 0) !== REQUIRED_STATE.tables.length) {
-      throw new Error(
-        `[${label}] missing required tables (found ${tablesRow?.count ?? 0}/${REQUIRED_STATE.tables.length})`,
-      );
+    if (options.strict) {
+      const found = new Set(tableRows.map((row) => row.tableName));
+      const missing = REQUIRED_STATE.tables.filter((tableName) => !found.has(tableName));
+      const allowedReplayOnly = (tableName: string) =>
+        tableName === "app_migration_journal"
+        || /^project_node_events_(?:\d{4}_\d{2}|default)$/.test(tableName)
+        || /^tasks_p\d+$/.test(tableName);
+      const unexpected = [...found]
+        .filter((tableName) => !REQUIRED_STATE.tables.includes(tableName) && !allowedReplayOnly(tableName))
+        .sort();
+      if (missing.length > 0 || unexpected.length > 0) {
+        throw new Error(
+          `[${label}] catalog mismatch; missing=[${missing.join(", ")}], unexpected=[${unexpected.join(", ")}]`,
+        );
+      }
     }
 
     const rlsRows = await sql<{ tableName: string; relrowsecurity: boolean }[]>`
