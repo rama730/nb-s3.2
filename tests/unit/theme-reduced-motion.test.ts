@@ -5,7 +5,7 @@ import {
   isReducedMotionEnabled,
   prefersReducedMotionFromAttributes,
   prefersReducedMotionFromSystem,
-} from "../../src/lib/theme/reduced-motion";
+} from "../../src/lib/theme/appearance";
 
 test("prefersReducedMotionFromSystem handles missing matcher", () => {
   assert.equal(prefersReducedMotionFromSystem(undefined), false);
