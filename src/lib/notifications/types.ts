@@ -1,5 +1,6 @@
 export type NotificationKind =
     | "message_burst"
+    | "message_reaction"
     | "workflow_assigned"
     | "workflow_resolved"
     | "application_received"
@@ -87,6 +88,8 @@ export type NotificationEntityRefs = {
     commentId?: string | null;
     conversationId?: string | null;
     sourceMessageId?: string | null;
+    reactionEmoji?: string | null;
+    messageDeletedAt?: string | null;
     workflowItemId?: string | null;
     applicationId?: string | null;
     connectionId?: string | null;
@@ -129,6 +132,8 @@ export type NotificationItem = {
     dismissedAt: string | null;
     snoozedUntil: string | null;
     createdAt: string;
+    /** Timestamp of the latest source event. Viewer actions never change it. */
+    activityAt: string;
     updatedAt: string;
 };
 
