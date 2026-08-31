@@ -47,14 +47,15 @@ function TypingDots({ size = 'md' }: { size?: 'sm' | 'md' }) {
 export function TypingIndicator({ users, variant = 'chat', className }: TypingIndicatorProps) {
     if (users.length === 0) return null;
 
-    const text = getTypingStatusText(users);
+    const text = getTypingStatusText(users, { ellipsis: true });
 
     if (variant === 'inline') {
+        const textWithoutEllipsis = getTypingStatusText(users);
         return (
             <span className={cn('inline-flex items-center gap-1.5 text-primary/70', className)}>
                 <TypingDots size="sm" />
                 <span className="truncate text-[12px] font-medium italic leading-5">
-                    {text}
+                    {textWithoutEllipsis}
                 </span>
             </span>
         );
@@ -62,19 +63,11 @@ export function TypingIndicator({ users, variant = 'chat', className }: TypingIn
 
     return (
         <div className={cn(
-            'mb-2 flex items-end gap-2 pl-4 animate-in fade-in slide-in-from-bottom-1 duration-200',
+            'mb-2 flex items-center gap-2 text-xs text-zinc-500 dark:text-zinc-400 font-normal italic animate-in fade-in duration-200',
             className,
         )}>
-            <div className="flex flex-col gap-1">
-                <div className="flex items-center gap-1.5 rounded-2xl rounded-bl-sm border border-zinc-200 bg-zinc-100 px-3 py-2 dark:border-zinc-700/50 dark:bg-zinc-800/80">
-                    <TypingDots size="md" />
-                </div>
-                {text && (
-                    <span className="ml-1 text-[10px] font-medium text-zinc-400">
-                        {text}
-                    </span>
-                )}
-            </div>
+            <TypingDots size="sm" />
+            <span className="animate-pulse">{text}</span>
         </div>
     );
 }
