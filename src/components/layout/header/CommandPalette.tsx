@@ -16,11 +16,11 @@ import { SearchPreviewError } from "@/lib/search/contracts";
 import {
     ProfileSearchResultCard,
     ProjectSearchResultCard,
+    LinkSearchResultCard,
     SettingsSearchResultCard,
     TaskSearchResultCard,
 } from "./GlobalSearchResultCards";
 import {
-    OPEN_MESSAGES_SEARCH_EVENT,
     buildGlobalSearchHref,
     getPeopleSearchScope,
     getProjectIdentifierFromPathname,
@@ -48,7 +48,7 @@ const CONTEXT_PRESENTATION = {
     default: { label: "Hub / Projects", hints: ["Project name", "Technology", "Category"] },
     hub: { label: "Hub / Projects", hints: ["Project name", "Technology", "Category"] },
     people: { label: "Connections / Builders", hints: ["Name", "Skill", "Location"] },
-    project: { label: "Project / Tasks", hints: ["Task title", "Task key", "Description"] },
+    project: { label: "Project / Work & Links", hints: ["Task title", "Destination name", "Link purpose"] },
     settings: { label: "Workspace / Settings", hints: ["Theme", "Privacy", "Integrations"] },
     messages: { label: "Messages", hints: [] },
 } satisfies Record<GlobalSearchContext, { label: string; hints: string[] }>;
@@ -100,6 +100,7 @@ function RecentSearchList({
                         if (recent.preview.kind === "project") return <ProjectSearchResultCard key={recent.key} result={recent.preview} {...interaction} />;
                         if (recent.preview.kind === "profile") return <ProfileSearchResultCard key={recent.key} result={recent.preview} {...interaction} onConnect={onConnect} isConnecting={connectingUserId === recent.preview.userId} />;
                         if (recent.preview.kind === "task") return <TaskSearchResultCard key={recent.key} result={recent.preview} {...interaction} />;
+                        if (recent.preview.kind === "link") return <LinkSearchResultCard key={recent.key} result={recent.preview} {...interaction} />;
                     }
                     if (recent.kind !== "query") return null;
                     return (
@@ -165,6 +166,7 @@ export default function CommandPalette({ isOpen, onClose, initialQuery = "", con
     const projectResults = previewResults.map((result, index) => ({ result, index })).filter((entry): entry is { result: Extract<GlobalSearchPreview, { kind: "project" }>; index: number } => entry.result.kind === "project");
     const profileResults = previewResults.map((result, index) => ({ result, index })).filter((entry): entry is { result: Extract<GlobalSearchPreview, { kind: "profile" }>; index: number } => entry.result.kind === "profile");
     const taskResults = previewResults.map((result, index) => ({ result, index })).filter((entry): entry is { result: Extract<GlobalSearchPreview, { kind: "task" }>; index: number } => entry.result.kind === "task");
+    const linkResults = previewResults.map((result, index) => ({ result, index })).filter((entry): entry is { result: Extract<GlobalSearchPreview, { kind: "link" }>; index: number } => entry.result.kind === "link");
     const skillResults = previewResults.map((result, index) => ({ result, index })).filter((entry): entry is { result: Extract<GlobalSearchPreview, { kind: "skill" }>; index: number } => entry.result.kind === "skill");
     const supportsPreviews = searchContext === "hub" || searchContext === "people" || searchContext === "project" || searchContext === "default";
     const resultCount = searchContext === "settings" ? settingsResults.length : previewResults.length;
@@ -202,12 +204,6 @@ export default function CommandPalette({ isOpen, onClose, initialQuery = "", con
         return () => window.clearTimeout(prefetchTimer);
     }, [activeResult?.href, isOpen, router]);
 
-    useEffect(() => {
-        if (!isOpen || searchContext !== "messages") return;
-        window.dispatchEvent(new Event(OPEN_MESSAGES_SEARCH_EVENT));
-        onClose();
-    }, [isOpen, onClose, searchContext]);
-
     const recordRecentSearch = (value: string) => {
         setRecentSearches(rememberRecentGlobalSearch(recentSearchOwnerId, recentSearchScope, value));
     };
@@ -238,6 +234,11 @@ export default function CommandPalette({ isOpen, onClose, initialQuery = "", con
         cancelActivePreviews();
         if (result.kind === "skill") recordRecentSearch(result.title);
         else recordRecentPreview(result);
+        if (result.kind === "link") {
+            window.open(result.href, "_blank", "noopener,noreferrer");
+            onClose();
+            return;
+        }
         router.push(result.href);
         onClose();
     };
@@ -299,14 +300,14 @@ export default function CommandPalette({ isOpen, onClose, initialQuery = "", con
         return true;
     };
 
-    if (searchContext === "messages") return null;
-
     const resultLabel = projectResults.length
         ? `${projectResults.length} project${projectResults.length === 1 ? "" : "s"}`
         : profileResults.length
             ? `${profileResults.length} builder${profileResults.length === 1 ? "" : "s"}`
             : taskResults.length
                 ? `${taskResults.length} task${taskResults.length === 1 ? "" : "s"}`
+                : linkResults.length
+                    ? `${linkResults.length} project link${linkResults.length === 1 ? "" : "s"}`
                 : settingsResults.length
                     ? `${settingsResults.length} setting${settingsResults.length === 1 ? "" : "s"}`
                     : "Results";
@@ -416,13 +417,14 @@ export default function CommandPalette({ isOpen, onClose, initialQuery = "", con
                                     {!isRateLimited ? <button type="button" onClick={() => void previews.refetch()} className="mt-3 inline-flex items-center gap-2 rounded-lg border border-zinc-200 px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-900"><RotateCcw className="h-3.5 w-3.5" aria-hidden />Retry preview</button> : null}
                                 </div>
                             ) : previewResults.length === 0 ? (
-                                <div className="px-5 py-12 text-center"><p className="text-sm font-medium text-zinc-700 dark:text-zinc-200">No {searchContext === "people" ? "builders" : searchContext === "project" ? "tasks" : "projects"} match “{normalizedQuery}”.</p><p className="mt-1 text-xs text-zinc-500">Try a {presentation.hints.map((hint) => hint.toLowerCase()).join(", ")}.</p></div>
+                                <div className="px-5 py-12 text-center"><p className="text-sm font-medium text-zinc-700 dark:text-zinc-200">No {searchContext === "people" ? "builders" : searchContext === "project" ? "project work or links" : "projects"} match “{normalizedQuery}”.</p><p className="mt-1 text-xs text-zinc-500">Try a {presentation.hints.map((hint) => hint.toLowerCase()).join(", ")}.</p></div>
                             ) : (
                                 <div className="p-2">
                                     <div className="flex items-center justify-between px-3 pb-1 pt-2 text-[11px] font-semibold text-zinc-400"><span>{resultLabel}</span>{previews.isFetching ? <span>Refreshing…</span> : null}</div>
                                     {projectResults.map(({ result, index }) => <ProjectSearchResultCard key={result.id} result={result} index={index} activeIndex={activeIndex} onActivate={setActiveIndex} onOpen={openPreviewResult} />)}
                                     {profileResults.map(({ result, index }) => <ProfileSearchResultCard key={result.id} result={result} index={index} activeIndex={activeIndex} onActivate={setActiveIndex} onOpen={openPreviewResult} onConnect={connectProfile} isConnecting={sendRequest.isPending && sendRequest.variables?.userId === result.userId} />)}
                                     {taskResults.map(({ result, index }) => <TaskSearchResultCard key={result.id} result={result} index={index} activeIndex={activeIndex} onActivate={setActiveIndex} onOpen={openPreviewResult} />)}
+                                    {linkResults.map(({ result, index }) => <LinkSearchResultCard key={result.id} result={result} index={index} activeIndex={activeIndex} onActivate={setActiveIndex} onOpen={openPreviewResult} />)}
                                     {skillResults.length ? (
                                         <div className="mt-2 border-t border-zinc-200/80 pt-3 dark:border-zinc-800">
                                             <div className="flex items-center justify-between px-3 pb-2 text-[11px] font-semibold text-zinc-400"><span>Skills in these projects</span><span>Scroll to explore</span></div>
