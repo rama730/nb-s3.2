@@ -383,11 +383,11 @@ describe("metadata_matches_selection — source-level pins", () => {
       /<FileView\s+key=\{location\.id\}/,
       "FilesTabMain must render FileView with key={location.id} so the subtree remounts on any id change (Req 17 structural fix)",
     );
-    // The ternary must branch on `location.type === "file"` (or the
-    // complementary folder/root branches) — pin the type guard directly.
+    // Root and folder are handled explicitly; the exhaustive final branch
+    // therefore owns file rendering without a second, redundant type check.
     assert.match(
       src,
-      /location\.type\s*===\s*"file"/,
+      /location\.type\s*===\s*"root"[\s\S]*?location\.type\s*===\s*"folder"[\s\S]*?<FolderListView[\s\S]*?:\s*\([\s\S]*?<FileView/,
       "FilesTabMain must gate the FileView render on location.type === 'file'",
     );
     // The folder branch must render `<FolderListView` and NOT
