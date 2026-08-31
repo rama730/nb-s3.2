@@ -11,8 +11,8 @@ const DISALLOWED_HARDCODED_ACCENT = /\b(?:bg|text|border|ring|from|to)-(?:blue|i
 
 const CORE_APPEARANCE_FILES = [
   "src/components/layout/header/NavLink.tsx",
-  "src/components/layout/Sidebar.tsx",
-  "src/components/layout/MobileNav.tsx",
+  "src/components/layout/header/TopNav.tsx",
+  "src/components/layout/header/MobileMenu.tsx",
   "src/components/hub/HubHeader.tsx",
   "src/components/chat/v2/ChatPopupV2.tsx",
   "src/components/chat/v2/MessageComposerV2.tsx",
