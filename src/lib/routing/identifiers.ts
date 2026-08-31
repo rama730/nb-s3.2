@@ -4,7 +4,7 @@
 
 interface ProfileLike {
     username?: string | null;
-    id?: string;
+    id?: string | null;
 }
 
 /**
