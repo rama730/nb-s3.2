@@ -6,6 +6,8 @@ import { db } from '@/lib/db';
 import {
     conversationParticipants,
     conversations,
+    connections,
+    dmPairs,
     profiles,
     projectMembers,
     projects,
@@ -20,6 +22,7 @@ import {
     hydrateConversationLastMessageDeliveryMetadata,
     getMessages,
     getOrCreateDMConversation,
+    isDirectMessagingAllowed,
     getPinnedMessages,
     sendMessageWithAttachments,
     sendStructuredMessageActionV2,
@@ -27,6 +30,10 @@ import {
 } from '@/app/actions/messaging';
 import type { MessageContextChip } from '@/lib/messages/structured';
 import { APPLICATION_BANNER_HIDE_AFTER_MS } from '@/lib/chat/banner-lifecycle';
+import { consumeRateLimit } from '@/lib/security/rate-limit';
+import { buildConversationDisplay } from '@/lib/messages/conversation-display';
+import { isUuid } from '@/lib/validations/uuid';
+import { runWithMessageThreadReadScope } from '@/lib/messages/thread-read-scope';
 
 type ConnectionStatus = 'none' | 'pending_sent' | 'pending_received' | 'connected' | 'blocked' | 'open';
 
@@ -70,11 +77,246 @@ export interface MessageThreadPageV2 {
     nextCursor: string | null;
 }
 
+export type MessageThreadErrorCode =
+    | 'UNAUTHENTICATED'
+    | 'INVALID_CONVERSATION'
+    | 'NOT_FOUND'
+    | 'FORBIDDEN'
+    | 'FAILED';
+
+export interface MessageRecipientV2 {
+    userId: string;
+    username: string | null;
+    fullName: string | null;
+    avatarUrl: string | null;
+    headline: string | null;
+    eligibility: 'connected' | 'everyone' | 'application';
+}
+
+type MessageRecipientCursor = {
+    sortKey: string;
+    userId: string;
+};
+
+function parseMessageRecipientCursor(value?: string | null): MessageRecipientCursor | null {
+    if (!value) return null;
+    try {
+        const parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as Partial<MessageRecipientCursor>;
+        if (
+            typeof parsed.sortKey !== 'string'
+            || parsed.sortKey.length > 256
+            || typeof parsed.userId !== 'string'
+            || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(parsed.userId)
+        ) {
+            return null;
+        }
+        return { sortKey: parsed.sortKey, userId: parsed.userId };
+    } catch {
+        return null;
+    }
+}
+
+function encodeMessageRecipientCursor(cursor: MessageRecipientCursor): string {
+    return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
+}
+
+function escapeLikePattern(value: string): string {
+    return value.replace(/[\\%_]/g, '\\$&');
+}
+
+export async function searchMessageRecipientsV2(input: {
+    query?: string;
+    cursor?: string | null;
+    limit?: number;
+} = {}): Promise<{
+    success: boolean;
+    recipients: MessageRecipientV2[];
+    hasMore: boolean;
+    nextCursor: string | null;
+    error?: string;
+    code?: 'UNAUTHENTICATED' | 'RATE_LIMITED' | 'INVALID_CURSOR' | 'FAILED';
+}> {
+    const user = await getAuthUser();
+    if (!user) {
+        return {
+            success: false,
+            recipients: [],
+            hasMore: false,
+            nextCursor: null,
+            code: 'UNAUTHENTICATED',
+            error: 'Not authenticated',
+        };
+    }
+
+    const normalizedQuery = (input.query ?? '').normalize('NFKC').replace(/\s+/g, ' ').trim();
+    if (Array.from(normalizedQuery).length > 100) {
+        return {
+            success: false,
+            recipients: [],
+            hasMore: false,
+            nextCursor: null,
+            code: 'FAILED',
+            error: 'Recipient search is too long',
+        };
+    }
+
+    const rate = await consumeRateLimit(`message-recipients:${user.id}`, 90, 60);
+    if (!rate.allowed) {
+        return {
+            success: false,
+            recipients: [],
+            hasMore: false,
+            nextCursor: null,
+            code: 'RATE_LIMITED',
+            error: 'Too many searches. Please wait and try again.',
+        };
+    }
+
+    const cursor = parseMessageRecipientCursor(input.cursor);
+    if (input.cursor && !cursor) {
+        return {
+            success: false,
+            recipients: [],
+            hasMore: false,
+            nextCursor: null,
+            code: 'INVALID_CURSOR',
+            error: 'Recipient cursor is invalid',
+        };
+    }
+
+    const limit = Number.isInteger(input.limit)
+        ? Math.max(1, Math.min(input.limit!, 60))
+        : 30;
+    const sortExpression = sql<string>`lower(coalesce(${profiles.fullName}, ${profiles.username}, ''))`;
+    const searchPattern = normalizedQuery
+        ? `%${escapeLikePattern(normalizedQuery.toLowerCase())}%`
+        : null;
+    const applicationFreshnessSeconds = Math.ceil(APPLICATION_BANNER_HIDE_AFTER_MS / 1_000);
+
+    try {
+        const rows = Array.from(await db.execute<{
+            user_id: string;
+            username: string | null;
+            full_name: string | null;
+            avatar_url: string | null;
+            headline: string | null;
+            sort_key: string;
+            eligibility: MessageRecipientV2['eligibility'];
+        }>(sql`
+            SELECT
+                ${profiles.id} AS user_id,
+                ${profiles.username} AS username,
+                ${profiles.fullName} AS full_name,
+                ${profiles.avatarUrl} AS avatar_url,
+                ${profiles.headline} AS headline,
+                ${sortExpression} AS sort_key,
+                CASE
+                    WHEN EXISTS (
+                        SELECT 1
+                        FROM ${connections} accepted_connection
+                        WHERE accepted_connection.status = 'accepted'
+                          AND (
+                              (accepted_connection.requester_id = ${user.id} AND accepted_connection.addressee_id = ${profiles.id})
+                              OR
+                              (accepted_connection.addressee_id = ${user.id} AND accepted_connection.requester_id = ${profiles.id})
+                          )
+                    ) THEN 'connected'
+                    WHEN ${profiles.messagePrivacy} = 'everyone' THEN 'everyone'
+                    ELSE 'application'
+                END AS eligibility
+            FROM ${profiles}
+            WHERE ${profiles.id} <> ${user.id}
+              AND ${profiles.deletedAt} IS NULL
+              AND ${profiles.onboardingStatus} = 'completed'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM ${connections} blocked_connection
+                  WHERE blocked_connection.status = 'blocked'
+                    AND (
+                        (blocked_connection.requester_id = ${user.id} AND blocked_connection.addressee_id = ${profiles.id})
+                        OR
+                        (blocked_connection.addressee_id = ${user.id} AND blocked_connection.requester_id = ${profiles.id})
+                    )
+              )
+              AND (
+                  ${profiles.messagePrivacy} = 'everyone'
+                  OR EXISTS (
+                      SELECT 1
+                      FROM ${connections} accepted_connection
+                      WHERE accepted_connection.status = 'accepted'
+                        AND (
+                            (accepted_connection.requester_id = ${user.id} AND accepted_connection.addressee_id = ${profiles.id})
+                            OR
+                            (accepted_connection.addressee_id = ${user.id} AND accepted_connection.requester_id = ${profiles.id})
+                        )
+                  )
+                  OR EXISTS (
+                      SELECT 1
+                      FROM ${roleApplications} eligible_application
+                      WHERE (
+                          (eligible_application.applicant_id = ${user.id} AND eligible_application.creator_id = ${profiles.id})
+                          OR
+                          (eligible_application.creator_id = ${user.id} AND eligible_application.applicant_id = ${profiles.id})
+                      )
+                        AND (
+                            eligible_application.status = 'pending'
+                            OR eligible_application.updated_at >= now() - (${applicationFreshnessSeconds} * interval '1 second')
+                        )
+                  )
+              )
+              ${searchPattern ? sql`
+                  AND (
+                      lower(coalesce(${profiles.fullName}, '')) LIKE ${searchPattern} ESCAPE '\\'
+                      OR lower(coalesce(${profiles.username}, '')) LIKE ${searchPattern} ESCAPE '\\'
+                      OR lower(coalesce(${profiles.headline}, '')) LIKE ${searchPattern} ESCAPE '\\'
+                  )
+              ` : sql``}
+              ${cursor ? sql`
+                  AND (
+                      ${sortExpression} > ${cursor.sortKey}
+                      OR (${sortExpression} = ${cursor.sortKey} AND ${profiles.id} > ${cursor.userId})
+                  )
+              ` : sql``}
+            ORDER BY ${sortExpression} ASC, ${profiles.id} ASC
+            LIMIT ${limit + 1}
+        `));
+
+        const hasMore = rows.length > limit;
+        const visibleRows = rows.slice(0, limit);
+        const last = visibleRows.at(-1);
+        return {
+            success: true,
+            recipients: visibleRows.map((row) => ({
+                userId: row.user_id,
+                username: row.username,
+                fullName: row.full_name,
+                avatarUrl: row.avatar_url,
+                headline: row.headline,
+                eligibility: row.eligibility,
+            })),
+            hasMore,
+            nextCursor: hasMore && last
+                ? encodeMessageRecipientCursor({ sortKey: last.sort_key, userId: last.user_id })
+                : null,
+        };
+    } catch (error) {
+        console.error('Error searching message recipients:', error);
+        return {
+            success: false,
+            recipients: [],
+            hasMore: false,
+            nextCursor: null,
+            code: 'FAILED',
+            error: 'Unable to search message recipients',
+        };
+    }
+}
+
 interface ActiveApplicationRowV2 {
     id: string;
     applicantId: string;
     creatorId: string;
-    status: 'pending' | 'accepted' | 'rejected' | 'project_deleted';
+    status: typeof roleApplications.$inferSelect.status;
     projectId: string | null;
     updatedAt: Date;
 }
@@ -216,29 +458,68 @@ async function getLatestApplicationsByOtherUser(
     const normalizedIds = Array.from(new Set(otherUserIds.filter(Boolean)));
     if (normalizedIds.length === 0) return new Map();
 
-    const rows = await db
-        .select({
-            id: roleApplications.id,
-            applicantId: roleApplications.applicantId,
-            creatorId: roleApplications.creatorId,
-            status: roleApplications.status,
-            projectId: roleApplications.projectId,
-            updatedAt: roleApplications.updatedAt,
-        })
-        .from(roleApplications)
-        .where(
-            or(
-                and(eq(roleApplications.applicantId, viewerId), inArray(roleApplications.creatorId, normalizedIds)),
-                and(eq(roleApplications.creatorId, viewerId), inArray(roleApplications.applicantId, normalizedIds)),
-            ),
+    const rows = Array.from(await db.execute<{
+        id: string;
+        applicant_id: string;
+        creator_id: string;
+        status: typeof roleApplications.$inferSelect.status;
+        project_id: string | null;
+        updated_at: Date;
+        other_user_id: string;
+    }>(sql`
+        WITH ranked_applications AS (
+            SELECT
+                application.id,
+                application.applicant_id,
+                application.creator_id,
+                application.status,
+                application.project_id,
+                application.updated_at,
+                CASE
+                    WHEN application.applicant_id = ${viewerId}
+                        THEN application.creator_id
+                    ELSE application.applicant_id
+                END AS other_user_id,
+                ROW_NUMBER() OVER (
+                    PARTITION BY CASE
+                        WHEN application.applicant_id = ${viewerId}
+                            THEN application.creator_id
+                        ELSE application.applicant_id
+                    END
+                    ORDER BY application.updated_at DESC, application.id DESC
+                ) AS row_number
+            FROM ${roleApplications} application
+            WHERE (
+                application.applicant_id = ${viewerId}
+                AND application.creator_id IN ${normalizedIds}
+            ) OR (
+                application.creator_id = ${viewerId}
+                AND application.applicant_id IN ${normalizedIds}
+            )
         )
-        .orderBy(desc(roleApplications.updatedAt), desc(roleApplications.id));
+        SELECT
+            id,
+            applicant_id,
+            creator_id,
+            status,
+            project_id,
+            updated_at,
+            other_user_id
+        FROM ranked_applications
+        WHERE row_number = 1
+    `));
 
     const byOtherUser = new Map<string, ActiveApplicationRowV2>();
     for (const row of rows) {
-        const otherUserId = row.applicantId === viewerId ? row.creatorId : row.applicantId;
-        if (!otherUserId || byOtherUser.has(otherUserId)) continue;
-        byOtherUser.set(otherUserId, row as ActiveApplicationRowV2);
+        if (!row.other_user_id) continue;
+        byOtherUser.set(row.other_user_id, {
+            id: row.id,
+            applicantId: row.applicant_id,
+            creatorId: row.creator_id,
+            status: row.status,
+            projectId: row.project_id,
+            updatedAt: row.updated_at,
+        });
     }
 
     return byOtherUser;
@@ -300,10 +581,12 @@ async function buildConversationCapability(
     return capabilities.get(conversation.id) ?? getDefaultCapability(conversation.type);
 }
 
-async function getProjectGroupConversationById(
+async function getProjectGroupConversationsByIds(
     viewerId: string,
-    conversationId: string,
-): Promise<ConversationWithDetails | null> {
+    conversationIds: string[],
+): Promise<ConversationWithDetails[]> {
+    const normalizedIds = Array.from(new Set(conversationIds.filter(Boolean))).slice(0, 50);
+    if (normalizedIds.length === 0) return [];
     const rows = await db.execute<{
         conversation_id: string;
         project_id: string;
@@ -316,6 +599,10 @@ async function getProjectGroupConversationById(
         last_message_sender_id: string | null;
         last_message_at: Date | null;
         last_message_type: string | null;
+        last_reaction_at: Date | null;
+        last_reaction_message_id: string | null;
+        last_reaction_emoji: string | null;
+        last_reaction_actor_id: string | null;
         unread_count: number;
         last_read_at: Date | null;
         last_read_message_id: string | null;
@@ -334,21 +621,24 @@ async function getProjectGroupConversationById(
             cp.last_message_preview,
             cp.last_message_sender_id,
             cp.last_message_at,
-            cp.last_message_type
+            cp.last_message_type,
+            cp.last_reaction_at,
+            cp.last_reaction_message_id,
+            cp.last_reaction_emoji,
+            cp.last_reaction_actor_id
         FROM ${projects} p
         INNER JOIN ${conversations} c ON c.id = p.conversation_id
         INNER JOIN ${projectMembers} pm ON pm.project_id = p.id AND pm.user_id = ${viewerId}
         INNER JOIN ${conversationParticipants} cp ON cp.conversation_id = c.id AND cp.user_id = ${viewerId}
-        WHERE p.conversation_id = ${conversationId}
-        LIMIT 1
+        WHERE p.conversation_id IN ${normalizedIds}
     `);
 
-    const row = Array.from(rows)[0];
-    if (!row) return null;
-
-    const [conversation] = await hydrateConversationLastMessageDeliveryMetadata(viewerId, [{
+    const projectGroupSources = Array.from(rows).map((row) => ({
         id: row.conversation_id,
         type: 'project_group',
+        displayTitle: row.project_title,
+        displayAvatarUrl: row.project_cover_image,
+        displaySubtitle: 'Project',
         updatedAt: row.last_message_at ?? row.updated_at,
         participants: [],
         lastMessage: row.last_message_id
@@ -363,9 +653,20 @@ async function getProjectGroupConversationById(
         unreadCount: row.unread_count || 0,
         lastReadAt: row.last_read_at ?? null,
         lastReadMessageId: row.last_read_message_id ?? null,
-    }]);
+        reactionPreview: row.last_reaction_at
+            && row.last_reaction_message_id
+            && row.last_reaction_emoji
+            && row.last_reaction_actor_id
+            ? {
+                messageId: row.last_reaction_message_id,
+                actorUserId: row.last_reaction_actor_id,
+                emoji: row.last_reaction_emoji,
+                createdAt: row.last_reaction_at,
+            }
+            : null,
+    } satisfies ConversationWithDetails));
 
-    return conversation ?? null;
+    return hydrateConversationLastMessageDeliveryMetadata(viewerId, projectGroupSources);
 }
 
 async function getConversationSummarySourceV2(
@@ -397,6 +698,10 @@ async function getConversationSummarySourcesV2(
         last_message_sender_id: string | null;
         last_message_at: Date | null;
         last_message_type: string | null;
+        last_reaction_at: Date | null;
+        last_reaction_message_id: string | null;
+        last_reaction_emoji: string | null;
+        last_reaction_actor_id: string | null;
     }>(sql`
         SELECT
             c.id,
@@ -411,7 +716,11 @@ async function getConversationSummarySourcesV2(
             cp.last_message_preview,
             cp.last_message_sender_id,
             cp.last_message_at,
-            cp.last_message_type
+            cp.last_message_type,
+            cp.last_reaction_at,
+            cp.last_reaction_message_id,
+            cp.last_reaction_emoji,
+            cp.last_reaction_actor_id
         FROM ${conversations} c
         INNER JOIN ${conversationParticipants} cp
             ON cp.conversation_id = c.id
@@ -469,6 +778,17 @@ async function getConversationSummarySourcesV2(
         unreadCount: row.unread_count || 0,
         lastReadAt: row.last_read_at ?? null,
         lastReadMessageId: row.last_read_message_id ?? null,
+        reactionPreview: row.last_reaction_at
+            && row.last_reaction_message_id
+            && row.last_reaction_emoji
+            && row.last_reaction_actor_id
+            ? {
+                messageId: row.last_reaction_message_id,
+                actorUserId: row.last_reaction_actor_id,
+                emoji: row.last_reaction_emoji,
+                createdAt: row.last_reaction_at,
+            }
+            : null,
     }));
 
     const hydratedNonProject = await hydrateConversationLastMessageDeliveryMetadata(
@@ -478,8 +798,9 @@ async function getConversationSummarySourcesV2(
     const projectGroupIds = rows
         .filter((row) => row.type === 'project_group')
         .map((row) => row.id);
-    const projectGroupConversations = await Promise.all(
-        projectGroupIds.map((conversationId) => getProjectGroupConversationById(viewerId, conversationId)),
+    const projectGroupConversations = await getProjectGroupConversationsByIds(
+        viewerId,
+        projectGroupIds,
     );
 
     const byId = new Map<string, ConversationWithDetails>();
@@ -487,7 +808,7 @@ async function getConversationSummarySourcesV2(
         byId.set(conversation.id, conversation);
     }
     for (const conversation of projectGroupConversations) {
-        if (conversation) byId.set(conversation.id, conversation);
+        byId.set(conversation.id, conversation);
     }
 
     return normalizedIds
@@ -501,23 +822,36 @@ async function hydrateConversationSummariesV2(
 ): Promise<InboxConversationV2[]> {
     if (conversationsToHydrate.length === 0) return [];
     const capabilitiesByConversation = await buildConversationCapabilitiesBatch(viewerId, conversationsToHydrate);
-    return conversationsToHydrate.map((conversation) => ({
-        ...conversation,
-        lastReadAt: conversation.lastReadAt ?? null,
-        lastReadMessageId: conversation.lastReadMessageId ?? null,
-        capability: capabilitiesByConversation.get(conversation.id) ?? getDefaultCapability(conversation.type),
-    }));
+    return conversationsToHydrate.map((conversation) => {
+        const display = buildConversationDisplay({
+            type: conversation.type,
+            participants: conversation.participants,
+            configuredTitle: conversation.displayTitle,
+            configuredAvatarUrl: conversation.displayAvatarUrl,
+            projectTitle: conversation.type === 'project_group' ? conversation.displayTitle : null,
+        });
+        return {
+            ...conversation,
+            displayTitle: display.title,
+            displayAvatarUrl: display.avatarUrl,
+            displaySubtitle: display.subtitle,
+            lastReadAt: conversation.lastReadAt ?? null,
+            lastReadMessageId: conversation.lastReadMessageId ?? null,
+            capability: capabilitiesByConversation.get(conversation.id) ?? getDefaultCapability(conversation.type),
+        };
+    });
 }
 
 export async function getInboxPageV2(
     limit: number = 20,
     cursor?: string,
+    scope: 'active' | 'archived' = 'active',
 ): Promise<{ success: boolean; error?: string; page?: MessagesInboxPageV2 }> {
     try {
         const user = await getAuthUser();
         if (!user) return { success: false, error: 'Not authenticated' };
 
-        const result = await getConversations(limit, cursor);
+        const result = await getConversations(limit, cursor, scope);
         if (!result.success || !result.conversations) {
             return { success: false, error: result.error || 'Failed to fetch inbox' };
         }
@@ -588,25 +922,66 @@ export async function getConversationThreadPageV2(
     conversationId: string,
     cursor?: string,
     limit: number = 30,
-): Promise<{ success: boolean; error?: string; page?: MessageThreadPageV2 }> {
+): Promise<{
+    success: boolean;
+    error?: string;
+    code?: MessageThreadErrorCode;
+    page?: MessageThreadPageV2;
+}> {
     try {
         const user = await getAuthUser();
-        if (!user) return { success: false, error: 'Not authenticated' };
-
-        const [conversationSummary, messageResult, pinnedResult] = await Promise.all([
-            getConversationSummarySourceV2(user.id, conversationId),
-            getMessages(conversationId, cursor, limit),
-            getPinnedMessages(conversationId, 3),
-        ]);
-
-        if (!conversationSummary) {
-            return { success: false, error: 'Conversation not found' };
+        if (!user) {
+            return { success: false, error: 'Not authenticated', code: 'UNAUTHENTICATED' };
         }
-        if (!messageResult.success) {
-            return { success: false, error: messageResult.error || 'Failed to fetch messages' };
+        if (!isUuid(conversationId)) {
+            return {
+                success: false,
+                error: 'Conversation link is invalid',
+                code: 'INVALID_CONVERSATION',
+            };
+        }
+
+        const conversationSummary = await getConversationSummarySourceV2(user.id, conversationId);
+        if (!conversationSummary) {
+            const [existingConversation] = await db
+                .select({ id: conversations.id })
+                .from(conversations)
+                .where(eq(conversations.id, conversationId))
+                .limit(1);
+            return existingConversation
+                ? { success: false, error: 'You do not have access to this conversation', code: 'FORBIDDEN' }
+                : { success: false, error: 'Conversation not found', code: 'NOT_FOUND' };
         }
 
         const [conversation] = await hydrateConversationSummariesV2(user.id, [conversationSummary]);
+        if (!conversation || conversation.capability.blocked) {
+            return {
+                success: false,
+                error: 'You do not have access to this conversation',
+                code: 'FORBIDDEN',
+            };
+        }
+
+        const [messageResult, pinnedResult] = await runWithMessageThreadReadScope({
+            viewerId: user.id,
+            conversationId,
+            conversationType: conversationSummary.type,
+            otherParticipantId: conversationSummary.type === 'dm'
+                ? conversationSummary.participants[0]?.id ?? null
+                : null,
+        }, () => Promise.all([
+            getMessages(conversationId, cursor, limit),
+            getPinnedMessages(conversationId, 3),
+        ]));
+
+        if (!messageResult.success) {
+            return {
+                success: false,
+                error: messageResult.error || 'Failed to fetch messages',
+                code: 'FAILED',
+            };
+        }
+
         const pinnedMessages = pinnedResult.success ? (pinnedResult.messages ?? []) : [];
 
         return {
@@ -622,7 +997,11 @@ export async function getConversationThreadPageV2(
         };
     } catch (error) {
         console.error('Error fetching conversation thread page v2:', error);
-        return { success: false, error: 'Failed to fetch conversation thread' };
+        return {
+            success: false,
+            error: 'Failed to fetch conversation thread',
+            code: 'FAILED',
+        };
     }
 }
 
@@ -649,12 +1028,49 @@ export async function ensureDirectConversationV2(
             return { success: false, error: 'User not found' };
         }
 
-        const ensured = await getOrCreateDMConversation(targetProfile.id);
-        if (!ensured.success || !ensured.conversationId) {
-            return { success: false, error: ensured.error || 'Failed to open conversation' };
+        const permission = await isDirectMessagingAllowed(user.id, targetProfile.id);
+        if (!permission.allowed) {
+            return { success: false, error: permission.error || 'Messaging is not allowed' };
+        }
+        const [low, high] = user.id < targetProfile.id
+            ? [user.id, targetProfile.id]
+            : [targetProfile.id, user.id];
+        const [existingPair] = await db
+            .select({ conversationId: dmPairs.conversationId })
+            .from(dmPairs)
+            .where(and(eq(dmPairs.userLow, low), eq(dmPairs.userHigh, high)))
+            .limit(1);
+
+        if (!existingPair?.conversationId) {
+            const [privacyMap, applicationMap] = await Promise.all([
+                resolvePrivacyRelationships(user.id, [targetProfile.id]),
+                getLatestApplicationsByOtherUser(user.id, [targetProfile.id]),
+            ]);
+            const capability = buildDmCapabilityFromState({
+                viewerId: user.id,
+                privacy: privacyMap.get(targetProfile.id) ?? null,
+                activeApplication: applicationMap.get(targetProfile.id) ?? null,
+            });
+            const conversationId = `draft:${targetProfile.id}`;
+            return {
+                success: true,
+                conversationId,
+                conversation: {
+                    id: conversationId,
+                    type: 'dm',
+                    lifecycleState: 'draft',
+                    updatedAt: new Date(),
+                    participants: [targetProfile],
+                    lastMessage: null,
+                    unreadCount: 0,
+                    lastReadAt: null,
+                    lastReadMessageId: null,
+                    capability,
+                },
+            };
         }
 
-        const conversationSummary = await getConversationSummarySourceV2(user.id, ensured.conversationId);
+        const conversationSummary = await getConversationSummarySourceV2(user.id, existingPair.conversationId);
         if (!conversationSummary) {
             return { success: false, error: 'Conversation not found' };
         }
@@ -664,7 +1080,7 @@ export async function ensureDirectConversationV2(
             return { success: false, error: 'Failed to load conversation' };
         }
 
-        return { success: true, conversationId: ensured.conversationId, conversation };
+        return { success: true, conversationId: existingPair.conversationId, conversation };
     } catch (error) {
         console.error('Error ensuring direct conversation v2:', error);
         return { success: false, error: 'Failed to open conversation' };
@@ -688,11 +1104,9 @@ export async function sendConversationMessageV2(params: {
     deduped?: boolean;
 }> {
     try {
-        const user = await getAuthUser();
-        if (!user) return { success: false, error: 'Not authenticated' };
-
         let conversationId = params.conversationId ?? null;
         let targetUserId = params.targetUserId ?? null;
+        let needsConversationSnapshot = false;
 
         // Handle draft conversation IDs — extract targetUserId and create the real conversation
         if (conversationId && conversationId.startsWith('draft:')) {
@@ -710,6 +1124,9 @@ export async function sendConversationMessageV2(params: {
                 return { success: false, error: ensured.error || 'Failed to open conversation' };
             }
             conversationId = ensured.conversationId;
+            // A draft has no existing inbox row to patch optimistically. Return
+            // one authoritative snapshot only for this first-message case.
+            needsConversationSnapshot = true;
         }
 
         const attachments = params.attachments ?? [];
@@ -724,7 +1141,12 @@ export async function sendConversationMessageV2(params: {
             },
         );
 
-        const conversation = result.success
+        // Existing conversations are already patched optimistically and updated
+        // by Realtime. Only a newly materialised draft needs a full snapshot.
+        const user = result.success && needsConversationSnapshot
+            ? await getAuthUser()
+            : null;
+        const conversation = user && result.success && needsConversationSnapshot
             ? await getConversationSummaryV2Internal(user.id, conversationId)
             : null;
 
@@ -750,15 +1172,18 @@ export async function sendStructuredConversationMessageV2(params: Parameters<typ
     conversation?: InboxConversationV2;
 }> {
     try {
-        const user = await getAuthUser();
-        if (!user) return { success: false, error: 'Not authenticated' };
-
         const result = await sendStructuredMessageActionV2(params);
         if (!result.success || !result.conversationId) {
             return { success: false, error: result.error || 'Failed to send structured message' };
         }
 
-        const conversation = await getConversationSummaryV2Internal(user.id, result.conversationId);
+        // A persisted conversation is updated optimistically and through
+        // Realtime; fetch a full summary only when this action creates it.
+        const needsConversationSnapshot = !params.conversationId || params.conversationId.startsWith('draft:');
+        const user = needsConversationSnapshot ? await getAuthUser() : null;
+        const conversation = user
+            ? await getConversationSummaryV2Internal(user.id, result.conversationId)
+            : null;
         return {
             success: true,
             conversationId: result.conversationId,
