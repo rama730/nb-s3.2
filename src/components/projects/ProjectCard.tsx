@@ -9,16 +9,19 @@ import {
     Sparkles,
     Maximize2,
     Clock,
+    ExternalLink,
+    Globe,
 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { Project } from '@/types/hub';
 import { useToggleProjectFollow } from '@/hooks/mutations/useProjectMutations';
 import { ProjectCardViewModel } from '@/lib/view-models/project-card';
-import { useRouteWarmPrefetch } from '@/hooks/useRouteWarmPrefetch';
 import { UserAvatar } from '@/components/ui/UserAvatar';
 import { buildIdentityPresentation } from '@/lib/ui/identity';
 import { SkillIcon } from '@/components/skills/SkillIcon';
 import { resolveClientSkill } from '@/lib/skills/client';
+import { SocialPresenceIcon } from '@/components/profile/SocialPresenceIcon';
+import { resolveProjectSocialLinks } from '@/lib/projects/social-links';
 
 const MAX_PROJECT_CARD_SKILL_ICONS = 10;
 
@@ -50,7 +53,6 @@ export default memo(function ProjectCard({
     const supabase = createClient();
     // Removed prefetch hooks as part of architectural optimization
     const { mutateAsync: toggleFollowMutation } = useToggleProjectFollow();
-    const warmPrefetchRoute = useRouteWarmPrefetch();
     const projectHref = `/projects/${project.slug || project.id}?fromTab=${fromTab}`;
 
     // OPTIMIZATION: Removed Debounce Ref (prefetching removed)
@@ -77,6 +79,8 @@ export default memo(function ProjectCard({
         openRoles 
     } = viewModel;
     const rankingReasons = project.rankingReasons || [];
+    const resolvedProjectLinks = resolveProjectSocialLinks(project.externalLinks, project.githubRepoUrl);
+    const primaryProjectLink = resolvedProjectLinks.find((link) => !link.managed) ?? resolvedProjectLinks[0] ?? null;
     const visibleTechStack = techStack.slice(0, MAX_PROJECT_CARD_SKILL_ICONS);
     const hiddenTechStackCount = Math.max(0, techStack.length - visibleTechStack.length);
 
@@ -105,12 +109,6 @@ export default memo(function ProjectCard({
         }
     }
 
-    // OPTIMIZATION: Removed prefetch logic
-    // The previous implementation used router.prefetch and React Query prefetch on hover.
-    // With the new "Instant Shell" architecture, the server response is O(1) and ultra-fast.
-    // Client-side prefetching for Server Components often results in double-fetching or is ignored.
-    // We rely on the speed of the optimized page.tsx and lazy hydrating tabs.
-
     if (viewMode === 'list') {
         return (
             <div
@@ -120,12 +118,22 @@ export default memo(function ProjectCard({
             >
                 <Link
                     href={projectHref}
-                    prefetch={false}
                     className="absolute inset-0 z-10"
                     aria-label={`View project ${project.title}`}
                     onClick={() => onOpenProject?.(project.id)}
-                    onPointerEnter={() => warmPrefetchRoute(projectHref)}
                 />
+                {primaryProjectLink ? (
+                    <a
+                        href={`/go/project/${encodeURIComponent(project.id)}/${encodeURIComponent(primaryProjectLink.id || primaryProjectLink.canonicalKey)}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="absolute right-28 top-1/2 z-20 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-lg text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+                        aria-label={`Open ${primaryProjectLink.customLabel || primaryProjectLink.platformLabel}: ${primaryProjectLink.accountLabel}`}
+                        title={`Open ${primaryProjectLink.customLabel || primaryProjectLink.platformLabel}: ${primaryProjectLink.accountLabel}`}
+                    >
+                        {primaryProjectLink.iconKey ? <SocialPresenceIcon iconKey={primaryProjectLink.iconKey} className="h-4 w-4" /> : <ExternalLink className="h-4 w-4" aria-hidden />}
+                    </a>
+                ) : null}
                 
                 {/* Content Container (Row Layout) */}
                 <div className="flex items-center gap-4 h-full relative z-0 pointer-events-none app-density-panel">
@@ -175,7 +183,6 @@ export default memo(function ProjectCard({
             className={`h-full ${disableHoverEffects ? '' : 'transform transition-all duration-300 hover:-translate-y-1'}`}
             data-project-id={project.id}
             data-testid={`project-card-${project.id}`}
-            onMouseEnter={() => warmPrefetchRoute(projectHref)}
         >
             <div className={`group relative h-full rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-sm overflow-hidden flex flex-col ${disableHoverEffects ? '' : 'transition-all duration-300 hover:-translate-y-1 hover:border-primary/20'}`}>
 
@@ -183,10 +190,8 @@ export default memo(function ProjectCard({
                     {!previewMode && (
                         <Link
                             href={projectHref}
-                            prefetch={false}
                             className="absolute inset-0 z-10"
                             onClick={() => onOpenProject?.(project.id)}
-                            onPointerEnter={() => warmPrefetchRoute(projectHref)}
                         />
                     )}
 
@@ -198,6 +203,23 @@ export default memo(function ProjectCard({
                                 <h3 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 truncate leading-snug group-hover:text-primary transition-colors flex-1">
                                     {project.title}
                                 </h3>
+                                {!previewMode && primaryProjectLink ? (
+                                    <a
+                                        href={`/go/project/${encodeURIComponent(project.id)}/${encodeURIComponent(primaryProjectLink.id || primaryProjectLink.canonicalKey)}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        onClick={(event) => event.stopPropagation()}
+                                        className="relative z-20 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+                                        aria-label={`Open ${primaryProjectLink.customLabel || primaryProjectLink.platformLabel}: ${primaryProjectLink.accountLabel}`}
+                                        title={`Open ${primaryProjectLink.customLabel || primaryProjectLink.platformLabel}: ${primaryProjectLink.accountLabel}`}
+                                    >
+                                        {primaryProjectLink.iconKey
+                                            ? <SocialPresenceIcon iconKey={primaryProjectLink.iconKey} className="h-4 w-4" />
+                                            : primaryProjectLink.platform === 'website'
+                                                ? <Globe className="h-4 w-4" aria-hidden />
+                                                : <ExternalLink className="h-4 w-4" aria-hidden />}
+                                    </a>
+                                ) : null}
                                 {totalOpenRoles > 0 && (
                                     <span className="shrink-0 inline-flex items-center px-2 py-0.5 rounded-md bg-primary/10 text-[9px] font-bold text-primary border border-primary/10 select-none">
                                         {totalOpenRoles} {totalOpenRoles === 1 ? 'Open Role' : 'Open Roles'}
