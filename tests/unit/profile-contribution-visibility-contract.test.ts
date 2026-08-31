@@ -6,7 +6,9 @@ import {
   buildContributionMutations,
   contributionEntryChanged,
   contributionToEditorEntry,
+  createExternalContributionDraft,
   type ContributionEditorEntry,
+  validateContributionEditorEntry,
 } from "@/lib/profile/contribution-editor";
 import { profileContributionBatchSchema } from "@/lib/profile/contribution-contract";
 import type { ProfileCollaborationContribution } from "@/lib/profile/collaboration";
@@ -184,6 +186,28 @@ test("normalized contribution mapping is canonical and dirty detection is order-
   assert.equal(contributionEntryChanged({ ...mapped, skills: ["TypeScript", "React"] }, mapped), false);
 });
 
+test("external drafts are validated before a separate contribution write and surface actionable field feedback", () => {
+  const draft = createExternalContributionDraft();
+  assert.equal(validateContributionEditorEntry(draft), "Project name is required.");
+  assert.equal(validateContributionEditorEntry({
+    ...draft,
+    projectTitle: "External project",
+    startedAt: "2026-05",
+    endedAt: "2026-04",
+  }), "Ended date cannot be earlier than Joined date.");
+  assert.equal(validateContributionEditorEntry({
+    ...draft,
+    projectTitle: "External project",
+    repositoryUrl: "javascript:alert(1)",
+  }), "Repository URL must use http(s) and point to a public host.");
+  assert.equal(validateContributionEditorEntry({
+    ...draft,
+    projectTitle: "External project",
+    projectUrl: "https://example.test/project",
+    repositoryUrl: "https://github.com/example/project",
+  }), null);
+});
+
 test("dedicated save is transactional, idempotent, versioned, audited, and invalidates once", () => {
   const action = read("src/app/actions/profile-contributions.ts");
   assert.match(action, /profileContributionBatchSchema\.safeParse/);
@@ -223,6 +247,11 @@ test("the contribution editor loads real pages and preserves the loaded baseline
   assert.match(modal, /offset: baseEntries\.length/);
   assert.match(modal, /experience: \[\.\.\.baseEntries, \.\.\.additions\]/);
   assert.match(editor, /Load more contributions/);
+  assert.match(editor, /onChange\(\[draft, \.\.\.items\]\)/);
+  assert.match(editor, /scrollIntoView\(\{ block: "nearest", behavior: "smooth" \}\)/);
+  assert.match(editor, /Finish or remove the current external-project draft/);
+  assert.match(modal, /validateContributionEditorEntry/);
+  assert.match(modal, /Profile details were saved, but project contributions were not/);
 });
 
 test("parent visibility is the UI and read authority while owners retain a private preview", () => {
