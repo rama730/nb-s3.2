@@ -23,7 +23,12 @@ export async function GET(
   }
 
   try {
-    const projects = await getProfileInviteProjectOptions(auth.user.id, id);
+    const url = new URL(request.url);
+    const page = await getProfileInviteProjectOptions(auth.user.id, id, {
+      search: url.searchParams.get("search") ?? undefined,
+      cursor: url.searchParams.get("cursor") ?? undefined,
+      limit: Number(url.searchParams.get("limit") || 20),
+    });
     logApiRoute(request, {
       requestId,
       action: "profiles.projectInviteOptions.get",
@@ -33,7 +38,7 @@ export async function GET(
       status: 200,
     });
     return jsonSuccess(
-      { projects },
+      page,
       undefined,
       { headers: { "Cache-Control": "private, max-age=30, stale-while-revalidate=120", Vary: "Cookie" } },
     );
