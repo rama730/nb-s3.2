@@ -1,13 +1,14 @@
 'use client'
 
-import { useId, type ReactNode } from 'react'
+import { useId, useState, type ReactNode } from 'react'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
-import { Users, FolderKanban, Link2, Sparkles, MessageSquare, Pencil, Github, Linkedin, Globe } from 'lucide-react'
+import { Users, FolderKanban, Link2, Sparkles, MessageSquare, Pencil } from 'lucide-react'
 import type { ProfileStats } from './types'
 import { normalizeProfile } from '@/lib/utils/normalize-profile'
 import { countLabel } from '@/lib/profile/display'
 import { normalizeSocialLinks as normalizeSocialLinksShared } from '@/lib/profile/normalization'
+import { SocialPresenceIcon } from '@/components/profile/SocialPresenceIcon'
 
 function RailCard({
     title,
@@ -92,15 +93,14 @@ export function ProfileRightRail({
     onEditSection?: (section: "general" | "experience" | "skills" | "social") => void
 }) {
     const vm = normalizeProfile(profile)
+    const [showAllLinks, setShowAllLinks] = useState(false)
     if (!vm) return null
     const links = normalizeSocialLinksShared({ ...profile, socialLinks: vm.socialLinks }, socialLinks)
+    const linkHealth = (isOwner && profile?.socialLinkMetadata && typeof profile.socialLinkMetadata === 'object')
+        ? profile.socialLinkMetadata as Record<string, { health?: string }>
+        : {}
+    const visibleLinks = showAllLinks ? links : links.slice(0, 4)
 
-    const linkIconFor = (url: string) => {
-        const u = (url || '').toLowerCase()
-        if (u.includes('github.com')) return <Github className="w-4 h-4" />
-        if (u.includes('linkedin.com')) return <Linkedin className="w-4 h-4" />
-        return <Globe className="w-4 h-4" />
-    }
     const completionScore = Number(vm.profileStrength || 0)
     const missingItems: string[] = Array.isArray((profile as any)?.completionMissing)
         ? (profile as any).completionMissing
@@ -117,22 +117,37 @@ export function ProfileRightRail({
 
             <RailCard title="Links" icon={<Link2 className="w-4 h-4" />}>
                 {links.length ? (
-                    <div className="space-y-2">
-                        {links.slice(0, 8).map((l) => (
-                            <a
-                                key={l.url}
-                                href={l.url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="flex items-center justify-between gap-3 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-800 px-3 py-2 hover:bg-zinc-50 dark:hover:bg-zinc-700"
-                            >
-                                <span className="text-sm text-zinc-700 dark:text-zinc-200 flex items-center gap-2 min-w-0">
-                                    <span className="text-zinc-400">{linkIconFor(l.url)}</span>
-                                    <span className="truncate">{l.label}</span>
-                                </span>
-                                <span className="text-xs text-zinc-500 dark:text-zinc-400 truncate max-w-[140px]">{l.url}</span>
-                            </a>
+                    <div className={cn("grid gap-2", links.length > 4 ? "grid-cols-2 sm:grid-cols-3" : "grid-cols-2")}>
+                        {visibleLinks.map((l) => (
+                            <div key={l.id || l.canonicalKey} className="min-w-0">
+                                <a
+                                    href={`/go/profile/${encodeURIComponent(vm.id)}/${encodeURIComponent(l.id || l.canonicalKey)}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    aria-label={`Open ${l.platformLabel}: ${l.accountLabel}`}
+                                    className="flex h-11 w-full min-w-0 items-center justify-between gap-2 rounded-xl border border-zinc-200 bg-white px-3 dark:border-zinc-800 dark:bg-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-700"
+                                >
+                                    <span className="flex shrink-0 items-center gap-2 whitespace-nowrap text-zinc-700 dark:text-zinc-200">
+                                        <span className="shrink-0 text-zinc-400">{l.iconKey ? <SocialPresenceIcon iconKey={l.iconKey} /> : <Link2 className="h-4 w-4" aria-hidden="true" />}</span>
+                                        <span className="truncate text-sm font-medium">{l.platformLabel}</span>
+                                    </span>
+                                    <span title={l.customLabel || l.accountLabel} className="min-w-0 truncate whitespace-nowrap text-right text-xs text-zinc-500 dark:text-zinc-400">{l.customLabel || l.accountLabel}</span>
+                                </a>
+                                {isOwner && l.id && linkHealth[l.id]?.health === 'unavailable' && onEditSection ? (
+                                    <button type="button" onClick={() => onEditSection('social')} className="rounded-lg border border-amber-300 px-2 py-1.5 text-xs font-medium text-amber-700 hover:bg-amber-50 dark:border-amber-800 dark:text-amber-300 dark:hover:bg-amber-950/40">Update</button>
+                                ) : null}
+                            </div>
                         ))}
+                        {links.length > 4 ? (
+                            <button
+                                type="button"
+                                onClick={() => setShowAllLinks((value) => !value)}
+                                className="col-span-full justify-self-start rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-xs font-medium text-zinc-600 hover:bg-zinc-100 dark:border-zinc-800 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+                                aria-expanded={showAllLinks}
+                            >
+                                {showAllLinks ? 'Show less' : `+${links.length - 4} more`}
+                            </button>
+                        ) : null}
                     </div>
                 ) : (
                     <div className="text-sm text-zinc-500 dark:text-zinc-400">
