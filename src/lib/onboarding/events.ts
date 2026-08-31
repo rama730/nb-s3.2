@@ -31,6 +31,16 @@ export const onboardingEventInputSchema = z.object({
 
 export type OnboardingEventInput = z.infer<typeof onboardingEventInputSchema>
 
+export const ONBOARDING_TELEMETRY_BATCH_LIMIT = 25
+
+export function sanitizeOnboardingTelemetryBatch(input: unknown): OnboardingEventInput[] {
+    if (!Array.isArray(input)) return []
+    return input.slice(0, ONBOARDING_TELEMETRY_BATCH_LIMIT).flatMap((event) => {
+        const parsed = onboardingEventInputSchema.safeParse(event)
+        return parsed.success ? [parsed.data] : []
+    })
+}
+
 export function normalizeOnboardingEventInput(input: OnboardingEventInput): OnboardingEventInput {
     return onboardingEventInputSchema.parse(input)
 }
