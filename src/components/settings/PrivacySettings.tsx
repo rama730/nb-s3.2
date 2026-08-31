@@ -123,7 +123,6 @@ function BlockedAccountRow({
                 <UserAvatar
                     identity={account}
                     size={44}
-                    unoptimized
                     fallbackDisplayName={displayName}
                     fallbackClassName="text-sm font-semibold text-white"
                 />
