@@ -14,7 +14,7 @@ Generation is deterministic for a given catalog and dependency version. Generate
 ## Initial rollout
 
 1. Apply `0103_market_skill_catalog`.
-2. Apply the latest checked-in catalog seed state through `0117_market_skill_catalog_1_3_6`; historical release replay remains migration history only.
+2. Deploy the generated client catalog and icon assets with the application release. Historical database catalog migrations remain unchanged.
 3. Preview legacy assignment volume with `npm run skills:backfill`.
 4. Apply in batches with `npm run skills:backfill -- --apply`.
 5. Run `npm run check:skills:assignments` to compare JSON mirrors with normalized assignments for profiles, projects, roles, and contributions.
@@ -38,9 +38,10 @@ The backfill is idempotent. Each owner is handled transactionally: the normalize
 - Repository imports returning the 24-skill ceiling unusually often: review signal ordering and suppress low-value package markers before raising the limit.
 - Custom proposal duplication above 5%: expand aliases before adding more canonical entries.
 
-## Release 1.3.6 checks
+## Release 1.3.7 checks
 
-- Expected minimums: 1,100 skills, 24 categories, and 740 approved branded mappings. Current generated values are 1,136, 24, and 785 mappings backed by 745 unique local assets.
+- Expected minimums: 1,100 skills, 25 categories, and 740 approved branded mappings. Current generated values are 1,170 skills, 25 categories, and 780 branded mappings backed by 745 unique local assets.
+- Confirm Scientific Computing & Engineering contains COMSOL Multiphysics, ANSYS, LabVIEW, Wolfram Mathematica, GNU Octave, KiCad, LTspice, FreeCAD, Autodesk Revit, Rhinoceros, Siemens NX, and the supporting simulation, CAD/CAE/CAM, systems, and engineering-domain skills. The 13 branded tool marks must resolve locally; the remaining tools and concepts must use their deterministic semantic fallbacks.
 - Confirm Figma, Docker, GitHub, GitHub Actions, Chrome Extension API, and MiniLM resolve to local branded assets.
 - Confirm HTML and Bash resolve through Simple Icons; Java, PowerShell, and Azure through Devicon; AWS through Skill Icons; Amazon RDS and Lambda through compact Logos service marks; Amazon Bedrock, AutoGen, and Chroma through reviewed curated assets.
 - Confirm the Adobe product family, Adobe Analytics, Fivetran, gRPC, GeoServer, PostGIS, Aurora, Redshift, Db2, Beam, Great Expectations, Vertex AI, Groq, and the AWS service rows resolve to local brand assets rather than category glyphs. WebSockets intentionally uses the semantic Network protocol glyph. Named products without a licensed reviewed mark render a deterministic identity badge; concepts such as AI Agents retain explicit semantic fallbacks.
