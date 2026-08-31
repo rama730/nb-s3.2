@@ -1,7 +1,10 @@
 import { createServerClient } from '@supabase/ssr'
 import type { User } from '@supabase/supabase-js'
-import { cookies } from 'next/headers'
+import { cookies, headers } from 'next/headers'
 import { resolveAuthSnapshot, type AuthSnapshotResolution } from '@/lib/auth/snapshot'
+import { logger } from '@/lib/logger'
+import { toPrivacySafeRouteMetric } from '@/lib/routing/route-metric'
+import { classifyRoute } from '@/lib/routing/route-class'
 import { resolveSupabasePublicEnv, resolveSupabaseServiceEnv } from '@/lib/supabase/env'
 import { resolveSupabaseServerCookieOptions } from '@/lib/supabase/cookie-options'
 
@@ -41,6 +44,18 @@ export async function createClient() {
     }
     const env = resolveSupabasePublicEnv('supabase.server')
 
+    let route = '/unknown'
+    try {
+        const requestHeaders = await headers()
+        route = toPrivacySafeRouteMetric(
+            requestHeaders.get('x-route-metric')
+                ?? requestHeaders.get('x-matched-path')
+                ?? requestHeaders.get('next-url'),
+        )
+    } catch {
+        // Server utilities and tests may execute without a Next request scope.
+    }
+
     const client = createServerClient(
         env.url,
         env.anonKey,
@@ -70,7 +85,32 @@ export async function createClient() {
     let authResolutionPromise: Promise<AuthSnapshotResolution> | null = null
     const resolveClientAuthSnapshot = () => {
         if (!authResolutionPromise) {
-            authResolutionPromise = resolveAuthSnapshot(client)
+            const startedAt = Date.now()
+            authResolutionPromise = resolveAuthSnapshot(client).then((resolution) => {
+                logger.metric('auth.server.resolution', {
+                    module: 'auth',
+                    route,
+                    scope: classifyRoute(route),
+                    outcome: resolution.error
+                        ? 'error'
+                        : resolution.user
+                            ? 'authenticated'
+                            : 'anonymous',
+                    durationMs: Date.now() - startedAt,
+                    value: 1,
+                })
+                return resolution
+            }).catch((error) => {
+                logger.metric('auth.server.resolution', {
+                    module: 'auth',
+                    route,
+                    scope: classifyRoute(route),
+                    outcome: 'threw',
+                    durationMs: Date.now() - startedAt,
+                    value: 1,
+                })
+                throw error
+            })
         }
         return authResolutionPromise
     }
