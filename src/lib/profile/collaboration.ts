@@ -7,6 +7,7 @@ import {
   profileProjectContributionStages,
   profileProjectContributions,
   profiles,
+  projectInvitations,
   projects,
   roleApplications,
   skills,
@@ -16,6 +17,8 @@ import { normalizeProjectDescription, normalizeProjectTitle, trimDisplayText, tr
 import { syncContributionSkills } from "@/lib/skills/service";
 import { formatProjectTeamRole } from "@/lib/projects/settings-policies";
 import { runInFlightDeduped } from "@/lib/utils/inflight-dedupe";
+import { containsLikePattern, normalizeSearchQuery } from "@/lib/search/query";
+import { isUuid } from "@/lib/validations/uuid";
 
 type DbExecutor = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -845,15 +848,31 @@ export async function getProfilePortfolioProjects(profileId: string, options: {
   };
 }
 
-export async function getProfileInviteProjectOptions(inviterId: string, targetProfileId: string): Promise<ProfileInviteProjectOption[]> {
-  if (!inviterId || !targetProfileId || inviterId === targetProfileId) return [];
+export async function getProfileInviteProjectOptions(
+  inviterId: string,
+  targetProfileId: string,
+  input: { search?: string; cursor?: string; limit?: number; projectId?: string } = {},
+): Promise<{ projects: ProfileInviteProjectOption[]; nextCursor: string | null }> {
+  if (!inviterId || !targetProfileId || inviterId === targetProfileId) return { projects: [], nextCursor: null };
+  const requestedLimit = Number(input.limit ?? 20);
+  const limit = Number.isFinite(requestedLimit) ? Math.max(1, Math.min(Math.trunc(requestedLimit), 50)) : 20;
+  const search = normalizeSearchQuery(input.search, 100);
+  const separator = input.cursor?.indexOf("|") ?? -1;
+  const cursorDate = separator > 0 ? new Date(input.cursor!.slice(0, separator)) : null;
+  const cursorId = separator > 0 ? input.cursor!.slice(separator + 1) : null;
+  const cursor = cursorDate && !Number.isNaN(cursorDate.getTime()) && cursorId && isUuid(cursorId)
+    ? { updatedAt: cursorDate, id: cursorId }
+    : null;
   const rows = await db.execute<{
     id: string;
     title: string | null;
     slug: string | null;
     role: "owner" | "admin";
+    updatedAt: Date | string;
   }>(sql`
-    SELECT p.id, p.title, p.slug, CASE WHEN p.owner_id = ${inviterId} THEN 'owner' ELSE pm.role END AS role
+    SELECT p.id, p.title, p.slug,
+           CASE WHEN p.owner_id = ${inviterId} THEN 'owner' ELSE pm.role END AS role,
+           p.updated_at AS "updatedAt"
     FROM ${projects} p
     LEFT JOIN project_members pm
       ON pm.project_id = p.id
@@ -862,23 +881,44 @@ export async function getProfileInviteProjectOptions(inviterId: string, targetPr
       ON target_pm.project_id = p.id
      AND target_pm.user_id = ${targetProfileId}
     WHERE p.deleted_at IS NULL
-      AND p.open_roles_count > 0
       AND target_pm.id IS NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM ${roleApplications} pending_application
+        WHERE pending_application.project_id = p.id
+          AND pending_application.applicant_id = ${targetProfileId}
+          AND pending_application.status = 'pending'
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM ${projectInvitations} pending_invitation
+        WHERE pending_invitation.project_id = p.id
+          AND pending_invitation.candidate_id = ${targetProfileId}
+          AND pending_invitation.status = 'pending'
+          AND pending_invitation.expires_at > now()
+      )
       AND (
         p.owner_id = ${inviterId}
         OR pm.role IN ('owner', 'admin')
       )
-    ORDER BY p.updated_at DESC, p.created_at DESC
-    LIMIT 20
+      ${input.projectId ? sql`AND p.id = ${input.projectId}::uuid` : sql``}
+      ${search ? sql`AND p.title ILIKE ${containsLikePattern(search)} ESCAPE '\\'` : sql``}
+      ${cursor ? sql`AND (p.updated_at, p.id) < (${cursor.updatedAt}, ${cursor.id}::uuid)` : sql``}
+    ORDER BY p.updated_at DESC, p.id DESC
+    LIMIT ${limit + 1}
   `);
 
-  return Array.from(rows).map((row) => ({
+  const page = Array.from(rows);
+  const visible = page.slice(0, limit);
+  const last = visible.at(-1);
+  return {
+    projects: visible.map((row) => ({
     id: row.id,
     title: normalizeProjectTitle(row.title),
     slug: row.slug,
     role: row.role === "admin" ? "admin" : "owner",
     href: buildProjectHref({ id: row.id, slug: row.slug }),
-  }));
+    })),
+    nextCursor: page.length > limit && last ? `${new Date(last.updatedAt).toISOString()}|${last.id}` : null,
+  };
 }
 
 export async function markProfileCollaborationSummaryStale(
