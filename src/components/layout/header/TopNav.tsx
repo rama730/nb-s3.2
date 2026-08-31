@@ -3,6 +3,7 @@
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { useCallback, useEffect, useState, Suspense } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Menu } from "lucide-react";
 import Logo from "./Logo";
 import NavLink from "./NavLink";
@@ -15,6 +16,7 @@ const NotificationPreview = dynamic(() => import("./NotificationPreview"), { ssr
 
 import GlobalSearch from "./GlobalSearch";
 import WorkspaceIndicator from "./WorkspaceIndicator";
+import { ConnectionStatusIndicator } from "./ConnectionStatusIndicator";
 import { ProfileAvatar } from "./ProfileAvatar";
 import { useScrollShadow } from "@/hooks/useScrollShadow";
 
@@ -25,17 +27,24 @@ import { ROUTES } from "@/constants/routes";
 import { resolveTopNavAuthUiState } from "./topnav-auth-state";
 import { MAIN_NAV_ITEMS, isMainNavRouteActive } from "./nav-items";
 import {
-    OPEN_MESSAGES_SEARCH_EVENT,
     resolveGlobalSearchContext,
     type GlobalSearchContext,
 } from "./global-search";
+import { useMessagesV2UiStore } from "@/stores/messagesV2UiStore";
+import { useMessageAttention } from "@/components/providers/MessageAttentionProvider";
+import { useUIStore } from "@/lib/stores/ui-store";
+import { useRealtime } from "@/components/providers/RealtimeProvider";
+import { getWorkspaceSummaryAction } from "@/app/actions/workspace";
+import { queryKeys } from "@/lib/query-keys";
 
 export default function TopNav() {
     const pathname = usePathname();
     const { user, isAuthenticated: isSignedIn, isLoading: authLoading, profile, signOut } = useAuth();
 
     const notifications = useNotifications();
-    const { totalPending } = usePeopleNotifications();
+    const peopleNotifications = usePeopleNotifications();
+    const messageAttention = useMessageAttention();
+    const { connectionHealth } = useRealtime();
 
     // Hydration fix: ensures we only render auth-dependent UI after mount
     const [mounted, setMounted] = useState(false);
@@ -47,6 +56,18 @@ export default function TopNav() {
     const [showCommandPalette, setShowCommandPalette] = useState(false);
     const [commandPaletteQuery, setCommandPaletteQuery] = useState("");
     const [commandPaletteContext, setCommandPaletteContext] = useState<GlobalSearchContext | undefined>();
+    const setMessageSearchOpen = useMessagesV2UiStore((state) => state.setMessageSearchOpen);
+    const openWorkspace = useUIStore((state) => state.openWorkspace);
+    const workspaceSummary = useQuery({
+        queryKey: queryKeys.workspace.summary(),
+        queryFn: getWorkspaceSummaryAction,
+        enabled: Boolean(isSignedIn),
+        staleTime: 30_000,
+        refetchOnWindowFocus: false,
+    });
+    const workspaceActionCount = workspaceSummary.data?.success
+        ? workspaceSummary.data.taskCount + workspaceSummary.data.requestCount + peopleNotifications.pendingConnections
+        : peopleNotifications.pendingConnections;
 
     const closeGlobalSearch = useCallback(() => {
         setShowCommandPalette(false);
@@ -58,13 +79,13 @@ export default function TopNav() {
         const nextContext = requestedContext ?? resolveGlobalSearchContext(pathname).context;
         if (nextContext === "messages") {
             closeGlobalSearch();
-            window.dispatchEvent(new Event(OPEN_MESSAGES_SEARCH_EVENT));
+            setMessageSearchOpen(true);
             return;
         }
         setCommandPaletteQuery(query);
         setCommandPaletteContext(nextContext);
         setShowCommandPalette(true);
-    }, [closeGlobalSearch, pathname]);
+    }, [closeGlobalSearch, pathname, setMessageSearchOpen]);
 
     const hasScrolled = useScrollShadow();
 
@@ -78,6 +99,11 @@ export default function TopNav() {
         const handleKeyDown = (e: KeyboardEvent) => {
             if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
                 e.preventDefault();
+                if ((e.target as HTMLElement | null)?.closest("[data-messages-surface]")) {
+                    closeGlobalSearch();
+                    setMessageSearchOpen(true);
+                    return;
+                }
                 if (showCommandPalette) {
                     closeGlobalSearch();
                 } else {
@@ -88,7 +114,7 @@ export default function TopNav() {
 
         window.addEventListener("keydown", handleKeyDown);
         return () => window.removeEventListener("keydown", handleKeyDown);
-    }, [closeGlobalSearch, openGlobalSearch, showCommandPalette]);
+    }, [closeGlobalSearch, openGlobalSearch, setMessageSearchOpen, showCommandPalette]);
     // Listen for custom event to open command palette
     useEffect(() => {
         const handleOpenCommandPalette = (e: CustomEvent<{ query?: string; context?: GlobalSearchContext }>) => {
@@ -126,11 +152,14 @@ export default function TopNav() {
                         {MAIN_NAV_ITEMS.map((item) => {
                             const isActive = isMainNavRouteActive(pathname, item.href);
 
-                            let badge;
-                            if (item.href === ROUTES.PEOPLE && totalPending > 0) {
-                                badge = (
-                                    <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-red-500 ring-2 ring-white dark:ring-zinc-950" aria-hidden />
-                                );
+                            let alertState = false;
+                            let alertCount: number | undefined;
+
+                            if (item.href === ROUTES.PEOPLE) {
+                                alertState = peopleNotifications.totalPending > 0 && !isActive;
+                            } else if (item.href === ROUTES.MESSAGES) {
+                                alertState = messageAttention.hasUnreadMessages;
+                                alertCount = messageAttention.unreadCount;
                             }
 
                             return (
@@ -140,10 +169,9 @@ export default function TopNav() {
                                     icon={item.icon}
                                     label={item.label}
                                     isActive={isActive}
-                                    badge={badge}
-                                    aria-label={item.href === ROUTES.PEOPLE && totalPending > 0
-                                        ? `${item.label}, ${totalPending} pending connection request${totalPending === 1 ? "" : "s"}`
-                                        : item.label}
+                                    alertState={alertState}
+                                    alertCount={alertCount}
+                                    connectionHealth={item.href === ROUTES.PEOPLE ? connectionHealth : undefined}
                                 />
                             );
                         })}
@@ -160,6 +188,7 @@ export default function TopNav() {
                 </div>
 
                 <div className="flex items-center gap-2">
+                    {authUiState === "signed-in" && <ConnectionStatusIndicator />}
                     {authUiState === "signed-in" && (
                         <NotificationPreview
                             unreadCount={notifications.unreadCount}
@@ -170,17 +199,14 @@ export default function TopNav() {
                             isLoading={notifications.isLoading}
                             hasMore={notifications.hasMore}
                             isLoadingMore={notifications.isLoadingMore}
-                            isRealtimeHealthy={notifications.isRealtimeHealthy}
-                            isMarkingAllRead={notifications.isMarkingAllRead}
+                            connectionHealth={connectionHealth}
                             onOpenChange={notifications.setTrayOpen}
                             onFilterChange={notifications.setActiveFilter}
                             onOpenItem={notifications.openItem}
-                            onMarkRead={notifications.markRead}
+                            onItemsViewed={notifications.stageViewedNotifications}
                             onMarkUnread={notifications.markUnread}
-                            onMarkAllRead={notifications.markAllRead}
                             onDismiss={notifications.dismiss}
                             onMuteScope={notifications.muteScope}
-                            onPause={notifications.pause}
                             onSnooze={notifications.snooze}
                             onLoadMore={notifications.loadMore}
                         />
@@ -239,6 +265,7 @@ export default function TopNav() {
                             profile={profile}
                             onSignOut={signOut}
                             notificationUnreadCount={notifications.unreadImportantCount}
+                            messageUnreadCount={messageAttention.unreadCount}
                             onOpenNotifications={() => {
                                 setShowMobileMenu(false);
                                 notifications.openTray();
@@ -247,6 +274,12 @@ export default function TopNav() {
                                 setShowMobileMenu(false);
                                 openGlobalSearch();
                             }}
+                            onOpenWorkspace={() => {
+                                setShowMobileMenu(false);
+                                openWorkspace("tasks");
+                            }}
+                            workspaceActionCount={workspaceActionCount}
+                            connectionHealth={connectionHealth}
                         />
                     </Suspense>
                 )}
