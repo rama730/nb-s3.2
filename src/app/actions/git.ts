@@ -44,6 +44,12 @@ async function requireProjectOwner(projectId: string) {
     return { user, project };
 }
 
+/** Safe connection summary: never expose import credentials to the browser. */
+export async function getProjectGitConnection(projectId: string) {
+    const { project } = await requireProjectOwner(projectId);
+    return { repository: project.githubRepoUrl, branch: project.githubDefaultBranch, lastSyncAt: project.githubLastSyncAt };
+}
+
 async function resolveGitActionAccess(
     user: Awaited<ReturnType<typeof requireProjectOwner>>["user"],
     project: Awaited<ReturnType<typeof requireProjectOwner>>["project"],
