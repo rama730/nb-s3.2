@@ -12,7 +12,8 @@ Suggested runs:
 - `k6 run qa/load/public-projects-feed.k6.js`
 - `k6 run -e AUTH_COOKIE="..." qa/load/authenticated-shells.k6.js`
 - `k6 run -e AUTH_COOKIE="..." qa/load/workspace-bootstrap.k6.js`
-- `k6 run -e AUTH_COOKIE="..." qa/load/messages-reconnect-storm.k6.js`
+- `k6 run -e AUTH_COOKIE="..." qa/load/messages-route-entry-churn.k6.js`
+- `k6 run -e SUPABASE_REALTIME_URL="..." -e SUPABASE_ANON_KEY="..." -e SUPABASE_ACCESS_TOKEN="..." -e REALTIME_TOPIC="presence:conversation:<id>" qa/load/realtime-reconnect.k6.js`
 - `k6 run -e AUTH_COOKIE="..." -e WORKER_LOAD_URL="https://worker.example.com/api/v1/inngest" qa/load/worker-isolation.k6.js`
 - `k6 run -e EXTENSION_TOKEN="nb_dev_..." -e EXTENSION_PROJECT_ID="..." -e EXTENSION_FILE_PATH="/README.md" qa/load/extension-sync.k6.js`
 - `k6 run qa/load/auth-entry-pages.k6.js`
@@ -23,7 +24,8 @@ Notes:
 - `public-projects-feed.k6.js` targets the cache-first anonymous feed path.
 - `authenticated-shells.k6.js` keeps `/hub`, `/workspace`, and `/messages` under sustained shell traffic.
 - `workspace-bootstrap.k6.js` isolates the profile-backed workspace bootstrap path.
-- `messages-reconnect-storm.k6.js` simulates reconnect/page-entry churn on the active messaging surface.
+- `messages-route-entry-churn.k6.js` measures repeated authenticated messaging route entry.
+- `realtime-reconnect.k6.js` opens native private Realtime sockets, joins channels, sends a bounded probe, reconnects, and records join latency/failures/duplicates.
 - `auth-entry-pages.k6.js` verifies the public auth and verification shells can absorb unauthenticated load.
 - `worker-isolation.k6.js` keeps authenticated shell traffic active while probing the worker-plane ingress separately.
 - `extension-sync.k6.js` exercises the extension bearer auth workspace route, signed file download intent, and signed range transfer path.
