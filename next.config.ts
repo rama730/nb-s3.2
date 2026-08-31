@@ -17,6 +17,8 @@ const e2eAuthRouteImplAbsolutePath =
     : path.resolve(__dirname, "src/app/api/e2e/auth/route.dev.ts");
 
 const nextConfig: NextConfig = {
+  // Keep verification builds isolated from an actively running local dev server.
+  distDir: process.env.NEXT_DIST_DIR || ".next",
   // Security headers for all routes
   async headers() {
     return [
@@ -38,12 +40,22 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: path.resolve(__dirname),
     resolveAlias: {
-      "@/app/api/e2e/auth/route-impl": e2eAuthRouteImplAbsolutePath,
+      "@/app/api/e2e/auth/route-impl": e2eAuthRouteImplRelativePath,
     },
   },
 
-  // Image optimization configuration for external domains
+  // Image optimization configuration for external domains and local query strings
   images: {
+    localPatterns: [
+      {
+        pathname: '/social-icons/heliyon.svg',
+        search: '?v=20260830-2',
+      },
+      {
+        pathname: '/**',
+        search: '',
+      },
+    ],
     remotePatterns: [
       {
         protocol: 'https',
@@ -62,6 +74,9 @@ const nextConfig: NextConfig = {
 
   // Performance optimizations
   experimental: {
+    scrollRestoration: true,
+    // ponytail: disabling persistent dev cache avoids observed multi-second compaction stalls.
+    turbopackFileSystemCacheForDev: false,
     optimizePackageImports: [
       'lucide-react',
       '@tanstack/react-query',
@@ -87,7 +102,8 @@ const nextConfig: NextConfig = {
     serverActions: {
       // Binary uploads use signed upload-intent routes. Server actions carry
       // structured metadata and text only, so keep their parsing budget small.
-      bodySizeLimit: '4mb',
+      // Note: We increased this to 50mb because message attachments are currently uploaded via server actions.
+      bodySizeLimit: '50mb',
     },
   },
 
