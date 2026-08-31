@@ -38,7 +38,8 @@ export async function generateMetadata() {
 type SearchParams = Promise<{ [key: string]: string | string[] | undefined }>;
 
 async function ResolvedHub({ searchParams }: { searchParams?: SearchParams }) {
-    const { user } = await getViewerAuthContext();
+    const viewer = await getViewerAuthContext();
+    const { user } = viewer;
     const dataHardeningEnabled = isHardeningDomainEnabled("dataV1", user?.id ?? null);
     const initialPageSize = dataHardeningEnabled ? 18 : 24;
     
@@ -47,7 +48,13 @@ async function ResolvedHub({ searchParams }: { searchParams?: SearchParams }) {
         resolvedSearchParams = await searchParams;
     }
     
-    const hasFilters = Object.keys(resolvedSearchParams).some(key => resolvedSearchParams[key]);
+    const first = (value: unknown) => Array.isArray(value) ? value[0] : value;
+    const hasFilters =
+        (first(resolvedSearchParams.view) && first(resolvedSearchParams.view) !== "all") ||
+        (first(resolvedSearchParams.status) && first(resolvedSearchParams.status) !== PROJECT_STATUS.ALL) ||
+        (first(resolvedSearchParams.type) && first(resolvedSearchParams.type) !== PROJECT_TYPE.ALL) ||
+        (first(resolvedSearchParams.sort) && first(resolvedSearchParams.sort) !== SORT_OPTIONS.NEWEST) ||
+        Boolean(first(resolvedSearchParams.tech) || first(resolvedSearchParams.q));
     
     let initialData = null;
     if (!hasFilters) {
@@ -59,7 +66,7 @@ async function ResolvedHub({ searchParams }: { searchParams?: SearchParams }) {
         };
     }
 
-    const clientViewer = user ? toClientViewer({ ...await getViewerAuthContext(), user }) : null;
+    const clientViewer = user ? toClientViewer(viewer) : null;
     const hubUser = clientViewer && clientViewer.userId ? {
         id: clientViewer.userId,
         username: clientViewer.username || undefined,
