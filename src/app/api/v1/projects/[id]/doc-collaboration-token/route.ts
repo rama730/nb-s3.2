@@ -20,6 +20,7 @@ import {
 } from "@/lib/realtime/doc-collaboration-token";
 import { resolveProjectDocPermission } from "@/lib/projects/doc";
 import { isUuid } from "@/lib/validations/uuid";
+import { validateCsrf } from "@/lib/security/csrf";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -28,6 +29,8 @@ export async function POST(
   request: NextRequest,
   context: { params: Promise<{ id: string }> },
 ) {
+  const csrfError = validateCsrf(request);
+  if (csrfError) return csrfError;
   const startedAt = Date.now();
   const requestId = getRequestId(request);
   const { id: projectId } = await context.params;
