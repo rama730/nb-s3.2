@@ -17,7 +17,7 @@ import {
     type OnboardingSocialLinks,
     type OnboardingVisibility,
 } from '@/lib/onboarding/contracts'
-import { onboardingEventInputSchema, type OnboardingEventInput } from '@/lib/onboarding/events'
+import { sanitizeOnboardingTelemetryBatch, type OnboardingEventInput } from '@/lib/onboarding/events'
 import { onboardingError, type OnboardingError } from '@/lib/onboarding/errors'
 import { UsernamePersistenceError, findUnavailableUsernames, generateDeterministicUsernameCandidates, getUsernameAvailability, mapUsernamePersistenceError } from '@/lib/usernames/service'
 import { consumeRateLimit } from '@/lib/security/rate-limit'
@@ -40,6 +40,7 @@ import type { OnboardingStep2SectionId } from '@/lib/onboarding/config'
 import { syncProfileSkills } from '@/lib/skills/service'
 import { getRolePreferences } from '@/lib/profile/role-preferences'
 import { ensureProfileShell } from '@/lib/services/profile-service'
+import { enqueueSupersededProfileImages } from '@/lib/profile/image-cleanup'
 
 const ONBOARDING_COMPLETE_LIMIT = 10
 const ONBOARDING_COMPLETE_WINDOW_SECONDS = 60
@@ -184,51 +185,6 @@ function sanitizeOnboardingDraft(input: unknown): DraftPayload {
             ? (visibility as OnboardingVisibility)
             : undefined,
     }
-}
-
-function sanitizeOnboardingDraftPatch(input: unknown): Partial<DraftPayload> {
-    const source = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>
-    const patch: Partial<DraftPayload> = {}
-
-    if ('username' in source) {
-        patch.username = typeof source.username === 'string' ? sanitizeUsernameInput(source.username) : undefined
-    }
-    if ('fullName' in source) patch.fullName = trimOptionalString(source.fullName, MAX_DRAFT_FULL_NAME_CHARS)
-    if ('avatarUrl' in source) {
-        const url = typeof source.avatarUrl === 'string' ? source.avatarUrl : undefined;
-        if (url && !url.startsWith('blob:') && !url.startsWith('data:image/')) {
-            patch.avatarUrl = trimOptionalString(url, 2000);
-        }
-    }
-    if ('headline' in source) patch.headline = trimOptionalString(source.headline, MAX_DRAFT_HEADLINE_CHARS)
-    if ('bio' in source) patch.bio = trimOptionalString(source.bio, MAX_DRAFT_BIO_CHARS)
-    if ('location' in source) patch.location = trimOptionalString(source.location, MAX_DRAFT_LOCATION_CHARS)
-    if ('website' in source) patch.website = trimOptionalUrl(source.website, MAX_DRAFT_WEBSITE_CHARS)
-    if ('skills' in source) patch.skills = sanitizeDraftTagList(source.skills)
-    if ('interests' in source) patch.interests = sanitizeDraftTagList(source.interests)
-    if ('openTo' in source) patch.openTo = sanitizeDraftOpenToList(source.openTo)
-    if ('messagePrivacy' in source) {
-        patch.messagePrivacy = sanitizeEnum(source.messagePrivacy, ONBOARDING_MESSAGE_PRIVACY_VALUES)
-    }
-    if ('socialLinks' in source) patch.socialLinks = sanitizeDraftSocialLinks(source.socialLinks)
-    if ('experienceLevel' in source) {
-        patch.experienceLevel = sanitizeEnum(source.experienceLevel, ONBOARDING_EXPERIENCE_LEVEL_VALUES)
-    }
-    if ('hoursPerWeek' in source) {
-        patch.hoursPerWeek = sanitizeEnum(source.hoursPerWeek, ONBOARDING_HOURS_PER_WEEK_VALUES)
-    }
-    if ('genderIdentity' in source) {
-        patch.genderIdentity = sanitizeEnum(source.genderIdentity, ONBOARDING_GENDER_VALUES)
-    }
-    if ('pronouns' in source) patch.pronouns = trimOptionalString(source.pronouns, MAX_DRAFT_PRONOUNS_CHARS)
-    if ('visibility' in source) {
-        const visibility = source.visibility
-        patch.visibility = ONBOARDING_VISIBILITY_VALUES.includes(visibility as OnboardingVisibility)
-            ? (visibility as OnboardingVisibility)
-            : undefined
-    }
-
-    return patch
 }
 
 function sanitizeTelemetryMetadata(input: unknown): Record<string, unknown> {
@@ -541,7 +497,7 @@ async function finalizeOnboardingSubmission(params: {
 }
 
 export async function completeOnboarding(
-    data: OnboardingPayloadInput & { idempotencyKey?: string }
+    data: OnboardingPayloadInput & { idempotencyKey?: string; telemetry?: OnboardingEventInput[] }
 ): Promise<{
     success: boolean
     error?: string
@@ -557,6 +513,7 @@ export async function completeOnboarding(
             return { success: false, error: error.message, errorDetails: error }
         }
 
+        const telemetry = sanitizeOnboardingTelemetryBatch(data.telemetry)
         let payload: ReturnType<typeof normalizeOnboardingPayload>
         try {
             payload = normalizeOnboardingPayload({ ...data, username: normalizedUsername })
@@ -667,13 +624,16 @@ export async function completeOnboarding(
             payload,
             avatarUrl,
         })
+        let previousAvatarUrl: string | null = null
         await db.transaction(async (tx) => {
             const existingProfile = await tx.query.profiles.findFirst({
                 where: eq(profiles.id, user.id),
                 columns: {
                     username: true,
+                    avatarUrl: true,
                 },
             })
+            previousAvatarUrl = existingProfile?.avatarUrl ?? null
             const previousUsername = existingProfile?.username ? normalizeUsername(existingProfile.username) : null
 
             await tx
@@ -752,7 +712,20 @@ export async function completeOnboarding(
             await tx
                 .delete(onboardingDrafts)
                 .where(eq(onboardingDrafts.userId, user.id))
+
+            if (telemetry.length > 0) {
+                await tx.insert(onboardingEvents).values(telemetry.map((event) => ({
+                    userId: user.id,
+                    eventType: event.eventType,
+                    step: typeof event.step === 'number' ? clampStep(event.step) : null,
+                    metadata: sanitizeTelemetryMetadata(event.metadata),
+                })))
+            }
         })
+
+        if (previousAvatarUrl && previousAvatarUrl !== avatarUrl) {
+            await enqueueSupersededProfileImages(user.id, [previousAvatarUrl])
+        }
 
         await writeOnboardingEventBestEffort({
             userId: user.id,
@@ -876,134 +849,12 @@ export async function getUsernameSuggestions(fullName: string): Promise<{ sugges
     }
 }
 
-export async function saveOnboardingDraft(input: {
-    step: number
-    draft: Partial<DraftPayload>
-    activeSection?: OnboardingStep2SectionId
-    expectedVersion?: number
-}): Promise<{
-    success: boolean
-    version?: number
-    step?: number
-    completedThrough?: number
-    activeSection?: OnboardingStep2SectionId
-    schemaVersion?: number
-    draft?: DraftPayload
-    updatedAt?: string
-    error?: string
-    errorDetails?: OnboardingError
-}> {
-    try {
-        const supabase = await createClient()
-        const { data: authData } = await supabase.auth.getUser()
-        const user = authData.user
-        if (!user) {
-            const details = onboardingError('NOT_AUTHENTICATED', 'Not authenticated')
-            return { success: false, error: details.message, errorDetails: details }
-        }
-        // Removed ensureOnboardingProfileShell from auto-save hotpath to prevent N+1 DB load
-        const safeStep = clampStep(input.step)
-        const incomingDraftPatch = sanitizeOnboardingDraftPatch(input.draft)
-        const fullDraft = sanitizeOnboardingDraft(incomingDraftPatch)
-        const activeSection = normalizeOnboardingSection(input.activeSection)
-        const updatedAt = new Date()
-        const expiresAt = new Date(updatedAt.getTime() + ONBOARDING_LOCAL_DRAFT_TTL_MS * 30)
-
-        const result = await db
-            .insert(onboardingDrafts)
-            .values({
-                userId: user.id,
-                step: safeStep,
-                completedThrough: 0,
-                activeSection,
-                version: 1,
-                schemaVersion: ONBOARDING_SCHEMA_VERSION,
-                draft: fullDraft,
-                expiresAt,
-                updatedAt,
-            })
-            .onConflictDoUpdate({
-                target: onboardingDrafts.userId,
-                set: {
-                    step: safeStep,
-                    activeSection,
-                    draft: sql`${onboardingDrafts.draft} || ${JSON.stringify(incomingDraftPatch)}::jsonb`,
-                    version: sql`${onboardingDrafts.version} + 1`,
-                    schemaVersion: ONBOARDING_SCHEMA_VERSION,
-                    expiresAt,
-                    updatedAt,
-                },
-                where: typeof input.expectedVersion === 'number'
-                    ? eq(onboardingDrafts.version, input.expectedVersion)
-                    : undefined
-            })
-            .returning({
-                version: onboardingDrafts.version,
-                step: onboardingDrafts.step,
-                completedThrough: onboardingDrafts.completedThrough,
-                activeSection: onboardingDrafts.activeSection,
-                schemaVersion: onboardingDrafts.schemaVersion,
-                draft: onboardingDrafts.draft,
-                updatedAt: onboardingDrafts.updatedAt,
-            })
-
-        if (result.length > 0) {
-            return {
-                success: true,
-                version: result[0]!.version,
-                step: clampStep(result[0]!.step),
-                completedThrough: clampCompletedThrough(result[0]!.completedThrough),
-                activeSection: normalizeOnboardingSection(result[0]!.activeSection),
-                schemaVersion: result[0]!.schemaVersion,
-                draft: sanitizeOnboardingDraft(result[0]!.draft),
-                updatedAt: result[0]!.updatedAt.toISOString(),
-            }
-        }
-
-        // Conflict: version didn't match
-        const latest = await db.query.onboardingDrafts.findFirst({
-            where: eq(onboardingDrafts.userId, user.id),
-            columns: {
-                version: true,
-                step: true,
-                completedThrough: true,
-                activeSection: true,
-                schemaVersion: true,
-                draft: true,
-                updatedAt: true,
-            },
-        })
-
-        if (!latest) {
-            const details = onboardingError('DB_ERROR', 'Unable to save onboarding draft', true)
-            return { success: false, error: details.message, errorDetails: details }
-        }
-
-        const details = onboardingError('DRAFT_CONFLICT', 'Draft changed in another session. Synced latest draft.')
-        return {
-            success: false,
-            error: details.message,
-            errorDetails: details,
-            version: latest.version,
-            step: clampStep(latest.step),
-            completedThrough: clampCompletedThrough(latest.completedThrough),
-            activeSection: normalizeOnboardingSection(latest.activeSection),
-            schemaVersion: latest.schemaVersion,
-            draft: sanitizeOnboardingDraft(latest.draft),
-            updatedAt: latest.updatedAt.toISOString(),
-        }
-    } catch (error) {
-        console.error('Error saving onboarding draft:', error)
-        const details = onboardingError('DB_ERROR', 'Unable to save onboarding draft', true)
-        return { success: false, error: details.message, errorDetails: details }
-    }
-}
-
 export async function commitOnboardingStep(input: {
     step: number
     draft: DraftPayload
     activeSection?: OnboardingStep2SectionId
     expectedVersion: number
+    telemetry?: OnboardingEventInput[]
 }): Promise<{
     success: boolean
     step?: number
@@ -1067,6 +918,7 @@ export async function commitOnboardingStep(input: {
         }
 
         const activeSection = normalizeOnboardingSection(input.activeSection)
+        const telemetry = sanitizeOnboardingTelemetryBatch(input.telemetry)
         const nextStep = Math.min(ONBOARDING_STEP_MAX, currentStep + 1)
         const now = new Date()
         const expiresAt = new Date(now.getTime() + ONBOARDING_LOCAL_DRAFT_TTL_MS * 30)
@@ -1122,6 +974,15 @@ export async function commitOnboardingStep(input: {
                             sql`${profiles.onboardingStatus} <> 'completed'`,
                         ),
                     )
+
+                if (telemetry.length > 0) {
+                    await tx.insert(onboardingEvents).values(telemetry.map((event) => ({
+                        userId: user.id,
+                        eventType: event.eventType,
+                        step: typeof event.step === 'number' ? clampStep(event.step) : null,
+                        metadata: sanitizeTelemetryMetadata(event.metadata),
+                    })))
+                }
             }
             return rows
         })
@@ -1184,34 +1045,5 @@ export async function clearOnboardingDraft(): Promise<{ success: boolean; error?
         console.error('Error clearing onboarding draft:', error)
         const details = onboardingError('DB_ERROR', 'Unable to clear onboarding draft', true)
         return { success: false, error: details.message }
-    }
-}
-
-export async function trackOnboardingEvent(input: {
-    eventType: OnboardingEventInput['eventType']
-    step?: number
-    metadata?: Record<string, string | number | boolean | null>
-}): Promise<{ success: boolean }> {
-    try {
-        const supabase = await createClient()
-        const { data: authData } = await supabase.auth.getUser()
-        const user = authData.user
-        if (!user) return { success: false }
-
-        const parsed = onboardingEventInputSchema.safeParse(input)
-        if (!parsed.success) return { success: false }
-        const payload = parsed.data
-
-        const tracked = await writeOnboardingEventBestEffort({
-            userId: user.id,
-            eventType: payload.eventType,
-            step: typeof payload.step === 'number' ? clampStep(payload.step) : null,
-            context: 'client_event',
-            metadata: sanitizeTelemetryMetadata(payload.metadata),
-        })
-        return { success: tracked }
-    } catch (error) {
-        console.error('Error tracking onboarding event:', error)
-        return { success: false }
     }
 }
