@@ -29,21 +29,21 @@ export function useMessagingShortcuts(callbacks: MessagingShortcutCallbacks, ena
 
             const isMod = e.metaKey || e.ctrlKey;
 
-            if (isMod && e.key === 'n') {
+            if (isMod && e.key === 'n' && callbacks.onNewMessage) {
                 e.preventDefault();
-                callbacks.onNewMessage?.();
-            } else if (isMod && e.key === 'k') {
+                callbacks.onNewMessage();
+            } else if (isMod && e.key === 'k' && callbacks.onFocusSearch) {
                 e.preventDefault();
-                callbacks.onFocusSearch?.();
-            } else if (isMod && e.shiftKey && e.key === 'M') {
+                callbacks.onFocusSearch();
+            } else if (isMod && e.shiftKey && e.key === 'M' && callbacks.onToggleMute) {
                 e.preventDefault();
-                callbacks.onToggleMute?.();
-            } else if (e.altKey && e.key === 'ArrowUp') {
+                callbacks.onToggleMute();
+            } else if (e.altKey && e.key === 'ArrowUp' && callbacks.onNavigateUp) {
                 e.preventDefault();
-                callbacks.onNavigateUp?.();
-            } else if (e.altKey && e.key === 'ArrowDown') {
+                callbacks.onNavigateUp();
+            } else if (e.altKey && e.key === 'ArrowDown' && callbacks.onNavigateDown) {
                 e.preventDefault();
-                callbacks.onNavigateDown?.();
+                callbacks.onNavigateDown();
             }
         };
 
