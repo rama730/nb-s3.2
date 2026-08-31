@@ -33,6 +33,8 @@ export function buildViewerScopedProfileView(params: {
     website: profile.website,
     bannerUrl: profile.bannerUrl,
     socialLinks: profile.socialLinks,
+    // Link health is recovery state for the owner, not public profile data.
+    socialLinkMetadata: isOwner ? profile.socialLinkMetadata ?? {} : {},
     openTo: profile.openTo,
     experienceLevel: profile.experienceLevel,
     hoursPerWeek: profile.hoursPerWeek,
