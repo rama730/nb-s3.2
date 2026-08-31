@@ -89,7 +89,12 @@ async function walkEntry(
   entry: FileSystemEntryLike,
   relativePrefix: string,
   acc: Array<{ file: File; relativePath: string }>,
+  depth: number = 0,
 ): Promise<void> {
+  if (acc.length >= 5_000) {
+    throw new Error("Folder upload is limited to 5,000 files at a time.");
+  }
+
   if (entry.isFile) {
     const f = await readFileFromEntry(entry);
     if (f) {
@@ -102,6 +107,9 @@ async function walkEntry(
   }
 
   if (entry.isDirectory && entry.createReader) {
+    if (depth >= 64) {
+      throw new Error("Folder nesting is too deep to upload safely.");
+    }
     const reader = entry.createReader();
     const entries = await readAllEntries(reader);
     const nextPrefix = relativePrefix
@@ -110,7 +118,10 @@ async function walkEntry(
     // Walk children sequentially — directory readers are stateful and
     // parallelizing them can produce duplicate or missed entries.
     for (const child of entries) {
-      await walkEntry(child, nextPrefix, acc);
+      if (acc.length >= 5_000) {
+        throw new Error("Folder upload is limited to 5,000 files at a time.");
+      }
+      await walkEntry(child, nextPrefix, acc, depth + 1);
     }
   }
 }
