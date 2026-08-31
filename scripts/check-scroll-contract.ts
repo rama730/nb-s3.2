@@ -17,7 +17,13 @@ const LEGACY_CLASS_ALLOWLIST = new Set<string>([
   "src/components/projects/tabs/SprintPlanning.tsx",
   "src/components/projects/v2/tasks/TaskDetailPanel.tsx",
   "src/components/workspace/WorkspaceDrawer.tsx",
-  "src/components/workspace/WorkspaceTaskDetailView.tsx",
+]);
+
+// Compatibility redirects never render a route surface, so they cannot own a
+// scroll root. Keep this list intentionally narrow rather than weakening the
+// contract for real pages.
+const REDIRECT_ONLY_PAGE_ALLOWLIST = new Set<string>([
+  "src/app/(main)/workspace/page.tsx",
 ]);
 
 function toPosix(filePath: string): string {
@@ -144,6 +150,9 @@ export function validateScrollContract(repoRoot: string = process.cwd()): CheckR
 
   const pageFiles = listPageFiles(mainDir);
   for (const pageFile of pageFiles) {
+    const relPage = toPosix(path.relative(repoRoot, pageFile));
+    if (REDIRECT_ONLY_PAGE_ALLOWLIST.has(relPage)) continue;
+
     const candidateFiles = [
       pageFile,
       ...collectAncestorLayouts(pageFile, mainDir),
@@ -152,7 +161,6 @@ export function validateScrollContract(repoRoot: string = process.cwd()): CheckR
     const uniqueFiles = Array.from(new Set(candidateFiles));
     const markerCount = countRouteMarkers(uniqueFiles);
     if (markerCount !== 1) {
-      const relPage = toPosix(path.relative(repoRoot, pageFile));
       const relSources = uniqueFiles.map((file) => toPosix(path.relative(repoRoot, file))).join(", ");
       errors.push(
         `${relPage} must resolve to exactly one route scroll root marker; found ${markerCount}. Sources checked: ${relSources}`,
