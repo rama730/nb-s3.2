@@ -53,8 +53,9 @@ export function FolderListHeader({
         Size
       </div>
       <div role="columnheader" data-column="by" className="min-w-0">
-        By
+        Updated by
       </div>
+      <div role="columnheader" data-column="actions"><span className="sr-only">Actions</span></div>
     </div>
   );
 }
