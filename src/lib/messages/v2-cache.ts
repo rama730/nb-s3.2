@@ -73,6 +73,15 @@ function isLastMessageAfterReadWatermark(
     return false;
 }
 
+function mergeReactionPreview(
+    current: InboxConversationV2['reactionPreview'],
+    next: InboxConversationV2['reactionPreview'],
+) {
+    if (!current || !next) return next ?? null;
+    // ponytail: summary requests can finish out of order; reaction time is its version.
+    return toEpochMs(next.createdAt) >= toEpochMs(current.createdAt) ? next : current;
+}
+
 function mergeConversationSnapshot(
     current: InboxConversationV2 | null | undefined,
     next: InboxConversationV2,
@@ -88,6 +97,7 @@ function mergeConversationSnapshot(
     const lastMessage = shouldUseNextLastMessage
         ? next.lastMessage
         : current.lastMessage ?? next.lastMessage;
+    const reactionPreview = mergeReactionPreview(current.reactionPreview, next.reactionPreview);
     const currentReadIsAtLeastNext = compareConversationReadWatermarks(current, next) >= 0;
     const shouldKeepCurrentReadWatermark = currentReadIsAtLeastNext;
     const shouldIgnoreStaleUnread =
@@ -113,6 +123,7 @@ function mergeConversationSnapshot(
         ...next,
         updatedAt: updatedAtEpoch > 0 ? new Date(updatedAtEpoch) : next.updatedAt,
         lastMessage,
+        reactionPreview,
         lastReadAt: shouldKeepCurrentReadWatermark ? current.lastReadAt : next.lastReadAt,
         lastReadMessageId: shouldKeepCurrentReadWatermark ? current.lastReadMessageId : next.lastReadMessageId,
         unreadCount: shouldIgnoreStaleUnread ? current.unreadCount : next.unreadCount,
@@ -180,15 +191,27 @@ function updateInboxData(
     queryClient: QueryClient,
     updater: (conversations: InboxConversationV2[]) => InboxConversationV2[],
 ) {
-    queryClient.setQueriesData<InfiniteData<MessagesInboxPageV2>>(
-        { queryKey: INBOX_QUERY_PREFIX },
-        (current) => {
-            if (!current) return current;
-            const flattened = current.pages.flatMap((page) => page.conversations);
-            const nextConversations = normalizeConversationRows(updater(flattened));
-            return repartitionConversations(current, nextConversations);
-        },
-    );
+    const entries = queryClient.getQueriesData<InfiniteData<MessagesInboxPageV2>>({
+        queryKey: INBOX_QUERY_PREFIX,
+    });
+    for (const [queryKey, current] of entries) {
+        if (!current) continue;
+        const scope = queryKey[3] === 'archived' ? 'archived' : 'active';
+        const flattened = current.pages.flatMap((page) => page.conversations);
+        const nextConversations = normalizeConversationRows(updater(flattened))
+            .filter((conversation) =>
+                scope === 'archived'
+                    ? conversation.lifecycleState === 'archived'
+                    : conversation.lifecycleState !== 'archived',
+            );
+        queryClient.setQueryData(queryKey, repartitionConversations(current, nextConversations));
+    }
+}
+
+export function hasCachedInboxData(queryClient: QueryClient) {
+    return queryClient.getQueriesData<InfiniteData<MessagesInboxPageV2>>({
+        queryKey: INBOX_QUERY_PREFIX,
+    }).some(([, data]) => Boolean(data));
 }
 
 function isMessageOlderThanBoundary(
@@ -297,7 +320,10 @@ export function patchConversationLastMessageFromMessage(
     conversationId: string,
     message: Pick<MessageWithSender, 'id' | 'content' | 'senderId' | 'createdAt' | 'type'> & {
         metadata?: Record<string, unknown> | null;
+        deletedAt?: Date | string | null;
+        replyToMessageId?: string | null;
     },
+    options?: { incrementUnreadCount?: boolean },
 ) {
     const nextLastMessage = buildConversationLastMessageSnapshot(message);
     if (!nextLastMessage) return;
@@ -317,6 +343,9 @@ export function patchConversationLastMessageFromMessage(
             lifecycleState: 'active',
             updatedAt: nextUpdatedAtEpoch > 0 ? new Date(nextUpdatedAtEpoch) : conversation.updatedAt,
             lastMessage: nextLastMessage,
+            ...(options?.incrementUnreadCount
+                ? { unreadCount: (conversation.unreadCount || 0) + 1 }
+                : {}),
         };
     });
 }
@@ -352,14 +381,53 @@ export function replaceOptimisticThreadMessage(
 ) {
     updateThreadData(queryClient, conversationId, (page, pageIndex) => {
         if (pageIndex !== 0) return page;
-        const nextMessages = page.messages.filter((entry) =>
-            entry.clientMessageId !== clientMessageId && entry.id !== `temp-${clientMessageId}`,
+
+        // Ensure the server-confirmed message has at least deliveryState: 'sent'
+        let targetMessage: MessageWithSender = {
+            ...message,
+            metadata: {
+                ...(message.metadata || {}),
+                deliveryState: (message.metadata?.deliveryState as string) || 'sent',
+            },
+        };
+
+        const existingMessage = page.messages.find(entry =>
+            entry.clientMessageId === clientMessageId ||
+            entry.id === `temp-${clientMessageId}` ||
+            entry.id === message.id
         );
+
+        if (existingMessage) {
+            const existingState = (existingMessage.metadata?.deliveryState as string) ?? 'sent';
+            const newState = (targetMessage.metadata?.deliveryState as string) ?? 'sent';
+
+            const stateRank = { 'sent': 0, 'delivered': 1, 'read': 2 };
+            const existingRank = stateRank[existingState as keyof typeof stateRank] ?? 0;
+            const newRank = stateRank[newState as keyof typeof stateRank] ?? 0;
+
+            if (existingRank > newRank) {
+                targetMessage = {
+                    ...targetMessage,
+                    metadata: {
+                        ...(targetMessage.metadata || {}),
+                        deliveryState: existingState,
+                        deliveryCounts: existingMessage.metadata?.deliveryCounts,
+                    }
+                };
+            }
+        }
+
+        const nextMessages = page.messages.filter((entry) =>
+            entry.clientMessageId !== clientMessageId &&
+            entry.id !== `temp-${clientMessageId}` &&
+            entry.id !== message.id
+        );
+
         return {
             ...page,
             conversation: conversation ?? page.conversation,
             capability: conversation?.capability ?? page.capability,
-            messages: mergeMessages(nextMessages, [message]),
+            messages: mergeMessages(nextMessages, [targetMessage]),
         };
     });
 
@@ -383,6 +451,31 @@ export function patchThreadMessage(
             message.id === messageId ? patch(message) : message,
         ),
     }));
+}
+
+export function patchThreadMessages(
+    queryClient: QueryClient,
+    conversationId: string,
+    shouldPatch: (message: MessageWithSender) => boolean,
+    patch: (message: MessageWithSender) => MessageWithSender,
+) {
+    const patchCollection = (messages: MessageWithSender[]) => {
+        let changed = false;
+        const next = messages.map((message) => {
+            if (!shouldPatch(message)) return message;
+            const patched = patch(message);
+            if (patched !== message) changed = true;
+            return patched;
+        });
+        return changed ? next : messages;
+    };
+
+    updateThreadData(queryClient, conversationId, (page) => {
+        const messages = patchCollection(page.messages);
+        const pinnedMessages = patchCollection(page.pinnedMessages);
+        if (messages === page.messages && pinnedMessages === page.pinnedMessages) return page;
+        return { ...page, messages, pinnedMessages };
+    });
 }
 
 export function patchPinnedMessages(
@@ -445,39 +538,27 @@ export function replaceThreadSnapshot(
                 conversation: committedConversation,
                 capability: committedConversation.capability,
             };
-            const newestSnapshotMessage = normalizedSnapshot.messages.at(-1) ?? null;
-            const newerCachedMessages = newestSnapshotMessage
-                ? current.pages
-                    .flatMap((page) => page.messages)
-                    .filter((message) => isMessageNewerThanBoundary(message, newestSnapshotMessage))
-                : [];
-            const mergedSnapshot: MessageThreadPageV2 = newerCachedMessages.length > 0
-                ? {
-                    ...snapshotWithConversation,
-                    messages: mergeMessages(normalizedSnapshot.messages, newerCachedMessages),
-                }
-                : snapshotWithConversation;
-            const oldestSnapshotMessage = mergedSnapshot.messages[0] ?? null;
-            if (!oldestSnapshotMessage) {
-                return {
-                    ...current,
-                    pages: [mergedSnapshot],
-                    pageParams: [undefined],
-                };
-            }
+            const mergedSnapshot: MessageThreadPageV2 = {
+                ...snapshotWithConversation,
+                messages: mergeMessages(
+                    current.pages[0]?.messages ?? [],
+                    normalizedSnapshot.messages
+                ),
+            };
 
-            const nextPages: MessageThreadPageV2[] = [mergedSnapshot];
-            const nextPageParams: Array<string | undefined> = [undefined];
-            current.pages.slice(1).forEach((page, pageIndex) => {
-                const olderMessages = mergeMessages([], page.messages)
-                    .filter((message) => isMessageOlderThanBoundary(message, oldestSnapshotMessage));
-                if (olderMessages.length === 0) return;
-                nextPages.push({
-                    ...page,
-                    messages: olderMessages,
-                });
-                nextPageParams.push(current.pageParams[pageIndex + 1] as string | undefined);
-            });
+            const snapshotOldest = normalizedSnapshot.messages[0] ?? null;
+            const retainedHistoryPages = current.pages.slice(1).map((page) => ({
+                ...page,
+                messages: snapshotOldest
+                    ? page.messages.filter((message) => {
+                        const timestampDiff = toEpochMs(message.createdAt) - toEpochMs(snapshotOldest.createdAt);
+                        if (timestampDiff !== 0) return timestampDiff < 0;
+                        return message.id.localeCompare(snapshotOldest.id) < 0;
+                    })
+                    : page.messages,
+            }));
+            const nextPages: MessageThreadPageV2[] = [mergedSnapshot, ...retainedHistoryPages];
+            const nextPageParams = [undefined, ...current.pageParams.slice(1)];
 
             return {
                 ...current,
@@ -526,6 +607,23 @@ export function isCachedConversationLastMessage(
     );
 
     return threadData?.pages[0]?.conversation.lastMessage?.id === messageId;
+}
+
+export function getCachedInboxConversation(
+    queryClient: QueryClient,
+    conversationId: string,
+): InboxConversationV2 | null {
+    const inboxQueries = queryClient.getQueriesData<InfiniteData<MessagesInboxPageV2>>({
+        queryKey: INBOX_QUERY_PREFIX,
+    });
+
+    for (const [, data] of inboxQueries) {
+        for (const page of data?.pages ?? []) {
+            const conversation = page.conversations.find((entry) => entry.id === conversationId);
+            if (conversation) return conversation;
+        }
+    }
+    return null;
 }
 
 export function getCachedInboxConversationIds(queryClient: QueryClient) {
