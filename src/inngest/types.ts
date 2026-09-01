@@ -17,6 +17,7 @@ type ProjectImportEvent = {
 
 type GitPushEvent = {
     data: {
+        runId?: string;
         projectId: string;
         commitMessage: string;
         userId: string;
@@ -26,6 +27,7 @@ type GitPushEvent = {
 
 type GitPullEvent = {
     data: {
+        runId?: string;
         projectId: string;
         userId: string;
         branch?: string | null;
