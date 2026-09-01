@@ -3,17 +3,42 @@ import test from "node:test";
 
 import {
   getTaskFileWarnings,
+  getApprovedTaskFileVersion,
+  isApprovedTaskFileRevision,
+  markTaskFileVersionApproved,
   inferTaskFileRole,
   normalizeTaskTitleDraft,
   replaceTaskFileRoleTag,
   resolveTaskFileIntent,
 } from "@/lib/projects/task-file-intelligence";
 
+test("approval metadata records exactly one version without losing role or custom labels", () => {
+  const tags = markTaskFileVersionApproved(["deliverable", "client-review", "approved_version:2"], 3);
+  assert.deepEqual(tags, ["deliverable", "client-review", "approved_version:3"]);
+  assert.equal(getApprovedTaskFileVersion(tags), 3);
+  assert.equal(getApprovedTaskFileVersion([]), null);
+  for (const invalid of ["0", "-1", "1.5", "1e3", "NaN", "", "9007199254740992"])
+    assert.equal(getApprovedTaskFileVersion([`approved_version:${invalid}`]), null);
+  assert.throws(() => markTaskFileVersionApproved([], 0), /Invalid/);
+});
+
 test("normalizeTaskTitleDraft collapses multiline whitespace into one logical title", () => {
   assert.equal(
     normalizeTaskTitleDraft("  Finish   the bugs\nfrom   the file  "),
     "Finish the bugs from the file",
   );
+});
+
+test("approval is invalidated by an active-revision overwrite even without a version bump", () => {
+  const uploadedAt = "2026-08-31T01:00:00.000Z";
+  const tags = markTaskFileVersionApproved(["deliverable"], 3, uploadedAt);
+  assert.equal(isApprovedTaskFileRevision(tags, 3, new Date(uploadedAt)), true);
+  assert.equal(isApprovedTaskFileRevision(tags, 4, uploadedAt), false);
+  assert.equal(isApprovedTaskFileRevision(tags, 3, "2026-08-31T02:00:00.000Z"), false);
+  assert.equal(isApprovedTaskFileRevision(tags, 3, null), false);
+  assert.equal(isApprovedTaskFileRevision(["approved_version:3"], 3, uploadedAt), false);
+  const approvedAgain = markTaskFileVersionApproved(tags, 3, "2026-08-31T02:00:00.000Z");
+  assert.equal(approvedAgain.filter(tag => tag.startsWith("approved_revision_at:")).length, 1);
 });
 
 test("resolveTaskFileIntent recommends replacing an exact linked root match", () => {
