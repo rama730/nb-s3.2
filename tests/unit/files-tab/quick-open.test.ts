@@ -40,7 +40,6 @@ import path from "node:path";
 import type { ProjectNode } from "@/lib/db/schema";
 import {
   buildNodePathMap,
-  rankFuzzyResults,
 } from "@/components/projects/v2/files-tab/quick-open/QuickOpenDialog";
 
 // ─── Fixture builders ────────────────────────────────────────────────
@@ -148,185 +147,6 @@ describe("buildNodePathMap — path joining", () => {
   });
 });
 
-// ─── rankFuzzyResults — empty query (Req 9.3 / 9.2 boundary) ────────
-
-describe("rankFuzzyResults — empty query (Req 9.2 / 9.3)", () => {
-  it("returns [] when the query is empty — Recents path is the caller's job", () => {
-    // The dialog renders Recents (Req 9.2) directly from the store; it
-    // only calls `rankFuzzyResults` with a non-empty query. Empty input
-    // into the ranker therefore MUST return [] — any other behaviour
-    // would collide with the Recents branch.
-    const nodes = buildNodes([
-      makeFolder("root", "root", null),
-      makeFile("a", "README.md", "root"),
-    ]);
-    const paths = buildNodePathMap(nodes);
-    const fileNodes = Object.values(nodes).filter((n) => n.type === "file");
-    assert.deepEqual(rankFuzzyResults(fileNodes, paths, ""), []);
-  });
-});
-
-// ─── rankFuzzyResults — ordered scoring tiers (Req 9.3) ─────────────
-
-describe("rankFuzzyResults — scoring order (Req 9.3)", () => {
-  // Scoring contract (from QuickOpenDialog.tsx):
-  //   exact name match: +500
-  //   name startsWith : +300
-  //   name includes   : +180
-  //   path includes   : +120
-  //
-  // Scores accumulate. The key property is the STRICT ordering across
-  // the four tiers: any file whose name equals the query must rank
-  // above any file whose name starts with (but does not equal) the
-  // query, which in turn ranks above any file whose name merely
-  // includes the query, which in turn ranks above any file matched
-  // only through its path.
-
-  it("exact name match ranks strictly above startsWith-only match", () => {
-    // Query "foo". "foo" is an exact name match; "foobar" is a
-    // startsWith match but not exact.
-    const nodes = buildNodes([
-      makeFolder("root", "root", null),
-      makeFile("exact", "foo", "root"),
-      makeFile("starts", "foobar", "root"),
-    ]);
-    const paths = buildNodePathMap(nodes);
-    const fileNodes = Object.values(nodes).filter((n) => n.type === "file");
-    const results = rankFuzzyResults(fileNodes, paths, "foo");
-    assert.equal(results.length, 2);
-    assert.equal(results[0]!.id, "exact", "exact name match must sort first");
-    assert.equal(results[1]!.id, "starts", "startsWith match must sort after exact");
-  });
-
-  it("startsWith match ranks strictly above includes-only match", () => {
-    // Query "foo". "foobar" starts-with; "zfoobar" only includes.
-    const nodes = buildNodes([
-      makeFolder("root", "root", null),
-      makeFile("starts", "foobar.ts", "root"),
-      makeFile("includes", "zfoobar.ts", "root"),
-    ]);
-    const paths = buildNodePathMap(nodes);
-    const fileNodes = Object.values(nodes).filter((n) => n.type === "file");
-    const results = rankFuzzyResults(fileNodes, paths, "foo");
-    assert.equal(results.length, 2);
-    assert.equal(results[0]!.id, "starts");
-    assert.equal(results[1]!.id, "includes");
-  });
-
-  it("name-includes match ranks strictly above path-only match", () => {
-    // Query "foo".
-    // "zfoobar.ts" at root         — name includes (+180) + path includes (+120) = 300
-    // "unrelated.ts" under a/foo/  — name does NOT include (+0) + path includes (+120) = 120
-    const nodes = buildNodes([
-      makeFolder("root", "root", null),
-      makeFolder("a", "a", "root"),
-      makeFolder("foo", "foo", "a"),
-      makeFile("nameHit", "zfoobar.ts", "root"),
-      makeFile("pathHit", "unrelated.ts", "foo"),
-    ]);
-    const paths = buildNodePathMap(nodes);
-    const fileNodes = Object.values(nodes).filter((n) => n.type === "file");
-    const results = rankFuzzyResults(fileNodes, paths, "foo");
-    assert.equal(results.length, 2);
-    assert.equal(results[0]!.id, "nameHit", "name-includes outranks path-only");
-    assert.equal(results[1]!.id, "pathHit");
-  });
-
-  it("full four-tier ordering: exact > startsWith > includes > path-only", () => {
-    // Query "foo".
-    //   exact    — name "foo"                     (path "root/foo")
-    //   starts   — name "foobar.ts"               (path "root/foobar.ts")
-    //   includes — name "zfoobar.ts"              (path "root/zfoobar.ts")
-    //   pathOnly — name "unrelated.ts" under /foo (path "root/foo/unrelated.ts")
-    const nodes = buildNodes([
-      makeFolder("root", "root", null),
-      makeFolder("foo", "foo", "root"),
-      makeFile("exact", "foo", "root"),
-      makeFile("starts", "foobar.ts", "root"),
-      makeFile("includes", "zfoobar.ts", "root"),
-      makeFile("pathOnly", "unrelated.ts", "foo"),
-    ]);
-    const paths = buildNodePathMap(nodes);
-    const fileNodes = Object.values(nodes).filter((n) => n.type === "file");
-    const results = rankFuzzyResults(fileNodes, paths, "foo");
-    assert.deepEqual(
-      results.map((n) => n.id),
-      ["exact", "starts", "includes", "pathOnly"],
-      "four-tier ordering must be stable across all fuzzy hits",
-    );
-  });
-
-  it("drops files that score zero (no name OR path match)", () => {
-    const nodes = buildNodes([
-      makeFolder("root", "root", null),
-      makeFile("hit", "foo.ts", "root"),
-      makeFile("miss", "bar.ts", "root"),
-    ]);
-    const paths = buildNodePathMap(nodes);
-    const fileNodes = Object.values(nodes).filter((n) => n.type === "file");
-    const results = rankFuzzyResults(fileNodes, paths, "foo");
-    assert.equal(results.length, 1);
-    assert.equal(results[0]!.id, "hit");
-  });
-
-  it("matches case-insensitively against both name and path (Req 9.3)", () => {
-    // The helper assumes the caller has lower-cased the query; the
-    // component lower-cases inside its `useMemo`. We mirror that in the
-    // call here.
-    const nodes = buildNodes([
-      makeFolder("root", "root", null),
-      makeFile("f", "ReadMe.MD", "root"),
-    ]);
-    const paths = buildNodePathMap(nodes);
-    const fileNodes = Object.values(nodes).filter((n) => n.type === "file");
-    const results = rankFuzzyResults(fileNodes, paths, "readme");
-    assert.equal(results.length, 1);
-    assert.equal(results[0]!.id, "f");
-  });
-});
-
-// ─── rankFuzzyResults — 50-result cap (Req 9.3) ─────────────────────
-
-describe("rankFuzzyResults — 50-result cap (Req 9.3)", () => {
-  it("truncates to at most 50 results when 100 files all match", () => {
-    const nodes: ProjectNode[] = [makeFolder("root", "root", null)];
-    // Generate 100 files that all match the query "foo".
-    for (let i = 0; i < 100; i += 1) {
-      nodes.push(makeFile(`f-${i}`, `foo-${i.toString().padStart(3, "0")}.ts`, "root"));
-    }
-    const nodesById = buildNodes(nodes);
-    const paths = buildNodePathMap(nodesById);
-    const fileNodes = Object.values(nodesById).filter((n) => n.type === "file");
-    const results = rankFuzzyResults(fileNodes, paths, "foo");
-    assert.equal(
-      results.length,
-      50,
-      "Req 9.3 requires the ranker to emit at most 50 results",
-    );
-    // The slice preserves the score-then-name order, so the first 50
-    // file names sort below the second 50 (deterministic cap).
-    const resultNames = results.map((n) => n.name);
-    const sortedNames = [...resultNames].sort((a, b) => a.localeCompare(b));
-    assert.deepEqual(
-      resultNames,
-      sortedNames,
-      "the 50-slice must be the lowest 50 names (name-asc tie-break)",
-    );
-  });
-
-  it("honours a caller-supplied limit override", () => {
-    const nodes: ProjectNode[] = [makeFolder("root", "root", null)];
-    for (let i = 0; i < 10; i += 1) {
-      nodes.push(makeFile(`f-${i}`, `foo-${i}.ts`, "root"));
-    }
-    const nodesById = buildNodes(nodes);
-    const paths = buildNodePathMap(nodesById);
-    const fileNodes = Object.values(nodesById).filter((n) => n.type === "file");
-    const results = rankFuzzyResults(fileNodes, paths, "foo", 3);
-    assert.equal(results.length, 3);
-  });
-});
-
 // ─── Source-level structural contracts ──────────────────────────────
 
 const DIALOG_SOURCE = readFileSync(
@@ -427,8 +247,8 @@ describe("QuickOpen — 20-Recents cap (Req 9.2, source-level)", () => {
     assert.match(DIALOG_SOURCE, /recents\.slice\(0, MAX_RECENTS\)/);
     assert.match(DIALOG_SOURCE, /getNodeMetadataBatch\(projectId, recentIds\)/);
   });
-  it("excludes deleted files and folders from authorized results", () => {
-    assert.match(DIALOG_SOURCE, /nodes\.filter\(node => node\.type === "file" && !node\.deletedAt\)/);
+  it("excludes deleted files and defaults to files; workspace search can include folders", () => {
+    assert.match(DIALOG_SOURCE, /nodes\.filter\(node => \(includeFolders \|\| node\.type === "file"\) && !node\.deletedAt\)/);
     assert.doesNotMatch(DIALOG_SOURCE, /rankFuzzyResults\(fileNodes/);
   });
 
@@ -453,7 +273,7 @@ describe("QuickOpen — 50-result cap (Req 9.3, source-level)", () => {
   });
 
   it("pages authoritative search in batches of 50 instead of silently truncating", () => {
-    assert.match(DIALOG_SOURCE, /getProjectNodes\(projectId, null, rawQuery, MAX_RESULTS, pageParam\)/);
+    assert.match(DIALOG_SOURCE, /getProjectNodes\(projectId, null, rawQuery, MAX_RESULTS, pageParam,\s*\{/);
     assert.match(DIALOG_SOURCE, /getNextPageParam: page => page.nextCursor/);
     assert.match(DIALOG_SOURCE, /search.fetchNextPage\(\)/);
   });
@@ -600,7 +420,7 @@ describe("QuickOpen — selected-node-gone error (Req 9.6, source-level)", () =>
   it("displays an inline `missingNodeError` when the fresh lookup fails", () => {
     assert.match(
       DIALOG_SOURCE,
-      /if\s*\(!fresh\s*\|\|\s*fresh\.type\s*!==\s*"file"\)\s*\{\s*setMissingNodeError\(/,
+      /if\s*\(!fresh\s*\|\|\s*fresh\.deletedAt\s*\|\|\s*\(!includeFolders && fresh\.type !== "file"\)\)\s*\{\s*setMissingNodeError\(/,
       "an absent or folder-typed fresh lookup must trigger setMissingNodeError",
     );
   });
