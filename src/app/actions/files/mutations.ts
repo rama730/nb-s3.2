@@ -404,7 +404,7 @@ export async function getUploadCollisionSummary(
     };
 }
 
-export async function renameNode(nodeId: string, newName: string, projectId: string) {
+export async function renameNode(nodeId: string, newName: string, projectId: string, expectedUpdatedAt?: string) {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) throw new Error("Unauthorized");
@@ -420,10 +420,12 @@ export async function renameNode(nodeId: string, newName: string, projectId: str
         await assertNodeNotLockedByAnotherUser(projectId, nodeId, user.id, tx);
         const current = await tx.query.projectNodes.findFirst({
             where: and(eq(projectNodes.id, nodeId), eq(projectNodes.projectId, projectId)),
-            columns: { id: true, parentId: true, taskId: true, metadata: true, deletedAt: true, path: true, type: true },
+            columns: { id: true, parentId: true, taskId: true, metadata: true, deletedAt: true, path: true, type: true, updatedAt: true },
         });
 
         if (!current || current.deletedAt) throw new Error("File not found");
+        if (expectedUpdatedAt !== undefined && current.updatedAt.toISOString() !== expectedUpdatedAt)
+            throw new Error("This item changed since the rename. Review its current name before renaming again.");
         const isSystemFolder =
             !!current.metadata && (current.metadata as { isSystem?: unknown }).isSystem === true;
         if (isSystemFolder) throw new Error("Cannot rename system folder");
@@ -819,10 +821,10 @@ export async function bulkTrashNodes(nodeIds: string[], projectId: string) {
                 }))
             );
 
-            return { trashedIds: affectedIds, selectedTrashedIds: toTrashIds, alreadyTrashedIds };
+            return { trashedIds: affectedIds, selectedTrashedIds: toTrashIds, alreadyTrashedIds, deletedAt: now.toISOString() };
         }
 
-        return { trashedIds: toTrashIds, selectedTrashedIds: toTrashIds, alreadyTrashedIds };
+        return { trashedIds: toTrashIds, selectedTrashedIds: toTrashIds, alreadyTrashedIds, deletedAt: now.toISOString() };
     });
 
     if (result.trashedIds.length > 0) {
@@ -843,7 +845,7 @@ export async function bulkTrashNodes(nodeIds: string[], projectId: string) {
     return result;
 }
 
-export async function bulkRestoreNodes(nodeIds: string[], projectId: string) {
+export async function bulkRestoreNodes(nodeIds: string[], projectId: string, expectedDeletedAt?: string) {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) throw new Error("Unauthorized");
@@ -862,6 +864,8 @@ export async function bulkRestoreNodes(nodeIds: string[], projectId: string) {
         if (selectedNodes.length !== uniqueIds.length) {
             throw new Error("Some selected files are missing");
         }
+        if (expectedDeletedAt !== undefined && selectedNodes.some(node => node.deletedAt?.toISOString() !== expectedDeletedAt))
+            throw new Error("These items changed since they were trashed. Review Trash before restoring them.");
 
         // Match single-folder restore: include only descendants deleted in
         // the same operation; explicitly selected older deletions still restore.
@@ -978,14 +982,23 @@ export async function getTrashPage(projectId: string, query = "", cursor?: strin
     if (!user) throw new Error("Unauthorized");
     await assertProjectWriteAccess(projectId, user.id);
     if (cursor && !UUID_RE.test(cursor)) throw new Error("Invalid cursor");
-    const rows = await db.query.projectNodes.findMany({
-        where: and(eq(projectNodes.projectId, projectId), isNotNull(projectNodes.deletedAt),
+    const rows = await db
+        .select({
+            node: projectNodes,
+            deletedByName: sql<string | null>`coalesce(${profiles.fullName}, ${profiles.username}, case when ${projectNodes.deletedBy} is not null then 'Former member' else null end)`,
+        })
+        .from(projectNodes)
+        .leftJoin(profiles, eq(profiles.id, projectNodes.deletedBy))
+        .where(and(eq(projectNodes.projectId, projectId), isNotNull(projectNodes.deletedAt),
             query.trim() ? ilike(projectNodes.name, `%${escapeLikePattern(query.trim().slice(0, 200))}%`) : undefined,
-            cursor ? gt(projectNodes.id, cursor) : undefined),
-        orderBy: (nodes, { asc }) => [asc(nodes.id)],
-        limit: 101,
-    });
-    return { nodes: rows.slice(0, 100), nextCursor: rows.length > 100 ? rows[99]!.id : null };
+            cursor ? gt(projectNodes.id, cursor) : undefined))
+        .orderBy(projectNodes.id)
+        .limit(101);
+    const page = rows.slice(0, 100);
+    return {
+        nodes: page.map(({ node, deletedByName }) => ({ ...node, deletedByName })),
+        nextCursor: rows.length > 100 ? page.at(-1)!.node.id : null,
+    };
 }
 
 /** Legacy export kept safe: deletion now requires Trash and reviewed scope. */
