@@ -21,6 +21,8 @@ export type PublicProjectsFeedItem = {
     followers_count: number
     saves_count: number
     cover_image: string | null
+    external_links?: any
+    github_repo_url?: string | null
     created_at: string
     updated_at: string
     open_roles: Array<{
@@ -32,6 +34,16 @@ export type PublicProjectsFeedItem = {
         count: number
         filled: number
         skills: string[]
+    }>
+    collaborators: Array<{
+        user_id: string
+        membership_role: string
+        profiles: {
+            id: string
+            username: string | null
+            full_name: string | null
+            avatar_url: string | null
+        }
     }>
     profiles: {
         id: string
@@ -95,6 +107,8 @@ export function mapPublicProjectToHubProject(project: PublicProjectsFeedItem): P
         viewCount: project.view_count,
         followersCount: project.followers_count,
         savesCount: project.saves_count,
+        externalLinks: project.external_links ?? null,
+        githubRepoUrl: project.github_repo_url ?? null,
         coverImage: project.cover_image,
         ownerId: project.owner_id,
         owner: {
@@ -109,7 +123,18 @@ export function mapPublicProjectToHubProject(project: PublicProjectsFeedItem): P
         },
         createdAt: project.created_at,
         updatedAt: project.updated_at,
-        collaborators: [],
+        collaborators: Array.isArray(project.collaborators)
+            ? project.collaborators.map((c) => ({
+                userId: c.user_id,
+                membershipRole: c.membership_role,
+                user: {
+                    id: c.profiles.id,
+                    username: c.profiles.username,
+                    fullName: c.profiles.full_name,
+                    avatarUrl: c.profiles.avatar_url,
+                },
+            })) as any[]
+            : [],
         openRoles: Array.isArray(project.open_roles)
             ? project.open_roles.map((role) => ({
                 id: role.id,
