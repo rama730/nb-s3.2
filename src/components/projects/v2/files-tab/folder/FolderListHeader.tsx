@@ -19,6 +19,7 @@ import { FOLDER_LIST_GRID_TEMPLATE } from "./layout";
 
 export interface FolderListHeaderProps {
   className?: string;
+  sort?: "name" | "updated" | "type";
 }
 
 /**
@@ -27,6 +28,7 @@ export interface FolderListHeaderProps {
  */
 export function FolderListHeader({
   className,
+  sort,
 }: FolderListHeaderProps): React.JSX.Element {
   return (
     <div
@@ -39,11 +41,11 @@ export function FolderListHeader({
         className,
       )}
     >
-      <div role="columnheader" data-column="name" className="min-w-0">
-        Name
+      <div role="columnheader" data-column="name" aria-sort={sort === "name" ? "ascending" : sort === "type" ? "other" : undefined} className="min-w-0">
+        Name {sort === "name" ? <span aria-hidden="true">↑</span> : sort === "type" ? <span className="normal-case">(by type)</span> : null}
       </div>
-      <div role="columnheader" data-column="updated" className="min-w-0">
-        Last updated
+      <div role="columnheader" data-column="updated" aria-sort={sort === "updated" ? "descending" : undefined} className="min-w-0">
+        Last updated {sort === "updated" && <span aria-hidden="true">↓</span>}
       </div>
       <div
         role="columnheader"
