@@ -81,12 +81,16 @@ import { FileVersionCompareView } from "./FileVersionCompareView";
 import { FileVersionHistoryPanel } from "./FileVersionHistoryPanel";
 import { LinkedTasksPanel } from "./LinkedTasksPanel";
 import { MetadataStrip, type MetadataStripNode } from "./MetadataStrip";
+import { useFilePreviewMutations } from "./useFilePreviewMutations";
+import { FilesTabRoleContext } from "../FilesTabRoleContext";
 import { TextViewer, type TextViewerMode } from "./TextViewer";
 import { isAssetKind, isEmptyMedia, isMarkdownNode } from "./previewPicker";
 import { useFilesWorkspaceView } from "../FilesWorkspaceViews";
 import { FileInspectorContainer } from "./FileInspectorContainer";
 import { FileInspectorPanelHeader } from "./FileInspectorPanelHeader";
-import { formatBytes, formatRelativeTime } from "../folder/format";
+import { formatBytes, formatFileTimestamp, formatFileActor } from "../folder/format";
+import { taskFilesHref } from "@/lib/files/task-navigation";
+import { confirmFileNavigation } from "@/lib/files/unsaved-navigation";
 import { RevisionControlModal } from "@/components/ui/RevisionControlModal";
 import { createClient } from "@/lib/supabase/client";
 import { useFileLease, type FileLeaseStatus } from "../hooks/useFileLease";
@@ -128,7 +132,7 @@ export interface FileViewProps {
 // it structurally.
 
 type FileViewMode = "view" | "raw" | "edit";
-type FileInspectorPanel = "details" | "linked_tasks" | "version_history" | "github" | null;
+type FileInspectorPanel = "details" | "linked_tasks" | "version_history" | null;
 
 // ---------------------------------------------------------------------------
 // Component
@@ -139,6 +143,8 @@ export function FileView({
   node,
   canEdit,
 }: FileViewProps): React.JSX.Element {
+  const roleContext = React.useContext(FilesTabRoleContext);
+  const { mutations, dialogs } = useFilePreviewMutations(projectId, node.id, canEdit, roleContext?.canManageFiles ?? false);
   // ── Fetch project members for uploader profiles ────────────────────
   const { data: membersData } = useProjectMembers(projectId);
   const uploaderNames = React.useMemo(() => {
@@ -209,8 +215,9 @@ export function FileView({
   }, [markdowns, node.id]);
 
   const handleNavigateToDoc = React.useCallback((slug: string) => {
+    if (!confirmFileNavigation(projectId)) return;
     router.push(`/projects/${projectSlug}?tab=docs&doc=${normalizeProjectDocSlug(slug)}`, { scroll: false });
-  }, [router, projectSlug]);
+  }, [router, projectSlug, projectId]);
 
   // ── LinkedTasksPanel toggle state (Req 8.1, 8.6) ───────────────────
   const workspace = useFilesWorkspaceView();
@@ -289,6 +296,11 @@ export function FileView({
       dragCounterRef.current = 0;
       setIsDragActive(false);
 
+      if (mode === "edit") {
+        toast.info("Save or cancel your edits before uploading a revision.");
+        return;
+      }
+
       const files = Array.from(event.dataTransfer.files || []);
 
       // Req 12.5: Multi-file drop → ignore and show toast
@@ -342,7 +354,7 @@ export function FileView({
         }
       })();
     },
-    [canEdit, projectId, node.id, node.name, saveAsNewVersion],
+    [canEdit, mode, projectId, node.id, node.name, saveAsNewVersion],
   );
 
   const handleDropRevisionOptionSelected = React.useCallback(
@@ -409,6 +421,7 @@ export function FileView({
   // markdown view is active.
   const [mdContent, setMdContent] = React.useState<string | null>(null);
   const [mdError, setMdError] = React.useState<string | null>(null);
+  const [previewAttempt, setPreviewAttempt] = React.useState(0);
 
   // ── Signed URL fetch ────────────────────────────────────────────────
   // Text-only files never need a signed URL (content is streamed through
@@ -422,7 +435,7 @@ export function FileView({
     : !(kind === "text" && !isMd) && kind !== "pdf";
 
   const signedUrlQuery = useQuery({
-    queryKey: ["project-file-signed-url", projectId, node.id, node.currentVersion],
+    queryKey: ["project-file-signed-url", projectId, node.id, node.currentVersion, node.updatedAt],
     enabled: needsSignedUrl,
     queryFn: async () => {
       const result = await getProjectFileSignedUrl(projectId, node.id, 1_800);
@@ -477,7 +490,7 @@ export function FileView({
     return () => {
       cancelled = true;
     };
-  }, [projectId, node.id, node.size, fetchMd]);
+  }, [projectId, node.id, node.size, node.currentVersion, node.updatedAt, fetchMd, previewAttempt]);
 
   // ── Action handlers ─────────────────────────────────────────────────
 
@@ -583,6 +596,7 @@ export function FileView({
         }}
       />
 
+      {dialogs}
       <MetadataStrip
         node={node as MetadataStripNode}
         projectId={projectId}
@@ -599,6 +613,7 @@ export function FileView({
         linkedDoc={linkedDoc}
         onNavigateToDoc={handleNavigateToDoc}
         actionsTriggerRef={actionsTriggerRef}
+        organizationActions={{ rename: () => mutations.openRename(node), move: () => mutations.openMove([node]), trash: () => mutations.openDelete([node]) }}
       />
 
       <div className="flex min-h-0 flex-1 flex-col">
@@ -632,12 +647,14 @@ export function FileView({
                   signedUrlError,
                   mdContent,
                   mdError,
+                  onRetry: () => { setPreviewAttempt(value => value + 1); if (needsSignedUrl) void signedUrlQuery.refetch(); },
                   projectId,
                   lease: fileLease.lease,
                   leaseStatus: fileLease.status,
                   leaseConflict: fileLease.conflict,
                   onDirtyChange: setEditorDirty,
                   onCancel: onView,
+                  onRetryLease: onEdit,
                 })
               )}
             </ComponentErrorBoundary>
@@ -652,14 +669,9 @@ export function FileView({
                 canEdit={canEdit}
                 onClose={closeInspectorPanel}
                 onOpenTask={(taskId) => {
+                  if (!confirmFileNavigation(projectId)) return;
                   router.push(
-                    `/projects/${encodeURIComponent(projectSlug)}?${new URLSearchParams({
-                      tab: "tasks",
-                      drawerType: "task",
-                      drawerId: taskId,
-                      panelTab: "files",
-                      fileId: node.id,
-                    }).toString()}`,
+                    `/projects/${encodeURIComponent(projectSlug)}${taskFilesHref(window.location.search, taskId, node.id)}`,
                     { scroll: false },
                   );
                 }}
@@ -667,7 +679,7 @@ export function FileView({
             </FileInspectorContainer>
           )}
 
-          {activeInspectorPanel === "details" && <FileInspectorContainer title="File details" onClose={closeInspectorPanel}><FileInspectorPanelHeader title="Details" closeLabel="Close file details" onClose={closeInspectorPanel} /><dl className="space-y-3 break-words p-4 text-sm">{[["Name", node.name], ["Location", node.path.startsWith("/.system/") ? "Task files" : node.path], ["Type", node.mimeType || "Not recorded"], ["Size", formatBytes(node.size, node.type)], ["Version", String(node.currentVersion)], ["Updated by", (node as MetadataStripNode).updatedByName || (node as MetadataStripNode).updatedByUsername || "Not recorded"], ["Modified", formatRelativeTime((node as MetadataStripNode).versionUpdatedAt ?? node.updatedAt)]].map(([label, value]) => <div key={label}><dt className="text-xs text-zinc-500">{label}</dt><dd>{value}</dd></div>)}</dl></FileInspectorContainer>}
+          {activeInspectorPanel === "details" && <FileInspectorContainer title="File details" onClose={closeInspectorPanel}><FileInspectorPanelHeader title="Details" closeLabel="Close file details" onClose={closeInspectorPanel} /><dl className="space-y-3 break-words p-4 text-sm">{[["Name", node.name], ["Location", node.path.startsWith("/.system/") ? "Task files" : node.path], ["Type", node.mimeType || "Not recorded"], ["Size", formatBytes(node.size, node.type) || "Not recorded"], ["Version", String(node.currentVersion)], ["Updated by", formatFileActor(node as MetadataStripNode)], ["Modified", formatFileTimestamp((node as MetadataStripNode).versionUpdatedAt ?? node.updatedAt)]].map(([label, value]) => <div key={label}><dt className="text-xs text-zinc-500">{label}</dt><dd>{value}</dd></div>)}</dl></FileInspectorContainer>}
           {/* FileVersionHistoryPanel — collapsible right-side drawer (Req 10.1, 10.2, 10.3) */}
           {isVersionHistoryPanelOpen && (
             <FileInspectorContainer title="Version history" onClose={closeInspectorPanel} testId="files-tab-version-history-drawer">
@@ -675,11 +687,11 @@ export function FileView({
                 projectId={projectId}
                 nodeId={node.id}
                 nodeName={node.name}
-                canEdit={canEdit}
+                canEdit={canEdit && !editorDirty}
                 currentVersion={node.currentVersion ?? 1}
                 isDeleted={node.deletedAt != null}
                 uploaderNames={uploaderNames}
-                onCompareClick={setCompareVersion}
+                onCompareClick={(version) => { if (!confirmFileNavigation(projectId)) return; leaveEditMode("view"); setCompareVersion(version); }}
                 onVersionChangeStart={() => setRestoringActive(true)}
                 onVersionChanged={() => {
                   setRestoringActive(false);
@@ -725,12 +737,14 @@ interface PreviewRegionProps {
   signedUrlError: string | null;
   mdContent: string | null;
   mdError: string | null;
+  onRetry: () => void;
   projectId: string;
   lease: BrowserFileLease | null;
   leaseStatus: FileLeaseStatus;
   leaseConflict: FileLeaseView | null;
   onDirtyChange: (dirty: boolean) => void;
   onCancel?: () => void;
+  onRetryLease?: () => void;
 }
 
 function renderPreviewRegion(p: PreviewRegionProps): React.JSX.Element {
@@ -756,6 +770,7 @@ function renderPreviewRegion(p: PreviewRegionProps): React.JSX.Element {
         leaseConflict={p.leaseConflict}
         onDirtyChange={p.onDirtyChange}
         onCancel={p.onCancel}
+        onRetryLease={p.onRetryLease}
       />
     );
   }
@@ -776,7 +791,7 @@ function renderPreviewRegion(p: PreviewRegionProps): React.JSX.Element {
   // Markdown default view: rendered preview (Req 5.5, Req 13.5).
   if (p.isMd) {
     if (p.mdError) {
-      return <PreviewError message={p.mdError} />;
+      return <PreviewError message={p.mdError} onRetry={p.onRetry} />;
     }
     if (p.mdContent === null) {
       return <PreviewLoading />;
@@ -813,7 +828,7 @@ function renderPreviewRegion(p: PreviewRegionProps): React.JSX.Element {
 
   if (isAssetKind(p.kind)) {
     if (p.signedUrlError) {
-      return <PreviewError message={p.signedUrlError} />;
+      return <PreviewError message={p.signedUrlError} onRetry={p.onRetry} />;
     }
     if (!p.signedUrl) {
       return <PreviewLoading />;
@@ -846,9 +861,10 @@ function PreviewLoading(): React.JSX.Element {
 
 interface PreviewErrorProps {
   message: string;
+  onRetry: () => void;
 }
 
-function PreviewError({ message }: PreviewErrorProps): React.JSX.Element {
+function PreviewError({ message, onRetry }: PreviewErrorProps): React.JSX.Element {
   // Req 13.6: error indicator in the preview region; the caller keeps
   // `MetadataStrip` (with Raw action) visible above this.
   return (
@@ -861,6 +877,7 @@ function PreviewError({ message }: PreviewErrorProps): React.JSX.Element {
       )}
     >
       <AlertTriangle className="h-6 w-6 text-amber-500" aria-hidden="true" />
+      <button type="button" onClick={onRetry} className="min-h-11 rounded border px-4">Retry preview</button>
       <p className="font-medium text-zinc-900 dark:text-zinc-100">
         Failed to load preview
       </p>
