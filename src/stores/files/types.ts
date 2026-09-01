@@ -209,7 +209,7 @@ export type ProjectWorkspaceState = {
   /** Current text editor with unsaved changes. Transient and never persisted. */
   dirtyFileId: string | null;
   /** Destination awaiting confirmation while an editor has unsaved changes. */
-  pendingNavigation: { nodeId: string | null } | null;
+  pendingNavigation: { nodeId: string | null; preserveQuery?: boolean } | null;
 
   // Git
   git: GitState;
@@ -293,7 +293,7 @@ export type FilesWorkspaceState = {
   setDirtyFile: (projectId: string, nodeId: string, dirty: boolean) => void;
   setPendingNavigation: (
     projectId: string,
-    pending: { nodeId: string | null } | null,
+    pending: { nodeId: string | null; preserveQuery?: boolean } | null,
   ) => void;
 
   // explorer cleanup
