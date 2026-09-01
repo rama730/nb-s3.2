@@ -17,7 +17,7 @@ import { LinkIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { logger } from "@/lib/logger";
 
-export interface TaskLinkChipProps {
+export interface TaskLinkChipProps extends Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, "onClick"> {
   /** Number of tasks linked to this node. */
   count: number;
   /** Click handler — parent typically opens a linked-tasks popover. */
@@ -33,6 +33,7 @@ export function TaskLinkChip({
   count,
   onClick,
   className,
+  ...props
 }: TaskLinkChipProps): React.JSX.Element | null {
   const handleClick = React.useCallback(
     (event: React.MouseEvent) => {
@@ -50,6 +51,7 @@ export function TaskLinkChip({
 
   return (
     <button
+      {...props}
       type="button"
       data-testid="files-tab-task-link-chip"
       data-count={count}
@@ -60,7 +62,7 @@ export function TaskLinkChip({
         "bg-sky-50 text-sky-700 ring-1 ring-sky-200",
         "dark:bg-sky-500/15 dark:text-sky-200 dark:ring-sky-500/30",
         "cursor-pointer transition-colors hover:bg-sky-100 dark:hover:bg-sky-500/25",
-        "focus:outline-none  ",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2",
         className,
       )}
     >
