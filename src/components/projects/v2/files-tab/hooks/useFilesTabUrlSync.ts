@@ -268,7 +268,7 @@ export function useFilesTabUrlSync(
               }
             }
           }
-          navigateRef.current(nodeId);
+          navigateRef.current(nodeId, { preserveQuery: true });
         },
         onError: (failure) => errorRef.current?.(failure),
         projectId,
