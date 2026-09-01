@@ -19,6 +19,7 @@ import {
   type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
+import type { SyncManifest, SyncResult, SyncStatus } from "@/lib/github/sync-contract";
 const tsvector = customType<{ data: string }>({
   dataType: () => "tsvector",
 });
@@ -2860,6 +2861,7 @@ export const fileVersions = pgTable(
       .notNull(),
     // Optional version note supplied by the uploader ("fixed typo", etc).
     comment: text("comment"),
+    attribution: jsonb("attribution").$type<Record<string, unknown>>().default({}).notNull(),
   },
   (t) => ({
     uniqueNodeVersion: uniqueIndex("file_versions_node_version_unique").on(
@@ -3109,6 +3111,54 @@ export const projectNodeEvents = pgTable(
     ),
   }),
 );
+
+// Reviewed sync operations and per-file baselines. Credentials never leave the server.
+export const githubSyncConnections = pgTable("github_sync_connections", {
+  projectId: uuid("project_id").primaryKey().references(() => projects.id, { onDelete: "cascade" }),
+  repository: text("repository").notNull(),
+  repositoryId: bigint("repository_id", { mode: "number" }).notNull(),
+  branch: text("branch").notNull(),
+  version: integer("version").notNull().default(1),
+  installationId: bigint("installation_id", { mode: "number" }),
+  incomingSha: text("incoming_sha"),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+export const githubSyncRuns = pgTable("github_sync_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  projectId: uuid("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  actorId: uuid("actor_id").notNull().references(() => profiles.id, { onDelete: "cascade" }),
+  status: text("status").$type<SyncStatus>().notNull().default("review"),
+  stage: text("stage").notNull().default("Ready for review"),
+  manifest: jsonb("manifest").$type<SyncManifest>().notNull(),
+  result: jsonb("result").$type<SyncResult>().notNull().default({}),
+  credential: jsonb("credential").$type<Record<string, unknown> | null>(),
+  error: text("error"),
+  leaseId: uuid("lease_id"),
+  leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, t => ({ projectIdx: index("github_sync_runs_project_idx").on(t.projectId, t.createdAt.desc()), queueIdx: index("github_sync_runs_queue_idx").on(t.status, t.updatedAt), activeIdx: uniqueIndex("github_sync_runs_active_idx").on(t.projectId).where(sql`${t.status} IN ('queued', 'running')`) }));
+export const githubSyncFiles = pgTable("github_sync_files", {
+  projectId: uuid("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  repositoryId: bigint("repository_id", { mode: "number" }).notNull(),
+  branch: text("branch").notNull(),
+  path: text("path").notNull(),
+  nodeId: uuid("node_id").references(() => projectNodes.id, { onDelete: "set null" }),
+  blobSha: text("blob_sha"),
+  localHash: text("local_hash"),
+  localBlobSha: text("local_blob_sha"),
+  commitSha: text("commit_sha").notNull(),
+  sequence: bigint("sequence", { mode: "number" }).notNull().default(0),
+}, t => ({ pk: primaryKey({ columns: [t.projectId, t.repositoryId, t.branch, t.path] }), nodeIdx: index("github_sync_files_node_idx").on(t.nodeId) }));
+export const githubContributorIdentities = pgTable("github_contributor_identities", {
+  userId: uuid("user_id").primaryKey().references(() => profiles.id, { onDelete: "cascade" }),
+  githubId: bigint("github_id", { mode: "number" }).notNull(),
+  login: text("login").notNull(),
+  name: text("name").notNull(),
+  email: text("email").notNull(),
+  avatarUrl: text("avatar_url"),
+  approvedAt: timestamp("approved_at", { withTimezone: true }).defaultNow().notNull(),
+}, t => ({ githubIdx: uniqueIndex("github_contributor_identity_uidx").on(t.githubId) }));
 
 // ============================================================================
 // RELATIONS
