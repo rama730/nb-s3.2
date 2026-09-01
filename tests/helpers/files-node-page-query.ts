@@ -10,7 +10,7 @@ const source = readFileSync("src/app/actions/files/nodes.ts", "utf8");
 const start = source.indexOf("export async function getProjectNodes(");
 const end = source.indexOf("export async function initializeProjectWorkspaceRoot(", start);
 const compiled = ts.transpileModule(source.slice(start, end), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
-export async function captureNodePageQuery(projectId: string, sort: "name" | "updated" | "type", cursor?: string, query?: string) {
+export async function captureNodePageQuery(projectId: string, sort: "name" | "updated" | "type", cursor?: string, query?: string, itemType?: "file" | "folder") {
   let captured: { where: orm.SQL; orderBy: orm.SQL[]; limit: number } | undefined;
   const serviceModule = { exports: {} as { getProjectNodes: (...args: unknown[]) => Promise<unknown> } };
   let authorized = false;
@@ -23,7 +23,7 @@ export async function captureNodePageQuery(projectId: string, sort: "name" | "up
     enrichNodesWithLatestVersionAttribution: async (nodes: unknown[]) => nodes,
     db: { query: { projectNodes: { findMany: async (request: typeof captured) => { if (!authorized) throw new Error("Missing authorization"); captured = request; return []; } } } },
   });
-  await serviceModule.exports.getProjectNodes(projectId, null, query, 2, cursor, { sort });
+  await serviceModule.exports.getProjectNodes(projectId, null, query, 2, cursor, { sort, itemType });
   if (!captured) throw new Error("No query captured");
   return captured;
 }
