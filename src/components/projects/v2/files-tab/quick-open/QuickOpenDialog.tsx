@@ -74,45 +74,6 @@ export function buildNodePathMap(
   return cache;
 }
 
-/**
- * Fuzzy-rank file nodes by name + path against a lower-cased query.
- *
- * Scoring matches the legacy Quick Open ranking:
- *   - exact name match: +500
- *   - name startsWith : +300
- *   - name includes   : +180
- *   - path includes   : +120
- * Nodes that score zero are excluded; ties break on the node name
- * ascending. Truncates to `limit` (default 50 per Req 9.3).
- *
- * Call with an empty query if you want zero results — recents are
- * handled by the hook path, not here.
- */
-export function rankFuzzyResults(
-  fileNodes: ProjectNode[],
-  nodePathById: Map<string, string>,
-  rawQueryLower: string,
-  limit: number = MAX_RESULTS,
-): ProjectNode[] {
-  if (!rawQueryLower) return [];
-  const scored: Array<{ node: ProjectNode; score: number }> = [];
-  for (const node of fileNodes) {
-    const name = node.name.toLowerCase();
-    const path = (nodePathById.get(node.id) || node.name).toLowerCase();
-    let score = 0;
-    if (name === rawQueryLower) score += 500;
-    if (name.startsWith(rawQueryLower)) score += 300;
-    if (name.includes(rawQueryLower)) score += 180;
-    if (path.includes(rawQueryLower)) score += 120;
-    if (score === 0) continue;
-    scored.push({ node, score });
-  }
-  scored.sort(
-    (a, b) => b.score - a.score || a.node.name.localeCompare(b.node.name),
-  );
-  return scored.slice(0, limit).map((item) => item.node);
-}
-
 // ─── Component ───────────────────────────────────────────────────────
 
 export interface QuickOpenDialogProps {
@@ -125,6 +86,9 @@ export interface QuickOpenDialogProps {
   onQueryChange: (q: string) => void;
   /** Invoked when the dialog wants to close (Escape, selection, backdrop). */
   onOpenChange: (open: boolean) => void;
+  /** Workspace search also lists folders and can apply results to the main list. */
+  includeFolders?: boolean;
+  onApplyQuery?: (query: string) => void;
 }
 
 export function QuickOpenDialog({
@@ -133,8 +97,11 @@ export function QuickOpenDialog({
   query,
   onQueryChange,
   onOpenChange,
+  includeFolders = false,
+  onApplyQuery,
 }: QuickOpenDialogProps): React.JSX.Element | null {
   const navigateTo = useNavigateTo(projectId);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   // Single shallow subscription to the slice bits we render from.
   const { nodesById, recents } = useFilesWorkspaceStore(
@@ -165,12 +132,14 @@ export function QuickOpenDialog({
   const rawQuery = debouncedQuery.trim();
   const showRecents = rawQuery.length === 0;
   const search = useInfiniteQuery({
-    queryKey: ["files-quick-open", projectId, rawQuery],
+    queryKey: ["files-quick-open", projectId, rawQuery, includeFolders],
     enabled: open && rawQuery.length >= 2,
     initialPageParam: undefined as string | undefined,
     queryFn: async ({ pageParam }) => {
       const { getProjectNodes } = await import("@/app/actions/files/nodes");
-      return getProjectNodes(projectId, null, rawQuery, MAX_RESULTS, pageParam);
+      return getProjectNodes(projectId, null, rawQuery, MAX_RESULTS, pageParam, {
+        itemType: includeFolders ? undefined : "file",
+      });
     },
     getNextPageParam: page => page.nextCursor ?? undefined,
     staleTime: 30_000,
@@ -195,8 +164,8 @@ export function QuickOpenDialog({
   // Search results come only from the authorized server page, never stale cache hits.
   const results = useMemo(() => {
     const nodes = showRecents ? recentFiles.data ?? [] : rawQuery.length < 2 ? [] : search.data?.pages.flatMap(page => page.nodes) ?? [];
-    return nodes.filter(node => node.type === "file" && !node.deletedAt);
-  }, [showRecents, recentFiles.data, search.data, rawQuery]);
+    return nodes.filter(node => (includeFolders || node.type === "file") && !node.deletedAt);
+  }, [showRecents, recentFiles.data, search.data, rawQuery, includeFolders]);
   useEffect(() => {
     useFilesWorkspaceStore.getState().upsertNodes(projectId, results);
   }, [results, projectId]);
@@ -246,7 +215,7 @@ export function QuickOpenDialog({
       // `results` array was last computed. Req 9.6: show inline error,
       // leave `currentLocationId` alone.
       const fresh = useFilesWorkspaceStore.getState().byProjectId[projectId]?.nodesById[candidate.id];
-      if (!fresh || fresh.type !== "file") {
+      if (!fresh || fresh.deletedAt || (!includeFolders && fresh.type !== "file")) {
         setMissingNodeError(
           `"${candidate.name}" is no longer available. It may have been deleted or moved.`,
         );
@@ -259,7 +228,7 @@ export function QuickOpenDialog({
       setMissingNodeError(null);
       onOpenChange(false);
     },
-    [navigateTo, onOpenChange, onQueryChange, projectId, results],
+    [navigateTo, onOpenChange, onQueryChange, projectId, results, includeFolders],
   );
 
   const onInputKeyDown = useCallback(
@@ -297,8 +266,8 @@ export function QuickOpenDialog({
 
   return (
     <Dialog open={open} onOpenChange={value => { if (!value) close(); }}>
-      <DialogContent showCloseButton={false} aria-describedby={undefined} data-testid="files-tab-quick-open" className="block max-w-2xl overflow-hidden p-0">
-        <DialogTitle className="sr-only">Quick open</DialogTitle>
+      <DialogContent showCloseButton onOpenAutoFocus={event => { event.preventDefault(); inputRef.current?.focus(); }} aria-describedby={undefined} data-testid="files-tab-quick-open" className="block max-w-[calc(100vw-2rem)] max-h-[calc(100dvh-2rem)] overflow-y-auto p-0 sm:max-w-2xl">
+        <DialogTitle className="px-4 pb-1 pt-4 text-sm">{onApplyQuery ? "Search project files" : "Quick open"}</DialogTitle>
       <div
         className="w-full max-w-2xl rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 shadow-2xl overflow-hidden"
         onMouseDown={(e) => {
@@ -309,11 +278,13 @@ export function QuickOpenDialog({
       >
         <div className="px-4 py-3 border-b border-zinc-200 dark:border-zinc-800">
           <input
+            ref={inputRef}
             data-testid="files-tab-quick-open-input"
             autoFocus
             type="text"
             className="w-full h-9 px-3 rounded-md border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 text-sm outline-none"
-            placeholder="Quick open files..."
+            placeholder={onApplyQuery ? "Search filenames across the project…" : "Quick open files..."}
+            aria-label={onApplyQuery ? "Search project files" : "Quick open files"}
             value={query}
             // Req 9.3: input is bounded to 1..256 chars; enforce the upper
             // bound at the UI level so typed/pasted input cannot exceed
@@ -403,6 +374,7 @@ export function QuickOpenDialog({
           )}
         </div>
         {!showRecents && search.hasNextPage && <button type="button" disabled={search.isFetchingNextPage} onClick={() => void search.fetchNextPage()} className="m-3 min-h-10 rounded border px-3 text-sm">{search.isFetchingNextPage ? "Loading…" : "Load more results"}</button>}
+        {onApplyQuery && <div className="flex justify-end border-t p-3"><button type="button" disabled={query.trim().length === 1} onClick={() => onApplyQuery(query.trim())} className="min-h-10 rounded bg-blue-600 px-3 text-sm text-white disabled:opacity-50">{query.trim() ? "Show results in file list" : "Clear search"}</button></div>}
       </div>
       </DialogContent>
     </Dialog>
