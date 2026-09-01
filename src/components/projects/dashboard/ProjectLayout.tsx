@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo, useRef, type CSSProperties, type Keyboard
 import Link from "next/link";
 import {
     LayoutDashboard, ListTodo, FolderOpen, BookOpenText,
-    Settings, Share2, ChevronLeft, Bell, IterationCcw, BarChart3, Loader2, Newspaper
+    Settings, Share2, ChevronLeft, UserPlus, UserCheck, IterationCcw, BarChart3, Loader2, Newspaper
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Project } from "@/types/hub";
@@ -284,19 +284,15 @@ export default function ProjectLayout({
                                     )}
                                 </div>
                             </div>
-
-                            {/* Inline project meta */}
-                            <div className="hidden lg:flex items-center min-w-0">
-                                <ProjectStatsBar
-                                    viewCount={viewCount ?? (project as any)?.viewCount ?? 0}
-                                    followersCount={followersCount ?? (project as any)?.followersCount ?? 0}
-
-                                />
-                            </div>
                         </div>
 
                         {/* Right: Actions */}
                         <div className="flex items-center gap-2">
+                            <ProjectStatsBar
+                                viewCount={viewCount ?? (project as any)?.viewCount ?? 0}
+                                followersCount={followersCount ?? (project as any)?.followersCount ?? 0}
+                            />
+                            
                             {/* Follow */}
                             <button
                                 type="button"
@@ -315,7 +311,7 @@ export default function ProjectLayout({
                                 {followLoading ? (
                                     <Loader2 className="w-4 h-4 animate-spin" />
                                 ) : (
-                                    <Bell className={cn("w-4 h-4", isFollowing && "fill-current")} />
+                                    isFollowing ? <UserCheck className="w-4 h-4" /> : <UserPlus className="w-4 h-4" />
                                 )}
                                 <span className="hidden sm:inline-block">{isFollowing ? "Following" : "Follow"}</span>
                             </button>
