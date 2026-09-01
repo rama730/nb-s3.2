@@ -29,9 +29,9 @@ import type { ProjectNode } from "@/lib/db/schema";
 import { cn } from "@/lib/utils";
 
 import { formatBytes, formatRelativeTime } from "../folder/format";
-import { TaskLinkPopover } from "../TaskLinkPopover";
 import { VersionPill } from "../VersionPill";
-import { FileActionsBar } from "./FileActionsBar";
+import { FileActionsBar, type FileActionsBarProps } from "./FileActionsBar";
+import { FilesHeaderSlot } from "../FilesHeaderSlot";
 
 // ---------------------------------------------------------------------------
 // Node shape
@@ -126,6 +126,7 @@ export interface MetadataStripProps {
   linkedDoc?: { slug: string; linkedNodeId?: string | null } | null;
   onNavigateToDoc?: (slug: string) => void;
   actionsTriggerRef?: React.Ref<HTMLButtonElement>;
+  organizationActions?: FileActionsBarProps["organizationActions"];
 }
 
 /**
@@ -150,6 +151,7 @@ export function MetadataStrip({
   linkedDoc = null,
   onNavigateToDoc,
   actionsTriggerRef,
+  organizationActions,
 }: MetadataStripProps): React.JSX.Element {
   // Dev-only invariant assertion. When this fires, the parent forgot to
   // gate the render on `currentLocation.type === "file"` or lost the
@@ -194,12 +196,11 @@ export function MetadataStrip({
       data-testid="files-tab-metadata-strip"
       data-node-id={node.id}
       className={cn(
-        "sticky top-0 z-10 flex flex-wrap items-center gap-3 border-b border-zinc-200 bg-white/95 px-4 py-2 backdrop-blur",
-        "dark:border-zinc-800 dark:bg-zinc-950/95",
+        "contents",
         className,
       )}
     >
-      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-zinc-600 dark:text-zinc-300">
+      <div className="sr-only">
         <span
           data-field="name"
           className="truncate font-medium text-zinc-900 dark:text-zinc-100"
@@ -251,16 +252,13 @@ export function MetadataStrip({
         {projectId && (taskLinkCount ?? 0) > 0 ? (
           <>
             <Separator />
-            <TaskLinkPopover
-              projectId={projectId}
-              nodeId={node.id}
-              count={taskLinkCount!}
-            />
+            <span>Linked to {taskLinkCount} tasks</span>
           </>
         ) : null}
       </div>
 
-      <FileActionsBar
+      {showVersionPill && mode !== "edit" && <FilesHeaderSlot slot="status"><span title={`Version ${currentVersion}`} className="text-zinc-500">v{currentVersion}</span></FilesHeaderSlot>}
+      <FilesHeaderSlot><FileActionsBar
         mode={mode}
         onView={onView}
         onRaw={onRaw}
@@ -277,7 +275,8 @@ export function MetadataStrip({
         linkedDoc={linkedDoc}
         onNavigateToDoc={onNavigateToDoc}
         actionsTriggerRef={actionsTriggerRef}
-      />
+        organizationActions={organizationActions}
+      /></FilesHeaderSlot>
     </div>
   );
 }
