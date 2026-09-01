@@ -18,3 +18,22 @@ test("malformed, legacy and mismatched-sort cursors fail before reading files", 
     await assert.rejects(captureNodePageQuery(project, "name", cursor), /Invalid project nodes cursor/);
   }
 });
+
+test("quick-open and folder-picker type filtering happens in SQL before pagination", async () => {
+  for (const itemType of ["file", "folder"] as const) {
+    for (const search of [undefined, "report"]) {
+      const page = await captureNodePageQuery(project, "name", undefined, search, itemType);
+      const query = new PgDialect().sqlToQuery(page.where);
+      assert.match(query.sql, /"project_nodes"\."type" = \$/);
+      assert.ok(query.params.includes(itemType));
+    }
+  }
+});
+
+test("updated sorting uses the same current-version timestamp as row attribution", async () => {
+  const page = await captureNodePageQuery(project, "updated");
+  const order = page.orderBy.map(value => new PgDialect().sqlToQuery(value).sql).join(" ");
+  assert.match(order, /file_versions/);
+  assert.match(order, /uploaded_at/);
+  assert.match(order, /current_version/);
+});
