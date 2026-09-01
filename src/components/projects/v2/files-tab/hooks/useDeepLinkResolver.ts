@@ -180,7 +180,7 @@ export function useDeepLinkResolver(
         case "ok": {
           const currentNodes = useFilesWorkspaceStore.getState().byProjectId[projectId]?.nodesById || {};
           if (currentNodes[result.nodeId]) {
-            navigateRef.current(result.nodeId);
+            navigateRef.current(result.nodeId, { preserveQuery: true });
           } else {
             try {
               const { getNodeMetadataBatch } = await import("@/app/actions/files/nodes");
@@ -192,7 +192,7 @@ export function useDeepLinkResolver(
             } catch (e) {
               console.warn("[files-tab] deep-link metadata prefetch failed", e);
             }
-            navigateRef.current(result.nodeId);
+            navigateRef.current(result.nodeId, { preserveQuery: true });
           }
           return;
         }
@@ -210,7 +210,7 @@ export function useDeepLinkResolver(
               ? { reason: "not_found", segments: result.segments }
               : { reason: result.kind },
           );
-          navigateRef.current(null);
+          navigateRef.current(null, { preserveQuery: true });
           errorRef.current?.(result);
           return;
         }
