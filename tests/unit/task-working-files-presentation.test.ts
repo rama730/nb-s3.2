@@ -155,9 +155,9 @@ test("task-file attribution prefers the latest uploader and falls back safely", 
   );
   assert.equal(
     getTaskFileAttributionLabel({ createdByName: "Legacy Creator" }),
-    "Legacy Creator",
+    "Not recorded",
   );
-  assert.equal(getTaskFileAttributionLabel({}), "Unknown");
+  assert.equal(getTaskFileAttributionLabel({}), "Not recorded");
 });
 
 test("Files and task attachments share one canonical attribution projection", () => {
