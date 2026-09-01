@@ -99,6 +99,7 @@ export function ProjectContributionsCard({
 
                             return (
                                 <article key={contribution.id} className="py-5">
+                                    {!!contribution.fileContributionCount && <p className="mb-2 text-xs text-zinc-500">Contributed to {contribution.fileContributionCount} project files</p>}
                                     <div className="min-w-0">
                                         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                                             <div className="min-w-0">
