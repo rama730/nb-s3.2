@@ -2,7 +2,7 @@ import { and, desc, eq, inArray, isNull, lt, ne, or, sql } from 'drizzle-orm'
 
 import { db } from '@/lib/db'
 import { isMissingRelationError } from '@/lib/db/errors'
-import { profiles, projectOpenRoles, projects } from '@/lib/db/schema'
+import { profiles, projectOpenRoles, projects, projectMembers } from '@/lib/db/schema'
 import { logger } from '@/lib/logger'
 import { getCacheEnvelope, cacheStaleableData, isCacheStale, redis } from '@/lib/redis'
 import { clearHubSnapshotCache } from '@/lib/hub/snapshot-cache'
@@ -35,6 +35,8 @@ type PublicProjectRow = {
     followersCount: number
     savesCount: number | null
     coverImage: string | null
+    externalLinks: any | null
+    githubRepoUrl: string | null
     createdAt: Date
     updatedAt: Date
     profiles: {
@@ -64,7 +66,7 @@ export type PublicProjectsFeedPage = {
     cacheState: 'fresh' | 'stale' | 'miss'
 }
 
-function mapProjectRow(row: PublicProjectRow, openRoles: PublicProjectRoleRow[]): PublicProjectsFeedItem {
+function mapProjectRow(row: PublicProjectRow, openRoles: PublicProjectRoleRow[], members: any[]): PublicProjectsFeedItem {
     return {
         id: row.id,
         slug: row.slug,
@@ -81,6 +83,8 @@ function mapProjectRow(row: PublicProjectRow, openRoles: PublicProjectRoleRow[])
         followers_count: row.followersCount ?? 0,
         saves_count: row.savesCount ?? 0,
         cover_image: row.coverImage,
+        external_links: row.externalLinks,
+        github_repo_url: row.githubRepoUrl,
         created_at: row.createdAt.toISOString(),
         updated_at: row.updatedAt.toISOString(),
         open_roles: openRoles.map((role) => ({
@@ -92,6 +96,11 @@ function mapProjectRow(row: PublicProjectRow, openRoles: PublicProjectRoleRow[])
             count: role.count,
             filled: role.filled,
             skills: role.skills ?? [],
+        })),
+        collaborators: members.map((m) => ({
+            user_id: m.userId,
+            membership_role: m.role,
+            profiles: m.profiles,
         })),
         profiles: row.profiles,
     }
@@ -129,6 +138,8 @@ export async function queryAndCachePublicProjectsFeed(limit: number, cursor: Pub
             followersCount: projects.followersCount,
             savesCount: projects.savesCount,
             coverImage: projects.coverImage,
+            externalLinks: projects.externalLinks,
+            githubRepoUrl: projects.githubRepoUrl,
             createdAt: projects.createdAt,
             updatedAt: projects.updatedAt,
             profiles: {
@@ -197,6 +208,36 @@ export async function queryAndCachePublicProjectsFeed(limit: number, cursor: Pub
             rolesByProjectId.set(role.projectId, [role])
         }
     }
+
+    const memberRows = projectIds.length === 0
+        ? []
+        : await db
+            .select({
+                projectId: projectMembers.projectId,
+                userId: projectMembers.userId,
+                role: projectMembers.role,
+                profiles: {
+                    id: profiles.id,
+                    username: profiles.username,
+                    full_name: profiles.fullName,
+                    avatar_url: profiles.avatarUrl,
+                },
+            })
+            .from(projectMembers)
+            .innerJoin(profiles, eq(projectMembers.userId, profiles.id))
+            .where(inArray(projectMembers.projectId, projectIds))
+            .catch(() => [])
+
+    const membersByProjectId = new Map<string, any[]>()
+    for (const member of memberRows) {
+        const existing = membersByProjectId.get(member.projectId)
+        if (existing) {
+            existing.push(member)
+        } else {
+            membersByProjectId.set(member.projectId, [member])
+        }
+    }
+
     const lastRow = pageRows.at(-1) ?? null
     const nextCursor = hasMore && lastRow
         ? encodePublicProjectsCursor({
@@ -205,7 +246,7 @@ export async function queryAndCachePublicProjectsFeed(limit: number, cursor: Pub
         })
         : null
     const payload = {
-        projects: pageRows.map((row) => mapProjectRow(row, rolesByProjectId.get(row.id) ?? [])),
+        projects: pageRows.map((row) => mapProjectRow(row, rolesByProjectId.get(row.id) ?? [], membersByProjectId.get(row.id) ?? [])),
         nextCursor,
     }
 
