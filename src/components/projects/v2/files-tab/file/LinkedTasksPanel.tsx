@@ -43,7 +43,7 @@ export function LinkedTasksPanel({
   onOpenTask,
   onClose,
 }: LinkedTasksPanelProps): React.JSX.Element {
-  const { tasks, isLoading, error, updateAnnotation } = useTaskLinks(
+  const { tasks, isLoading, error, updateAnnotation, refresh } = useTaskLinks(
     projectId,
     nodeId,
   );
@@ -63,7 +63,7 @@ export function LinkedTasksPanel({
     <div
       data-testid="linked-tasks-panel"
       className={cn(
-        "flex h-full w-72 shrink-0 flex-col border-l border-zinc-200 bg-white",
+        "flex h-full min-w-0 w-full flex-col bg-white",
         "dark:border-zinc-800 dark:bg-zinc-950",
       )}
     >
@@ -82,8 +82,8 @@ export function LinkedTasksPanel({
             Loading…
           </div>
         ) : error ? (
-          <div className="px-3 py-6 text-center text-xs text-red-500">
-            {error}
+          <div role="alert" className="px-3 py-6 text-center text-xs text-red-500">
+            {error} <button type="button" className="min-h-10 px-2 underline" onClick={() => void refresh()}>Retry</button>
           </div>
         ) : tasks.length === 0 ? (
           <div className="px-3 py-6 text-center text-xs text-zinc-500 dark:text-zinc-400">
@@ -131,7 +131,11 @@ function LinkedTaskRow({
     task.annotation ?? "",
   );
   const [isSaving, setIsSaving] = React.useState(false);
+  const [saveError, setSaveError] = React.useState<string | null>(null);
   const inputRef = React.useRef<HTMLInputElement | null>(null);
+  React.useEffect(() => {
+    if (!isEditing) setAnnotationDraft(task.annotation ?? "");
+  }, [task.annotation, isEditing]);
 
   // Focus input when entering edit mode
   React.useEffect(() => {
@@ -143,12 +147,23 @@ function LinkedTaskRow({
   const handleSaveAnnotation = async () => {
     if (isSaving) return;
     setIsSaving(true);
-    await onUpdateAnnotation(task.taskId, annotationDraft.trim());
-    setIsSaving(false);
-    setIsEditing(false);
+    setSaveError(null);
+    try {
+      const result = await onUpdateAnnotation(task.taskId, annotationDraft.trim());
+      if (!result.success) {
+        setSaveError(result.error || "Could not save this note. Your draft is still here.");
+        return;
+      }
+      setIsEditing(false);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "Could not save this note. Please retry.");
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const handleCancelEdit = () => {
+    setSaveError(null);
     setAnnotationDraft(task.annotation ?? "");
     setIsEditing(false);
   };
@@ -157,7 +172,7 @@ function LinkedTaskRow({
     if (e.key === "Enter") {
       e.preventDefault();
       void handleSaveAnnotation();
-    } else if (e.key === "Escape") {
+    } else if (e.key === "Escape" && !isSaving) {
       e.preventDefault();
       handleCancelEdit();
     }
@@ -207,6 +222,7 @@ function LinkedTaskRow({
 
       {/* Annotation section */}
       <div className="px-3 pb-2">
+        {saveError && <p role="alert" className="mb-2 text-xs text-red-600 dark:text-red-400">{saveError}</p>}
         {isEditing && canEdit ? (
           /* Inline annotation editor (Req 8.4) */
           <div className="flex items-center gap-1">
@@ -243,9 +259,10 @@ function LinkedTaskRow({
             <button
               type="button"
               onClick={handleCancelEdit}
+              disabled={isSaving}
               aria-label="Cancel editing"
               data-testid={`linked-task-annotation-cancel-${task.taskId}`}
-              className="rounded p-0.5 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+              className="min-h-10 min-w-10 rounded p-0.5 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"
             >
               <X className="h-3.5 w-3.5" />
             </button>
@@ -268,7 +285,7 @@ function LinkedTaskRow({
                 }}
                 aria-label="Edit annotation"
                 data-testid={`linked-task-annotation-edit-${task.taskId}`}
-                className="rounded p-0.5 text-zinc-400 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                className="min-h-10 min-w-10 rounded p-0.5 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"
               >
                 <Pencil className="h-3 w-3" />
               </button>
