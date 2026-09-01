@@ -17,7 +17,7 @@ import {
   X as XIcon,
 } from "lucide-react";
 import { format } from "date-fns";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { readTaskSourceMessageLinksAction } from "@/app/actions/messaging/linked-work";
@@ -140,6 +140,7 @@ export default function DetailsTab({
   const sourceLinks = sourceLinksQuery.data ?? [];
 
   const [isApproving, setIsApproving] = React.useState(false);
+  const queryClient = useQueryClient();
   const [reviewError, setReviewError] = React.useState<string | null>(null);
 
   const handleApprove = async () => {
@@ -148,7 +149,10 @@ export default function DetailsTab({
     setIsApproving(true);
     try {
       const res = await approveTaskReviewAction(task.id, task.projectId);
-      if (res.success && res.updatedAt) onReviewApproved(res.updatedAt);
+      if (res.success && res.updatedAt) {
+        onReviewApproved(res.updatedAt);
+        void queryClient.invalidateQueries({ queryKey: ["files-task-collections", task.projectId] });
+      }
       else setReviewError(res.error || "Failed to approve task review");
     } finally {
       setIsApproving(false);
