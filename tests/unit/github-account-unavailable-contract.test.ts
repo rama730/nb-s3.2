@@ -29,7 +29,8 @@ describe("github unavailable-account end-to-end contract", () => {
   it("keeps public and GitHub App reads working while private OAuth access is blocked", () => {
     const preview = source("src/app/actions/project/sync-preview.ts");
     const retry = source("src/app/actions/project/_all.ts");
-    const gitActions = source("src/app/actions/git.ts");
+    const syncActions = source("src/app/actions/github-sync.ts");
+    const tokenResolver = source("src/lib/github/user-access-token.ts");
     const worker = source("src/inngest/functions/git-sync.ts");
 
     assert.match(preview, /githubAccess\.source !== "app"/);
@@ -37,9 +38,10 @@ describe("github unavailable-account end-to-end contract", () => {
     assert.match(retry, /access\.source !== ["']app["']/);
     assert.match(retry, /accountCannotAuthorize \? undefined : access\.token/);
     assert.match(retry, /githubRepoPrivate: accessCheck\.isPrivate/);
-    assert.match(gitActions, /GITHUB_ACCOUNT_UNAVAILABLE_MESSAGE/);
-    assert.match(gitActions, /useAnonymousAccess = true/);
-    assert.match(worker, /useAnonymousAccess \? null : access\.token/);
+    assert.match(syncActions, /resolveGithubUserAccessToken/);
+    assert.match(tokenResolver, /identityIds\.has\(String\(account\.id\)\)/);
+    assert.match(worker, /A signed, reviewed push operation is required/);
+    assert.match(worker, /runReviewedGitHubSync/);
   });
 
   it("prevents a stale sealed token from presenting repository browsing as healthy", () => {
