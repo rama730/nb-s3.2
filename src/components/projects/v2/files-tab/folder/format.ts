@@ -9,6 +9,21 @@
 
 export type NodeType = "file" | "folder";
 
+/** Names describe the current content revision, never an unrelated creator. */
+export function formatFileActor(node: {
+  updatedByName?: string | null;
+  updatedByUsername?: string | null;
+}): string {
+  return node.updatedByName?.trim() || node.updatedByUsername?.trim() || "Not recorded";
+}
+
+export function formatFileTimestamp(value: Date | string | null | undefined): string {
+  if (!value) return "Not recorded";
+  const date = value instanceof Date ? value : new Date(value);
+  if (!Number.isFinite(date.getTime())) return "Not recorded";
+  return date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "long" });
+}
+
 const KIB = 1024;
 const BYTE_UNITS = ["B", "KB", "MB", "GB", "TB"] as const;
 
