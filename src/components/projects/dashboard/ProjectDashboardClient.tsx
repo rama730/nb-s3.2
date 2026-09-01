@@ -33,6 +33,7 @@ import {
 } from '@/lib/stores/ui-store';
 
 import { DashboardTab, DocTab, UpdatesTab, TasksTab, FilesTab, AnalyticsTab, SprintPlanning, ProjectSettingsTab } from '@/components/projects/dashboard/ProjectTabsRegistry';
+import { confirmFileNavigation } from '@/lib/files/unsaved-navigation';
 
 const EditProjectModal = dynamic(() => import('@/components/projects/EditProjectModal'), { ssr: false, loading: () => null });
 
@@ -516,6 +517,7 @@ export default function ProjectDashboardClient({ project, currentUserId, viewerD
     // Tab change handler
     const handleTabChange = useCallback(
         (tabId: string) => {
+            if (!confirmFileNavigation(project.id)) return;
             if (
                 !isProjectTabVisibleToViewer({
                     tabId,
