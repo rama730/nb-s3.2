@@ -11,6 +11,7 @@ import { SettingsPageHeader } from "@/components/settings/ui/SettingsPageHeader"
 import { SettingsSectionCard } from "@/components/settings/ui/SettingsSectionCard";
 import { useExtensionSessionsData, useIntegrationsData } from "@/hooks/useSettingsQueries";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+import { GitHubCommitAttributionSettings } from "@/components/settings/GitHubCommitAttributionSettings";
 import { revokeExtensionSession, generateExtensionToken } from "@/app/actions/extension-sessions";
 import type { AuthConnectionMethod, ExtensionSessionData, IntegrationsAuthProvider } from "@/lib/types/settingsTypes";
 
@@ -178,6 +179,7 @@ export default function IntegrationsSettings() {
     </SettingsSectionCard>
 
     <SettingsSectionCard title="GitHub" description="Repository access is managed from each project; this page only shows account-level status.">
+      <GitHubCommitAttributionSettings />
       <div className="flex flex-col gap-4 rounded-xl border p-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex min-w-0 items-center gap-3"><Github className="h-8 w-8" /><div><p className="text-sm font-semibold">{data?.githubService.summary || "GitHub status unavailable"}</p><p className="mt-1 text-sm text-zinc-500">{data?.githubService.detail}</p>{data?.githubService.githubUsername ? <a href={`https://github.com/${data.githubService.githubUsername}`} target="_blank" rel="noreferrer" className="mt-1 inline-block text-xs text-primary hover:underline">@{data.githubService.githubUsername}</a> : null}</div></div>
         <Button variant="outline" size="sm" asChild><Link href="/projects"><Link2 className="h-4 w-4" />Open projects</Link></Button>
