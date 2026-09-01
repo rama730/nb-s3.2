@@ -72,12 +72,12 @@ const EXT_ICONS: Record<string, { icon: React.ElementType; color: string }> = {
   go: { icon: Box, color: "text-cyan-500" },
 };
 
-export function FileIcon({ name, isFolder, isOpen, size = "w-4 h-4", className }: { name: string; isFolder: boolean; isOpen?: boolean; size?: string; className?: string }) {
+export function FileIcon({ name, mimeType, isFolder, isOpen, size = "w-4 h-4", className }: { name: string; mimeType?: string | null; isFolder: boolean; isOpen?: boolean; size?: string; className?: string }) {
   if (isFolder) {
     // Folder icons - can be customized further based on folder name (e.g. 'src', 'components')
     // For now standard blue folder
     return (
-      <div className={cn(size, className, "relative")}>
+      <div aria-hidden="true" className={cn(size, className, "relative")}>
          {/* We can use an SVG or Lucide. Lucide Folder/FolderOpen are good. */}
          {/* VS Code uses a flat color. Let's use a nice blue. */}
          {isOpen ? (
@@ -104,8 +104,21 @@ export function FileIcon({ name, isFolder, isOpen, size = "w-4 h-4", className }
     return <Icon aria-hidden="true" className={cn(size, className, match.color)} />;
   }
 
+  // MIME rescues extensionless uploads; known filenames retain their richer
+  // code/config icons. Icons are presentation, never a preview security check.
+  const mime = mimeType?.split(";", 1)[0]?.trim().toLowerCase() || "";
+  const MimeIcon = mime.startsWith("image/") ? FileImage
+    : mime.startsWith("video/") ? FileVideo
+    : mime.startsWith("audio/") ? FileAudio
+    : /spreadsheet|excel|csv/.test(mime) ? FileSpreadsheet
+    : /presentation|powerpoint/.test(mime) ? Presentation
+    : /zip|compressed|tar|gzip/.test(mime) ? FileArchive
+    : mime.includes("json") ? FileJson
+    : mime.startsWith("text/") || /pdf|document|msword/.test(mime) ? FileText
+    : File;
+
   // Default file
-  return <File aria-hidden="true" className={cn(size, className, "text-zinc-400")} />;
+  return <MimeIcon aria-hidden="true" className={cn(size, className, "text-zinc-400")} />;
 }
 const FolderIcon = Folder;
 const FolderOpenIcon = FolderOpen;
