@@ -22,6 +22,7 @@ import {
 import { formatTaskId } from "@/lib/project-key";
 import { getTaskTitlePresentation } from "@/lib/projects/task-presentation";
 import { cn } from "@/lib/utils";
+import type { TaskFileRole } from "@/lib/projects/task-file-intelligence";
 
 // ─── Constants ───────────────────────────────────────────────────────
 
@@ -43,8 +44,9 @@ interface SearchableTask {
 export interface TaskSearchPickerProps {
   projectId: string;
   isOpen: boolean;
+  isSaving?: boolean;
   onClose: () => void;
-  onSelect: (taskId: string) => void;
+  onSelect: (taskId: string, role: TaskFileRole) => void;
 }
 
 // ─── Component ───────────────────────────────────────────────────────
@@ -52,6 +54,7 @@ export interface TaskSearchPickerProps {
 export function TaskSearchPicker({
   projectId,
   isOpen,
+  isSaving = false,
   onClose,
   onSelect,
 }: TaskSearchPickerProps): React.JSX.Element {
@@ -59,7 +62,10 @@ export function TaskSearchPicker({
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [results, setResults] = useState<SearchableTask[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState(false);
+  const [retry, setRetry] = useState(0);
   const [activeIndex, setActiveIndex] = useState(0);
+  const [role, setRole] = useState<TaskFileRole>("reference");
   const inputRef = useRef<HTMLInputElement | null>(null);
   const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
@@ -79,6 +85,7 @@ export function TaskSearchPicker({
 
     let cancelled = false;
     setIsLoading(true);
+    setError(false);
 
     import("@/app/actions/files/links")
       .then(({ searchProjectTasks }) =>
@@ -93,6 +100,7 @@ export function TaskSearchPicker({
       .catch(() => {
         if (!cancelled) {
           setResults([]);
+          setError(true);
         }
       })
       .finally(() => {
@@ -104,7 +112,7 @@ export function TaskSearchPicker({
     return () => {
       cancelled = true;
     };
-  }, [projectId, debouncedQuery, isOpen]);
+  }, [projectId, debouncedQuery, isOpen, retry]);
 
   // ── Reset state on open/close ──────────────────────────────────────
   useEffect(() => {
@@ -114,6 +122,7 @@ export function TaskSearchPicker({
       setDebouncedQuery("");
       setResults([]);
       setActiveIndex(0);
+      setRole("reference");
       // Focus input after dialog animation
       timer = window.setTimeout(() => {
         inputRef.current?.focus();
@@ -135,9 +144,10 @@ export function TaskSearchPicker({
   // ── Selection handler ──────────────────────────────────────────────
   const handleSelect = useCallback(
     (taskId: string) => {
-      onSelect(taskId);
+      if (isSaving || isLoading || error || query !== debouncedQuery) return;
+      onSelect(taskId, role);
     },
-    [onSelect],
+    [onSelect, role, isSaving, isLoading, error, query, debouncedQuery],
   );
 
   // ── Keyboard navigation ────────────────────────────────────────────
@@ -192,6 +202,7 @@ export function TaskSearchPicker({
             autoFocus
             type="text"
             value={query}
+            disabled={isSaving}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={onInputKeyDown}
             placeholder="Search tasks by title..."
@@ -201,7 +212,7 @@ export function TaskSearchPicker({
             aria-expanded="true"
             aria-controls="task-search-picker-listbox"
             aria-activedescendant={
-              results[activeIndex]
+              !isLoading && !error && results[activeIndex]
                 ? `task-search-picker-item-${results[activeIndex].id}`
                 : undefined
             }
@@ -216,16 +227,46 @@ export function TaskSearchPicker({
           </button>
         </div>
 
+        <div
+          className="flex flex-wrap items-center gap-2 border-b border-zinc-200 px-4 py-3 dark:border-zinc-800"
+          role="radiogroup"
+          aria-label="File role in the task"
+        >
+          <span className="mr-1 text-xs font-medium text-zinc-500">Add as</span>
+          {([
+            ["reference", "Reference"],
+            ["working", "Working file"],
+            ["deliverable", "Deliverable"],
+          ] as const).map(([value, label]) => (
+            <label
+              key={value}
+              className={cn(
+                "inline-flex min-h-9 cursor-pointer items-center rounded-md border px-3 text-xs font-medium transition-colors focus-within:ring-2 focus-within:ring-blue-500",
+                role === value
+                  ? "border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300"
+                  : "border-zinc-200 text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800",
+              )}
+            >
+              <input type="radio" name="task-file-role" value={value} checked={role === value} onChange={() => setRole(value)} disabled={isSaving} className="sr-only" />
+              {label}
+            </label>
+          ))}
+        </div>
+
         {/* Results list */}
         <div
           id="task-search-picker-listbox"
           className="max-h-[50vh] overflow-y-auto"
           role="listbox"
         >
-          {isLoading ? (
-            <div className="flex items-center gap-2 px-4 py-6 text-sm text-zinc-500">
+          {error ? (
+            <div role="alert" className="px-4 py-6 text-sm text-zinc-500">
+              Could not load tasks. <button type="button" onClick={() => setRetry(value => value + 1)} className="underline focus-visible:ring-2 focus-visible:ring-blue-500">Try again</button>
+            </div>
+          ) : isLoading || query !== debouncedQuery || isSaving ? (
+            <div role="status" className="flex items-center gap-2 px-4 py-6 text-sm text-zinc-500">
               <Loader2 className="h-4 w-4 animate-spin" />
-              Searching tasks...
+              {isSaving ? "Attaching file…" : "Searching tasks…"}
             </div>
           ) : showEmpty ? (
             <div className="px-4 py-6 text-sm text-zinc-500">
