@@ -31,43 +31,7 @@ import { cn } from "@/lib/utils";
 import type { ProjectNode } from "@/lib/db/schema";
 import { extractLabel } from "@/lib/projects/task-file-label";
 import type { TaskFileRole } from "@/lib/projects/task-file-intelligence";
-
-const byteNumberFormat = new Intl.NumberFormat(undefined, {
-  maximumFractionDigits: 1,
-});
-
-function formatBytes(bytes?: number | null): string {
-  const b = bytes ?? 0;
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  const unitIndex =
-    b > 0
-      ? Math.min(Math.floor(Math.log(b) / Math.log(1024)), units.length - 1)
-      : 0;
-  return `${byteNumberFormat.format(b / 1024 ** unitIndex)} ${units[unitIndex]}`;
-}
-
-const relativeTimeFormat = new Intl.RelativeTimeFormat(undefined, {
-  numeric: "auto",
-});
-
-function formatRelative(date: Date | string | null | undefined): string {
-  if (!date) return "—";
-  const value = date instanceof Date ? date : new Date(date);
-  if (Number.isNaN(value.getTime())) return "—";
-  const diffMs = value.getTime() - Date.now();
-  const absoluteMs = Math.abs(diffMs);
-  const units: Array<[Intl.RelativeTimeFormatUnit, number]> = [
-    ["day", 86_400_000],
-    ["hour", 3_600_000],
-    ["minute", 60_000],
-  ];
-  for (const [unit, milliseconds] of units) {
-    if (absoluteMs >= milliseconds)
-      return relativeTimeFormat.format(Math.round(diffMs / milliseconds), unit);
-  }
-  if (absoluteMs < 60_000) return "just now";
-  return value.toLocaleDateString();
-}
+import { formatBytes, formatRelativeTime as formatRelative, formatFileActor, formatFileTimestamp } from "../../files-tab/folder/format";
 
 function extensionOf(name: string) {
   const dot = name.lastIndexOf(".");
@@ -83,13 +47,7 @@ type TaskFileAttributionFields = {
 };
 
 export function getTaskFileAttributionLabel(node: TaskFileAttributionFields): string {
-  return (
-    node.updatedByName?.trim() ||
-    node.updatedByUsername?.trim() ||
-    node.createdByName?.trim() ||
-    node.createdByUsername?.trim() ||
-    "Unknown"
-  );
+  return formatFileActor(node);
 }
 
 export interface TaskFileRowProps {
@@ -258,7 +216,7 @@ export function TaskFileRow({
           {isFolder ? (
             <FolderIcon className="h-5 w-5 text-zinc-400" fill="currentColor" />
           ) : (
-            <FileIcon name={node.name} isFolder={false} className="h-5 w-5" />
+            <FileIcon name={node.name} mimeType={node.mimeType} isFolder={false} className="h-5 w-5" />
           )}
         </span>
 
@@ -329,30 +287,30 @@ export function TaskFileRow({
               v{version}
             </span>
           )}
-          <span className="truncate text-xs text-zinc-400 dark:text-zinc-500">
+          <span title={formatFileTimestamp(node.versionUpdatedAt || node.updatedAt)} className="truncate text-xs text-zinc-400 dark:text-zinc-500">
             {isFolder
               ? "Folder"
-              : `${formatBytes(node.size)} · by ${getTaskFileAttributionLabel(node)} · ${formatRelative(node.versionUpdatedAt || node.updatedAt)}`}
+              : `${formatBytes(node.size) || "Size not recorded"} · Updated by ${getTaskFileAttributionLabel(node)} · ${formatRelative(node.versionUpdatedAt || node.updatedAt)}`}
           </span>
         </span>
       </div>
 
       {/* Hover actions */}
-      <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+      <div className="flex shrink-0 items-center gap-1">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
               type="button"
               data-testid="task-file-row-overflow"
               aria-label={`Options for ${node.name}`}
-              className="flex h-8 w-8 items-center justify-center rounded-md text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-700 dark:hover:text-zinc-200"
+              className="flex size-11 items-center justify-center rounded-md text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-700 dark:hover:text-zinc-200"
             >
               <MoreHorizontal className="h-4 w-4" />
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent
             align="end"
-            className="z-[300] w-56"
+            className="z-[300] w-56 [&_[role=menuitem]]:min-h-10"
             data-testid="task-file-row-overflow-menu"
           >
             <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-zinc-500">
