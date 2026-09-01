@@ -1,4 +1,4 @@
-// Files sidebar: collapsible searchable tree plus create/upload context actions.
+// Files sidebar: collection navigation or project tree; search lives in the workspace menu.
 
 "use client";
 
@@ -13,9 +13,10 @@ import React, {
   useState,
 } from "react";
 import { ArrowLeft, PanelLeftClose } from "lucide-react";
-import { getTrashNodes } from "@/app/actions/files/mutations";
-import { getProjectNodes } from "@/app/actions/files/nodes";
-import { useFilesWorkspaceView, fileCollectionViews } from "./FilesWorkspaceViews";
+import {
+  useFilesWorkspaceView,
+  fileCollectionViews,
+} from "./FilesWorkspaceViews";
 
 import type { ProjectNode } from "@/lib/db/schema";
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
@@ -32,7 +33,6 @@ import {
   FolderPlus,
   FolderInput,
   Pencil,
-  RotateCcw,
   Star,
   StarOff,
   Trash2,
@@ -47,21 +47,13 @@ import {
   useRowsToRender,
   useVisibleRows,
 } from "../explorer/ExplorerTree";
-import {
-  EMPTY_ARRAY,
-  EMPTY_OBJECT,
-} from "../explorer/explorerTypes";
+import { EMPTY_ARRAY, EMPTY_OBJECT } from "../explorer/explorerTypes";
 import { useExplorerOperationLog } from "../explorer/useExplorerOperationLog";
 import { ExplorerDialogsHost } from "../explorer/ExplorerDialogsHost";
 
 import { useNavigateTo } from "./hooks/useNavigateTo";
 import { FilesTabBootContext } from "./hooks/useFolderContents";
-import {
-  FILES_TAB_SIDEBAR_HEADER_HEIGHT_PX,
-  FILES_TAB_SIDEBAR_SEARCH_DEBOUNCE_MS,
-  FILES_TAB_SIDEBAR_WIDTH_PX,
-  computeVisibleIdsForSearch,
-} from "./sidebarSearch";
+import { FILES_TAB_SIDEBAR_WIDTH_PX } from "./sidebarSearch";
 
 // Re-export the pure helpers so consumers (Task 3.2 tests, FilesTabMain's
 // collapsed-state floating toggle) can depend on a single import path.
@@ -70,7 +62,10 @@ export {
   computeVisibleIdsForSearch,
 } from "./sidebarSearch";
 
-function showFilesToast(message: string, type: "success" | "error" | "info" | "warning" = "info") {
+function showFilesToast(
+  message: string,
+  type: "success" | "error" | "info" | "warning" = "info",
+) {
   if (type === "success") toast.success(message);
   else if (type === "error") toast.error(message);
   else if (type === "warning") toast.warning(message);
@@ -160,101 +155,87 @@ export function FilesTabSidebar({
   // ── Navigation (single write path) ────────────────────────────────
   const navigateTo = useNavigateTo(projectId);
 
-  // ── Inline search (debounced, ancestor retention) ─────────────────
-  const [searchInput, setSearchInput] = useState("");
   const workspaceView = useFilesWorkspaceView();
-  const [searching, setSearching] = useState(false);
-  const [searchError, setSearchError] = useState<string | null>(null);
-  const [searchCursor, setSearchCursor] = useState<string | null>(null);
-  const [searchResults, setSearchResults] = useState<ProjectNode[]>([]);
-  const [effectiveQuery, setEffectiveQuery] = useState("");
-  const [sidebarMode, setSidebarMode] = useState<"tree" | "trash">("tree");
-  const [trashNodes, setTrashNodes] = useState<ProjectNode[]>([]);
-  const [isTrashLoading, setIsTrashLoading] = useState(false);
-
-  const loadTrash = useCallback(async (query = "") => {
-    if (!canEdit) return;
-    setIsTrashLoading(true);
-    try {
-      setTrashNodes((await getTrashNodes(projectId, query)) as ProjectNode[]);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not load trash");
-    } finally {
-      setIsTrashLoading(false);
-    }
-  }, [canEdit, projectId]);
-  const renderNodesById = useMemo(() => {
-    if (sidebarMode !== "trash") return nodesById as Record<string, ProjectNode>;
-    return {
-      ...(nodesById as Record<string, ProjectNode>),
-      ...Object.fromEntries(trashNodes.map((node) => [node.id, node])),
-    };
-  }, [nodesById, sidebarMode, trashNodes]);
-  const visibleTrashNodes = useMemo(
-    () => trashNodes.filter((node) => !isInternalTaskWorkingFilesNode(node)),
-    [trashNodes],
-  );
-
-  useEffect(() => {
-    const handle = setTimeout(() => {
-      setEffectiveQuery(searchInput);
-    }, FILES_TAB_SIDEBAR_SEARCH_DEBOUNCE_MS);
-    return () => clearTimeout(handle);
-  }, [searchInput]);
-
-  const searchGeneration = useRef(0);
-  useEffect(() => {
-    searchGeneration.current += 1;
-    if (sidebarMode !== "tree" || effectiveQuery.trim().length < 2) { setSearchError(null); setSearching(false); setSearchCursor(null); setSearchResults([]); return; }
-    let cancelled = false;
-    setSearching(true);
-    setSearchResults([]);
-    setSearchCursor(null);
-    setSearchError(null);
-    void getProjectNodes(projectId, null, effectiveQuery, 100).then(page => {
-      if (cancelled) return;
-      useFilesWorkspaceStore.getState().upsertNodes(projectId, page.nodes);
-      setSearchResults(page.nodes);
-      setSearchCursor(page.nextCursor);
-    }).catch(error => { if (!cancelled) setSearchError(error.message); }).finally(() => { if (!cancelled) setSearching(false); });
-    return () => { cancelled = true; };
-  }, [effectiveQuery, projectId, sidebarMode]);
+  const renderNodesById = nodesById as Record<string, ProjectNode>;
 
   useEffect(() => {
     const media = window.matchMedia("(max-width: 767px)");
-    const closeOnSmallScreen = () => { const collapsed = useFilesWorkspaceStore.getState().byProjectId[projectId]?.ui.sidebarCollapsed; if (collapsed !== undefined && collapsed !== media.matches) toggleSidebar(projectId); };
+    const closeOnSmallScreen = () => {
+      const collapsed =
+        useFilesWorkspaceStore.getState().byProjectId[projectId]?.ui
+          .sidebarCollapsed;
+      if (collapsed !== undefined && collapsed !== media.matches)
+        toggleSidebar(projectId);
+    };
     closeOnSmallScreen();
-    const stopHydration = useFilesWorkspaceStore.persist.onFinishHydration(closeOnSmallScreen);
+    const stopHydration =
+      useFilesWorkspaceStore.persist.onFinishHydration(closeOnSmallScreen);
     media.addEventListener("change", closeOnSmallScreen);
-    return () => { stopHydration(); media.removeEventListener("change", closeOnSmallScreen); };
+    return () => {
+      stopHydration();
+      media.removeEventListener("change", closeOnSmallScreen);
+    };
   }, [projectId, toggleSidebar]);
 
   useEffect(() => {
-    if (sidebarCollapsed || !window.matchMedia("(max-width: 767px)").matches) return;
-    const sidebar = document.querySelector<HTMLElement>('[data-testid="files-tab-sidebar"][data-collapsed="false"]');
-    const controls = () => Array.from(sidebar?.querySelectorAll<HTMLElement>('button:not([disabled]):not([tabindex="-1"]), input:not([disabled]), [tabindex="0"]') ?? []).filter(element => element.getAttribute("aria-hidden") !== "true" && element.getClientRects().length > 0 && getComputedStyle(element).visibility !== "hidden");
+    if (sidebarCollapsed || !window.matchMedia("(max-width: 767px)").matches)
+      return;
+    const sidebar = document.querySelector<HTMLElement>(
+      '[data-testid="files-tab-sidebar"][data-collapsed="false"]',
+    );
+    const controls = () =>
+      Array.from(
+        sidebar?.querySelectorAll<HTMLElement>(
+          'button:not([disabled]):not([tabindex="-1"]), input:not([disabled]), [tabindex="0"]',
+        ) ?? [],
+      ).filter(
+        (element) =>
+          element.getAttribute("aria-hidden") !== "true" &&
+          element.getClientRects().length > 0 &&
+          getComputedStyle(element).visibility !== "hidden",
+      );
     controls()[0]?.focus();
     const close = (event: KeyboardEvent) => {
       // Nested menus/dialogs own their own Escape and focus scope.
-      if (event.defaultPrevented || document.querySelector('[role="dialog"], [role="menu"][data-state="open"]')) return;
-      if (event.key === "Escape") { event.preventDefault(); toggleSidebar(projectId); }
+      if (
+        event.defaultPrevented ||
+        document.querySelector(
+          '[role="dialog"], [role="menu"][data-state="open"]',
+        )
+      )
+        return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        toggleSidebar(projectId);
+      }
       if (event.key === "Tab") {
-        const items = controls(), first = items[0], last = items.at(-1);
-        if (!sidebar?.contains(document.activeElement) || (event.shiftKey && document.activeElement === first)) { event.preventDefault(); (event.shiftKey ? last : first)?.focus(); }
-        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+        const items = controls(),
+          first = items[0],
+          last = items.at(-1);
+        if (
+          !sidebar?.contains(document.activeElement) ||
+          (event.shiftKey && document.activeElement === first)
+        ) {
+          event.preventDefault();
+          (event.shiftKey ? last : first)?.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first?.focus();
+        }
       }
     };
     window.addEventListener("keydown", close);
     return () => {
       window.removeEventListener("keydown", close);
-      requestAnimationFrame(() => document.querySelector<HTMLButtonElement>('[data-testid="files-tab-sidebar-expand"]')?.focus());
+      requestAnimationFrame(() =>
+        document
+          .querySelector<HTMLButtonElement>(
+            '[data-testid="files-tab-sidebar-expand"]',
+          )
+          ?.focus(),
+      );
     };
   }, [sidebarCollapsed, projectId, toggleSidebar]);
-
-  useEffect(() => {
-    if (sidebarMode !== "trash") return;
-    void loadTrash(effectiveQuery);
-  }, [effectiveQuery, loadTrash, sidebarMode]);
 
   // ── Performance mark (Req 16.5, Task 11.1) ────────────────────────
   //
@@ -273,32 +254,30 @@ export function FilesTabSidebar({
     sidebarInteractiveMarkedRef.current = true;
   }, [sidebarCollapsed]);
 
-  const visibleIdsFromSearch = useMemo(
-    () =>
-      computeVisibleIdsForSearch(
-        nodesById as Record<string, ProjectNode>,
-        effectiveQuery,
-      ),
-    [nodesById, effectiveQuery],
-  );
-
   // ── Data bootstrapping ────────────────────────────────────────────
   const bootContext = useContext(FilesTabBootContext);
   if (!bootContext) {
     throw new Error("FilesTabSidebar must be used within FilesTabBootContext");
   }
-  const { isBooting, accessError, loadFolderContent, handleToggleFolder, handleLoadMore } = bootContext;
+  const {
+    isBooting,
+    accessError,
+    loadFolderContent,
+    handleToggleFolder,
+    handleLoadMore,
+  } = bootContext;
 
   // ── Operations log (powers undo on rename/delete/move) ────────────
   const { recordOperation } = useExplorerOperationLog();
 
   // ── Derived selected node (coerced to the legacy explorer shape) ──
   const selectedNode = currentLocationId
-    ? (nodesById as Record<string, ProjectNode>)[currentLocationId] ?? null
+    ? ((nodesById as Record<string, ProjectNode>)[currentLocationId] ?? null)
     : null;
 
   // ── Mutations (create / rename / delete / move / upload) ─────────
   const {
+    uploadCollisionDialog,
     createDialog,
     setCreateDialog,
     deleteDialog,
@@ -344,28 +323,6 @@ export function FilesTabSidebar({
     recordOperation,
   });
 
-  // ── Visible rows (delegates to buildVisibleRows with ancestor filter) ──
-  const includeFilter = useMemo(() => {
-    if (!visibleIdsFromSearch) return undefined;
-    return (node: ProjectNode) => visibleIdsFromSearch.has(node.id);
-  }, [visibleIdsFromSearch]);
-
-  // During an active search we want every matching node and its ancestors
-  // to render regardless of the stored expand state. Compute a union of
-  // the user's expanded folders and the ancestor chain of every match so
-  // `buildVisibleRows` traverses through them.
-  const expandedForRender = useMemo(() => {
-    if (!visibleIdsFromSearch) return expandedFolderIds as Record<string, boolean>;
-    const next: Record<string, boolean> = {
-      ...(expandedFolderIds as Record<string, boolean>),
-    };
-    for (const id of visibleIdsFromSearch) {
-      const node = (nodesById as Record<string, ProjectNode>)[id];
-      if (node?.type === "folder") next[id] = true;
-    }
-    return next;
-  }, [visibleIdsFromSearch, expandedFolderIds, nodesById]);
-
   const { visibleRows, includeFileByMode } = useVisibleRows({
     projectId,
     treeVersion,
@@ -373,7 +330,7 @@ export function FilesTabSidebar({
     nodesById: nodesById as Record<string, ProjectNode>,
     childrenByParentId: childrenByParentId as Record<string, string[]>,
     loadedChildren: loadedChildren as Record<string, boolean>,
-    expandedFolderIds: expandedForRender,
+    expandedFolderIds: expandedFolderIds as Record<string, boolean>,
     folderMeta: folderMeta as Record<
       string,
       { nextCursor: string | null; hasMore: boolean }
@@ -383,21 +340,18 @@ export function FilesTabSidebar({
     viewMode: "all",
   });
 
-  // The Files-tab v3 sidebar renders every node type that survives the
-  // ancestor-retention filter. `buildVisibleRows` honours the caller's
-  // `includeNode` via `includeFilter`, so we layer the search filter on
-  // top of the default view-mode predicate.
+  // The tree is navigation, not a second search surface. Internal task
+  // storage stays hidden here; its authorized collection owns those files.
   const rowsToRender = useRowsToRender({
-    effectiveMode: sidebarMode,
+    effectiveMode: "tree",
     visibleRows: visibleRows.filter((row) => {
       if (row.kind !== "node") return true;
       const node = (nodesById as Record<string, ProjectNode>)[row.nodeId];
       if (node && isInternalTaskWorkingFilesNode(node)) return false;
-      if (!includeFilter) return true;
-      return node ? includeFilter(node) : false;
+      return true;
     }),
     searchResults: [],
-    trashNodesState: visibleTrashNodes,
+    trashNodesState: [],
     favorites: favorites as Record<string, boolean>,
     recents: recents as string[],
     nodesById: nodesById as Record<string, ProjectNode>,
@@ -459,11 +413,11 @@ export function FilesTabSidebar({
   // ── Row-click handler: single write path to currentLocationId ─────
   const handleSelect = useCallback(
     (node: ProjectNode) => {
-      if (sidebarMode === "trash") return;
       navigateTo(node.id);
-      if (window.matchMedia("(max-width: 767px)").matches) toggleSidebar(projectId);
+      if (window.matchMedia("(max-width: 767px)").matches)
+        toggleSidebar(projectId);
     },
-    [navigateTo, sidebarMode, toggleSidebar, projectId],
+    [navigateTo, toggleSidebar, projectId, workspaceView],
   );
 
   // ── Drag & drop (preserved — Q4 keep) ─────────────────────────────
@@ -527,39 +481,38 @@ export function FilesTabSidebar({
   // checkbox column never renders (Q1 dropped, Req 15.15).
   const contextValue = useTreeContext({
     projectId,
-    // Trash rows are not part of the active tree cache. Pass the same merged
-    // map used by the virtualized renderer so every row has a stable node
-    // snapshot and can never collapse to a zero-height placeholder.
+    // Share the renderer's node snapshot so tree rows retain stable heights.
     nodesById: renderNodesById,
     selectedNodeId: currentLocationId,
     effectiveSelectedNodeIds: EMPTY_ARRAY,
-    expandedFolderIds: expandedForRender,
+    expandedFolderIds: expandedFolderIds as Record<string, boolean>,
     favorites: favorites as Record<string, boolean>,
     taskLinkCounts: taskLinkCounts as Record<string, number>,
     locksByNodeId: locksByNodeId as Record<
       string,
-      { lockedBy: string; lockedByName?: string | null; clientKind?: "web" | "vscode"; expiresAt: number }
+      {
+        lockedBy: string;
+        lockedByName?: string | null;
+        clientKind?: "web" | "vscode";
+        expiresAt: number;
+      }
     >,
     mode: "default",
     canEdit,
-    canMove: sidebarMode === "tree" && canManageFiles,
+    canMove: canManageFiles,
     projectName: projectName || "Project",
-    effectiveMode: sidebarMode,
+    effectiveMode: "tree",
     renameNodeId: renameState.nodeId,
     renameValue: renameState.value,
     onRenameChange: handleRenameChange,
     onRenameConfirm: handleInlineRenameConfirm,
     onRenameCancel: handleInlineRenameCancel,
-    onDesktopFileDrop: sidebarMode === "tree" ? handleDesktopFileDrop : undefined,
+    onDesktopFileDrop: handleDesktopFileDrop,
     folderSizes,
     treeItemMetaByNodeId,
     handleSelect,
-    handleToggleFolder:
-      sidebarMode === "tree" ? handleToggleFolder : async (_node: ProjectNode) => {},
-    handleDropOnFolder:
-      sidebarMode === "tree"
-        ? handleDropOnFolder
-        : async (_targetId: string, _draggedId: string) => {},
+    handleToggleFolder,
+    handleDropOnFolder,
     handleLoadMore,
     openCreate,
     openCreateInFolder,
@@ -577,7 +530,7 @@ export function FilesTabSidebar({
     runUniqueMutation,
     showToast: showFilesToast,
     recordOperation,
-    setTrashNodesState: setTrashNodes,
+    setTrashNodesState: () => undefined,
     onContextMenu: handleContextMenu,
   });
 
@@ -592,116 +545,148 @@ export function FilesTabSidebar({
     // NOTE: The visible Sidebar_Reopen_Control now lives in FilesTabMain
     // (Req 18.1–18.6). This aside retains zero width for layout purposes.
     return (
-      <aside
-        data-testid="files-tab-sidebar"
-        data-collapsed="true"
-        aria-label="File sidebar"
-        style={{ width: 0 }}
-        className="shrink-0 overflow-hidden"
-      />
+      <>
+        {uploadCollisionDialog}
+        <aside
+          data-testid="files-tab-sidebar"
+          data-collapsed="true"
+          aria-label="File sidebar"
+          style={{ width: 0 }}
+          className="shrink-0 overflow-hidden"
+        />
+      </>
     );
   }
 
   return (
-    <><button type="button" aria-label="Close file sidebar" onClick={() => toggleSidebar(projectId)} className="absolute inset-0 z-20 bg-black/30 md:hidden" />
-    <aside
-      data-testid="files-tab-sidebar"
-      data-collapsed="false"
-      aria-label="File sidebar"
-      style={{ width: FILES_TAB_SIDEBAR_WIDTH_PX }}
-      className="shrink-0 flex flex-col h-full border-r border-zinc-200 dark:border-white/10 bg-white dark:bg-zinc-900 max-md:absolute max-md:inset-y-0 max-md:left-0 max-md:z-30 max-md:max-w-[85vw] max-md:shadow-xl md:resize-x md:overflow-auto md:min-w-52 md:max-w-[40vw]"
-    >
-      <div className="flex min-h-12 shrink-0 items-center gap-2 border-b border-zinc-200 px-3 dark:border-white/10">
-        {workspaceView?.sidebarMode === "tree" ? <button type="button" onClick={workspaceView.showCollections} className="flex min-h-10 flex-1 items-center gap-2 rounded text-sm focus-visible:ring-2 focus-visible:ring-blue-500"><ArrowLeft aria-hidden="true" className="size-4" />Back to Files</button> : <span className="flex-1 text-sm font-semibold">Files</span>}
-        <button type="button" onClick={() => toggleSidebar(projectId)} aria-label={collapsedToggleLabel} title={collapsedToggleLabel} data-testid="files-tab-sidebar-collapse" className="flex size-10 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-100 focus-visible:ring-2 focus-visible:ring-blue-500 dark:hover:bg-zinc-800"><PanelLeftClose aria-hidden="true" className="size-4" /></button>
-      </div>
-      {workspaceView?.sidebarMode === "collections" ? <nav aria-label="File collections" className="flex-1 space-y-1 overflow-y-auto p-3">
-        {fileCollectionViews.filter(item => (canEdit || item.id !== "trash") && (workspaceView.canReadTasks || !["tasks", "deliverables"].includes(item.id))).map(({ id, label, Icon }) => <button key={id} type="button" aria-current={workspaceView.view === id ? "page" : undefined} onClick={() => { workspaceView.selectView(id); if (id !== "project" && window.matchMedia("(max-width: 767px)").matches) toggleSidebar(projectId); }} className={`flex min-h-11 w-full items-center gap-3 rounded-md px-3 text-left text-sm focus-visible:ring-2 focus-visible:ring-blue-500 ${workspaceView.view === id ? "bg-blue-50 text-blue-700 dark:bg-blue-500/15 dark:text-blue-300" : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"}`}><Icon aria-hidden="true" className="size-4 shrink-0" />{label}</button>)}
-      </nav> : <>
-      <label className="shrink-0 p-3"><span className="sr-only">Find in project tree</span><input type="search" value={searchInput} onChange={event => setSearchInput(event.target.value)} placeholder="Find in project tree…" data-testid="files-tab-sidebar-search" className="h-9 w-full min-w-0 rounded-md border border-zinc-200 bg-transparent px-2 text-sm focus-visible:outline-blue-500 dark:border-zinc-700" /></label>
-      {/* Tree body — virtualized via ExplorerTree */}
-      {searching && <p role="status" className="px-3 py-2 text-xs text-zinc-500">Searching project…</p>}
-      {searchError && <p role="alert" className="px-3 py-2 text-xs text-red-600">{searchError}</p>}
-      {searchCursor && <button type="button" disabled={searching} className="min-h-10 px-3 text-xs text-blue-600" onClick={async () => {
-        const generation = searchGeneration.current;
-        setSearching(true);
-        try { const page = await getProjectNodes(projectId, null, effectiveQuery, 100, searchCursor); if (generation !== searchGeneration.current) return; useFilesWorkspaceStore.getState().upsertNodes(projectId, page.nodes); setSearchResults(previous => Array.from(new Map([...previous, ...page.nodes].map(node => [node.id, node])).values())); setSearchCursor(page.nextCursor); }
-        catch (error) { if (generation === searchGeneration.current) setSearchError(error instanceof Error ? error.message : "Search failed"); }
-        finally { if (generation === searchGeneration.current) setSearching(false); }
-      }}>Load more search results</button>}
-      <div className="flex-1 min-h-0 overflow-hidden">
-        {sidebarMode === "tree" && effectiveQuery.trim() ? <div className="h-full overflow-y-auto">
-          {effectiveQuery.trim().length < 2 ? <p className="p-3 text-xs text-zinc-500">Type at least two characters to search all project files.</p> : <>
-            {searchResults.map(node => <button type="button" key={node.id} onClick={() => handleSelect(node)} className="block min-h-12 w-full border-b border-zinc-100 px-3 py-2 text-left text-sm hover:bg-zinc-100 focus-visible:ring-2 dark:border-zinc-800 dark:hover:bg-zinc-800"><span className="block truncate font-medium">{node.name}</span><span className="block truncate text-xs text-zinc-500">{node.path?.startsWith("/.system/") ? "Task files" : node.path}</span></button>)}
-            {!searching && !searchError && !searchResults.length && <p className="p-3 text-xs text-zinc-500">No matching files.</p>}
-          </>}
-        </div> :
-        <ExplorerTree
-          rowsToRender={rowsToRender}
-          contextValue={contextValue}
-          nodesById={renderNodesById}
-          childrenByParentId={childrenByParentId}
-          effectiveSelectedNodeIds={EMPTY_ARRAY as string[]}
-          selectedNodeId={currentLocationId}
-          viewMode="code"
-          effectiveMode={sidebarMode}
-          isBooting={isBooting}
-          isTrashLoading={isTrashLoading}
-          accessError={accessError}
-          onSelect={handleSelect}
-          onToggleFolder={sidebarMode === "tree" ? handleToggleFolder : () => undefined}
-          onDropOnFolder={sidebarMode === "tree" && canManageFiles ? handleDropOnFolder : undefined}
-        />
-        }
-      </div>
-
-      </>}
-      {/* Context-menu portal (preserved — Q5 keep) */}
-      <DropdownMenu
-        open={contextMenuState.open}
-        onOpenChange={(open) =>
-          setContextMenuState((prev) => ({ ...prev, open }))
-        }
+    <>
+      <button
+        type="button"
+        aria-label="Close file sidebar"
+        onClick={() => toggleSidebar(projectId)}
+        className="absolute inset-0 z-20 bg-black/30 md:hidden"
+      />
+      <aside
+        data-testid="files-tab-sidebar"
+        data-collapsed="false"
+        aria-label="File sidebar"
+        style={{ width: FILES_TAB_SIDEBAR_WIDTH_PX }}
+        className="shrink-0 flex flex-col h-full border-r border-zinc-200 dark:border-white/10 bg-white dark:bg-zinc-900 max-md:absolute max-md:inset-y-0 max-md:left-0 max-md:z-30 max-md:max-w-[85vw] max-md:shadow-xl md:resize-x md:overflow-auto md:min-w-52 md:max-w-[40vw]"
       >
-        {/* See FolderListView: the installed Radix DropdownMenu package has
-            no Anchor export, so this controlled inert trigger is the
-            collision-aware virtual anchor. */}
-        <DropdownMenuTrigger asChild>
+        <div className="flex min-h-12 shrink-0 items-center gap-2 border-b border-zinc-200 px-3 dark:border-white/10">
+          {workspaceView?.sidebarMode === "tree" ? (
+            <button
+              type="button"
+              onClick={workspaceView.showCollections}
+              className="flex min-h-10 flex-1 items-center gap-2 rounded text-sm focus-visible:ring-2 focus-visible:ring-blue-500"
+            >
+              <ArrowLeft aria-hidden="true" className="size-4" />
+              Back to Files
+            </button>
+          ) : (
+            <span className="flex-1 text-sm font-semibold">Files</span>
+          )}
           <button
             type="button"
-            aria-hidden="true"
-            tabIndex={-1}
-            style={{
-              position: "fixed",
-              left: contextMenuState.x,
-              top: contextMenuState.y,
-              width: 1,
-              height: 1,
-              pointerEvents: "none",
-            }}
-          />
-        </DropdownMenuTrigger>
-        <DropdownMenuContent
-          side="bottom"
-          align="start"
-          sideOffset={6}
-          collisionPadding={12}
-          sticky="always"
-          className="z-50 w-48"
-        >
-          {contextMenuState.node ? (
-            <>
-              {sidebarMode === "trash" ? (
-                <DropdownMenuItem
+            onClick={() => toggleSidebar(projectId)}
+            aria-label={collapsedToggleLabel}
+            title={collapsedToggleLabel}
+            data-testid="files-tab-sidebar-collapse"
+            className="flex size-10 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-100 focus-visible:ring-2 focus-visible:ring-blue-500 dark:hover:bg-zinc-800"
+          >
+            <PanelLeftClose aria-hidden="true" className="size-4" />
+          </button>
+        </div>
+        {workspaceView?.sidebarMode === "collections" ? (
+          <nav
+            aria-label="File collections"
+            className="flex-1 space-y-1 overflow-y-auto p-3"
+          >
+            {fileCollectionViews
+              .filter(
+                (item) =>
+                  (canEdit || item.id !== "trash") &&
+                  (workspaceView.canReadTasks ||
+                    !["tasks", "deliverables"].includes(item.id)) &&
+                  (item.id !== "github" || workspaceView.canOpenGitHub),
+              )
+              .map(({ id, label, Icon }) => (
+                <button
+                  key={id}
+                  type="button"
+                  aria-current={workspaceView.view === id ? "page" : undefined}
                   onClick={() => {
-                    if (contextMenuState.node)
-                      void contextValue.restoreNode(contextMenuState.node.id);
+                    workspaceView.selectView(id);
+                    if (
+                      id !== "project" &&
+                      window.matchMedia("(max-width: 767px)").matches
+                    )
+                      toggleSidebar(projectId);
                   }}
+                  className={`flex min-h-11 w-full items-center gap-3 rounded-md px-3 text-left text-sm focus-visible:ring-2 focus-visible:ring-blue-500 ${workspaceView.view === id ? "bg-blue-50 text-blue-700 dark:bg-blue-500/15 dark:text-blue-300" : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"}`}
                 >
-                  <RotateCcw className="mr-2 h-4 w-4" />
-                  Restore
-                </DropdownMenuItem>
-              ) : (
+                  <Icon aria-hidden="true" className="size-4 shrink-0" />
+                  {label}
+                </button>
+              ))}
+          </nav>
+        ) : (
+          <>
+            <div className="flex-1 min-h-0 overflow-hidden">
+              <ExplorerTree
+                rowsToRender={rowsToRender}
+                contextValue={contextValue}
+                nodesById={renderNodesById}
+                childrenByParentId={childrenByParentId}
+                effectiveSelectedNodeIds={EMPTY_ARRAY as string[]}
+                selectedNodeId={currentLocationId}
+                viewMode="code"
+                effectiveMode="tree"
+                isBooting={isBooting}
+                isTrashLoading={false}
+                accessError={accessError}
+                onSelect={handleSelect}
+                onToggleFolder={handleToggleFolder}
+                onDropOnFolder={canManageFiles ? handleDropOnFolder : undefined}
+              />
+            </div>
+          </>
+        )}
+        {/* Context-menu portal (preserved — Q5 keep) */}
+        <DropdownMenu
+          open={contextMenuState.open}
+          onOpenChange={(open) =>
+            setContextMenuState((prev) => ({ ...prev, open }))
+          }
+        >
+          {/* See FolderListView: the installed Radix DropdownMenu package has
+            no Anchor export, so this controlled inert trigger is the
+            collision-aware virtual anchor. */}
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              aria-hidden="true"
+              tabIndex={-1}
+              style={{
+                position: "fixed",
+                left: contextMenuState.x,
+                top: contextMenuState.y,
+                width: 1,
+                height: 1,
+                pointerEvents: "none",
+              }}
+            />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            side="bottom"
+            align="start"
+            sideOffset={6}
+            collisionPadding={12}
+            sticky="always"
+            className="z-50 w-48 [&_[role=menuitem]]:min-h-10"
+          >
+            {contextMenuState.node ? (
+              <>
                 <DropdownMenuItem
                   onClick={() => {
                     if (contextMenuState.node)
@@ -711,138 +696,133 @@ export function FilesTabSidebar({
                   <FolderOpen className="w-4 h-4 mr-2" />
                   Open
                 </DropdownMenuItem>
-              )}
-              {sidebarMode !== "trash" ? (
-                <>
-              <DropdownMenuItem
-                onClick={() => {
-                  if (contextMenuState.node)
-                    toggleFavorite(projectId, contextMenuState.node.id);
-                }}
-              >
-                {contextMenuState.node &&
-                (favorites as Record<string, boolean>)[
-                  contextMenuState.node.id
-                ] ? (
+                <DropdownMenuItem
+                  onClick={() => {
+                    if (contextMenuState.node)
+                      toggleFavorite(projectId, contextMenuState.node.id);
+                  }}
+                >
+                  {contextMenuState.node &&
+                  (favorites as Record<string, boolean>)[
+                    contextMenuState.node.id
+                  ] ? (
+                    <>
+                      <StarOff className="w-4 h-4 mr-2" />
+                      Unstar
+                    </>
+                  ) : (
+                    <>
+                      <Star className="w-4 h-4 mr-2" />
+                      Star
+                    </>
+                  )}
+                </DropdownMenuItem>
+                {canEdit && contextMenuState.node.type === "folder" && (
                   <>
-                    <StarOff className="w-4 h-4 mr-2" />
-                    Remove favorite
-                  </>
-                ) : (
-                  <>
-                    <Star className="w-4 h-4 mr-2" />
-                    Add favorite
-                  </>
-                )}
-              </DropdownMenuItem>
-              {canEdit && contextMenuState.node.type === "folder" && (
-                <>
-                  <DropdownMenuItem
-                    onClick={() =>
-                      openCreateInFolder(contextMenuState.node!.id, "file")
-                    }
-                  >
-                    <FilePlus2 className="w-4 h-4 mr-2" />
-                    New file
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={() =>
-                      openCreateInFolder(
-                        contextMenuState.node!.id,
-                        "folder",
-                      )
-                    }
-                  >
-                    <FolderPlus className="w-4 h-4 mr-2" />
-                    New folder
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={() =>
-                      handleUploadToFolder(contextMenuState.node!.id)
-                    }
-                  >
-                    <Upload className="w-4 h-4 mr-2" />
-                    Upload file
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={() =>
-                      openFolderUpload(contextMenuState.node!.id)
-                    }
-                  >
-                    <FolderInput className="w-4 h-4 mr-2" />
-                    Upload folder
-                  </DropdownMenuItem>
-                </>
-              )}
-              {canEdit && (
-                <>
-                  <DropdownMenuItem
-                    onClick={() => openRename(contextMenuState.node!)}
-                  >
-                    <Pencil className="w-4 h-4 mr-2" />
-                    Rename
-                  </DropdownMenuItem>
-                  {canManageFiles ? (
                     <DropdownMenuItem
-                      onClick={() => handleMoveFromMenu(contextMenuState.node!)}
+                      onClick={() =>
+                        openCreateInFolder(contextMenuState.node!.id, "file")
+                      }
+                    >
+                      <FilePlus2 className="w-4 h-4 mr-2" />
+                      New file
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() =>
+                        openCreateInFolder(contextMenuState.node!.id, "folder")
+                      }
+                    >
+                      <FolderPlus className="w-4 h-4 mr-2" />
+                      New folder
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() =>
+                        handleUploadToFolder(contextMenuState.node!.id)
+                      }
+                    >
+                      <Upload className="w-4 h-4 mr-2" />
+                      Upload file
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() =>
+                        openFolderUpload(contextMenuState.node!.id)
+                      }
                     >
                       <FolderInput className="w-4 h-4 mr-2" />
-                      Move
+                      Upload folder
                     </DropdownMenuItem>
-                  ) : null}
-                  <DropdownMenuItem
-                    className="text-red-600 focus:text-red-600 dark:text-red-400 dark:focus:text-red-400"
-                    onClick={() =>
-                      handleDeleteFromMenu(contextMenuState.node!)
-                    }
-                  >
-                    <Trash2 className="w-4 h-4 mr-2" />
-                    Move to trash
-                  </DropdownMenuItem>
-                </>
-              )}
-                </>
-              ) : null}
-            </>
-          ) : null}
-        </DropdownMenuContent>
-      </DropdownMenu>
+                  </>
+                )}
+                {canEdit && (
+                  <>
+                    <DropdownMenuItem
+                      onClick={() => openRename(contextMenuState.node!)}
+                    >
+                      <Pencil className="w-4 h-4 mr-2" />
+                      Rename
+                    </DropdownMenuItem>
+                    {canManageFiles ? (
+                      <DropdownMenuItem
+                        onClick={() =>
+                          handleMoveFromMenu(contextMenuState.node!)
+                        }
+                      >
+                        <FolderInput className="w-4 h-4 mr-2" />
+                        Move
+                      </DropdownMenuItem>
+                    ) : null}
+                    <DropdownMenuItem
+                      className="text-red-600 focus:text-red-600 dark:text-red-400 dark:focus:text-red-400"
+                      onClick={() =>
+                        handleDeleteFromMenu(contextMenuState.node!)
+                      }
+                    >
+                      <Trash2 className="w-4 h-4 mr-2" />
+                      Move to trash
+                    </DropdownMenuItem>
+                  </>
+                )}
+              </>
+            ) : null}
+          </DropdownMenuContent>
+        </DropdownMenu>
 
-      {/* Dialogs (create / rename / delete / move) — reuses existing host */}
-      <ExplorerDialogsHost
-        canEdit={canEdit}
-        canManageFiles={canManageFiles}
-        projectId={projectId}
-        createDialog={createDialog}
-        setCreateDialog={setCreateDialog}
-        confirmCreate={async () => {
-          await confirmCreate();
-        }}
-        renameState={renameState}
-        setRenameState={setRenameState}
-        confirmRename={async () => {
-          await confirmRename();
-        }}
-        deleteDialog={deleteDialog}
-        setDeleteDialog={setDeleteDialog}
-        confirmDelete={async () => {
-          await confirmDelete();
-        }}
-        moveDialog={moveDialog}
-        setMoveDialog={setMoveDialog}
-        confirmMove={async () => {
-          await confirmMove();
-        }}
-      />
+        {/* Dialogs (create / rename / delete / move) — reuses existing host */}
+        {uploadCollisionDialog}
+        <ExplorerDialogsHost
+          canEdit={canEdit}
+          canManageFiles={canManageFiles}
+          projectId={projectId}
+          createDialog={createDialog}
+          setCreateDialog={setCreateDialog}
+          confirmCreate={async () => {
+            await confirmCreate();
+          }}
+          renameState={renameState}
+          setRenameState={setRenameState}
+          confirmRename={async () => {
+            await confirmRename();
+          }}
+          deleteDialog={deleteDialog}
+          setDeleteDialog={setDeleteDialog}
+          confirmDelete={async () => {
+            await confirmDelete();
+          }}
+          moveDialog={moveDialog}
+          setMoveDialog={setMoveDialog}
+          confirmMove={async () => {
+            await confirmMove();
+          }}
+        />
 
-      {/* Dev-only guardrails: surface suspicious states as console warnings
+        {/* Dev-only guardrails: surface suspicious states as console warnings
           rather than overlays. The test suite reads DOM `data-*` attributes,
           not warning text. */}
-      {process.env.NODE_ENV !== "production" && accessError ? (
-        <AccessErrorDevWarning error={accessError} />
-      ) : null}
-
-    </aside></>
+        {process.env.NODE_ENV !== "production" && accessError ? (
+          <AccessErrorDevWarning error={accessError} />
+        ) : null}
+      </aside>
+    </>
   );
 }
 
