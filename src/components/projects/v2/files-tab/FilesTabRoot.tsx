@@ -71,10 +71,7 @@ import { getNodeMetadataBatch } from "@/app/actions/files/nodes";
 
 import { useExplorerBoot } from "../explorer/useExplorerBoot";
 
-import {
-  FilesTabRoleProvider,
-  type Role,
-} from "./FilesTabRoleContext";
+import { FilesTabRoleProvider, type Role } from "./FilesTabRoleContext";
 import { FilesTabSidebar } from "./FilesTabSidebar";
 import { FilesTabMain } from "./FilesTabMain";
 import { QuickOpenDialog } from "./quick-open/QuickOpenDialog";
@@ -83,13 +80,19 @@ import { FilesTabBootContext } from "./hooks/useFolderContents";
 import { useFilesTabStartupStage } from "./hooks/useFilesTabStartupStage";
 import { useDeepLinkResolver } from "./hooks/useDeepLinkResolver";
 import { useFilesTabUrlSync } from "./hooks/useFilesTabUrlSync";
-import { runNavigateTo, useNavigateTo } from "./hooks/useNavigateTo";
+import { useNavigateTo } from "./hooks/useNavigateTo";
 import { fetchProjectFileLeases } from "@/lib/files/file-lease-client";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { FilesWorkspaceViews } from "./FilesWorkspaceViews";
-import { FilesWorkspaceGitHubDrawer } from "./navigation/FilesWorkspaceGitHubDrawer";
+import { FileTransfersProvider } from "./FileTransfers";
+import { confirmFileNavigation } from "@/lib/files/unsaved-navigation";
+import { fetchGithubImportAccessState } from "@/lib/github/import-client";
+import type { GithubImportAccessState } from "@/lib/github/import-types";
 
-function showFilesToast(message: string, type: "success" | "error" | "info" | "warning" = "info") {
+function showFilesToast(
+  message: string,
+  type: "success" | "error" | "info" | "warning" = "info",
+) {
   if (type === "success") toast.success(message);
   else if (type === "error") toast.error(message);
   else if (type === "warning") toast.warning(message);
@@ -173,25 +176,96 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
   }, [currentUserId, isOwner, isOwnerOrMember]);
   const canEdit = role !== "Role_Viewer" && props.canUploadFiles !== false;
   const canReadTasks = props.canReadTasks ?? role !== "Role_Viewer";
+  const [githubAccess, setGithubAccess] =
+    useState<GithubImportAccessState | null>(null);
+  const [githubAccessResolved, setGithubAccessResolved] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    if (!isActive || !isOwner || !currentUserId) {
+      setGithubAccess(null);
+      setGithubAccessResolved(true);
+      return;
+    }
+    setGithubAccessResolved(false);
+    void fetchGithubImportAccessState()
+      .then((access) => {
+        if (!cancelled) {
+          setGithubAccess(access);
+          setGithubAccessResolved(true);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          console.warn("[files-tab] failed to resolve GitHub access", error);
+          setGithubAccess(null);
+          setGithubAccessResolved(true);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUserId, isActive, isOwner]);
+  const canOpenGitHub = isOwner && githubAccess?.linked === true;
   const pendingNavigation = useFilesWorkspaceStore(
     (state) => state.byProjectId[projectId]?.pendingNavigation ?? null,
   );
+  const navigateToInitialFile = useNavigateTo(projectId);
+  const dirtyFileId = useFilesWorkspaceStore(
+    (state) => state.byProjectId[projectId]?.dirtyFileId ?? null,
+  );
+  useEffect(() => {
+    if (!dirtyFileId) return;
+    const previousUrl = window.location.href;
+    const previousState = window.history.state;
+    const guardHistory = (event: PopStateEvent) => {
+      if (confirmFileNavigation(projectId)) return;
+      event.stopImmediatePropagation();
+      // The browser has already traversed. Restore the editor entry before
+      // collection/URL listeners can consume the rejected destination.
+      window.history.pushState(previousState, "", previousUrl);
+    };
+    const guardLink = (event: MouseEvent) => {
+      if (
+        event.defaultPrevented ||
+        event.button !== 0 ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey ||
+        event.altKey
+      )
+        return;
+      const anchor = (
+        event.target as Element | null
+      )?.closest<HTMLAnchorElement>("a[href]");
+      if (
+        !anchor ||
+        anchor.target === "_blank" ||
+        anchor.hasAttribute("download") ||
+        anchor.href === window.location.href
+      )
+        return;
+      if (!confirmFileNavigation(projectId)) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }
+    };
+    window.addEventListener("popstate", guardHistory, true);
+    document.addEventListener("click", guardLink, true);
+    return () => {
+      window.removeEventListener("popstate", guardHistory, true);
+      document.removeEventListener("click", guardLink, true);
+    };
+  }, [projectId, dirtyFileId]);
   const confirmPendingNavigation = useCallback(() => {
     if (!pendingNavigation) return;
     const state = useFilesWorkspaceStore.getState();
     const dirtyFileId = state.byProjectId[projectId]?.dirtyFileId ?? null;
     if (dirtyFileId) state.setDirtyFile(projectId, dirtyFileId, false);
     state.setPendingNavigation(projectId, null);
-    runNavigateTo(
-      {
-        setCurrentLocation: state.setCurrentLocation,
-        addRecent: state.addRecent,
-        getNodeType: (id) => state.byProjectId[projectId]?.nodesById[id]?.type,
-      },
-      projectId,
-      pendingNavigation.nodeId,
-    );
-  }, [pendingNavigation, projectId]);
+    navigateToInitialFile(pendingNavigation.nodeId, {
+      preserveQuery: pendingNavigation.preserveQuery,
+    });
+  }, [pendingNavigation, projectId, navigateToInitialFile]);
 
   // ── 3. Three-stage startup machine (Req 16.4) ─────────────────────
   const [stage, signalStageComplete] = useFilesTabStartupStage(projectId);
@@ -200,7 +274,13 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
   //
   // Boot the explorer exactly once here and publish folder loaders through
   // context so sidebar/main children cannot double-fetch.
-  const { isBooting, accessError, loadFolderContent, handleToggleFolder, handleLoadMore } = useExplorerBoot({
+  const {
+    isBooting,
+    accessError,
+    loadFolderContent,
+    handleToggleFolder,
+    handleLoadMore,
+  } = useExplorerBoot({
     projectId,
     canEdit,
     isActive,
@@ -211,8 +291,20 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
     if (!isBooting) signalStageComplete("explorer");
   }, [isBooting, signalStageComplete]);
   const bootContextValue = useMemo(
-    () => ({ isBooting, accessError, loadFolderContent, handleToggleFolder, handleLoadMore }),
-    [isBooting, accessError, loadFolderContent, handleToggleFolder, handleLoadMore],
+    () => ({
+      isBooting,
+      accessError,
+      loadFolderContent,
+      handleToggleFolder,
+      handleLoadMore,
+    }),
+    [
+      isBooting,
+      accessError,
+      loadFolderContent,
+      handleToggleFolder,
+      handleLoadMore,
+    ],
   );
 
   // ── 5. Deep-link snapshot: captured ONCE at mount ─────────────────
@@ -242,7 +334,9 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
   const [initialSearch] = useState<string>(() => {
     if (typeof window === "undefined") return "";
     const live = window.location.search;
-    const params = new URLSearchParams(live.startsWith("?") ? live.slice(1) : live);
+    const params = new URLSearchParams(
+      live.startsWith("?") ? live.slice(1) : live,
+    );
     if (params.get("path")) return live;
     if (initialOpenPath && initialOpenPath.length > 0) {
       const encoded = initialOpenPath
@@ -255,7 +349,9 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
         const preserved: string[] = [];
         for (const [key, value] of params.entries()) {
           if (key === "path") continue;
-          preserved.push(`${encodeURIComponent(key)}=${encodeURIComponent(value)}`);
+          preserved.push(
+            `${encodeURIComponent(key)}=${encodeURIComponent(value)}`,
+          );
         }
         preserved.push(`path=${encoded}`);
         return `?${preserved.join("&")}`;
@@ -302,17 +398,18 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
     },
   });
 
-  const navigateToInitialFile = useNavigateTo(projectId);
   const upsertNodes = useFilesWorkspaceStore((s) => s.upsertNodes);
   const initialOpenFileExists = useFilesWorkspaceStore((s) =>
     Boolean(
       initialOpenFileId &&
-        s.byProjectId[projectId]?.nodesById[initialOpenFileId]?.type === "file",
+      s.byProjectId[projectId]?.nodesById[initialOpenFileId]?.type === "file",
     ),
   );
   const handledInitialFileIdRef = useRef<string | null>(null);
   const resolvingInitialFileIdRef = useRef<string | null>(null);
-  const [handledInitialFileId, setHandledInitialFileId] = useState<string | null>(null);
+  const [handledInitialFileId, setHandledInitialFileId] = useState<
+    string | null
+  >(null);
   const completeInitialFileResolution = useCallback((fileId: string) => {
     handledInitialFileIdRef.current = fileId;
     setHandledInitialFileId(fileId);
@@ -346,7 +443,9 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
     let cancelled = false;
     resolvingInitialFileIdRef.current = initialOpenFileId;
 
-    void getNodeMetadataBatch(projectId, [initialOpenFileId], { includeBreadcrumbs: true })
+    void getNodeMetadataBatch(projectId, [initialOpenFileId], {
+      includeBreadcrumbs: true,
+    })
       .then((result) => {
         if (cancelled) return;
         if (!result.success) {
@@ -355,9 +454,13 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
           return;
         }
 
-        const node = result.data.nodes.find((candidate) => candidate.id === initialOpenFileId);
+        const node = result.data.nodes.find(
+          (candidate) => candidate.id === initialOpenFileId,
+        );
         if (!node || node.type !== "file") {
-          toast.error("The requested file is not available or you do not have access.");
+          toast.error(
+            "The requested file is not available or you do not have access.",
+          );
           completeInitialFileResolution(initialOpenFileId);
           return;
         }
@@ -373,7 +476,9 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
           fileId: initialOpenFileId,
           error,
         });
-        toast.error("The requested file is not available or you do not have access.");
+        toast.error(
+          "The requested file is not available or you do not have access.",
+        );
         completeInitialFileResolution(initialOpenFileId);
       })
       .finally(() => {
@@ -403,8 +508,7 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
   // ── 7. URL sync (replaceState mirror + popstate handler) ──────────
   useFilesTabUrlSync(projectId, {
     suspendWrites: Boolean(
-      initialOpenFileId &&
-        handledInitialFileId !== initialOpenFileId,
+      initialOpenFileId && handledInitialFileId !== initialOpenFileId,
     ),
     onPopStateError: () => {
       toast.error("Deep link target not found.");
@@ -421,14 +525,15 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
   const currentLocationId = useFilesWorkspaceStore(
     (s) => s.byProjectId[projectId]?.currentLocationId ?? null,
   );
-  const currentLocationNode = useFilesWorkspaceStore(
-    (s) => currentLocationId
-      ? s.byProjectId[projectId]?.nodesById[currentLocationId] ?? null
+  const currentLocationNode = useFilesWorkspaceStore((s) =>
+    currentLocationId
+      ? (s.byProjectId[projectId]?.nodesById[currentLocationId] ?? null)
       : null,
   );
-  const visibleFolderId = currentLocationNode?.type === "folder"
-    ? currentLocationNode.id
-    : currentLocationNode?.parentId ?? null;
+  const visibleFolderId =
+    currentLocationNode?.type === "folder"
+      ? currentLocationNode.id
+      : (currentLocationNode?.parentId ?? null);
 
   useEffect(() => {
     if (!isActive) return;
@@ -441,7 +546,9 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
       reconcileTimer = window.setTimeout(() => {
         void fetchProjectFileLeases(projectId)
           .then((locks) => setLocks(projectId, locks))
-          .catch((error) => console.warn("[files-tab] failed to reconcile file leases", error));
+          .catch((error) =>
+            console.warn("[files-tab] failed to reconcile file leases", error),
+          );
       }, 100);
     };
 
@@ -463,8 +570,24 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
       if (document.visibilityState === "visible") reconcileVisibleFolder();
     };
     const onFilesChanged = (event: Event) => {
-      if ((event as CustomEvent<{ projectId?: string }>).detail?.projectId !== projectId) return;
-      for (const collection of ["files-task-collections", "files-trash", "files-saved-collection", "files-directory", "files-picker", "files-picker-recent", "files-quick-open", "files-quick-open-recent"]) void queryClient.invalidateQueries({ queryKey: [collection, projectId] });
+      if (
+        (event as CustomEvent<{ projectId?: string }>).detail?.projectId !==
+        projectId
+      )
+        return;
+      for (const collection of [
+        "files-task-collections",
+        "files-trash",
+        "files-saved-collection",
+        "files-directory",
+        "files-picker",
+        "files-picker-recent",
+        "files-quick-open",
+        "files-quick-open-recent",
+      ])
+        void queryClient.invalidateQueries({
+          queryKey: [collection, projectId],
+        });
       reconcileVisibleFolder();
     };
     window.addEventListener("focus", reconcileVisibleFolder);
@@ -472,12 +595,20 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
     window.addEventListener("online", reconcileVisibleFolder);
     document.addEventListener("visibilitychange", onVisibilityChange);
 
-    const folderReconciliation = window.setInterval(reconcileVisibleFolder, 60_000);
+    const folderReconciliation = window.setInterval(
+      reconcileVisibleFolder,
+      60_000,
+    );
     const expirySweep = window.setInterval(() => {
-      const current = useFilesWorkspaceStore.getState().byProjectId[projectId]?.locksByNodeId ?? {};
+      const current =
+        useFilesWorkspaceStore.getState().byProjectId[projectId]
+          ?.locksByNodeId ?? {};
       const locks = Object.values(current);
       if (locks.some((lock) => lock.expiresAt <= Date.now())) {
-        setLocks(projectId, locks.filter((lock) => lock.expiresAt > Date.now()));
+        setLocks(
+          projectId,
+          locks.filter((lock) => lock.expiresAt > Date.now()),
+        );
       }
     }, 5_000);
 
@@ -492,7 +623,14 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
       document.removeEventListener("visibilitychange", onVisibilityChange);
       void supabase.removeChannel(channel);
     };
-  }, [projectId, isActive, loadFolderContent, setLocks, visibleFolderId, queryClient]);
+  }, [
+    projectId,
+    isActive,
+    loadFolderContent,
+    setLocks,
+    visibleFolderId,
+    queryClient,
+  ]);
 
   // ── 9. Quick Open state + ⌘P / Ctrl+P toggle (Req 9.1) ────────────
   const [quickOpenOpen, setQuickOpenOpen] = useState(false);
@@ -503,14 +641,19 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
     if (!next) setQuickOpenQuery(""); // Req 9.7 discards input on close
   }, []);
 
-  const handleWorkspaceScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
-    const target = event.target;
-    if (!(target instanceof HTMLElement)) return;
+  const handleWorkspaceScroll = useCallback(
+    (event: React.UIEvent<HTMLDivElement>) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
 
-    window.dispatchEvent(new CustomEvent(FILES_WORKSPACE_SCROLL_EVENT, {
-      detail: { projectId, scrollTop: target.scrollTop },
-    }));
-  }, [projectId]);
+      window.dispatchEvent(
+        new CustomEvent(FILES_WORKSPACE_SCROLL_EVENT, {
+          detail: { projectId, scrollTop: target.scrollTop },
+        }),
+      );
+    },
+    [projectId],
+  );
 
   // Use a ref so the listener identity stays stable across renders; the
   // ref carries the freshest `open` value without re-binding the handler.
@@ -530,9 +673,19 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
       // matches the legacy WorkspaceKeyboard behaviour which the browser
       // default (print dialog) also overrides.
       const target = e.target as HTMLElement | null;
+      // An on-demand Files search or inspector already owns keyboard focus.
+      // Do not open a second Quick Open dialog from its buttons or menus.
+      if (
+        !quickOpenOpenRef.current &&
+        target?.closest('[role="dialog"], [role="menu"]')
+      )
+        return;
       if (target) {
-        const isInput = target.tagName === "INPUT" || target.tagName === "TEXTAREA";
-        const isEditable = target.isContentEditable || target.getAttribute("contenteditable") === "true";
+        const isInput =
+          target.tagName === "INPUT" || target.tagName === "TEXTAREA";
+        const isEditable =
+          target.isContentEditable ||
+          target.getAttribute("contenteditable") === "true";
         if (isInput || isEditable) return;
       }
 
@@ -552,50 +705,63 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
   // ── 10. Render ─────────────────────────────────────────────────────
   return (
     <FilesTabBootContext.Provider value={bootContextValue}>
-      <FilesTabRoleProvider role={role} canEdit={canEdit} canManageFiles={canManageFiles} canReadTasks={canReadTasks}>
-        <FilesWorkspaceViews projectId={projectId} canReadTasks={canReadTasks}>
-        <div
-          data-testid="files-tab-root"
-          data-startup-stage={stage}
-          onScrollCapture={handleWorkspaceScroll}
-          className="relative flex h-full min-h-0 w-full"
-        >
-          <HydrationProgressBanner projectId={projectId} />
-          <FilesTabSidebar
+      <FilesTabRoleProvider
+        role={role}
+        canEdit={canEdit}
+        canManageFiles={canManageFiles}
+        canReadTasks={canReadTasks}
+      >
+        <FileTransfersProvider>
+          <FilesWorkspaceViews
             projectId={projectId}
-            canEdit={canEdit}
-            canManageFiles={canManageFiles}
-            projectName={projectName}
-          />
-          <FilesTabMain
-            projectId={projectId}
-            canOpenGitHub={isOwner}
-          />
-          <FilesWorkspaceGitHubDrawer projectId={projectId} enabled={isOwner} />
-          <QuickOpenDialog
-            projectId={projectId}
-            open={quickOpenOpen}
-            query={quickOpenQuery}
-            onQueryChange={setQuickOpenQuery}
-            onOpenChange={handleQuickOpenChange}
-          />
-          <ConfirmDialog
-            open={Boolean(pendingNavigation)}
-            onOpenChange={(open) => {
-              if (!open) {
-                useFilesWorkspaceStore
-                  .getState()
-                  .setPendingNavigation(projectId, null);
-              }
-            }}
-            title="Discard unsaved changes?"
-            description="Your edits have not been saved. Discard them and open the selected location?"
-            confirmLabel="Discard and open"
-            variant="destructive"
-            onConfirm={confirmPendingNavigation}
-          />
-        </div>
-        </FilesWorkspaceViews>
+            canReadTasks={canReadTasks}
+            canOpenGitHub={canOpenGitHub}
+            githubAccessResolved={githubAccessResolved}
+          >
+            <div
+              data-testid="files-tab-root"
+              data-startup-stage={stage}
+              onScrollCapture={handleWorkspaceScroll}
+              className="relative flex h-full min-h-0 w-full"
+            >
+              <HydrationProgressBanner projectId={projectId} />
+              <FilesTabSidebar
+                projectId={projectId}
+                canEdit={canEdit}
+                canManageFiles={canManageFiles}
+                projectName={projectName}
+              />
+              <FilesTabMain
+                projectId={projectId}
+                projectName={projectName}
+                canOpenGitHub={canOpenGitHub}
+                githubAccess={githubAccess}
+              />
+              <QuickOpenDialog
+                projectId={projectId}
+                open={quickOpenOpen}
+                query={quickOpenQuery}
+                onQueryChange={setQuickOpenQuery}
+                onOpenChange={handleQuickOpenChange}
+              />
+              <ConfirmDialog
+                open={Boolean(pendingNavigation)}
+                onOpenChange={(open) => {
+                  if (!open) {
+                    useFilesWorkspaceStore
+                      .getState()
+                      .setPendingNavigation(projectId, null);
+                  }
+                }}
+                title="Discard unsaved changes?"
+                description="Your edits have not been saved. Discard them and open the selected location?"
+                confirmLabel="Discard and open"
+                variant="destructive"
+                onConfirm={confirmPendingNavigation}
+              />
+            </div>
+          </FilesWorkspaceViews>
+        </FileTransfersProvider>
       </FilesTabRoleProvider>
     </FilesTabBootContext.Provider>
   );
