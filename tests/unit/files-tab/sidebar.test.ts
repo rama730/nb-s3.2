@@ -265,13 +265,8 @@ const SIDEBAR_SOURCE = readFileSync(
 );
 
 describe("FilesTabSidebar — structural contracts (source-level)", () => {
-  it("renders a <input type=\"search\"> for inline search (Req 2.2)", () => {
-    // The search input is a text input, NOT a checkbox (Q1 drop).
-    assert.match(
-      SIDEBAR_SOURCE,
-      /type="search"/,
-      "inline search input must be declared with type=\"search\"",
-    );
+  it("keeps search in the shared header menu, not the navigation tree", () => {
+    assert.doesNotMatch(SIDEBAR_SOURCE, /type="search"|searchInput|effectiveQuery/);
   });
 
   it("does NOT render a resize handle (Req 15.14)", () => {
@@ -369,19 +364,9 @@ describe("FilesTabSidebar — structural contracts (source-level)", () => {
     );
   });
 
-  it("declares the inline-search debounce at 200ms (Req 2.2 + design.md header row)", () => {
-    // The runtime module exports `FILES_TAB_SIDEBAR_SEARCH_DEBOUNCE_MS`
-    // so both the component and the test reference the same literal.
-    assert.equal(
-      FILES_TAB_SIDEBAR_SEARCH_DEBOUNCE_MS,
-      200,
-      "the 200ms search debounce is required by the design header row spec",
-    );
-    assert.match(
-      SIDEBAR_SOURCE,
-      /FILES_TAB_SIDEBAR_SEARCH_DEBOUNCE_MS/,
-      "sidebar must wire the inline input's setTimeout to the shared debounce constant",
-    );
+  it("retains the shared helper without running a second sidebar search", () => {
+    assert.equal(FILES_TAB_SIDEBAR_SEARCH_DEBOUNCE_MS, 200);
+    assert.doesNotMatch(SIDEBAR_SOURCE, /getProjectNodes\(/);
   });
 
   it("applies `width: 280` (via FILES_TAB_SIDEBAR_WIDTH_PX) when visible and `width: 0` when collapsed", () => {
