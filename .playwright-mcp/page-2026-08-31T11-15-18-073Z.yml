@@ -1,0 +1,36 @@
+- generic [active] [ref=f5e1]:
+  - generic [ref=f5e2]:
+    - banner [ref=f5e3]:
+      - generic [ref=f5e4]:
+        - link "Navigate to home" [ref=f5e7] [cursor=pointer]:
+          - /url: /
+          - generic [ref=f5e14]: NB
+        - generic [ref=f5e15]:
+          - button "Toggle theme" [ref=f5e16] [cursor=pointer]
+          - link "Sign in" [ref=f5e24] [cursor=pointer]:
+            - /url: /login
+    - main [ref=f5e25]:
+      - generic [ref=f5e27]:
+        - generic [ref=f5e30]:
+          - generic [ref=f5e31]:
+            - link "Hub" [ref=f5e32] [cursor=pointer]:
+              - /url: /hub
+            - generic [ref=f5e35]:
+              - heading "DeepScope AI" [level=1] [ref=f5e36]
+              - generic "Project links" [ref=f5e37]:
+                - button "Open 6 project links" [ref=f5e38] [cursor=pointer]:
+                  - text: Links
+                  - generic [ref=f5e42]: "6"
+          - generic [ref=f5e43]:
+            - button "Follow Project" [ref=f5e44] [cursor=pointer]
+            - button "Share Project" [ref=f5e49] [cursor=pointer]
+        - tablist "Project sections" [ref=f5e58]:
+          - tab "Dashboard" [ref=f5e59] [cursor=pointer]
+          - tab "Docs" [ref=f5e65] [cursor=pointer]
+          - tab "Updates" [ref=f5e68] [cursor=pointer]
+          - tab "Files" [selected] [ref=f5e72] [cursor=pointer]
+        - tabpanel "Files" [ref=f5e76]:
+          - status "Loading files" [ref=f5e79]
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=f5e120] [cursor=pointer]
+  - alert [ref=f5e124]
