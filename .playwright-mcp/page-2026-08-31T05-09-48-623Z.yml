@@ -1,0 +1,25 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - banner [ref=e3]:
+      - generic [ref=e4]:
+        - link "Navigate to home" [ref=e7] [cursor=pointer]:
+          - /url: /
+          - generic [ref=e14]: NB
+        - navigation "Main navigation" [ref=e16]:
+          - link "Hub" [ref=e17] [cursor=pointer]:
+            - /url: /hub
+          - link "Connections" [ref=e24] [cursor=pointer]:
+            - /url: /people
+          - link "Messages" [ref=e31] [cursor=pointer]:
+            - /url: /messages
+          - link "Settings" [ref=e35] [cursor=pointer]:
+            - /url: /settings
+        - generic [ref=e40]:
+          - button "Toggle theme" [ref=e41] [cursor=pointer]
+          - link "Sign in" [ref=e49] [cursor=pointer]:
+            - /url: /login
+    - main [ref=e50]:
+      - generic [ref=e51]: Loading project data...
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=e58] [cursor=pointer]
+  - alert [ref=e62]
