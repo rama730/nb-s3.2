@@ -9,7 +9,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Info, Edit, FileText } from "lucide-react";
+import { Edit, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 export interface RevisionControlModalProps {
@@ -46,16 +46,16 @@ export function RevisionControlModal({
         </DialogHeader>
 
         {/* Options grid */}
-        <div className="flex flex-col gap-3 my-4">
+        <div role="radiogroup" aria-label="How to save this revision" className="flex flex-col gap-3 my-4">
           {/* Commit as New Revision */}
-          <div
-            onClick={() => setSelected("commit")}
-            className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
+          <label
+            className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-all focus-within:ring-2 focus-within:ring-blue-500 ${
               selected === "commit"
                 ? "border-indigo-500 bg-indigo-50/20 dark:border-indigo-600 dark:bg-indigo-950/10"
                 : "border-zinc-200 hover:border-zinc-300 dark:border-zinc-800 dark:hover:border-zinc-700"
             }`}
           >
+            <input type="radio" name="file-revision-mode" value="commit" checked={selected === "commit"} onChange={() => setSelected("commit")} className="sr-only" aria-label="Commit as New Revision" />
             <div className={`p-1.5 rounded-full ${selected === "commit" ? "bg-indigo-100 dark:bg-indigo-950" : "bg-zinc-100 dark:bg-zinc-900"}`}>
               <FileText className={`h-4 w-4 ${selected === "commit" ? "text-indigo-600 dark:text-indigo-400" : "text-zinc-500"}`} />
             </div>
@@ -65,27 +65,27 @@ export function RevisionControlModal({
                 Creates an incremental version log. Safe for tracking milestones and history.
               </p>
             </div>
-          </div>
+          </label>
 
           {/* Overwrite Active Revision */}
-          <div
-            onClick={() => setSelected("overwrite")}
-            className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
+          <label
+            className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-all focus-within:ring-2 focus-within:ring-blue-500 ${
               selected === "overwrite"
                 ? "border-amber-500 bg-amber-50/20 dark:border-amber-600 dark:bg-amber-950/10"
                 : "border-zinc-200 hover:border-zinc-300 dark:border-zinc-800 dark:hover:border-zinc-700"
             }`}
           >
+            <input type="radio" name="file-revision-mode" value="overwrite" checked={selected === "overwrite"} onChange={() => setSelected("overwrite")} className="sr-only" aria-label="Apply to Active Revision" />
             <div className={`p-1.5 rounded-full ${selected === "overwrite" ? "bg-amber-100 dark:bg-amber-950" : "bg-zinc-100 dark:bg-zinc-900"}`}>
               <Edit className={`h-4 w-4 ${selected === "overwrite" ? "text-amber-600 dark:text-amber-400" : "text-zinc-500"}`} />
             </div>
             <div className="flex-1">
               <h4 className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">Apply to Active Revision</h4>
               <p className="mt-0.5 text-[11px] text-zinc-500 dark:text-zinc-400">
-                Directly overwrites current bytes. Recommended for small edits or draft work.
+                Replaces the contents of this version without preserving its previous contents. Use a new revision to keep that history.
               </p>
             </div>
-          </div>
+          </label>
         </div>
 
         {/* Optional Comment for Commit */}
