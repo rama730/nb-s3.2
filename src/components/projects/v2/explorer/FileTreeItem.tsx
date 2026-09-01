@@ -104,7 +104,7 @@ export function FileTreeItem({
     // Loading Row
     if (row.kind === "loading") {
       return (
-        <div className="flex items-center h-[22px] pointer-events-none opacity-60">
+        <div className="flex items-center h-[22px] [@media(pointer:coarse)]:h-11 pointer-events-none opacity-60">
           {guides}
           <div className="w-4 h-full" />
           <div className="flex items-center gap-2 ml-1 mt-0.5 w-full max-w-[140px]">
@@ -118,7 +118,7 @@ export function FileTreeItem({
     if (row.kind === "load-more") {
         return (
         <div 
-            className="flex items-center h-[22px] hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer text-blue-500 hover:text-blue-600"
+            className="flex items-center h-[22px] [@media(pointer:coarse)]:h-11 hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer text-blue-500 hover:text-blue-600"
             onClick={(e) => {
                 e.stopPropagation();
                 const pid = row.parentId === "root" ? null : row.parentId;
@@ -139,7 +139,7 @@ export function FileTreeItem({
     const node = context.nodesById[row.nodeId];
     // ponytail: a virtualized row must always have measurable height. A node
     // can disappear between the row calculation and the next context update.
-    if (!node) return <div aria-hidden="true" className="h-[22px]" />;
+    if (!node) return <div aria-hidden="true" className="h-[22px] [@media(pointer:coarse)]:h-11" />;
 
     const expanded = !!context.expandedFolderIds[node.id];
     // Multi-select check + Single select check
