@@ -1,5 +1,6 @@
 "use client";
-import React, { useEffect, useState } from "react";
+import { FilesWorkspaceMenu } from "./FilesWorkspaceHeader";
+import React, { useState } from "react";
 import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import { MoreHorizontal, RotateCcw, Trash2 } from "lucide-react";
 import { toast } from "sonner";
@@ -21,20 +22,22 @@ import { useFilesTabRole } from "./FilesTabRoleContext";
 import { formatRelativeTime } from "./folder/format";
 import { FileIcon } from "../explorer/FileIcons";
 
+function originalLocation(path: string) {
+  const parts = path.split("/").filter(Boolean);
+  if (parts.length <= 1) return "Project files";
+  return `/${parts.slice(0, -1).join("/")}`;
+}
+
 export function TrashFilesCollection({ projectId }: { projectId: string }) {
   const { query } = useFilesWorkspaceView()!;
   const { canEdit, canManageFiles } = useFilesTabRole();
-  const [search, setSearch] = useState(query);
+  const search = query;
   const [busy, setBusy] = useState<string | null>(null);
   const [deletion, setDeletion] = useState<
     | ({ id: string } & Awaited<ReturnType<typeof getPermanentDeleteImpact>>)
     | null
   >(null);
   const client = useQueryClient();
-  useEffect(() => {
-    const timer = setTimeout(() => setSearch(query), 200);
-    return () => clearTimeout(timer);
-  }, [query]);
   const result = useInfiniteQuery({
     queryKey: ["files-trash", projectId, search],
     enabled: canEdit,
@@ -112,12 +115,7 @@ export function TrashFilesCollection({ projectId }: { projectId: string }) {
   const nodes = result.data?.pages.flatMap((page) => page.nodes) ?? [];
   return (
     <section aria-label="Trash" className="h-full min-w-0 overflow-y-auto p-3">
-      <h2 className="text-lg font-semibold">Trash</h2>
-      <p className="mb-4 mt-1 text-sm text-zinc-500">
-        Restore an item and the contents deleted with it. Earlier deletions stay
-        in Trash. Permanent deletion cannot be undone and does not delete
-        anything from GitHub.
-      </p>
+      <FilesWorkspaceMenu projectId={projectId} />
       {result.isError && (
         <p role="alert" className="p-3 text-sm">
           Could not update Trash.{" "}
@@ -146,10 +144,16 @@ export function TrashFilesCollection({ projectId }: { projectId: string }) {
                   <p className="truncate text-xs text-zinc-500">
                     {node.metadata?.permanentDeleteRoot
                       ? "Permanent deletion pending"
-                      : `Deleted ${formatRelativeTime(node.deletedAt)}`}
+                      : `Deleted ${formatRelativeTime(node.deletedAt)}${node.deletedByName ? ` by ${node.deletedByName}` : ""}`}
+                  </p>
+                  <p
+                    className="truncate text-xs text-zinc-500"
+                    title={`Original location: ${originalLocation(node.path)}`}
+                  >
+                    Original location: {originalLocation(node.path)}
                   </p>
                 </div>
-                <DropdownMenu>
+                <DropdownMenu modal={false}>
                   <DropdownMenuTrigger asChild>
                     <button
                       type="button"
