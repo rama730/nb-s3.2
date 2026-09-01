@@ -14,7 +14,7 @@ export interface WorkspaceSlice {
   setDirtyFile: (projectId: string, nodeId: string, dirty: boolean) => void;
   setPendingNavigation: (
     projectId: string,
-    pending: { nodeId: string | null } | null,
+    pending: { nodeId: string | null; preserveQuery?: boolean } | null,
   ) => void;
 
   setQuickOpenOpen: (projectId: string, open: boolean) => void;
@@ -105,6 +105,7 @@ export const createWorkspaceSlice: StateCreator<FilesWorkspaceState, [], [], Wor
       const ws = state.byProjectId[projectId] ?? defaultWorkspace();
       if (
         ws.pendingNavigation?.nodeId === pending?.nodeId &&
+        ws.pendingNavigation?.preserveQuery === pending?.preserveQuery &&
         Boolean(ws.pendingNavigation) === Boolean(pending) &&
         state.byProjectId[projectId]
       ) {
