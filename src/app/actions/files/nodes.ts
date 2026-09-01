@@ -158,7 +158,11 @@ export async function getProjectNodes(
     query?: string,
     limit: number = 100,
     cursor?: string, // versioned cursor for the selected server-side sort
-    options?: { taskId?: string | null; sort?: "name" | "updated" | "type" },
+    options?: {
+        taskId?: string | null;
+        sort?: "name" | "updated" | "type";
+        itemType?: "file" | "folder";
+    },
 ): Promise<GetProjectNodesResult> {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
@@ -175,7 +179,15 @@ export async function getProjectNodes(
     const rank = sql<number>`CASE WHEN ${projectNodes.type} = 'folder' THEN 0 ELSE 1 END`;
     const nameKey = sql<string>`lower(${projectNodes.name}) COLLATE "C"`;
     const typeKey = sql<string>`coalesce(${projectNodes.mimeType}, '') COLLATE "C"`;
-    const dateKey = sql`date_trunc('milliseconds', ${projectNodes.updatedAt})`;
+    // Use the same current-version timestamp that the row renders. Node
+    // metadata changes remain the fallback for folders and legacy files.
+    const dateKey = sql`date_trunc('milliseconds', coalesce(
+      (SELECT fv.uploaded_at FROM file_versions fv
+       WHERE fv.node_id = ${projectNodes.id}
+         AND fv.version = ${projectNodes.currentVersion}
+       LIMIT 1),
+      ${projectNodes.updatedAt}
+    ))`;
     const order = sort === "updated" ? [asc(rank), desc(dateKey), asc(nameKey), asc(projectNodes.id)]
       : sort === "type" ? [asc(rank), asc(typeKey), asc(nameKey), asc(projectNodes.id)] : [asc(rank), asc(nameKey), asc(projectNodes.id)];
     const cursorCondition = (() => {
@@ -198,6 +210,9 @@ export async function getProjectNodes(
     })();
     const pageLimit = Math.min(Math.max(1, limit), MAX_TREE_PAGE_SIZE);
     const normalizedQuery = normalizeSearchQuery(query);
+    const itemTypeCondition = options?.itemType
+        ? eq(projectNodes.type, options.itemType)
+        : undefined;
     // ponytail: an exact parent id already scopes directory reads. Allow the
     // managed task subtree there, while flat search/root reads stay public.
     const scopeCondition = !canReadProjectTaskFiles(readAccess)
@@ -207,14 +222,26 @@ export async function getProjectNodes(
         : normalizedQuery || parentId
             ? sql`true`
         : sql`${projectNodes.taskId} IS NULL AND ${projectNodes.path} NOT LIKE '/.system%'`;
-    const finishPage = async (nodes: ProjectNodeWithAttribution[]) => {
+    const finishPage = async (rawNodes: ProjectNodeWithAttribution[]) => {
+        const nodes = await enrichNodesWithLatestVersionAttribution(rawNodes);
         let nextCursor: string | null = null;
         if (nodes.length > pageLimit) {
             nodes.pop();
             const last = nodes[nodes.length - 1];
-            if (last) nextCursor = Buffer.from(JSON.stringify({ v: 2, sort, id: last.id, rank: last.type === "folder" ? 0 : 1, name: last.name, mime: last.mimeType ?? "", date: last.updatedAt.toISOString() })).toString("base64url");
+            if (last) {
+                const displayedDate = new Date(last.versionUpdatedAt ?? last.updatedAt);
+                nextCursor = Buffer.from(JSON.stringify({
+                    v: 2,
+                    sort,
+                    id: last.id,
+                    rank: last.type === "folder" ? 0 : 1,
+                    name: last.name,
+                    mime: last.mimeType ?? "",
+                    date: displayedDate.toISOString(),
+                })).toString("base64url");
+            }
         }
-        return { nodes: await enrichNodesWithLatestVersionAttribution(nodes), nextCursor };
+        return { nodes, nextCursor };
     };
 
     // --- Search Mode (Flat) ---
@@ -224,6 +251,7 @@ export async function getProjectNodes(
             eq(projectNodes.projectId, projectId),
             isNull(projectNodes.deletedAt),
             scopeCondition,
+            itemTypeCondition,
             ilike(projectNodes.name, `%${escapeLikePattern(normalizedQuery)}%`),
             ...(cursorCondition ? [cursorCondition] : []),
         );
@@ -241,6 +269,7 @@ export async function getProjectNodes(
         eq(projectNodes.projectId, projectId),
         isNull(projectNodes.deletedAt),
         scopeCondition,
+        itemTypeCondition,
         parentId ? eq(projectNodes.parentId, parentId) : isNull(projectNodes.parentId)
     ];
 
