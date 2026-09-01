@@ -1,26 +1,36 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
-import fs from "node:fs";
+import { readFileSync } from "node:fs";
+import test from "node:test";
 
-const source = fs.readFileSync("src/inngest/functions/git-sync.ts", "utf8");
-
-describe("git sync worker failure contract", () => {
-  it("persists failed claimed deltas before rethrowing", () => {
-    assert.match(source, /markGitDeltasFailed\(claimedDeltas\.map\(\(delta\) => delta\.id\), error\)/);
-    assert.match(source, /markGitDeltasFailed[\s\S]*processingError/);
-  });
-
-  it("does not silently swallow fetch, rename, or cleanup failures", () => {
-    const rebaseFetch = source.indexOf('execFileAsync("git", ["-C", tempDir, "fetch", "origin", targetBranch]');
-    const rebase = source.indexOf('execFileAsync("git", ["-C", tempDir, "rebase"', rebaseFetch);
-    assert.ok(rebaseFetch >= 0 && rebase > rebaseFetch);
-    assert.doesNotMatch(source.slice(rebaseFetch, rebase), /\.catch\(/);
-    assert.match(source, /await rename\(oldPath, targetPath\)/);
-    assert.match(source, /github\.sync\.temp_cleanup_failed/);
-    assert.match(source, /github\.sync\.cache_refresh_failed/);
-  });
-
-  it("reclaims explicitly failed work for Inngest retries", () => {
-    assert.match(source, /inArray\(projectGitDeltas\.status, \['pending', 'failed'\]\)/);
-  });
+const worker = readFileSync("src/inngest/functions/git-sync.ts", "utf8");
+const runner = readFileSync("src/lib/github/sync-runner.ts", "utf8");
+const webhook = readFileSync("src/app/api/v1/webhooks/github/route.ts", "utf8");
+test("both workers require signed review identity, not an unreviewed project ID", () => {
+  assert.equal((worker.match(/subjectId: runId/g) || []).length, 2);
+  assert.match(worker, /runReviewedGitHubSync/);
+  assert.doesNotMatch(worker, /markGitDeltasProcessing|git reset/);
+});
+test("recovery retains result checkpoints and dispatches the durable outbox", () => {
+  assert.match(worker, /Worker interrupted/);
+  assert.match(worker, /Previously applied files and remote commit identity have been retained/);
+  assert.match(worker, /status, "queued"/);
+  assert.match(runner, /result\.applied\?\.includes\(file\.path\)/);
+  assert.match(runner, /Synchronization lease was lost/);
+  assert.match(runner, /result\.commitSha/);
+});
+test("pulls go through canonical revisions and preserve attribution separately from importer", () => {
+  assert.match(runner, /await applyFileRevision/);
+  assert.match(runner, /contentAuthorId:/);
+  assert.match(runner, /importedBy: actorId/);
+  assert.match(runner, /baseStorageKey:/);
+  assert.match(runner, /basePath:/);
+  assert.match(runner, /afterMutationTx:/);
+  assert.doesNotMatch(runner, /upsert:\s*true|delete\(fileVersions\)/);
+});
+test("signed webhook records incoming changes; it cannot enqueue an automatic pull", () => {
+  assert.match(webhook, /timingSafeEqual/);
+  assert.match(webhook, /eq\(githubSyncConnections.repositoryId, repositoryId!/);
+  assert.match(webhook, /connection.installationId !== installationId/);
+  assert.match(webhook, /incomingSha: payload.after!/);
+  assert.doesNotMatch(webhook, /inngest.send|createSignedJobRequestToken|claimGithubDeliveryId/);
 });
