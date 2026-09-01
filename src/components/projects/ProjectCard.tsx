@@ -3,14 +3,15 @@ import { memo, useState, useEffect } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import {
     Users,
-    Eye,
     Briefcase,
     UserPlus,
+    Check, UserCheck,
+    TrendingUp,
     Sparkles,
-    Maximize2,
     Clock,
     ExternalLink,
     Globe,
+    Eye,
 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { Project } from '@/types/hub';
@@ -29,7 +30,6 @@ interface ProjectCardProps {
     project: Project;
     viewModel: ProjectCardViewModel; // New Prop
     fromTab?: string;
-    onQuickView?: (project: Project) => void;
     viewMode?: string;
     previewMode?: boolean;
     isFollowing?: boolean;
@@ -42,7 +42,6 @@ export default memo(function ProjectCard({
     project,
     viewModel,
     fromTab = 'projects',
-    onQuickView,
     viewMode = 'grid',
     previewMode = false,
     isFollowing: propIsFollowing,
@@ -122,18 +121,6 @@ export default memo(function ProjectCard({
                     aria-label={`View project ${project.title}`}
                     onClick={() => onOpenProject?.(project.id)}
                 />
-                {primaryProjectLink ? (
-                    <a
-                        href={`/go/project/${encodeURIComponent(project.id)}/${encodeURIComponent(primaryProjectLink.id || primaryProjectLink.canonicalKey)}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="absolute right-28 top-1/2 z-20 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-lg text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
-                        aria-label={`Open ${primaryProjectLink.customLabel || primaryProjectLink.platformLabel}: ${primaryProjectLink.accountLabel}`}
-                        title={`Open ${primaryProjectLink.customLabel || primaryProjectLink.platformLabel}: ${primaryProjectLink.accountLabel}`}
-                    >
-                        {primaryProjectLink.iconKey ? <SocialPresenceIcon iconKey={primaryProjectLink.iconKey} className="h-4 w-4" /> : <ExternalLink className="h-4 w-4" aria-hidden />}
-                    </a>
-                ) : null}
                 
                 {/* Content Container (Row Layout) */}
                 <div className="flex items-center gap-4 h-full relative z-0 pointer-events-none app-density-panel">
@@ -203,23 +190,6 @@ export default memo(function ProjectCard({
                                 <h3 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 truncate leading-snug group-hover:text-primary transition-colors flex-1">
                                     {project.title}
                                 </h3>
-                                {!previewMode && primaryProjectLink ? (
-                                    <a
-                                        href={`/go/project/${encodeURIComponent(project.id)}/${encodeURIComponent(primaryProjectLink.id || primaryProjectLink.canonicalKey)}`}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        onClick={(event) => event.stopPropagation()}
-                                        className="relative z-20 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
-                                        aria-label={`Open ${primaryProjectLink.customLabel || primaryProjectLink.platformLabel}: ${primaryProjectLink.accountLabel}`}
-                                        title={`Open ${primaryProjectLink.customLabel || primaryProjectLink.platformLabel}: ${primaryProjectLink.accountLabel}`}
-                                    >
-                                        {primaryProjectLink.iconKey
-                                            ? <SocialPresenceIcon iconKey={primaryProjectLink.iconKey} className="h-4 w-4" />
-                                            : primaryProjectLink.platform === 'website'
-                                                ? <Globe className="h-4 w-4" aria-hidden />
-                                                : <ExternalLink className="h-4 w-4" aria-hidden />}
-                                    </a>
-                                ) : null}
                                 {totalOpenRoles > 0 && (
                                     <span className="shrink-0 inline-flex items-center px-2 py-0.5 rounded-md bg-primary/10 text-[9px] font-bold text-primary border border-primary/10 select-none">
                                         {totalOpenRoles} {totalOpenRoles === 1 ? 'Open Role' : 'Open Roles'}
@@ -292,7 +262,7 @@ export default memo(function ProjectCard({
                         <div className="flex items-center gap-3">
                             {/* Avatars */}
                             <div className="flex items-center -space-x-1.5">
-                                {collaborators.slice(0, 3).map((p, i) => {
+                                {collaborators.slice(0, 5).map((p, i) => {
                                     const identity = buildIdentityPresentation(p, { fallbackDisplayName: 'Collaborator' });
                                     return (
                                         <UserAvatar
@@ -306,9 +276,9 @@ export default memo(function ProjectCard({
                                         />
                                     );
                                 })}
-                                {collaborators.length > 3 && (
+                                {collaborators.length > 5 && (
                                     <div className="w-6 h-6 rounded-full border-2 border-white dark:border-zinc-900 bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center text-[9px] font-bold text-zinc-500">
-                                        +{collaborators.length - 3}
+                                        +{collaborators.length - 5}
                                     </div>
                                 )}
                                 {collaborators.length === 0 && (
@@ -317,37 +287,43 @@ export default memo(function ProjectCard({
                                     </div>
                                 )}
                             </div>
-
-                            {/* Views & Followers */}
-                            <div className="flex items-center gap-2.5 text-xs font-semibold text-zinc-500 select-none">
-                                <span className="flex items-center gap-1" data-testid={`project-card-views-${project.id}`} title="Views">
-                                    <Eye className="w-3.5 h-3.5" /> {project.viewCount || 0}
-                                </span>
-                                <span className="flex items-center gap-1" data-testid={`project-card-followers-${project.id}`} title="Followers">
-                                    <UserPlus className="w-3.5 h-3.5" /> {followersCount}
-                                </span>
-                            </div>
                         </div>
 
-                        <div className="flex items-center gap-1.5 text-zinc-400">
-                            <button
-                                onClick={(e) => {
-                                    e.preventDefault();
-                                    e.stopPropagation();
-                                    onQuickView?.(project);
-                                }}
-                                className="p-1.5 hover:text-primary hover:bg-white dark:hover:bg-zinc-800 rounded-md transition-colors border border-transparent hover:border-zinc-200 dark:hover:border-zinc-700 shadow-sm"
-                                title="Quick View"
-                            >
-                                <Maximize2 className="w-3.5 h-3.5" />
-                            </button>
+                        <div className="flex items-center gap-1 text-zinc-400">
+                            {!previewMode && resolvedProjectLinks.slice(0, 4).map((link) => (
+                                <a
+                                    key={link.id || link.canonicalKey}
+                                    href={`/go/project/${encodeURIComponent(project.id)}/${encodeURIComponent(link.id || link.canonicalKey)}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    onClick={(event) => event.stopPropagation()}
+                                    className="p-1.5 hover:text-zinc-900 hover:bg-white dark:hover:bg-zinc-800 rounded-md transition-colors border border-transparent hover:border-zinc-200 dark:hover:border-zinc-700 shadow-sm"
+                                    aria-label={`Open ${link.customLabel || link.platformLabel}: ${link.accountLabel}`}
+                                    title={`Open ${link.customLabel || link.platformLabel}: ${link.accountLabel}`}
+                                >
+                                    {link.iconKey
+                                        ? <SocialPresenceIcon iconKey={link.iconKey} className="h-3.5 w-3.5" />
+                                        : link.platform === 'website'
+                                            ? <Globe className="h-3.5 w-3.5" aria-hidden />
+                                            : <ExternalLink className="h-3.5 w-3.5" aria-hidden />}
+                                </a>
+                            ))}
+                            {!previewMode && resolvedProjectLinks.length > 0 && (
+                                <div className="w-px h-3.5 bg-zinc-200 dark:bg-zinc-700 mx-1" />
+                            )}
+                            <span className="flex items-center gap-1.5 pl-1 text-[13px] font-semibold text-zinc-500 select-none" data-testid={`project-card-views-${project.id}`} title="Views">
+                                <TrendingUp className="w-3.5 h-3.5" /> {project.viewCount || 0}
+                            </span>
                             <button
                                 onClick={toggleFollow}
-                                className="p-1.5 hover:text-emerald-600 hover:bg-white dark:hover:bg-zinc-800 rounded-md transition-colors border border-transparent hover:border-zinc-200 dark:hover:border-zinc-700 shadow-sm"
+                                className={`flex items-center gap-1.5 px-1 py-1 transition-colors text-[13px] font-semibold select-none hover:text-zinc-900 dark:hover:text-zinc-100 ${
+                                    followingProject ? 'text-emerald-600' : ''
+                                }`}
                                 title={followingProject ? 'Unfollow' : 'Follow'}
                                 data-testid={`project-card-follow-${project.id}`}
                             >
-                                <UserPlus className={`w-3.5 h-3.5 ${followingProject ? 'text-emerald-600 fill-current' : ''}`} />
+                                {followingProject ? <UserCheck className="w-3.5 h-3.5" /> : <UserPlus className="w-3.5 h-3.5" />}
+                                <span>{followersCount}</span>
                             </button>
                         </div>
                     </div>
