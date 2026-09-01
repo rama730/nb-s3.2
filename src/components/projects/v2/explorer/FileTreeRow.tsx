@@ -196,7 +196,7 @@ export const FileTreeRow = React.memo(function FileTreeRow({
             aria-expanded={isFolder ? (isExpanded ? "true" : "false") : undefined}
             tabIndex={isSelected ? 0 : -1}
             className={cn(
-                "group relative flex items-center h-[22px] min-w-0 cursor-pointer select-none transition-colors pr-2",
+                "group relative flex items-center h-[22px] [@media(pointer:coarse)]:h-11 min-w-0 cursor-pointer select-none transition-colors pr-2",
                 isSelected
                     ? "bg-indigo-50 dark:bg-indigo-900/20 border-l-2 border-l-indigo-500"
                     : "hover:bg-zinc-100 dark:hover:bg-zinc-800/50 border-l-2 border-l-transparent",
@@ -291,7 +291,7 @@ export const FileTreeRow = React.memo(function FileTreeRow({
                 </div>
             )}
  
-            <FileIcon name={node.name} isFolder={isFolder} isOpen={isExpanded} className="w-4 h-4 mr-2 flex-shrink-0 text-zinc-500" />
+            <FileIcon name={node.name} mimeType={node.mimeType} isFolder={isFolder} isOpen={isExpanded} className="w-4 h-4 mr-2 flex-shrink-0 text-zinc-500" />
             
             {isRenaming && onRenameChange && onRenameConfirm && onRenameCancel ? (
                 <InlineRenameInput
