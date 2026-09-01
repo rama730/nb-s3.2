@@ -51,8 +51,8 @@ describe("FilesTabMain — structural contract (Req 1.2, 1.3, 1.5-1.8)", () => {
     assert.match(SRC, /flex-1 flex flex-col min-w-0 h-full/);
   });
 
-  it("always renders BreadcrumbBar above the body", () => {
-    assert.match(SRC, /<BreadcrumbBar\s+projectId=\{projectId\}\s+location=\{location\}/);
+  it("always renders the shared location header around the body", () => {
+    assert.match(SRC, /<FilesWorkspaceHeader\s+projectId=\{projectId\}\s+location=\{location\}/);
   });
 
   it("folder branch: location null | root | folder → <FolderListView ...> (Req 1.3)", () => {
@@ -70,8 +70,8 @@ describe("FilesTabMain — structural contract (Req 1.2, 1.3, 1.5-1.8)", () => {
     assert.match(SRC, /<FileView\s+key=\{location\.id\}/);
   });
 
-  it("imports the real surfaces (BreadcrumbBar, FolderListView, FileView)", () => {
-    assert.match(SRC, /from\s+"\.\/breadcrumb\/BreadcrumbBar"/);
+  it("imports the shared header and real folder/file surfaces", () => {
+    assert.match(SRC, /from\s+"\.\/FilesWorkspaceHeader"/);
     assert.match(SRC, /from\s+"\.\/folder\/FolderListView"/);
     assert.match(SRC, /from\s+"\.\/file\/FileView"/);
   });
