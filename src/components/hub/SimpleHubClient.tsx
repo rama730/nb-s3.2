@@ -43,7 +43,6 @@ import { User, Project } from '@/types/hub';
 
 // Dynamic Modals
 const CreateProjectWizard = dynamic(() => import('@/components/projects/create-wizard/CreateProjectWizard'), { ssr: false });
-const ProjectQuickView = dynamic(() => import('@/components/projects/ProjectQuickView'), { ssr: false });
 // Optimization: Defer mobile sidebar code until interaction
 const MobileSidebarDrawer = dynamic(() => import('@/components/hub/MobileSidebarDrawer'), { ssr: false });
 
@@ -112,7 +111,6 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
     const [showMobileSidebar, setShowMobileSidebar] = useState(false);
 
     // Selection & Modal State
-    const [selectedProject, setSelectedProject] = useState<Project | null>(null);
 
     // Dialog Visibility
     const [showCreateModal, setShowCreateModal] = useState(false);
@@ -523,7 +521,6 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
                                                     project={project}
                                                     viewModel={projectViewModels[project.id]!}
                                                     viewMode={viewMode}
-                                                    onQuickView={setSelectedProject}
                                                     isFollowing={myFollowedProjects?.has(project.id)}
                                                     followersCount={project.followersCount ?? 0}
                                                     onOpenProject={markSeen}
@@ -539,22 +536,6 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
                         </AppScrollArea>
 
                         {/* Modals & Drawers */}
-                        <ProjectQuickView
-                            project={selectedProject}
-                            isOpen={!!selectedProject}
-                            onClose={() => setSelectedProject(null)}
-                            onNext={() => {
-                                const idx = visibleProjects.findIndex(p => p.id === selectedProject?.id);
-                                if (idx >= 0 && idx < visibleProjects.length - 1) setSelectedProject(visibleProjects[idx + 1]!);
-                            }}
-                            onPrevious={() => {
-                                const idx = visibleProjects.findIndex(p => p.id === selectedProject?.id);
-                                if (idx > 0) setSelectedProject(visibleProjects[idx - 1]!);
-                            }}
-                            hasNext={visibleProjects.findIndex(p => p.id === selectedProject?.id) < visibleProjects.length - 1}
-                            hasPrevious={visibleProjects.findIndex(p => p.id === selectedProject?.id) > 0}
-                        />
-
                         {showCreateModal && (
                             <CreateProjectWizard
                                 onClose={() => {
