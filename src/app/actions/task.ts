@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import {
+  fileVersions,
   profiles,
   projectMembers,
   projectNodes,
@@ -19,7 +20,11 @@ import { createClient } from "@/lib/supabase/server";
 import { enqueueProjectNotificationEvent } from "@/lib/notifications/project-events";
 import { consumeRateLimit } from "@/lib/security/rate-limit";
 import { queueCounterRefreshBestEffort } from "@/lib/workspace/counter-buffer";
-import { getTaskFileWarnings } from "@/lib/projects/task-file-intelligence";
+import {
+  getTaskFileWarnings,
+  inferTaskFileRole,
+  markTaskFileVersionApproved,
+} from "@/lib/projects/task-file-intelligence";
 import { logger } from "@/lib/logger";
 import {
   isProjectMemberEligibleFor,
@@ -990,6 +995,33 @@ export async function approveTaskReviewAction(
         throw new Error("Task is not pending review");
 
       const updatedAt = new Date();
+      const linkedFiles = await tx
+        .select({
+          linkId: taskNodeLinks.id,
+          tags: taskNodeLinks.tags,
+          annotation: taskNodeLinks.annotation,
+          id: projectNodes.id,
+          name: projectNodes.name,
+          type: projectNodes.type,
+          path: projectNodes.path,
+          canonicalNodeId: projectNodes.canonicalNodeId,
+          currentVersion: projectNodes.currentVersion,
+          revisedAt: fileVersions.uploadedAt,
+        })
+        .from(taskNodeLinks)
+        .innerJoin(projectNodes, eq(projectNodes.id, taskNodeLinks.nodeId))
+        .innerJoin(fileVersions, and(eq(fileVersions.nodeId, projectNodes.id), eq(fileVersions.version, projectNodes.currentVersion)))
+        .where(and(eq(taskNodeLinks.taskId, taskId), isNull(projectNodes.deletedAt)))
+        .for("update");
+
+      // Approval belongs to a specific file version in this task, not every
+      // future upload or every other task that references the same file.
+      for (const file of linkedFiles) {
+        if (file.type !== "file" || inferTaskFileRole(file) !== "deliverable") continue;
+        await tx.update(taskNodeLinks)
+          .set({ tags: markTaskFileVersionApproved(file.tags, file.currentVersion, file.revisedAt) })
+          .where(eq(taskNodeLinks.id, file.linkId));
+      }
       await tx
         .update(tasks)
         .set({
