@@ -23,9 +23,10 @@ test("production pagination predicates keep project, Trash and task visibility f
               CASE WHEN i = 3 THEN now() ELSE NULL::timestamptz END AS deleted_at,
               CASE WHEN i = 4 THEN '33333333-3333-4333-8333-333333333333'::uuid ELSE NULL::uuid END AS task_id,
               NULL::uuid AS parent_id, 'file'::text AS type, 'Z file'::text AS name,
-              '/file'::text AS path, 'text/plain'::text AS mime_type, '2025-01-01'::timestamptz AS updated_at
+              '/file'::text AS path, 1 AS current_version, 'text/plain'::text AS mime_type, '2025-01-01'::timestamptz AS updated_at
             FROM generate_series(1,4) i
-          ) SELECT id FROM project_nodes WHERE ${page.where} ORDER BY ${sql.join(page.orderBy, sql`, `)} LIMIT ${page.limit}
+          ), file_versions AS (SELECT id AS node_id, current_version AS version, updated_at AS uploaded_at FROM project_nodes)
+          SELECT id FROM project_nodes WHERE ${page.where} ORDER BY ${sql.join(page.orderBy, sql`, `)} LIMIT ${page.limit}
         `);
         const rows = await tx.unsafe(q.sql, q.params as never[]);
         assert.deepEqual(rows.map(row => row.id), ["00000000-0000-4000-8000-000000000001"], `${sort}, rank=${rank}, search=${search}: no cursor branch may bypass access filters`);
