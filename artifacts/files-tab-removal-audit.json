@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-08-31T00:36:19.117Z",
+  "generatedAt": "2026-08-31T20:11:49.007Z",
   "searchTool": "rg",
   "repoRoot": "/Users/chrama/Downloads/nb-s3",
   "notes": "Best-effort audit: `unexpected` counts are logged for Task 13 review but do NOT fail the build while `filesTabV3Enabled` is ramping. Task 13.4 / 13.5 must re-run this audit and confirm zero `unexpected` references before any deletion lands.",
@@ -29,18 +29,6 @@
           "slice": "workspaceSlice",
           "references": [
             {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 139,
-              "text": "      { kind: \"store-method\", slice: \"workspaceSlice\", name: \"setSplitEnabled\" },",
-              "classification": "allowed-spec"
-            },
-            {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 468,
-              "text": " * count its own `export function setSplitEnabled(...)` as \"unexpected\").",
-              "classification": "allowed-spec"
-            },
-            {
               "file": ".kiro/specs/files-tab-github-redesign/design.md",
               "line": 436,
               "text": "- `setSplitEnabled`, `setSplitRatio`",
@@ -62,6 +50,18 @@
               "file": ".kiro/specs/files-tab-github-redesign/tasks.md",
               "line": 497,
               "text": "- `workspaceSlice`: `setSplitEnabled`, `setSplitRatio`, `pinTab`, `closeOtherTabs`, `closeTabsToRight`, `openTab`, `closeTab`, `setActiveTab`, `reorderTabs`, `moveTabToPane`, `pruneGhostTabs`",
+              "classification": "allowed-spec"
+            },
+            {
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 139,
+              "text": "      { kind: \"store-method\", slice: \"workspaceSlice\", name: \"setSplitEnabled\" },",
+              "classification": "allowed-spec"
+            },
+            {
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 468,
+              "text": " * count its own `export function setSplitEnabled(...)` as \"unexpected\").",
               "classification": "allowed-spec"
             }
           ],
@@ -80,12 +80,6 @@
           "slice": "workspaceSlice",
           "references": [
             {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 140,
-              "text": "      { kind: \"store-method\", slice: \"workspaceSlice\", name: \"setSplitRatio\" },",
-              "classification": "allowed-spec"
-            },
-            {
               "file": ".kiro/specs/files-tab-github-redesign/design.md",
               "line": 436,
               "text": "- `setSplitEnabled`, `setSplitRatio`",
@@ -107,6 +101,12 @@
               "file": ".kiro/specs/files-tab-github-redesign/tasks.md",
               "line": 497,
               "text": "- `workspaceSlice`: `setSplitEnabled`, `setSplitRatio`, `pinTab`, `closeOtherTabs`, `closeTabsToRight`, `openTab`, `closeTab`, `setActiveTab`, `reorderTabs`, `moveTabToPane`, `pruneGhostTabs`",
+              "classification": "allowed-spec"
+            },
+            {
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 140,
+              "text": "      { kind: \"store-method\", slice: \"workspaceSlice\", name: \"setSplitRatio\" },",
               "classification": "allowed-spec"
             }
           ],
@@ -296,6 +296,42 @@
               "classification": "allowed-spec"
             },
             {
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 144,
+              "text": "      { kind: \"store-method\", slice: \"workspaceSlice\", name: \"openTab\" },",
+              "classification": "allowed-spec"
+            },
+            {
+              "file": "tests/unit/project-doc.test.ts",
+              "line": 980,
+              "text": "    assert.match(viewer, /const \\[railState, setRailState\\] = useState<ReadmeRailUiState>\\(\\{ openTab: null, selectedActionId: null \\}\\)/, \"viewer should keep right-rail tabs closed by default\");",
+              "classification": "allowed-spec"
+            },
+            {
+              "file": "tests/unit/project-doc.test.ts",
+              "line": 982,
+              "text": "    assert.match(viewer, /setRailState\\(\\{ openTab: action\\.railTab, selectedActionId: action\\.id \\}\\)/, \"deep links should open the matching rail tab and row\");",
+              "classification": "allowed-spec"
+            },
+            {
+              "file": "tests/unit/project-doc.test.ts",
+              "line": 1014,
+              "text": "    assert.match(rail, /openTab !== undefined \\? openTab : localRailState\\.openTab/, \"controlled null should keep every rail tab closed instead of falling back to stale local state\");",
+              "classification": "allowed-spec"
+            },
+            {
+              "file": "tests/unit/project-doc.test.ts",
+              "line": 1016,
+              "text": "    assert.match(rail, /openTab:\\s*null/, \"rail tabs should be closed by default\");",
+              "classification": "allowed-spec"
+            },
+            {
+              "file": "tests/unit/project-doc.test.ts",
+              "line": 1017,
+              "text": "    assert.match(rail, /state\\.openTab === action\\.id \\? null : action\\.id/, \"clicking the active tab should close it\");",
+              "classification": "allowed-spec"
+            },
+            {
               "file": "src/components/projects/doc/ProjectDocViewer.tsx",
               "line": 125,
               "text": "    openTab: ProjectDocRailAction[\"railTab\"] | null;",
@@ -474,42 +510,6 @@
               "line": 1154,
               "text": "                        active={railState.openTab === tab.id}",
               "classification": "likely-collision"
-            },
-            {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 144,
-              "text": "      { kind: \"store-method\", slice: \"workspaceSlice\", name: \"openTab\" },",
-              "classification": "allowed-spec"
-            },
-            {
-              "file": "tests/unit/project-doc.test.ts",
-              "line": 980,
-              "text": "    assert.match(viewer, /const \\[railState, setRailState\\] = useState<ReadmeRailUiState>\\(\\{ openTab: null, selectedActionId: null \\}\\)/, \"viewer should keep right-rail tabs closed by default\");",
-              "classification": "allowed-spec"
-            },
-            {
-              "file": "tests/unit/project-doc.test.ts",
-              "line": 982,
-              "text": "    assert.match(viewer, /setRailState\\(\\{ openTab: action\\.railTab, selectedActionId: action\\.id \\}\\)/, \"deep links should open the matching rail tab and row\");",
-              "classification": "allowed-spec"
-            },
-            {
-              "file": "tests/unit/project-doc.test.ts",
-              "line": 1014,
-              "text": "    assert.match(rail, /openTab !== undefined \\? openTab : localRailState\\.openTab/, \"controlled null should keep every rail tab closed instead of falling back to stale local state\");",
-              "classification": "allowed-spec"
-            },
-            {
-              "file": "tests/unit/project-doc.test.ts",
-              "line": 1016,
-              "text": "    assert.match(rail, /openTab:\\s*null/, \"rail tabs should be closed by default\");",
-              "classification": "allowed-spec"
-            },
-            {
-              "file": "tests/unit/project-doc.test.ts",
-              "line": 1017,
-              "text": "    assert.match(rail, /state\\.openTab === action\\.id \\? null : action\\.id/, \"clicking the active tab should close it\");",
-              "classification": "allowed-spec"
             }
           ],
           "counts": {
@@ -526,12 +526,6 @@
           "searchQuery": "closeTab",
           "slice": "workspaceSlice",
           "references": [
-            {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 145,
-              "text": "      { kind: \"store-method\", slice: \"workspaceSlice\", name: \"closeTab\" },",
-              "classification": "allowed-spec"
-            },
             {
               "file": ".kiro/specs/files-tab-github-redesign/design.md",
               "line": 437,
@@ -573,6 +567,12 @@
               "line": 497,
               "text": "- `workspaceSlice`: `setSplitEnabled`, `setSplitRatio`, `pinTab`, `closeOtherTabs`, `closeTabsToRight`, `openTab`, `closeTab`, `setActiveTab`, `reorderTabs`, `moveTabToPane`, `pruneGhostTabs`",
               "classification": "allowed-spec"
+            },
+            {
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 145,
+              "text": "      { kind: \"store-method\", slice: \"workspaceSlice\", name: \"closeTab\" },",
+              "classification": "allowed-spec"
             }
           ],
           "counts": {
@@ -590,34 +590,28 @@
           "slice": "workspaceSlice",
           "references": [
             {
-              "file": "test_out.log",
-              "line": 341,
-              "text": "      '    const setActiveTab = useMessagesV2UiStore((state) => state.setActiveTab);\\n' +",
-              "classification": "likely-collision"
+              "file": ".kiro/specs/files-tab-github-redesign/design.md",
+              "line": 437,
+              "text": "- `openTab`, `closeTab`, `setActiveTab`, `reorderTabs`, `moveTabToPane`, `pruneGhostTabs`, `pinTab`, `closeOtherTabs`, `closeTabsToRight`",
+              "classification": "allowed-spec"
             },
             {
-              "file": "test_out.log",
-              "line": 575,
-              "text": "        const setActiveTab = useMessagesV2UiStore((state) => state.setActiveTab);",
-              "classification": "likely-collision"
+              "file": ".kiro/specs/files-tab-github-redesign/design.md",
+              "line": 634,
+              "text": "- `workspaceSlice.ts`: `setSplitEnabled`, `setSplitRatio`, `pinTab`, `closeOtherTabs`, `closeTabsToRight`, `openTab`, `closeTab`, `setActiveTab`, `reorderTabs`, `moveTabToPane`, `pruneGhostTabs`",
+              "classification": "allowed-spec"
             },
             {
-              "file": "test_out.log",
-              "line": 1248,
-              "text": "                                            <DropdownMenuItem onClick={() => setActiveTab('chats')}>",
-              "classification": "likely-collision"
+              "file": ".kiro/specs/files-tab-github-redesign/tasks.md",
+              "line": 447,
+              "text": "    - `workspaceSlice.ts`: remove `setSplitEnabled`, `setSplitRatio`, `pinTab`, `closeOtherTabs`, `closeTabsToRight`, `openTab`, `closeTab`, `setActiveTab`, `reorderTabs`, `moveTabToPane`, `pruneGhostTabs`",
+              "classification": "allowed-spec"
             },
             {
-              "file": "test_out.log",
-              "line": 1251,
-              "text": "                                            <DropdownMenuItem onClick={() => setActiveTab('applications')}>",
-              "classification": "likely-collision"
-            },
-            {
-              "file": "test_out.log",
-              "line": 1254,
-              "text": "                                            <DropdownMenuItem onClick={() => setActiveTab('projects')}>",
-              "classification": "likely-collision"
+              "file": ".kiro/specs/files-tab-github-redesign/tasks.md",
+              "line": 497,
+              "text": "- `workspaceSlice`: `setSplitEnabled`, `setSplitRatio`, `pinTab`, `closeOtherTabs`, `closeTabsToRight`, `openTab`, `closeTab`, `setActiveTab`, `reorderTabs`, `moveTabToPane`, `pruneGhostTabs`",
+              "classification": "allowed-spec"
             },
             {
               "file": "scratch/fix_hub_client.py",
@@ -650,46 +644,34 @@
               "classification": "likely-collision"
             },
             {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 27,
-              "text": "//                        React `useState` setter called `setActiveTab`).",
-              "classification": "allowed-spec"
+              "file": "test_out.log",
+              "line": 341,
+              "text": "      '    const setActiveTab = useMessagesV2UiStore((state) => state.setActiveTab);\\n' +",
+              "classification": "likely-collision"
             },
             {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 146,
-              "text": "      { kind: \"store-method\", slice: \"workspaceSlice\", name: \"setActiveTab\" },",
-              "classification": "allowed-spec"
+              "file": "test_out.log",
+              "line": 575,
+              "text": "        const setActiveTab = useMessagesV2UiStore((state) => state.setActiveTab);",
+              "classification": "likely-collision"
             },
             {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 208,
-              "text": "  // `setActiveTab` React useState setter in a different component doesn't",
-              "classification": "allowed-spec"
+              "file": "test_out.log",
+              "line": 1248,
+              "text": "                                            <DropdownMenuItem onClick={() => setActiveTab('chats')}>",
+              "classification": "likely-collision"
             },
             {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 394,
-              "text": "  // a React `useState` setter called `setActiveTab`). Demote to",
-              "classification": "allowed-spec"
+              "file": "test_out.log",
+              "line": 1251,
+              "text": "                                            <DropdownMenuItem onClick={() => setActiveTab('applications')}>",
+              "classification": "likely-collision"
             },
             {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 416,
-              "text": " * `const [activeTab, setActiveTab] = useState(...)` somewhere else in the",
-              "classification": "allowed-spec"
-            },
-            {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 479,
-              "text": "  // `setActiveTab` doesn't match `setActiveTabKey`. Common names like",
-              "classification": "allowed-spec"
-            },
-            {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 480,
-              "text": "  // `setActiveTab` still hit unrelated local React `useState` setters; those",
-              "classification": "allowed-spec"
+              "file": "test_out.log",
+              "line": 1254,
+              "text": "                                            <DropdownMenuItem onClick={() => setActiveTab('projects')}>",
+              "classification": "likely-collision"
             },
             {
               "file": "src/components/profile/v2/ProfileV2Client.tsx",
@@ -729,25 +711,25 @@
             },
             {
               "file": "src/components/projects/dashboard/ProjectDashboardClient.tsx",
-              "line": 237,
+              "line": 238,
               "text": "    const [activeTab, setActiveTab] = useState(() => resolvedActiveTab);",
               "classification": "likely-collision"
             },
             {
               "file": "src/components/projects/dashboard/ProjectDashboardClient.tsx",
-              "line": 542,
+              "line": 544,
               "text": "            setActiveTab(tabId);",
               "classification": "likely-collision"
             },
             {
               "file": "src/components/projects/dashboard/ProjectDashboardClient.tsx",
-              "line": 629,
+              "line": 631,
               "text": "        setActiveTab((prev) => (prev === nextTab ? prev : nextTab));",
               "classification": "likely-collision"
             },
             {
               "file": "src/components/projects/dashboard/ProjectDashboardClient.tsx",
-              "line": 961,
+              "line": 963,
               "text": "        setActiveTab('dashboard');",
               "classification": "likely-collision"
             },
@@ -896,27 +878,45 @@
               "classification": "likely-collision"
             },
             {
-              "file": ".kiro/specs/files-tab-github-redesign/design.md",
-              "line": 437,
-              "text": "- `openTab`, `closeTab`, `setActiveTab`, `reorderTabs`, `moveTabToPane`, `pruneGhostTabs`, `pinTab`, `closeOtherTabs`, `closeTabsToRight`",
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 27,
+              "text": "//                        React `useState` setter called `setActiveTab`).",
               "classification": "allowed-spec"
             },
             {
-              "file": ".kiro/specs/files-tab-github-redesign/design.md",
-              "line": 634,
-              "text": "- `workspaceSlice.ts`: `setSplitEnabled`, `setSplitRatio`, `pinTab`, `closeOtherTabs`, `closeTabsToRight`, `openTab`, `closeTab`, `setActiveTab`, `reorderTabs`, `moveTabToPane`, `pruneGhostTabs`",
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 146,
+              "text": "      { kind: \"store-method\", slice: \"workspaceSlice\", name: \"setActiveTab\" },",
               "classification": "allowed-spec"
             },
             {
-              "file": ".kiro/specs/files-tab-github-redesign/tasks.md",
-              "line": 447,
-              "text": "    - `workspaceSlice.ts`: remove `setSplitEnabled`, `setSplitRatio`, `pinTab`, `closeOtherTabs`, `closeTabsToRight`, `openTab`, `closeTab`, `setActiveTab`, `reorderTabs`, `moveTabToPane`, `pruneGhostTabs`",
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 208,
+              "text": "  // `setActiveTab` React useState setter in a different component doesn't",
               "classification": "allowed-spec"
             },
             {
-              "file": ".kiro/specs/files-tab-github-redesign/tasks.md",
-              "line": 497,
-              "text": "- `workspaceSlice`: `setSplitEnabled`, `setSplitRatio`, `pinTab`, `closeOtherTabs`, `closeTabsToRight`, `openTab`, `closeTab`, `setActiveTab`, `reorderTabs`, `moveTabToPane`, `pruneGhostTabs`",
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 394,
+              "text": "  // a React `useState` setter called `setActiveTab`). Demote to",
+              "classification": "allowed-spec"
+            },
+            {
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 416,
+              "text": " * `const [activeTab, setActiveTab] = useState(...)` somewhere else in the",
+              "classification": "allowed-spec"
+            },
+            {
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 479,
+              "text": "  // `setActiveTab` doesn't match `setActiveTabKey`. Common names like",
+              "classification": "allowed-spec"
+            },
+            {
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 480,
+              "text": "  // `setActiveTab` still hit unrelated local React `useState` setters; those",
               "classification": "allowed-spec"
             }
           ],
@@ -1545,13 +1545,13 @@
             },
             {
               "file": "tests/unit/files-tab/sidebar.test.ts",
-              "line": 284,
+              "line": 279,
               "text": "      /setSidebarWidth\\s*\\(/,",
               "classification": "allowed-spec"
             },
             {
               "file": "tests/unit/files-tab/sidebar.test.ts",
-              "line": 285,
+              "line": 280,
               "text": "      \"the v3 sidebar must not call setSidebarWidth (Req 15.14)\",",
               "classification": "allowed-spec"
             },
@@ -1800,7 +1800,7 @@
             },
             {
               "file": "tests/unit/files-tab/sidebar.test.ts",
-              "line": 333,
+              "line": 328,
               "text": "      \"saveCurrentView\",",
               "classification": "allowed-spec"
             },
@@ -1825,6 +1825,24 @@
           "searchQuery": "applySavedView",
           "slice": "explorerSlice",
           "references": [
+            {
+              "file": "tests/unit/files-tab/sidebar.test.ts",
+              "line": 329,
+              "text": "      \"applySavedView\",",
+              "classification": "allowed-spec"
+            },
+            {
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 170,
+              "text": "      { kind: \"store-method\", slice: \"explorerSlice\", name: \"applySavedView\" },",
+              "classification": "allowed-spec"
+            },
+            {
+              "file": ".kiro/specs/files-tab-github-redesign/requirements.md",
+              "line": 267,
+              "text": "18. THE Files_Tab SHALL NOT render a Saved Views UI, and SHALL NOT invoke `applySavedView`, `saveCurrentView`, or `deleteSavedView` on the files workspace store.",
+              "classification": "allowed-spec"
+            },
             {
               "file": ".kiro/specs/task-files-version-control-v3/tasks.md",
               "line": 269,
@@ -1860,24 +1878,6 @@
               "line": 499,
               "text": "- `explorerSlice`: `saveCurrentView`, `applySavedView`, `deleteSavedView`",
               "classification": "allowed-spec"
-            },
-            {
-              "file": ".kiro/specs/files-tab-github-redesign/requirements.md",
-              "line": 267,
-              "text": "18. THE Files_Tab SHALL NOT render a Saved Views UI, and SHALL NOT invoke `applySavedView`, `saveCurrentView`, or `deleteSavedView` on the files workspace store.",
-              "classification": "allowed-spec"
-            },
-            {
-              "file": "tests/unit/files-tab/sidebar.test.ts",
-              "line": 334,
-              "text": "      \"applySavedView\",",
-              "classification": "allowed-spec"
-            },
-            {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 170,
-              "text": "      { kind: \"store-method\", slice: \"explorerSlice\", name: \"applySavedView\" },",
-              "classification": "allowed-spec"
             }
           ],
           "counts": {
@@ -1907,12 +1907,6 @@
               "classification": "allowed-spec"
             },
             {
-              "file": ".kiro/specs/files-tab-github-redesign/requirements.md",
-              "line": 267,
-              "text": "18. THE Files_Tab SHALL NOT render a Saved Views UI, and SHALL NOT invoke `applySavedView`, `saveCurrentView`, or `deleteSavedView` on the files workspace store.",
-              "classification": "allowed-spec"
-            },
-            {
               "file": ".kiro/specs/files-tab-github-redesign/tasks.md",
               "line": 449,
               "text": "    - `explorerSlice.ts`: remove `saveCurrentView`, `applySavedView`, `deleteSavedView`",
@@ -1925,8 +1919,14 @@
               "classification": "allowed-spec"
             },
             {
+              "file": ".kiro/specs/files-tab-github-redesign/requirements.md",
+              "line": 267,
+              "text": "18. THE Files_Tab SHALL NOT render a Saved Views UI, and SHALL NOT invoke `applySavedView`, `saveCurrentView`, or `deleteSavedView` on the files workspace store.",
+              "classification": "allowed-spec"
+            },
+            {
               "file": "tests/unit/files-tab/sidebar.test.ts",
-              "line": 335,
+              "line": 330,
               "text": "      \"deleteSavedView\",",
               "classification": "allowed-spec"
             },
@@ -1952,6 +1952,12 @@
           "slice": "editorSlice",
           "references": [
             {
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 174,
+              "text": "      { kind: \"store-method\", slice: \"editorSlice\", name: \"setFileState\" },",
+              "classification": "allowed-spec"
+            },
+            {
               "file": ".kiro/specs/files-tab-github-redesign/design.md",
               "line": 438,
               "text": "- `setFileState`, `setActiveFileSymbols`, `requestScrollTo`, `clearScrollRequest`",
@@ -1973,12 +1979,6 @@
               "file": ".kiro/specs/files-tab-github-redesign/tasks.md",
               "line": 500,
               "text": "- `editorSlice`: `setFileState`, `setActiveFileSymbols`, `requestScrollTo`, `clearScrollRequest`",
-              "classification": "allowed-spec"
-            },
-            {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 174,
-              "text": "      { kind: \"store-method\", slice: \"editorSlice\", name: \"setFileState\" },",
               "classification": "allowed-spec"
             }
           ],
@@ -2042,6 +2042,12 @@
           "slice": "editorSlice",
           "references": [
             {
+              "file": "tests/unit/files-tab/removal-audit.test.ts",
+              "line": 176,
+              "text": "      { kind: \"store-method\", slice: \"editorSlice\", name: \"requestScrollTo\" },",
+              "classification": "allowed-spec"
+            },
+            {
               "file": ".kiro/specs/task-files-version-control-v3/tasks.md",
               "line": 269,
               "text": "    - Remove: `openTab`, `saveCurrentView`, `applySavedView`, `setGitSyncStatus`, `requestScrollTo`, and any other V2-only methods identified in import-graph audit",
@@ -2075,12 +2081,6 @@
               "file": ".kiro/specs/files-tab-github-redesign/tasks.md",
               "line": 500,
               "text": "- `editorSlice`: `setFileState`, `setActiveFileSymbols`, `requestScrollTo`, `clearScrollRequest`",
-              "classification": "allowed-spec"
-            },
-            {
-              "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 176,
-              "text": "      { kind: \"store-method\", slice: \"editorSlice\", name: \"requestScrollTo\" },",
               "classification": "allowed-spec"
             }
           ],
