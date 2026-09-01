@@ -9,6 +9,44 @@ export type GithubAccountConnectionState = {
   fullName: string | null;
 };
 
+type ProviderSession = {
+  provider_token?: unknown;
+} | null | undefined;
+
+export function getLinkedGithubIdentityIds(
+  user: User | null | undefined,
+): Set<string> {
+  const ids = new Set<string>();
+  for (const identity of user?.identities || []) {
+    if (identity.provider !== "github") continue;
+    for (const candidate of [
+      identity.id,
+      identity.identity_data?.provider_id,
+      identity.identity_data?.sub,
+    ]) {
+      if (candidate !== null && candidate !== undefined && String(candidate)) {
+        ids.add(String(candidate));
+      }
+    }
+  }
+  return ids;
+}
+
+/**
+ * Supabase's provider token belongs to the provider that authenticated the
+ * session, not every linked identity. Never let a Google-primary session
+ * overwrite the separately sealed GitHub repository grant.
+ */
+export function readGithubSessionProviderToken(
+  user: User | null | undefined,
+  session: ProviderSession,
+): string {
+  if (user?.app_metadata?.provider !== "github") return "";
+  return typeof session?.provider_token === "string"
+    ? session.provider_token.trim()
+    : "";
+}
+
 function readGithubIdentityUsername(identity: unknown): string | null {
   if (!identity || typeof identity !== "object") {
     return null;
@@ -156,4 +194,3 @@ export function buildGithubAccountConnectionState(
     fullName,
   };
 }
-
