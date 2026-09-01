@@ -503,7 +503,7 @@ describe("Unauthenticated deep-link arrival (Req 19.7, Req 19.5)", () => {
     // renders the project root, not the requested target.
     assert.match(
       RESOLVER_SRC,
-      /navigateRef\.current\(null\)/,
+      /navigateRef\.current\(null, \{ preserveQuery: true \}\)/,
       "unresolved deep link must navigate to root (Req 10.5, 19.7)",
     );
   });
