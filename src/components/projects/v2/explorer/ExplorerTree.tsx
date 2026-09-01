@@ -744,7 +744,7 @@ export function ExplorerTree({
           : `${row.kind}:${"parentId" in row ? row.parentId : "root"}`
       }
       itemContent={(_, row, context) => (
-        <div className="min-h-[22px] px-2" role="none">
+        <div className="min-h-[22px] [@media(pointer:coarse)]:min-h-11 px-2" role="none">
           <FileTreeItem row={row} context={context} />
         </div>
       )}
