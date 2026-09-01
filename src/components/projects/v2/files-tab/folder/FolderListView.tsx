@@ -27,7 +27,7 @@ import {
   StarOff,
   Trash2,
   Upload,
-  MoreHorizontal, Download, Copy, Info, History, ListTodo, Search,
+  MoreHorizontal, Download, Copy, Info, History, ListTodo, ArrowDownWideNarrow,
 } from "lucide-react";
 
 import {
@@ -35,11 +35,18 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubTrigger,
+  DropdownMenuSubContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
 } from "@/components/ui/dropdown-menu";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { getProjectNodes } from "@/app/actions/files/nodes";
 import { getProjectFileSignedUrl } from "@/app/actions/files/content";
 import { useFilesWorkspaceView } from "../FilesWorkspaceViews";
+import { FilesWorkspaceMenu, FilesHeaderSlot } from "../FilesWorkspaceHeader";
 import type { ProjectNode } from "@/lib/db/schema";
 import { filesFeatureFlags } from "@/lib/features/files";
 import { cn } from "@/lib/utils";
@@ -109,7 +116,7 @@ export interface FolderListViewProps {
   canEdit: boolean;
   canManageFiles?: boolean;
   className?: string;
-  collection?: { nodes: FolderListRowNode[]; loading?: boolean; footer?: React.ReactNode; labels?: Record<string, string>; preserveOrder?: boolean; emptyMessage?: string; onUnlink?: (node: FolderListRowNode) => void };
+  collection?: { menuItems?: React.ReactNode; nodes: FolderListRowNode[]; loading?: boolean; footer?: React.ReactNode; labels?: Record<string, string>; preserveOrder?: boolean; emptyMessage?: string; onUnlink?: (node: FolderListRowNode) => void };
 }
 
 // ─── Component ───────────────────────────────────────────────────────
@@ -162,8 +169,9 @@ export function FolderListView({
   const canEditCurrentFolder = canEdit && !currentFolderIsSystemManaged;
   const workspace = useFilesWorkspaceView();
   const [selectionMode, setSelectionMode] = React.useState(false);
-  const [search, setSearch] = React.useState(workspace?.query ?? "");
-  React.useEffect(() => { const timer = setTimeout(() => setSearch(workspace?.query ?? ""), 200); return () => clearTimeout(timer); }, [workspace?.query]);
+  // Search is committed from the dialog, not on every keystroke. Applying it
+  // synchronously prevents stale, clickable rows under a new query label.
+  const search = workspace?.query ?? "";
 
   const upsertNodes = useFilesWorkspaceStore((s) => s.upsertNodes);
   const setChildren = useFilesWorkspaceStore((s) => s.setChildren);
@@ -175,8 +183,7 @@ export function FolderListView({
   const toggleFavorite = useFilesWorkspaceStore((s) => s.toggleFavorite);
 
   // ── Navigation (single write path to currentLocationId) ───────────
-  const navigate = useNavigateTo(projectId);
-  const navigateTo = React.useCallback((id: string | null) => { if (workspace?.view === "project") workspace.showTree(); navigate(id); }, [navigate, workspace]);
+  const navigateTo = useNavigateTo(projectId);
 
   // ── Explorer boot (provides loadFolderContent + handlers) ─────────
   const bootContext = React.useContext(FilesTabBootContext);
@@ -233,7 +240,7 @@ export function FolderListView({
     if (folder.status === "ready" && scrollRef.current) scrollRef.current.scrollTop = workspace?.scrollOffsets.current.get(scrollKey) ?? 0;
   }, [scrollKey, folder.status, workspace?.scrollOffsets]);
   const selectedItems = sortedChildren.filter(node => storeSelectedNodeIds.includes(node.id) && !isInternalTaskWorkingFilesNode(node));
-  React.useEffect(() => { setSelectedNodeIds(projectId, []); setSelectionMode(false); }, [projectId, folderId, search, collection?.preserveOrder, setSelectedNodeIds]);
+  React.useEffect(() => { setSelectedNodeIds(projectId, []); setSelectionMode(false); }, [projectId, folderId, search, sort, workspace?.view, workspace?.taskId, collection?.preserveOrder, setSelectedNodeIds]);
   const selectItem = React.useCallback((id: string, selected: boolean) => {
     const current = useFilesWorkspaceStore.getState().byProjectId[projectId]?.selectedNodeIds ?? [];
     if (selected && current.length >= 200) { toast.info("Select up to 200 items per operation."); return; }
@@ -261,6 +268,7 @@ export function FolderListView({
   const selectedNode = folderId ? nodesById[folderId] ?? null : null;
 
   const {
+    uploadCollisionDialog,
     createDialog,
     setCreateDialog,
     deleteDialog,
@@ -481,21 +489,34 @@ export function FolderListView({
         className,
       )}
     >
-      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-zinc-200 px-3 py-2 text-sm dark:border-zinc-800">
-        <div className="flex items-center gap-2">
+      <FilesWorkspaceMenu projectId={projectId} selectionMode={selectionMode}>
+        {selectionMode ? <>
+          <DropdownMenuItem onSelect={() => setSelectedNodeIds(projectId, sortedChildren.filter(node => !isInternalTaskWorkingFilesNode(node)).slice(0, 200).map(node => node.id))}>Select loaded items (up to 200)</DropdownMenuItem>
+          {canManageFiles && <DropdownMenuItem disabled={!selectedItems.length} onSelect={() => openMove(selectedItems)}><FolderInput className="size-4" />Move…</DropdownMenuItem>}
+          <DropdownMenuItem disabled={!selectedItems.length} variant="destructive" onSelect={() => openDelete(selectedItems)}><Trash2 className="size-4" />Move to trash…</DropdownMenuItem>
+        </> : <>
+          {!collection && <DropdownMenuSub>
+            <DropdownMenuSubTrigger><ArrowDownWideNarrow className="size-4" />Sort</DropdownMenuSubTrigger>
+            <DropdownMenuSubContent><DropdownMenuRadioGroup aria-label="Sort files" value={sort} onValueChange={value => setSort(projectId, value as "name" | "updated" | "type")}>
+              <DropdownMenuRadioItem value="name">Name</DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="updated">Last updated</DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="type">File type</DropdownMenuRadioItem>
+            </DropdownMenuRadioGroup></DropdownMenuSubContent>
+          </DropdownMenuSub>}
+          {collection?.menuItems}
           {!collection && !search && canEditCurrentFolder && <>
-            <DropdownMenu><DropdownMenuTrigger asChild><button type="button" className="min-h-9 rounded-md bg-blue-600 px-3 font-medium text-white focus-visible:ring-2 focus-visible:ring-blue-500">Upload</button></DropdownMenuTrigger><DropdownMenuContent align="start"><DropdownMenuItem onSelect={() => handleUploadToFolder(folderId)}><Upload className="mr-2 size-4" />Upload files</DropdownMenuItem><DropdownMenuItem onSelect={() => openFolderUpload(folderId)}><FolderInput className="mr-2 size-4" />Upload folder</DropdownMenuItem></DropdownMenuContent></DropdownMenu>
-            <DropdownMenu><DropdownMenuTrigger asChild><button type="button" className="min-h-9 rounded-md border px-3 focus-visible:ring-2 focus-visible:ring-blue-500">New</button></DropdownMenuTrigger><DropdownMenuContent align="start"><DropdownMenuItem onSelect={() => openCreateInFolder(folderId, "file")}><FilePlus2 className="mr-2 size-4" />New file</DropdownMenuItem><DropdownMenuItem onSelect={() => openCreateInFolder(folderId, "folder")}><FolderPlus className="mr-2 size-4" />New folder</DropdownMenuItem></DropdownMenuContent></DropdownMenu>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={() => handleUploadToFolder(folderId)}><Upload className="size-4" />Upload files…</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => openFolderUpload(folderId)}><FolderInput className="size-4" />Upload folder…</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => openCreateInFolder(folderId, "file")}><FilePlus2 className="size-4" />New file…</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => openCreateInFolder(folderId, "folder")}><FolderPlus className="size-4" />New folder…</DropdownMenuItem>
           </>}
-          {canEditCurrentFolder && <DropdownMenu><DropdownMenuTrigger asChild><button type="button" aria-label="List actions" className="flex size-9 items-center justify-center rounded hover:bg-zinc-100 focus-visible:ring-2 focus-visible:ring-blue-500 dark:hover:bg-zinc-800"><MoreHorizontal className="size-4" /></button></DropdownMenuTrigger><DropdownMenuContent><DropdownMenuItem onSelect={() => { setSelectionMode(!selectionMode); setSelectedNodeIds(projectId, []); }}>{selectionMode ? "Exit selection" : "Select items"}</DropdownMenuItem>{selectionMode && <DropdownMenuItem onSelect={() => setSelectedNodeIds(projectId, sortedChildren.filter(node => !isInternalTaskWorkingFilesNode(node)).slice(0, 200).map(node => node.id))}>Select loaded items (up to 200)</DropdownMenuItem>}</DropdownMenuContent></DropdownMenu>}
-          {search && !collection && <span className="text-xs text-zinc-500">{search.length < 2 ? "Type at least two characters" : "Project search results"}</span>}
-        </div>
-        {!collection && workspace?.view === "project" && <label className="ml-auto flex min-w-0 flex-1 items-center gap-2 rounded-md border border-zinc-200 px-2 sm:max-w-sm dark:border-zinc-700"><Search aria-hidden="true" className="size-4 shrink-0 text-zinc-500" /><input type="search" value={workspace.query} onChange={event => workspace.setQuery(event.target.value)} aria-label="Search project files" placeholder="Search project files…" className="h-9 w-full min-w-0 bg-transparent text-sm outline-none focus-visible:ring-2 focus-visible:ring-blue-500" /></label>}
-        {!collection && <label className="flex items-center gap-2 text-xs text-zinc-500">Sort<select aria-label="Sort files" value={sort} onChange={event => setSort(projectId, event.target.value as "name" | "updated" | "type")} className="min-h-9 rounded border bg-transparent px-2 text-sm text-zinc-800 dark:text-zinc-200"><option value="name">Name</option><option value="updated">Last updated</option><option value="type">File type</option></select></label>}
-      </div>
-      {selectionMode && <div role="toolbar" aria-label="Selected file actions" className="flex shrink-0 flex-wrap items-center gap-3 border-b p-2 text-sm"><span>{selectedItems.length} selected</span>{canManageFiles && <button type="button" disabled={!selectedItems.length} className="min-h-9 rounded border px-3 disabled:opacity-50" onClick={() => openMove(selectedItems)}>Move…</button>}<button type="button" disabled={!selectedItems.length} className="min-h-9 rounded border px-3 text-red-600 disabled:opacity-50" onClick={() => openDelete(selectedItems)}>Move to trash…</button><button type="button" className="min-h-9 px-3" onClick={() => { setSelectionMode(false); setSelectedNodeIds(projectId, []); }}>Done selecting</button></div>}
+          {canEditCurrentFolder && <><DropdownMenuSeparator /><DropdownMenuItem onSelect={() => { setSelectionMode(true); setSelectedNodeIds(projectId, []); }}>Select items</DropdownMenuItem></>}
+        </>}
+      </FilesWorkspaceMenu>
+      {selectionMode && <FilesHeaderSlot slot="status"><span role="status">{selectedItems.length} selected</span><button type="button" className="min-h-10 rounded px-2 hover:bg-zinc-100 dark:hover:bg-zinc-800" onClick={() => { setSelectionMode(false); setSelectedNodeIds(projectId, []); }}>Done</button></FilesHeaderSlot>}
       <div role="table" aria-label="File listing" className="flex min-h-0 flex-1 flex-col">
-      <FolderListHeader />
+      <FolderListHeader sort={collection?.preserveOrder ? undefined : sort} />
 
       {folder.refreshError ? <div role="status" className="px-4 py-2 text-sm text-amber-700 dark:text-amber-300">Showing cached files. Refresh failed. <button type="button" onClick={folder.retry} className="underline">Retry</button></div> : null}
 
@@ -515,11 +536,7 @@ export function FolderListView({
               }
             />
             {!collection && !search && canEditCurrentFolder ? (
-              <div className="flex flex-wrap justify-center gap-2">
-                <button type="button" onClick={() => openCreateInFolder(folderId, "file")} className="rounded-lg border border-zinc-200 px-3 py-1.5 text-sm font-medium hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-900">New file</button>
-                <button type="button" onClick={() => openCreateInFolder(folderId, "folder")} className="rounded-lg border border-zinc-200 px-3 py-1.5 text-sm font-medium hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-900">New folder</button>
-                <button type="button" onClick={() => handleUploadToFolder(folderId)} className="rounded-lg bg-zinc-900 px-3 py-1.5 text-sm font-semibold text-white dark:bg-zinc-100 dark:text-zinc-900">Upload files</button>
-              </div>
+              <p className="text-sm text-zinc-500">Use the Files actions menu to upload files or create a file or folder.</p>
             ) : null}
           </div>
         ) : (
@@ -541,7 +558,7 @@ export function FolderListView({
                   onSelectionChange={selectionMode ? selectItem : undefined}
                   showActions={true}
                   subtitle={collection?.labels?.[node.id] ?? (search ? (node.path.startsWith("/.system/") ? "Task files" : node.path) : undefined)}
-                  actions={<DropdownMenu><DropdownMenuTrigger asChild><button type="button" aria-label={`Actions for ${node.name}`} className="flex size-10 items-center justify-center rounded hover:bg-zinc-100 focus-visible:ring-2 focus-visible:ring-blue-500 dark:hover:bg-zinc-800"><MoreHorizontal aria-hidden="true" className="size-4" /></button></DropdownMenuTrigger><DropdownMenuContent align="end" onClick={event => event.stopPropagation()}>{renderMenu(node)}</DropdownMenuContent></DropdownMenu>}
+                  actions={<DropdownMenu modal={false}><DropdownMenuTrigger asChild><button type="button" aria-label={`Actions for ${node.name}`} className="flex size-10 items-center justify-center rounded hover:bg-zinc-100 focus-visible:ring-2 focus-visible:ring-blue-500 dark:hover:bg-zinc-800"><MoreHorizontal aria-hidden="true" className="size-4" /></button></DropdownMenuTrigger><DropdownMenuContent align="end" onClick={event => event.stopPropagation()}>{renderMenu(node)}</DropdownMenuContent></DropdownMenu>}
                   isFavorite={!!favorites[node.id]}
                   gitChange={gitChange}
                   gitIntegrationEnabled={gitIntegrationEnabled}
@@ -581,6 +598,7 @@ export function FolderListView({
           `canEdit` for mutation entries so `Role_Viewer` never sees
           upload / create / rename / move / delete affordances. */}
       <DropdownMenu
+        modal={false}
         open={contextMenuState.open}
         onOpenChange={(open) =>
           setContextMenuState((prev) => ({ ...prev, open }))
@@ -617,6 +635,7 @@ export function FolderListView({
       </DropdownMenu>
 
       {/* Dialogs (create / rename / delete / move) — reuses existing host */}
+      {uploadCollisionDialog}
       <ExplorerDialogsHost
         canEdit={canEditCurrentFolder}
         canManageFiles={canManageFiles}
