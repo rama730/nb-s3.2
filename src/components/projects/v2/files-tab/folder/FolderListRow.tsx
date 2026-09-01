@@ -12,7 +12,7 @@ import { getTaskWorkingFilesDisplayName } from "@/lib/files/task-working-files";
 import { FileIcon } from "../../explorer/FileIcons";
 import { TaskLinkPopover } from "../TaskLinkPopover";
 import { VersionPill } from "../VersionPill";
-import { formatBytes, formatRelativeTime } from "./format";
+import { formatBytes, formatRelativeTime, formatFileActor } from "./format";
 import { FOLDER_LIST_GRID_TEMPLATE, FOLDER_LIST_ROW_HEIGHT_PX } from "./layout";
 
 // ─── Types ───────────────────────────────────────────────────────────
@@ -83,15 +83,7 @@ const MISSING = "—" as const;
 
 /** "By" column label with the same fallback order as `MetadataStrip`. */
 function updatedByLabel(node: FolderListRowNode): string {
-  const name =
-    typeof node.updatedByName === "string" ? node.updatedByName.trim() : "";
-  if (name.length > 0) return name;
-  const username =
-    typeof node.updatedByUsername === "string"
-      ? node.updatedByUsername.trim()
-      : "";
-  if (username.length > 0) return username;
-  return MISSING;
+  return node.type === "folder" ? MISSING : formatFileActor(node);
 }
 
 /** Relative-time label for the "Last updated" column. */
@@ -176,8 +168,9 @@ export const FolderListRow = React.memo(function FolderListRow({
     gitIntegrationEnabled && !!gitChange && !isFolder;
 
   const handleClick = React.useCallback(() => {
-    onNavigate(node.id);
-  }, [node.id, onNavigate]);
+    if (onSelectionChange) onSelectionChange(node.id, !selected);
+    else onNavigate(node.id);
+  }, [node.id, onNavigate, onSelectionChange, selected]);
 
   const handleContextMenu = React.useCallback(
     (e: React.MouseEvent) => {
@@ -264,6 +257,7 @@ export const FolderListRow = React.memo(function FolderListRow({
   return (
     <div
       role="row"
+      aria-selected={onSelectionChange ? selected : undefined}
       data-testid="files-tab-folder-list-row"
       data-node-id={node.id}
       data-node-type={node.type}
@@ -276,7 +270,7 @@ export const FolderListRow = React.memo(function FolderListRow({
         if (e.target !== e.currentTarget) return;
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
-          onNavigate(node.id);
+          handleClick();
         }
       }}
       onContextMenu={handleContextMenu}
@@ -293,6 +287,7 @@ export const FolderListRow = React.memo(function FolderListRow({
         dropHighlight &&
           "bg-indigo-50/70 ring-1 ring-inset ring-indigo-400 dark:bg-indigo-900/30",
         className,
+        selected && onSelectionChange && "bg-blue-50 dark:bg-blue-950/30",
       )}
     >
       {/* Name column */}
@@ -304,6 +299,7 @@ export const FolderListRow = React.memo(function FolderListRow({
         {canEdit && onSelectionChange && <label className="flex size-9 shrink-0 cursor-pointer items-center justify-center" onClick={event => event.stopPropagation()}><input type="checkbox" aria-label={`Select ${displayName}`} checked={selected} onChange={event => onSelectionChange(node.id, event.target.checked)} className="size-4 accent-blue-600" /></label>}
         <FileIcon
           name={displayName}
+          mimeType={node.mimeType}
           isFolder={isFolder}
           isOpen={false}
           className="h-4 w-4 shrink-0 text-zinc-500"
@@ -318,7 +314,7 @@ export const FolderListRow = React.memo(function FolderListRow({
         >
           {displayName}
         </span>
-        {subtitle && <span className="block truncate text-xs text-zinc-500">{subtitle}</span>}
+        {subtitle && <span title={subtitle} className="block truncate text-xs text-zinc-500">{subtitle}</span>}
         <span data-file-mobile-meta className="truncate text-xs text-zinc-500">{[updatedLabel, sizeLabel(node), byLabel].filter(label => label && label !== MISSING).join(" · ")}</span></div>
         <VersionPill v={node.currentVersion} />
         {isFavorite && <Star aria-label="Starred" className="size-3.5 shrink-0 text-zinc-500" fill="currentColor" />}
