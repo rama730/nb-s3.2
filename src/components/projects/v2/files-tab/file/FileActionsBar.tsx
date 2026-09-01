@@ -10,11 +10,11 @@ import {
   Link2,
   ListTodo,
   Pencil,
-  RefreshCw,
+  FileUp,
   MoreHorizontal,
   Download,
   Copy,
-  ChevronDown,
+  Info,
   History,
 } from "lucide-react";
 
@@ -37,9 +37,12 @@ import {
 } from "@/hooks/hub/useProjectDocData";
 
 import { FilesTabRoleContext } from "../FilesTabRoleContext";
+import { useFilesWorkspaceView } from "../FilesWorkspaceViews";
 import { TaskSearchPicker } from "../picker/TaskSearchPicker";
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 import { RevisionControlModal } from "@/components/ui/RevisionControlModal";
+import { Star, FolderInput, Trash2 } from "lucide-react";
+import { isInternalTaskWorkingFilesNode } from "@/lib/files/task-working-files";
 
 interface LockConflictInfo {
   lockedBy: { userId: string; displayName: string; lockedAt: string };
@@ -69,6 +72,7 @@ export interface FileActionsBarProps {
   linkedDoc?: { slug: string; linkedNodeId?: string | null } | null;
   onNavigateToDoc?: (slug: string) => void;
   actionsTriggerRef?: React.Ref<HTMLButtonElement>;
+  organizationActions?: { rename: () => void; move?: () => void; trash: () => void };
 }
 
 export function FileActionsBar({
@@ -83,17 +87,22 @@ export function FileActionsBar({
   projectId,
   nodeId,
   fileName,
-  fileSize = 0,
+  fileSize = null,
   mimeType,
   className,
   linkedDoc = null,
   onNavigateToDoc,
   actionsTriggerRef,
+  organizationActions,
 }: FileActionsBarProps): React.JSX.Element {
   const roleCtx = React.useContext(FilesTabRoleContext);
+  const workspace = useFilesWorkspaceView();
   // Default to read-only when no provider is mounted so the Edit control
   // stays hidden rather than defaulting to a mutation-capable state.
   const canEdit = roleCtx?.canEdit ?? false;
+  const node = useFilesWorkspaceStore(state => projectId && nodeId ? state.byProjectId[projectId]?.nodesById[nodeId] : undefined);
+  const canOrganize = organizationActions && canEdit && node && !isInternalTaskWorkingFilesNode(node) && !node.deletedAt && mode !== "edit";
+  const starred = useFilesWorkspaceStore(state => !!(projectId && nodeId && state.byProjectId[projectId]?.favorites[nodeId]));
 
   const queryClient = useQueryClient();
 
@@ -153,18 +162,24 @@ export function FileActionsBar({
   }, [isLinking]);
 
   const handleTaskSelect = React.useCallback(
-    async (taskId: string) => {
+    async (taskId: string, role: "reference" | "working" | "deliverable") => {
       if (!nodeId || isLinking) return;
 
       setIsLinking(true);
       try {
         const { linkNodeToTask } = await import("@/app/actions/files/links");
-        await linkNodeToTask(taskId, nodeId, { role: "reference" });
+        await linkNodeToTask(taskId, nodeId, { role });
         // On success: close picker (Req 9.4). TaskLinkChip updates via
         // realtime Project_Channel (Req 9.6).
         setIsTaskPickerOpen(false);
         window.dispatchEvent(new CustomEvent("project:task-files-changed", { detail: { projectId } }));
-        toast.success("File attached to task");
+        toast.success(
+          role === "deliverable"
+            ? "File attached as a deliverable"
+            : role === "working"
+              ? "File attached as a working file"
+              : "File attached as a reference",
+        );
       } catch (err) {
         // On failure: show error toast, keep picker open for retry (Req 9.5).
         const message =
@@ -287,6 +302,7 @@ export function FileActionsBar({
               ? "New revision committed successfully"
               : "Active revision updated successfully");
           useFilesWorkspaceStore.getState().setNodes(projectId, [result.node]);
+          window.dispatchEvent(new CustomEvent("project:task-files-changed", { detail: { projectId } }));
 
           logger.metric("files_tab.version_replaced", {
             module: "files-tab",
@@ -340,7 +356,7 @@ export function FileActionsBar({
     const url = new URL(window.location.href);
     url.searchParams.set("tab", "files");
     url.searchParams.set("fileId", nodeId);
-    ["path", "filesView", "filesTask"].forEach(key => url.searchParams.delete(key));
+    ["path", "filesView", "filesTask", "filesRole", "filesQuery", "filesGroupQuery", "filesPanel"].forEach(key => url.searchParams.delete(key));
     try { await navigator.clipboard.writeText(url.toString()); toast.success("File link copied. Recipients still need access."); }
     catch { toast.error("Could not copy the link. Check browser clipboard permissions."); }
   }
@@ -348,25 +364,27 @@ export function FileActionsBar({
   return (
     <div
       data-testid="files-tab-file-actions-bar"
-      className={cn("flex shrink-0 flex-wrap items-center gap-2", className)}
+      className={cn("flex shrink-0 items-center gap-2", className)}
     >
-      <DropdownMenu>
+      <DropdownMenu modal={false}>
         <DropdownMenuTrigger asChild>
           <Button
             ref={actionsTriggerRef}
             type="button"
-            variant="outline"
+            variant="ghost"
             size="sm"
-            className="gap-1.5 h-8 font-medium text-xs border-zinc-200 dark:border-zinc-800"
+            className="size-11 p-0"
+            aria-label={`Actions for ${fileName || "file"}`}
+            title="File actions"
             data-testid="files-tab-file-actions-dropdown-trigger"
           >
             <MoreHorizontal className="h-3.5 w-3.5 opacity-70" aria-hidden="true" />
-            Actions
-            <ChevronDown className="h-3.5 w-3.5 opacity-50" aria-hidden="true" />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-52">
+        <DropdownMenuContent align="end" collisionPadding={8} className="w-56 max-w-[calc(100vw-16px)] [&_[role=menuitem]]:min-h-10">
+          {workspace && <DropdownMenuItem onSelect={() => workspace.setInspector(current => current === "details" ? null : "details")}><Info className="size-4" />Details</DropdownMenuItem>}
           {projectId && nodeId && <>
+            <DropdownMenuItem onSelect={() => useFilesWorkspaceStore.getState().toggleFavorite(projectId, nodeId)}><Star className="size-4" fill={starred ? "currentColor" : "none"} />{starred ? "Unstar" : "Star"}</DropdownMenuItem>
             <DropdownMenuItem disabled={downloading} onClick={() => void downloadFile()} className="gap-2"><Download className="size-4" />{downloading ? "Downloading…" : "Download"}</DropdownMenuItem>
             <DropdownMenuItem onClick={() => void copyLink()} className="gap-2"><Copy className="size-4" />Copy file link</DropdownMenuItem>
             <DropdownMenuSeparator />
@@ -399,12 +417,12 @@ export function FileActionsBar({
           {canReplaceOption && (
             <DropdownMenuItem
               onClick={handleReplaceClick}
-              disabled={isReplacing || lockConflict !== null}
+              disabled={isReplacing || mode === "edit"}
               className="gap-2 cursor-pointer"
-              aria-label="Replace file with new version"
+              aria-label="Upload a file revision"
             >
-              <RefreshCw className={cn("h-4 w-4 opacity-70", isReplacing && "animate-spin")} />
-              <span>Replace…</span>
+              <FileUp className={cn("h-4 w-4 opacity-70", isReplacing && "animate-pulse")} />
+              <span>{lockConflict ? "Retry upload revision…" : "Upload revision…"}</span>
             </DropdownMenuItem>
           )}
 
@@ -437,7 +455,7 @@ export function FileActionsBar({
               className={cn("gap-2 cursor-pointer", isLinkedTasksPanelOpen && "bg-zinc-100 dark:bg-zinc-800 font-medium")}
             >
               <ListTodo className="h-4 w-4 opacity-70" />
-              <span>Tasks</span>
+              <span>Linked tasks</span>
             </DropdownMenuItem>
           )}
 
@@ -452,6 +470,12 @@ export function FileActionsBar({
               <span>Version history</span>
             </DropdownMenuItem>
           )}
+          {canOrganize && <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={organizationActions?.rename}><Pencil className="size-4" />Rename…</DropdownMenuItem>
+            {roleCtx?.canManageFiles && organizationActions?.move && <DropdownMenuItem onSelect={organizationActions.move}><FolderInput className="size-4" />Move…</DropdownMenuItem>}
+            <DropdownMenuItem className="text-red-600" onSelect={organizationActions?.trash}><Trash2 className="size-4" />Move to Trash</DropdownMenuItem>
+          </>}
         </DropdownMenuContent>
       </DropdownMenu>
 
@@ -484,6 +508,7 @@ export function FileActionsBar({
         <TaskSearchPicker
           projectId={projectId}
           isOpen={isTaskPickerOpen}
+          isSaving={isLinking}
           onClose={handleCloseTaskPicker}
           onSelect={handleTaskSelect}
         />
