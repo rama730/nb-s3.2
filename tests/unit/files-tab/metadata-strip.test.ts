@@ -191,10 +191,12 @@ describe("MetadataStrip — all fields rendered (Req 5.1)", () => {
     assert.equal(fieldText(html, "mime-type"), "text/plain");
   });
 
-  it("renders the root `data-testid` and sticky container", () => {
+  it("keeps metadata accessible without adding a second toolbar", () => {
     const html = renderMetadataStrip({ node: makeNode() });
     assert.match(html, /data-testid="files-tab-metadata-strip"/);
-    assert.match(html, /sticky top-0/);
+    assert.match(html, /class="contents"/);
+    assert.match(html, /class="sr-only"/);
+    assert.doesNotMatch(html, /sticky top-0/);
   });
 
   it("falls back to the username when the display name is absent (Req 4.6, 5.1)", () => {
@@ -671,13 +673,13 @@ describe("FileActionsBar — Replace… button (Req 11.1, 11.2, 24.1)", () => {
     );
     assert.match(
       FILE_ACTIONS_BAR_SRC,
-      /aria-label="Replace file with new version"/,
+      /aria-label="Upload a file revision"/,
       "Replace button must have an accessible label in source code",
     );
     assert.match(
       FILE_ACTIONS_BAR_SRC,
-      /Replace…/,
-      "Replace button must have 'Replace…' label in source code",
+      /Upload revision…/,
+      "Version upload must use explicit action copy",
     );
     assert.match(
       FILE_ACTIONS_BAR_SRC,
@@ -720,12 +722,13 @@ describe("FileActionsBar — Replace… source-level contracts (Req 11.4–11.6,
     );
   });
 
-  it("disables Replace button when lock conflict is active (Req 11.5)", () => {
+  it("allows retry after lock conflict but blocks replacement during edit/upload", () => {
     assert.match(
       FILE_ACTIONS_BAR_SRC,
-      /disabled=\{isReplacing \|\| lockConflict !== null\}/,
-      "Replace button must be disabled during replacement or lock conflict (Req 11.5)",
+      /disabled=\{isReplacing \|\| mode === "edit"\}/,
+      "Replacement cannot discard an active editor or start a duplicate upload",
     );
+    assert.match(FILE_ACTIONS_BAR_SRC, /Retry upload revision/);
   });
 
   it("emits files_tab.version_replaced telemetry with source: files_tab (Req 16.3)", () => {
