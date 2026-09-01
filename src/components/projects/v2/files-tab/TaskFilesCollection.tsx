@@ -2,56 +2,57 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, ExternalLink, FolderOpen, Loader2 } from "lucide-react";
+import { ArrowRight, FolderOpen, Loader2, Filter } from "lucide-react";
 import { unlinkNodeFromTask } from "@/app/actions/files/links";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import type { FolderListRowNode } from "./folder/FolderListRow";
 import { toast } from "sonner";
 import {
   getTaskFileGroups,
-  getTaskFileGroupPage,
   type TaskCollectionEntry,
   type TaskFileGroup,
-  type TaskCollectionRole,
 } from "@/app/actions/files/collections";
 import { FolderListView } from "./folder/FolderListView";
+import { FilesWorkspaceMenu } from "./FilesWorkspaceHeader";
+import { DropdownMenuItem, DropdownMenuSub, DropdownMenuSubTrigger, DropdownMenuSubContent, DropdownMenuRadioGroup, DropdownMenuRadioItem } from "@/components/ui/dropdown-menu";
 import { useFilesTabRole } from "./FilesTabRoleContext";
+import { taskFilesHref } from "@/lib/files/task-navigation";
 import { useFilesWorkspaceView } from "./FilesWorkspaceViews";
 import { formatRelativeTime } from "./folder/format";
+
+function deliverableReviewLabel(
+  entry: TaskCollectionEntry,
+  reviewStatus: TaskFileGroup["reviewStatus"],
+) {
+  const currentVersion = entry.node.currentVersion;
+  const taskReview = reviewStatus === "pending" ? " · Task review pending" : reviewStatus === "rejected" ? " · Task changes requested" : "";
+  if (entry.isCurrentRevisionApproved)
+    return `Approved · version ${currentVersion}${taskReview}`;
+  if (entry.approvedVersion)
+    return `Current content awaiting review · previously approved version ${entry.approvedVersion}${taskReview}`;
+  return `Review not recorded${taskReview}`;
+}
 
 export function TaskFilesCollection({ projectId }: { projectId: string }) {
   const workspace = useFilesWorkspaceView()!;
   const { taskId, query, view, selectTask } = workspace;
-  const [search, setSearch] = useState(query);
-  const [role, setRole] = useState<TaskCollectionRole | "all">("all");
-  const [extraPages, setExtraPages] = useState<
-    Record<string, { entries: TaskCollectionEntry[]; cursor: string | null }>
-  >({});
-  const [loadingMore, setLoadingMore] = useState(false);
+  const search = query;
+  const role = workspace.fileRole;
+  const setRole = workspace.setFileRole;
   const { canEdit, canManageFiles } = useFilesTabRole();
   const [unlinkTarget, setUnlinkTarget] = useState<FolderListRowNode | null>(
     null,
   );
   const [unlinking, setUnlinking] = useState(false);
-  const generation = useRef(0);
-  useEffect(() => {
-    generation.current += 1;
-    return () => {
-      generation.current += 1;
-    };
-  }, [search, role, view, taskId]);
   const queryClient = useQueryClient();
-  useEffect(() => {
-    const timer = setTimeout(() => setSearch(query), 200);
-    return () => clearTimeout(timer);
-  }, [query]);
   const result = useInfiniteQuery({
     queryKey: ["files-task-collections", projectId, view, taskId, search, role],
     initialPageParam: undefined as string | undefined,
     queryFn: ({ pageParam }) =>
       getTaskFileGroups(projectId, {
         deliverables: view === "deliverables",
-        cursor: pageParam,
+        cursor: taskId ? undefined : pageParam,
+        fileCursor: taskId ? pageParam : undefined,
         taskId: taskId ?? undefined,
         query: search,
         role: role === "all" ? undefined : role,
@@ -62,7 +63,9 @@ export function TaskFilesCollection({ projectId }: { projectId: string }) {
         pages: Array<{ groups: TaskFileGroup[] }>;
       }>({ queryKey: ["files-task-collections", projectId, view] });
       const group = cached
-        .filter(([key]) => !key[3] && !key[4] && key[5] === "all")
+        // A group found through task/filename search already contains its
+        // first file page. Reuse it while the direct task query revalidates.
+        .filter(([key]) => !key[3] && key[5] === "all")
         .flatMap(([, data]) => data?.pages.flatMap((page) => page.groups) ?? [])
         .find((group) => group.id === taskId);
       return group
@@ -73,24 +76,15 @@ export function TaskFilesCollection({ projectId }: { projectId: string }) {
         : undefined;
     },
     initialDataUpdatedAt: 0,
-    getNextPageParam: (page) => page.nextCursor ?? undefined,
+    getNextPageParam: (page) => (taskId ? page.groups[0]?.nextFileCursor : page.nextCursor) ?? undefined,
     staleTime: 30_000,
     refetchInterval: 60_000,
     refetchIntervalInBackground: false,
   });
-  const groups = result.data?.pages.flatMap((page) => page.groups) ?? [];
+  const groups = Array.from(new Map(result.data?.pages.flatMap(page => page.groups).map(group => [group.id, group]) ?? []).values());
   const selected = groups.find((group) => group.id === taskId);
-  // A bookmarked task can live on a later page. Resolve it without a false empty state.
-  useEffect(() => {
-    if (taskId && !selected && result.hasNextPage && !result.isFetching)
-      void result.fetchNextPage();
-  }, [
-    taskId,
-    selected,
-    result.hasNextPage,
-    result.isFetching,
-    result.fetchNextPage,
-  ]);
+  const setTaskTitle = workspace.setTaskTitle;
+  useEffect(() => { if (selected?.title) setTaskTitle(selected.title); }, [selected?.title, setTaskTitle]);
   useEffect(() => {
     const refresh = (event: Event) => {
       if (
@@ -98,7 +92,6 @@ export function TaskFilesCollection({ projectId }: { projectId: string }) {
         projectId
       )
         return;
-      setExtraPages({});
       void queryClient.invalidateQueries({
         queryKey: ["files-task-collections", projectId],
       });
@@ -107,47 +100,11 @@ export function TaskFilesCollection({ projectId }: { projectId: string }) {
     return () =>
       window.removeEventListener("project:task-files-changed", refresh);
   }, [projectId, queryClient]);
-  useEffect(() => {
-    setExtraPages({});
-    setLoadingMore(false);
-  }, [search, role, view, taskId]);
-  const entries = selected
-    ? [...selected.entries, ...(extraPages[selected.id]?.entries ?? [])]
-    : [];
-  const visibleEntries = entries;
-  const nextFileCursor =
-    selected && extraPages[selected.id]
-      ? extraPages[selected.id]!.cursor
-      : selected?.nextFileCursor;
-  async function moreFiles(group: TaskFileGroup) {
-    if (!nextFileCursor || loadingMore) return;
-    setLoadingMore(true);
-    const request = generation.current;
-    try {
-      const page = await getTaskFileGroupPage(
-        projectId,
-        group.id,
-        view === "deliverables",
-        nextFileCursor,
-        search,
-        role === "all" ? undefined : role,
-      );
-      if (request !== generation.current) return;
-      setExtraPages((previous) => ({
-        ...previous,
-        [group.id]: {
-          entries: [...(previous[group.id]?.entries ?? []), ...page.entries],
-          cursor: page.nextFileCursor,
-        },
-      }));
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Could not load more files",
-      );
-    } finally {
-      if (request === generation.current) setLoadingMore(false);
-    }
-  }
+  // ponytail: first and subsequent pages share React Query's cache and retry
+  // lifecycle. Deduplicate by identity when concurrent updates overlap pages.
+  const visibleEntries = Array.from(new Map(
+    result.data?.pages.flatMap(page => page.groups.filter(group => group.id === taskId).flatMap(group => group.entries)).map(entry => [entry.node.id, entry]) ?? [],
+  ).values());
   const groupScrollRef = useRef<HTMLElement>(null);
   const groupScrollKey = `${view}:groups:${query}`;
   React.useLayoutEffect(() => {
@@ -159,6 +116,14 @@ export function TaskFilesCollection({ projectId }: { projectId: string }) {
     query !== search ||
     result.isPending ||
     (taskId && !selected && (result.hasNextPage || result.isFetching));
+  const taskMenuItems = taskId ? <>
+    {view !== "deliverables" && <DropdownMenuSub><DropdownMenuSubTrigger><Filter className="size-4" />File role</DropdownMenuSubTrigger><DropdownMenuSubContent><DropdownMenuRadioGroup aria-label="File role" value={role} onValueChange={value => setRole(value as "all" | "reference" | "working")}>
+      <DropdownMenuRadioItem value="all">All files</DropdownMenuRadioItem>
+      <DropdownMenuRadioItem value="reference">References</DropdownMenuRadioItem>
+      <DropdownMenuRadioItem value="working">Working files</DropdownMenuRadioItem>
+    </DropdownMenuRadioGroup></DropdownMenuSubContent></DropdownMenuSub>}
+    <DropdownMenuItem asChild><a href={`?tab=tasks&drawerType=task&drawerId=${taskId}&panelTab=files`} onClick={event => { event.currentTarget.href = taskFilesHref(window.location.search, taskId!); }}><ArrowRight className="size-4" />Open task files…</a></DropdownMenuItem>
+  </> : null;
   return (
     <section
       ref={groupScrollRef}
@@ -170,31 +135,9 @@ export function TaskFilesCollection({ projectId }: { projectId: string }) {
           );
       }}
       aria-label={view === "deliverables" ? "Deliverables" : "Task files"}
-      className="flex h-full min-h-0 min-w-0 flex-col overflow-y-auto p-3"
+      className="flex h-full min-h-0 min-w-0 flex-col overflow-y-auto"
     >
-      <header className="mb-4 flex flex-wrap items-start justify-between gap-3">
-        <div>
-          {taskId && (
-            <button
-              type="button"
-              onClick={() => selectTask(null)}
-              className="mb-2 flex min-h-10 items-center gap-2 text-sm text-blue-600"
-            >
-              <ArrowLeft className="h-4 w-4" />
-              All tasks
-            </button>
-          )}
-          <h2 className="text-lg font-semibold">
-            {selected?.title ??
-              (view === "deliverables" ? "Deliverables" : "Task files")}
-          </h2>
-          <p className="mt-1 text-sm text-zinc-500">
-            {view === "deliverables"
-              ? "Submitted outputs. A deliverable label does not imply review approval."
-              : "Working files and references, grouped by task. Linked files stay in their original location."}
-          </p>
-        </div>
-      </header>
+      {(!selected || initialLoading) && <FilesWorkspaceMenu projectId={projectId}>{taskMenuItems}</FilesWorkspaceMenu>}
       {result.isError && (
         <div
           role="alert"
@@ -206,22 +149,6 @@ export function TaskFilesCollection({ projectId }: { projectId: string }) {
           </button>
         </div>
       )}
-      {taskId && view !== "deliverables" && (
-        <label className="mb-4 block text-sm">
-          Role{" "}
-          <select
-            value={role}
-            onChange={(event) =>
-              setRole(event.target.value as TaskCollectionRole | "all")
-            }
-            className="ml-2 min-h-10 rounded border bg-transparent px-3"
-          >
-            <option value="all">All files</option>
-            <option value="reference">References</option>
-            <option value="working">Working files</option>
-          </select>
-        </label>
-      )}
       {initialLoading ? (
         <div role="status" className="flex items-center gap-2 py-8 text-sm">
           <Loader2 className="h-4 w-4 animate-spin" />
@@ -230,43 +157,36 @@ export function TaskFilesCollection({ projectId }: { projectId: string }) {
       ) : result.isError && !result.data ? null : taskId ? (
         selected ? (
           <>
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-              <a
-                href={`?tab=tasks&drawerType=task&drawerId=${selected.id}&panelTab=files`}
-                className="flex min-h-10 items-center gap-2 text-sm text-blue-600"
-              >
-                Open task files
-                <ExternalLink className="h-4 w-4" />
-              </a>
-            </div>
-            <div className="min-h-48 flex-1">
+            <div className="min-h-0 flex-1">
               <FolderListView
                 projectId={projectId}
                 folderId={null}
                 canEdit={canEdit}
                 canManageFiles={canManageFiles}
                 collection={{
+                  preserveOrder: true,
+                  menuItems: taskMenuItems,
                   onUnlink: canEdit ? setUnlinkTarget : undefined,
                   nodes: visibleEntries.map((entry) => entry.node),
                   labels: Object.fromEntries(
                     visibleEntries.map((entry) => [
                       entry.node.id,
                       view === "deliverables"
-                        ? "Deliverable · Review status unavailable"
+                        ? `Deliverable · ${deliverableReviewLabel(entry, selected.reviewStatus)}`
                         : entry.role === "reference"
                           ? "Reference"
                           : "Working file",
                     ]),
                   ),
                   emptyMessage: "No files match these filters.",
-                  footer: nextFileCursor ? (
+                  footer: result.hasNextPage ? (
                     <button
                       type="button"
-                      disabled={loadingMore}
-                      onClick={() => void moreFiles(selected)}
+                      disabled={result.isFetchingNextPage}
+                      onClick={() => void result.fetchNextPage()}
                       className="m-3 min-h-10 rounded border px-4"
                     >
-                      {loadingMore ? "Loading…" : "Load more files"}
+                      {result.isFetchingNextPage ? "Loading…" : "Load more files"}
                     </button>
                   ) : undefined,
                 }}
@@ -344,7 +264,6 @@ export function TaskFilesCollection({ projectId }: { projectId: string }) {
           try {
             await unlinkNodeFromTask(taskId, unlinkTarget.id);
             setUnlinkTarget(null);
-            setExtraPages({});
             void queryClient.invalidateQueries({
               queryKey: ["files-task-collections", projectId],
             });
