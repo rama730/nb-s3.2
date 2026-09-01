@@ -7,7 +7,7 @@ function getWorkerOnlyFunctions() {
   const { flushProjectViews } = loadModule("./functions/flush-views");
   const { flushUpdateLikes } = loadModule("./functions/flush-likes");
   const { cleanupProjectUpdate } = loadModule("./functions/cleanup-update");
-  const { gitPull, gitPush, lockCleanup, uploadIntentCleanup } = loadModule("./functions/git-sync");
+  const { gitPull, gitPush, gitSyncRecovery, lockCleanup, uploadIntentCleanup } = loadModule("./functions/git-sync");
   const { migrateProjectFileLegacyKeys } = loadModule("./functions/project-files-key-migration");
   const { finishPendingFileDeletions } = loadModule("./functions/project-files-permanent-delete");
   const { reconcileProjectFiles } = loadModule("./functions/project-files-reconciliation");
@@ -37,6 +37,7 @@ function getWorkerOnlyFunctions() {
     projectImportHydrate,
     gitPush,
     gitPull,
+    gitSyncRecovery,
     lockCleanup,
     uploadIntentCleanup,
     onboardingClaimsRepair,
