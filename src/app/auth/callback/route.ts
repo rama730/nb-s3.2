@@ -3,9 +3,10 @@ import { createClient } from '@/lib/supabase/server'
 import { logger } from '@/lib/logger'
 import { normalizeAuthNextPath, resolveAuthBaseUrl } from '@/lib/auth/redirects'
 import { getAuthHardeningPhase } from '@/lib/auth/hardening'
-import { setGithubImportAccessCookie } from '@/lib/github/import-access-cookie'
+import { clearGithubImportAccessCookie, setGithubImportAccessCookie } from '@/lib/github/import-access-cookie'
 import { sealGithubImportToken } from '@/lib/github/repo-security'
 import { isCompletedOnboardingStatus } from '@/lib/onboarding/state'
+import { ensureDefaultGithubContributorIdentity } from '@/lib/github/contributor-identity'
 
 export async function GET(request: Request) {
     const startedAt = Date.now()
@@ -57,6 +58,10 @@ export async function GET(request: Request) {
     }
 
     const supabase = await createClient()
+    const [{ data: previousUserData }, { data: previousSessionData }] = await Promise.all([
+        supabase.auth.getUser(),
+        supabase.auth.getSession(),
+    ])
     const { data, error } = await supabase.auth.exchangeCodeForSession(code)
     if (error) {
         logger.metric('auth.callback.exchange.failure', {
@@ -114,14 +119,60 @@ export async function GET(request: Request) {
     }
 
     const successUrl = new URL(destinationPath, baseUrl)
-    const response = NextResponse.redirect(successUrl)
     const providerToken = typeof (data?.session as { provider_token?: unknown } | null | undefined)?.provider_token === 'string'
         ? (data?.session as { provider_token?: string }).provider_token?.trim() || ''
         : ''
-    if (provider === 'github' && providerToken) {
-        const sealed = sealGithubImportToken(providerToken)
-        if (sealed) {
-            setGithubImportAccessCookie(response, sealed)
+    const previousUser = previousUserData.user
+    const expectedUser = previousUser ?? data.user
+    const githubIdentityMatches = provider !== 'github'
+        || !previousUser
+        || previousUser.id === data.user.id
+    const githubGrantIsValid = provider === 'github'
+        && Boolean(providerToken)
+        && githubIdentityMatches
+
+    if (provider === 'github' && !githubGrantIsValid) {
+        successUrl.searchParams.set(
+            'githubAuth',
+            providerToken && !githubIdentityMatches ? 'account_mismatch' : 'token_missing',
+        )
+    } else if (provider === 'github') {
+        successUrl.searchParams.delete('githubAuth')
+    }
+
+    // Repository authorization must not replace the account session that
+    // initiated it. The browser also retains that session, but restoring it
+    // here removes the race between the callback redirect and session bridge.
+    if (provider === 'github' && previousSessionData.session && previousUser) {
+        await supabase.auth.setSession({
+            access_token: previousSessionData.session.access_token,
+            refresh_token: previousSessionData.session.refresh_token,
+        }).catch((sessionError) => {
+            logger.warn('github.repository_auth.session_restore_failed', {
+                requestId,
+                userId: previousUser.id,
+                error: sessionError instanceof Error ? sessionError.message : String(sessionError),
+            })
+        })
+    }
+
+    const response = NextResponse.redirect(successUrl)
+    if (provider === 'github') {
+        if (!githubGrantIsValid) {
+            clearGithubImportAccessCookie(response)
+        } else {
+            const sealed = sealGithubImportToken(providerToken)
+            if (sealed) setGithubImportAccessCookie(response, sealed)
+            try {
+                await ensureDefaultGithubContributorIdentity(expectedUser.id, providerToken)
+            } catch (identityError) {
+                // Attribution enrichment must never block a successful OAuth flow.
+                logger.warn('github.contributor_identity.default_failed', {
+                    requestId,
+                    userId: expectedUser.id,
+                    error: identityError instanceof Error ? identityError.message : String(identityError),
+                })
+            }
         }
     }
     response.headers.set('x-request-id', requestId)
