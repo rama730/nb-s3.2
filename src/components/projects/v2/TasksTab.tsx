@@ -1,6 +1,7 @@
 "use client";
 
 import { toast } from "sonner";
+import { filesReturnQuery } from "@/lib/files/task-navigation";
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Users, UserPlus, Plus, Check } from "lucide-react";
@@ -412,6 +413,11 @@ export default function TasksTab({
     loadingInitialOpenTaskRef.current = null;
     if (typeof window !== "undefined") {
       const nextParams = new URLSearchParams(window.location.search);
+      const filesReturn = filesReturnQuery(nextParams.get("filesReturn") ?? "");
+      if (filesReturn) {
+        router.replace(`${window.location.pathname}?${filesReturn}`, { scroll: false });
+        return;
+      }
       let changed = false;
       for (const key of [
         "drawerType",
