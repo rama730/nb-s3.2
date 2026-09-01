@@ -46,16 +46,9 @@ export function SavedFilesCollection({ projectId }: { projectId: string }) {
     ) ?? [];
   return (
     <section
-      className="flex h-full min-h-0 flex-col p-3"
+      className="flex h-full min-h-0 flex-col"
       aria-label={`${view.view} files`}
     >
-      <h2 className="text-lg font-semibold">
-        {view.view === "recent" ? "Recent files" : "Starred files"}
-      </h2>
-      <p className="mb-4 mt-1 text-sm text-zinc-500">
-        Shortcuts saved in this browser. Deleted files and files you can no
-        longer access are excluded.
-      </p>
       {result.isError && (
         <p role="alert" className="p-3 text-sm">
           Could not update this collection.{" "}
