@@ -37,6 +37,7 @@
 //     that fixes the Req 17 metadata-stale bug.
 
 "use client";
+import { FilesHeaderSlot } from "../FilesHeaderSlot";
 
 import { toast } from "sonner";
 
@@ -98,6 +99,7 @@ export interface TextViewerProps {
   leaseStatus?: FileLeaseStatus;
   leaseConflict?: FileLeaseView | null;
   onCancel?: () => void;
+  onRetryLease?: () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -119,6 +121,7 @@ export function TextViewer({
   leaseStatus = "idle",
   leaseConflict = null,
   onCancel,
+  onRetryLease,
 }: TextViewerProps): React.JSX.Element {
   const { resolvedTheme } = useTheme();
   const upsertNodes = useFilesWorkspaceStore((s) => s.upsertNodes);
@@ -131,8 +134,17 @@ export function TextViewer({
   // re-converge after a successful Save.
   const [savedContent, setSavedContent] = React.useState<string>("");
   const [content, setContent] = React.useState<string>("");
+  const [baseVersion, setBaseVersion] = React.useState(node.currentVersion ?? 1);
+  const [loadAttempt, setLoadAttempt] = React.useState(0);
+  const editSnapshot = React.useRef<{ nodeId: string; version: number; updatedAt: ProjectNode["updatedAt"] } | null>(null);
+  if (mode !== "edit") editSnapshot.current = null;
+  else if (editSnapshot.current?.nodeId !== node.id) editSnapshot.current = { nodeId: node.id, version: node.currentVersion ?? 1, updatedAt: node.updatedAt };
+  // Freeze the base while editing: realtime revisions must not replace the draft.
+  const loadVersion = editSnapshot.current?.version ?? node.currentVersion ?? 1;
+  const loadUpdatedAt = editSnapshot.current?.updatedAt ?? node.updatedAt;
   const [baseHash, setBaseHash] = React.useState<string | null>(null);
   const [isSaving, setIsSaving] = React.useState(false);
+  const [saveError, setSaveError] = React.useState<string | null>(null);
   const [isModalOpen, setIsModalOpen] = React.useState(false);
 
   // ── Dark theme extension (lazy-loaded) ─────────────────────────────
@@ -169,6 +181,7 @@ export function TextViewer({
     setContent("");
     setSavedContent("");
     setBaseHash(null);
+    setBaseVersion(loadVersion);
 
     void (async () => {
       try {
@@ -184,7 +197,7 @@ export function TextViewer({
         setSavedContent(text);
         setContent(text);
         setBaseHash(
-          versions.find((version) => version.version === (node.currentVersion ?? 1))?.contentHash ?? null,
+          versions.find((version) => version.version === loadVersion)?.contentHash ?? null,
         );
         setStatus("ready");
       } catch (err) {
@@ -198,13 +211,21 @@ export function TextViewer({
     return () => {
       cancelled = true;
     };
-  }, [projectId, node.id, mode, node.currentVersion]);
+  }, [projectId, node.id, mode, loadVersion, loadUpdatedAt, loadAttempt]);
 
   // ── Dirty state ────────────────────────────────────────────────────
   // Only meaningful in Edit mode; Raw always renders `savedContent`, so
   // it can never be dirty. Report changes to the parent for the metadata
   // strip's indicator.
   const isDirty = mode === "edit" && content !== savedContent;
+  React.useEffect(() => {
+    const discard = (event: Event) => {
+      const detail = (event as CustomEvent).detail;
+      if (detail?.projectId === projectId && detail.nodeId === node.id) setContent(savedContent);
+    };
+    window.addEventListener("project:discard-file-edits", discard);
+    return () => window.removeEventListener("project:discard-file-edits", discard);
+  }, [projectId, node.id, savedContent]);
   React.useEffect(() => {
     onDirtyChange?.(isDirty);
   }, [isDirty, onDirtyChange]);
@@ -243,12 +264,13 @@ export function TextViewer({
       return;
     }
     setIsModalOpen(true);
-  }, [canEdit, isSaving, isDirty, node.s3Key]);
+  }, [canEdit, isSaving, isDirty, node.s3Key, lease]);
 
   const handleRevisionOptionSelected = React.useCallback(
     async (choice: { option: "overwrite" | "commit"; comment?: string }) => {
       if (!canEdit || isSaving) return;
       setIsSaving(true);
+      setSaveError(null);
 
       try {
         const supabase = createSupabaseBrowserClient();
@@ -261,7 +283,7 @@ export function TextViewer({
           file,
           mode: choice.option === "commit" ? "new_revision" : "active_revision",
           comment: choice.comment || (choice.option === "commit" ? "Updated via Editor" : null),
-          baseVersion: node.currentVersion,
+          baseVersion,
           baseHash,
           lease,
           supabase,
@@ -270,22 +292,26 @@ export function TextViewer({
         if (result.success) {
           setSavedContent(content);
           setBaseHash(result.version.contentHash ?? null);
+          setBaseVersion(result.version.version);
+          window.dispatchEvent(new CustomEvent("project:task-files-changed", { detail: { projectId } }));
           upsertNodes(projectId, [result.node]);
           onSaved?.();
           toast.success(choice.option === "commit"
               ? "New revision committed successfully"
               : "Active revision updated successfully");
         } else {
+          setSaveError(result.error || "Failed to save revision");
           toast.error(result.error || "Failed to save revision");
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : "Unknown error";
+        setSaveError(message);
         toast.error(`Failed to save: ${message}`);
       } finally {
         setIsSaving(false);
       }
     },
-    [baseHash, canEdit, content, isSaving, lease, node.currentVersion, node.id, node.name, node.mimeType, node.s3Key, onSaved, projectId,upsertNodes]
+    [baseHash, baseVersion, canEdit, content, isSaving, lease, node.id, node.name, node.mimeType, node.s3Key, onSaved, projectId,upsertNodes]
   );
 
   // ── Render ─────────────────────────────────────────────────────────
@@ -307,6 +333,7 @@ export function TextViewer({
         className="flex h-full min-h-0 w-full flex-col items-center justify-center gap-2 p-4 text-center text-xs text-zinc-600 dark:text-zinc-300"
       >
         <p className="font-medium">Failed to load file content</p>
+        <Button variant="outline" onClick={() => setLoadAttempt(value => value + 1)}>Retry preview</Button>
         {loadError ? (
           <p className="max-w-md break-words text-zinc-500 dark:text-zinc-400">
             {loadError}
@@ -382,12 +409,13 @@ export function TextViewer({
       data-testid="files-tab-text-viewer-edit"
       className="flex h-full min-h-0 w-full flex-col"
     >
-      <div className="flex items-center justify-between gap-2 border-b border-zinc-200 bg-zinc-50 px-3 py-1.5 dark:border-zinc-800 dark:bg-zinc-900">
+      <FilesHeaderSlot slot="status"><div className="flex items-center gap-2">
         <div className="flex items-center gap-2 text-[11px] text-zinc-500 dark:text-zinc-400">
           {isDirty ? (
             <span
               data-testid="files-tab-text-viewer-dirty"
-              className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
+              className="max-w-16 truncate rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 sm:max-w-none dark:bg-amber-900/30 dark:text-amber-300"
+              title="Unsaved changes"
             >
               Unsaved changes
             </span>
@@ -418,7 +446,18 @@ export function TextViewer({
             {isSaving ? "Saving…" : "Save"}
           </Button>
         </div>
-      </div>
+      </div></FilesHeaderSlot>
+      {saveError && <div role="alert" className="border-b border-red-200 p-3 text-xs text-red-700 dark:border-red-900 dark:text-red-300">
+        <p>{saveError} Your draft is still here.</p>
+        <Button variant="outline" size="sm" className="mt-2" onClick={() => {
+          const url = URL.createObjectURL(new Blob([content], { type: node.mimeType || "text/plain" }));
+          const link = document.createElement("a");
+          link.href = url;
+          link.download = node.name;
+          link.click();
+          window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }}>Download draft</Button>
+      </div>}
       {leaseStatus === "lost" || leaseStatus === "conflict" ? (
         <div
           role="alert"
@@ -427,7 +466,8 @@ export function TextViewer({
         >
           {leaseConflict
             ? `${leaseConflict.lockedByName || "Another collaborator"} is editing this file${leaseConflict.clientKind === "vscode" ? " in VS Code" : ""}.`
-            : "The editing lease was lost. Your unsaved buffer is preserved, but saving is blocked until you reopen Edit."}
+            : "The editing lease was lost. Your unsaved buffer is preserved, but saving is blocked until editing access is restored."}
+          {onRetryLease && <Button variant="outline" size="sm" className="ml-2" onClick={onRetryLease}>Retry editing access</Button>}
         </div>
       ) : null}
       <div className="min-h-0 flex-1">
