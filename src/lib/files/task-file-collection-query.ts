@@ -44,13 +44,13 @@ export function taskFileRoleSql(input: { tags: SQL; annotation: SQL; name: SQL; 
 /** Collection is a read model over links/legacy ownership, not another folder tree. */
 export function taskFileAssociationsSql(projectId: string) {
   return sql`WITH attachments AS (
-    SELECT l.task_id, n.id AS node_id,
+    SELECT l.task_id, n.id AS node_id, l.tags,
       ${taskFileRoleSql({ tags: sql`l.tags`, annotation: sql`l.annotation`, name: sql`n.name`, canonicalNodeId: sql`n.canonical_node_id` })} AS role
     FROM task_node_links l
     JOIN project_nodes n ON n.id = l.node_id AND n.project_id = ${projectId} AND n.deleted_at IS NULL
     JOIN tasks t ON t.id = l.task_id AND t.project_id = ${projectId} AND t.deleted_at IS NULL
     UNION ALL
-    SELECT t.id, n.id,
+    SELECT t.id, n.id, '[]'::jsonb AS tags,
       ${taskFileRoleSql({ tags: sql`'[]'::jsonb`, annotation: sql`NULL::text`, name: sql`n.name`, canonicalNodeId: sql`n.canonical_node_id` })} AS role
     FROM tasks t
     JOIN project_nodes n ON n.project_id = t.project_id AND n.deleted_at IS NULL
