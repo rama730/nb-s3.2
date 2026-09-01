@@ -88,6 +88,19 @@ export function toProjectCardViewModel(project: Project): ProjectCardViewModel {
         });
     }
 
+    if (Array.isArray(extendedProject.collaborators)) {
+        extendedProject.collaborators.forEach((collab: any) => {
+            const user = collab.user || collab;
+            if (user && user.id !== extendedProject.owner?.id) {
+                collaborators.push({
+                    full_name: user.fullName || user.displayName || user.full_name,
+                    avatar_url: user.avatarUrl || user.avatar_url,
+                    username: user.username,
+                });
+            }
+        });
+    }
+
     // Open Roles
     const rawRoles = extendedProject.openRoles || [];
     let totalOpenRoles = 0;
