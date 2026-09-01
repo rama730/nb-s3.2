@@ -112,6 +112,7 @@ export async function listFileVersions(
       uploadedBy: fileVersions.uploadedBy,
       uploadedAt: fileVersions.uploadedAt,
       comment: fileVersions.comment,
+      attribution: fileVersions.attribution,
       uploadedByName: profiles.fullName,
       uploadedByUsername: profiles.username,
     })
