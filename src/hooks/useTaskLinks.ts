@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 export interface LinkedTask {
   taskId: string;
@@ -25,42 +26,35 @@ export interface UseTaskLinksReturn {
 }
 
 export function useTaskLinks(projectId: string, nodeId: string): UseTaskLinksReturn {
-  const [tasks, setTasks] = useState<LinkedTask[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const mountedRef = useRef(true);
-
-  const fetchLinks = useCallback(async () => {
-    if (!projectId || !nodeId) return;
-    try {
+  const client = useQueryClient();
+  const result = useQuery({
+    queryKey: ["files-linked-tasks", projectId, nodeId],
+    enabled: Boolean(projectId && nodeId),
+    queryFn: async () => {
       const { getTaskLinksForNode } = await import("@/app/actions/files/links");
-      const result = await getTaskLinksForNode(projectId, nodeId);
-      if (mountedRef.current) {
-        setTasks(result);
-        setError(null);
-      }
-    } catch (err) {
-      if (mountedRef.current) {
-        setError(err instanceof Error ? err.message : "Failed to fetch task links");
-      }
-    }
-  }, [projectId, nodeId]);
-
+      return getTaskLinksForNode(projectId, nodeId);
+    },
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+    refetchIntervalInBackground: false,
+  });
+  const tasks = result.data ?? EMPTY_TASKS;
+  const isLoading = result.isPending;
+  const error = result.error?.message ?? null;
+  const fetchLinks = useCallback(async () => {
+    await client.invalidateQueries({ queryKey: ["files-linked-tasks", projectId, nodeId] });
+  }, [client, projectId, nodeId]);
   useEffect(() => {
-    mountedRef.current = true;
-    setIsLoading(true);
-    setError(null);
-
-    fetchLinks().finally(() => {
-      if (mountedRef.current) {
-        setIsLoading(false);
-      }
-    });
-
-    return () => {
-      mountedRef.current = false;
+    const changed = (event: Event) => {
+      if ((event as CustomEvent<{ projectId?: string }>).detail?.projectId === projectId) void fetchLinks();
     };
-  }, [fetchLinks]);
+    window.addEventListener("project:task-files-changed", changed);
+    return () => window.removeEventListener("project:task-files-changed", changed);
+  }, [fetchLinks, projectId]);
+
+  const notifyChanged = useCallback(() => {
+    window.dispatchEvent(new CustomEvent("project:task-files-changed", { detail: { projectId, nodeId } }));
+  }, [projectId, nodeId]);
 
   const refresh = useCallback(async () => {
     await fetchLinks();
@@ -71,14 +65,14 @@ export function useTaskLinks(projectId: string, nodeId: string): UseTaskLinksRet
       try {
         const { linkNodeToTask } = await import("@/app/actions/files/links");
         await linkNodeToTask(taskId, nodeId, { role: "reference" });
-        await fetchLinks();
+        notifyChanged();
         return { success: true };
       } catch (err) {
         const message = err instanceof Error ? err.message : "Failed to link task";
         return { success: false, error: message };
       }
     },
-    [nodeId, fetchLinks],
+    [nodeId, notifyChanged],
   );
 
   const unlink = useCallback(
@@ -86,14 +80,14 @@ export function useTaskLinks(projectId: string, nodeId: string): UseTaskLinksRet
       try {
         const { unlinkNodeFromTask } = await import("@/app/actions/files/links");
         await unlinkNodeFromTask(taskId, nodeId);
-        await fetchLinks();
+        notifyChanged();
         return { success: true };
       } catch (err) {
         const message = err instanceof Error ? err.message : "Failed to unlink task";
         return { success: false, error: message };
       }
     },
-    [nodeId, fetchLinks],
+    [nodeId, notifyChanged],
   );
 
   const updateAnnotation = useCallback(
@@ -101,14 +95,14 @@ export function useTaskLinks(projectId: string, nodeId: string): UseTaskLinksRet
       try {
         const { updateTaskNodeLink } = await import("@/app/actions/files/links");
         await updateTaskNodeLink(taskId, nodeId, { annotation });
-        await fetchLinks();
+        notifyChanged();
         return { success: true };
       } catch (err) {
         const message = err instanceof Error ? err.message : "Failed to update annotation";
         return { success: false, error: message };
       }
     },
-    [nodeId, fetchLinks],
+    [nodeId, notifyChanged],
   );
 
   return useMemo(() => ({
@@ -122,3 +116,5 @@ export function useTaskLinks(projectId: string, nodeId: string): UseTaskLinksRet
     refresh,
   }), [tasks, isLoading, error, link, unlink, updateAnnotation, refresh]);
 }
+
+const EMPTY_TASKS: LinkedTask[] = [];
