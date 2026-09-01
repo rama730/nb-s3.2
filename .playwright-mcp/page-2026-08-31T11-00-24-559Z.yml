@@ -1,0 +1,14 @@
+- generic [active] [ref=f4e1]:
+  - generic [ref=f4e2]:
+    - banner [ref=f4e3]:
+      - generic [ref=f4e4]:
+        - link "Navigate to home" [ref=f4e7] [cursor=pointer]:
+          - /url: /
+          - generic [ref=f4e14]: NB
+        - generic [ref=f4e15]:
+          - button "Theme (loading)" [disabled]
+    - main [ref=f4e18]:
+      - generic [ref=f4e19]: Loading project data...
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=f4e26] [cursor=pointer]
+  - alert [ref=f4e30]
