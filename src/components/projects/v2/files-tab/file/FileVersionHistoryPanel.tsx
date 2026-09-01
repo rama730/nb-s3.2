@@ -32,6 +32,7 @@ import type { FileVersion } from "@/lib/db/schema";
 import { VersionPill } from "../VersionPill";
 import { FileInspectorPanelHeader } from "./FileInspectorPanelHeader";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { formatBytes, formatFileTimestamp as formatDate, formatFileActor } from "../folder/format";
 
 type FileVersionWithUploader = FileVersion & {
   uploadedByName?: string | null;
@@ -39,26 +40,6 @@ type FileVersionWithUploader = FileVersion & {
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────
-
-function formatBytes(bytes?: number | null) {
-  const b = bytes ?? 0;
-  if (b < 1024) return `${b} B`;
-  const kb = b / 1024;
-  if (kb < 1024) return `${kb.toFixed(1)} KB`;
-  const mb = kb / 1024;
-  if (mb < 1024) return `${mb.toFixed(1)} MB`;
-  return `${(mb / 1024).toFixed(2)} GB`;
-}
-
-function formatDate(date: Date | string | null | undefined): string {
-  if (!date) return "—";
-  const value = date instanceof Date ? date : new Date(date);
-  if (Number.isNaN(value.getTime())) return "—";
-  return value.toLocaleString(undefined, {
-    dateStyle: "medium",
-    timeStyle: "medium",
-  });
-}
 
 // ─── Props ───────────────────────────────────────────────────────────
 
@@ -133,9 +114,8 @@ export function FileVersionHistoryPanel({
         if (result.success) {
           toast.success(`Restored v${version.version} successfully`);
           
-          if ((result as any).node) {
-            useFilesWorkspaceStore.getState().setNodes(projectId, [(result as any).node]);
-          }
+          useFilesWorkspaceStore.getState().setNodes(projectId, [result.node]);
+          window.dispatchEvent(new CustomEvent("project:task-files-changed", { detail: { projectId } }));
 
           // Emit telemetry (Req 16.4) — Task 7.5 wires this
           logger.metric("files_tab.version_restored", {
@@ -143,7 +123,7 @@ export function FileVersionHistoryPanel({
             projectId,
             nodeId,
             restoredFromVersion: version.version,
-            newVersion: version.version,
+            newVersion: result.version.version,
           });
           // Refresh the list to show the updated active version
           await listVersions();
@@ -206,12 +186,13 @@ export function FileVersionHistoryPanel({
         if (result.success) {
           toast.success(`Deleted version ${version.version} successfully`);
           
-          if ((result as any).node) {
-            useFilesWorkspaceStore.getState().setNodes(projectId, [(result as any).node]);
+          if (result.node) {
+            useFilesWorkspaceStore.getState().setNodes(projectId, [result.node]);
           }
+          window.dispatchEvent(new CustomEvent("project:task-files-changed", { detail: { projectId } }));
           await listVersions();
         } else {
-          toast.error((result as any).error || "Delete failed");
+          toast.error(result.error || "Delete failed");
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : "Delete failed";
@@ -238,10 +219,7 @@ export function FileVersionHistoryPanel({
           : "";
       if (directUsername) return directUsername;
       const userId = version.uploadedBy;
-      if (!userId) return "Unknown";
-      const named = uploaderNames?.[userId];
-      if (named) return named;
-      return `${userId.slice(0, 8)}…`;
+      return formatFileActor({ updatedByName: userId ? uploaderNames?.[userId] : null });
     },
     [uploaderNames],
   );
@@ -301,8 +279,9 @@ export function FileVersionHistoryPanel({
             Loading versions…
           </div>
         ) : error ? (
-          <div className="px-3 py-6 text-center text-xs text-red-500">
+          <div role="alert" className="px-3 py-6 text-center text-xs text-red-500">
             {error}
+            <button type="button" onClick={() => void listVersions()} className="mx-auto mt-3 block min-h-10 rounded border px-3">Retry</button>
           </div>
         ) : versions.length === 0 ? (
           <div className="px-3 py-6 text-center text-xs text-zinc-500 dark:text-zinc-400">
@@ -336,7 +315,7 @@ export function FileVersionHistoryPanel({
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-1.5">
                         <span className="text-xs font-medium text-zinc-900 dark:text-zinc-100">
-                          {formatBytes(version.size)}
+                          {formatBytes(version.size) || "Size not recorded"}
                         </span>
                         {isCurrent && (
                           <span className="rounded-full bg-indigo-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-200">
@@ -355,7 +334,7 @@ export function FileVersionHistoryPanel({
                     </div>
 
                     {/* Actions */}
-                    <div className="flex flex-col gap-1 shrink-0">
+                    <div className="flex flex-col gap-1 shrink-0 [&>button]:min-h-10 [&>button]:min-w-10">
                       <button
                         type="button"
                         disabled={pendingAction === dlKey}
@@ -400,7 +379,7 @@ export function FileVersionHistoryPanel({
                       )}
 
                       {/* Delete button: Leads/Co-Leads only */}
-                      {canEdit && (
+                      {canEdit && !isDeleted && (
                         <button
                           type="button"
                           disabled={pendingAction === `delete:${version.id}`}
