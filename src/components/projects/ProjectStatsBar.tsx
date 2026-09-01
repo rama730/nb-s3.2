@@ -1,6 +1,6 @@
 "use client";
 
-import { Eye, Users, Bookmark } from "lucide-react";
+import { TrendingUp, Users, Bookmark } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface ProjectStatsBarProps {
@@ -26,14 +26,9 @@ export default function ProjectStatsBar({
     return (
         <div className={cn("flex items-center gap-3 text-zinc-500 dark:text-zinc-400", textClass, className)}>
             <div className="flex items-center gap-1" title="Total Views" data-testid={`${testIdPrefix}-view-count`}>
-                <Eye className={iconClass} />
+                <TrendingUp className={iconClass} />
                 <span className="font-semibold text-zinc-900 dark:text-zinc-200">{viewCount}</span>
             </div>
-            <div className="flex items-center gap-1" title="Followers" data-testid={`${testIdPrefix}-followers-count`}>
-                <Users className={iconClass} />
-                <span className="font-semibold text-zinc-900 dark:text-zinc-200">{followersCount}</span>
-            </div>
-
         </div>
     );
 }
