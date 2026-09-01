@@ -3,13 +3,7 @@
 "use client";
 
 import * as React from "react";
-import {
-  AlertTriangle,
-  PanelLeftOpen,
-  Loader2,
-  ArrowLeft,
-  Search,
-} from "lucide-react";
+import { AlertTriangle, Loader2 } from "lucide-react";
 
 import type { ProjectNode } from "@/lib/db/schema";
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
@@ -17,13 +11,18 @@ import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 import { useFilesTabRole } from "./FilesTabRoleContext";
 import { useCurrentLocation } from "./hooks/useCurrentLocation";
 import { FilesTabBootContext } from "./hooks/useFolderContents";
-import { BreadcrumbBar } from "./breadcrumb/BreadcrumbBar";
+import {
+  FilesWorkspaceHeader,
+  FilesWorkspaceMenu,
+} from "./FilesWorkspaceHeader";
 import { FolderListView } from "./folder/FolderListView";
 import { FileView } from "./file/FileView";
 import { useFilesWorkspaceView } from "./FilesWorkspaceViews";
 import { TaskFilesCollection } from "./TaskFilesCollection";
 import { SavedFilesCollection } from "./SavedFilesCollection";
 import { TrashFilesCollection } from "./TrashFilesCollection";
+import { GitHubSyncWorkspace } from "./GitHubSyncWorkspace";
+import type { GithubImportAccessState } from "@/lib/github/import-types";
 
 // ---------------------------------------------------------------------------
 // Props
@@ -31,7 +30,9 @@ import { TrashFilesCollection } from "./TrashFilesCollection";
 
 export interface FilesTabMainProps {
   projectId: string;
+  projectName?: string;
   canOpenGitHub?: boolean;
+  githubAccess?: GithubImportAccessState | null;
 }
 
 // Stable empty object used by selectors reading `nodesById` when the
@@ -46,7 +47,9 @@ const EMPTY_NODES = Object.freeze({}) as Record<string, ProjectNode>;
 
 export function FilesTabMain({
   projectId,
+  projectName,
   canOpenGitHub,
+  githubAccess,
 }: FilesTabMainProps): React.JSX.Element {
   const { canEdit, canManageFiles } = useFilesTabRole();
   const location = useCurrentLocation(projectId);
@@ -59,12 +62,6 @@ export function FilesTabMain({
   // Read the booting state from the explorer context (injected via FilesTabRoot)
   const bootContext = React.useContext(FilesTabBootContext);
   const isBooting = bootContext?.isBooting ?? false;
-
-  // ── Sidebar collapsed state (Req 18.1–18.6) ──────────────────────
-  const sidebarCollapsed = useFilesWorkspaceStore(
-    (s) => s.byProjectId[projectId]?.ui?.sidebarCollapsed ?? false,
-  );
-  const toggleSidebar = useFilesWorkspaceStore((s) => s.toggleSidebar);
 
   // Read the raw `currentLocationId` + `nodesById` so we can detect the
   // Req 1.8 "id set but unresolved" case independently of
@@ -85,113 +82,66 @@ export function FilesTabMain({
       data-testid="files-tab-main"
       className="flex-1 flex flex-col min-w-0 h-full relative"
     >
-      {/* Sidebar_Reopen_Control — Req 18.1–18.6 */}
-      {(sidebarCollapsed ||
-        isCollection ||
-        workspaceView?.view !== "project") && (
-        <div className="flex min-h-12 shrink-0 flex-wrap items-center gap-3 border-b border-zinc-200 px-3 py-1 dark:border-zinc-800">
-          {sidebarCollapsed && (
-            <button
-              type="button"
-              onClick={() => toggleSidebar(projectId)}
-              aria-label="Show sidebar"
-              title="Show sidebar"
-              data-testid="files-tab-sidebar-expand"
-              className="flex shrink-0 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-100 focus-visible:ring-2 focus-visible:ring-blue-500 dark:hover:bg-zinc-800"
-              style={{ width: 44, height: 44 }}
-            >
-              <PanelLeftOpen className="w-4 h-4" />
-            </button>
-          )}
-          {workspaceView?.view !== "project" && currentLocationId ? (
-            <button
-              type="button"
-              onClick={workspaceView?.returnToCollection}
-              className="flex min-h-10 items-center gap-2 text-sm focus-visible:ring-2"
-            >
-              <ArrowLeft className="size-4" />
-              Back to{" "}
-              {workspaceView?.taskId ? "task files" : workspaceView?.view}
-            </button>
+      <FilesWorkspaceHeader
+        projectId={projectId}
+        location={location}
+        canOpenGitHub={canOpenGitHub}
+      >
+        {!isCollection && (isBooting || unresolved) && (
+          <FilesWorkspaceMenu projectId={projectId} />
+        )}
+        {isCollection ? (
+          workspaceView.view === "github" ? (
+            <GitHubSyncWorkspace
+              projectId={projectId}
+              projectName={projectName}
+              canManage={!!canOpenGitHub}
+              access={githubAccess ?? null}
+            />
+          ) : workspaceView.view === "tasks" ||
+            workspaceView.view === "deliverables" ? (
+            <TaskFilesCollection
+              key={`${projectId}:${workspaceView.view}:${workspaceView.taskId ?? "all"}`}
+              projectId={projectId}
+            />
+          ) : workspaceView.view === "trash" ? (
+            <TrashFilesCollection projectId={projectId} />
           ) : (
-            <span className="text-sm font-medium">
-              {workspaceView?.view === "project" ? "Project files" : "Files"}
-            </span>
-          )}
-          {workspaceView && isCollection && (
-            <label className="ml-auto flex min-w-0 flex-1 items-center gap-2 rounded-md border border-zinc-200 px-3 sm:max-w-sm dark:border-zinc-700">
-              <Search
-                aria-hidden="true"
-                className="size-4 shrink-0 text-zinc-500"
-              />
-              <input
-                type="search"
-                value={workspaceView.query}
-                onChange={(event) => workspaceView.setQuery(event.target.value)}
-                aria-label={`Search ${workspaceView.view} files`}
-                placeholder={`Search ${workspaceView.view === "project" ? "project files" : workspaceView.view}…`}
-                className="h-9 w-full min-w-0 bg-transparent text-sm outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
-              />
-            </label>
-          )}
-        </div>
-      )}
-      {!isCollection && (
-        <BreadcrumbBar
-          projectId={projectId}
-          location={location}
-          onToggleGitHubSync={
-            canOpenGitHub && workspaceView?.view === "project"
-              ? () =>
-                  workspaceView.setInspector((current) =>
-                    current === "github" ? null : "github",
-                  )
-              : undefined
-          }
-        />
-      )}
-      {isCollection ? (
-        workspaceView.view === "tasks" ||
-        workspaceView.view === "deliverables" ? (
-          <TaskFilesCollection
-            key={`${projectId}:${workspaceView.view}:${workspaceView.taskId ?? "all"}`}
+            <SavedFilesCollection projectId={projectId} />
+          )
+        ) : isBooting ? (
+          <div
+            role="status"
+            aria-busy="true"
+            aria-live="polite"
+            data-testid="files-tab-main-loading"
+            className="flex flex-1 items-center justify-center gap-2 p-8 text-zinc-500"
+          >
+            <Loader2 className="h-4 w-4 animate-spin text-zinc-400 dark:text-zinc-500" />
+            <span>Loading workspace...</span>
+          </div>
+        ) : unresolved ? (
+          <LocationNotFound />
+        ) : location === null ||
+          location.type === "root" ||
+          location.type === "folder" ? (
+          <FolderListView
             projectId={projectId}
+            folderId={
+              location && location.type === "folder" ? location.id : null
+            }
+            canEdit={canEdit}
+            canManageFiles={canManageFiles}
           />
-        ) : workspaceView.view === "trash" ? (
-          <TrashFilesCollection projectId={projectId} />
         ) : (
-          <SavedFilesCollection projectId={projectId} />
-        )
-      ) : isBooting ? (
-        <div
-          role="status"
-          aria-busy="true"
-          aria-live="polite"
-          data-testid="files-tab-main-loading"
-          className="flex flex-1 items-center justify-center gap-2 p-8 text-zinc-500"
-        >
-          <Loader2 className="h-4 w-4 animate-spin text-zinc-400 dark:text-zinc-500" />
-          <span>Loading workspace...</span>
-        </div>
-      ) : unresolved ? (
-        <LocationNotFound />
-      ) : location === null ||
-        location.type === "root" ||
-        location.type === "folder" ? (
-        <FolderListView
-          projectId={projectId}
-          folderId={location && location.type === "folder" ? location.id : null}
-          canEdit={canEdit}
-          canManageFiles={canManageFiles}
-        />
-      ) : (
-        <FileView
-          key={location.id}
-          projectId={projectId}
-          node={location.node}
-          canEdit={canEdit}
-        />
-      )}
+          <FileView
+            key={location.id}
+            projectId={projectId}
+            node={location.node}
+            canEdit={canEdit}
+          />
+        )}
+      </FilesWorkspaceHeader>
     </div>
   );
 }
