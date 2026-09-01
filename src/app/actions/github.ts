@@ -11,6 +11,7 @@ import { runInFlightDeduped } from '@/lib/utils/inflight-dedupe';
 import { logger } from '@/lib/logger';
 import { safeFetch } from '@/lib/security/ssrf-guard';
 import { detectPackageTechnologies, mergeDetectedTechnologies } from '@/lib/skills/repository-detection';
+import { resolveGithubUserAccessToken } from '@/lib/github/user-access-token';
 
 type PreviewEntry = {
   name: string;
@@ -177,8 +178,13 @@ async function fetchGithubJson<T>(
 
 async function getAuthorizedGithubSession() {
   const supabase = await createClient();
-  const { data: { session } } = await supabase.auth.getSession();
-  const user = session?.user;
+  const [
+    { data: { user } },
+    { data: { session } },
+  ] = await Promise.all([
+    supabase.auth.getUser(),
+    supabase.auth.getSession(),
+  ]);
   if (!user) {
     return { ok: false as const, error: 'Unauthorized. Please sign in first.' };
   }
@@ -194,7 +200,7 @@ async function getAuthorizedGithubSession() {
     ok: true as const,
     session: {
       userId: user.id,
-      oauthToken: session?.provider_token || null,
+      oauthToken: await resolveGithubUserAccessToken(user, session),
     } satisfies GithubAuthSession,
   };
 }
