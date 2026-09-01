@@ -34,7 +34,8 @@ import { useCallback } from "react";
 
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 
-export type NavigateTo = (nodeId: string | null) => void;
+export type NavigateTo = (nodeId: string | null, options?: { preserveQuery?: boolean }) => void;
+export const FILES_NAVIGATED_EVENT = "project:files-navigated";
 
 // ─── Pure core (unit-testable without React) ─────────────────────────
 
@@ -109,11 +110,11 @@ export function runNavigateTo(
  */
 export function useNavigateTo(projectId: string): NavigateTo {
   return useCallback<NavigateTo>(
-    (nodeId) => {
+    (nodeId, options = {}) => {
       const state = useFilesWorkspaceStore.getState();
       const dirtyFileId = state.byProjectId[projectId]?.dirtyFileId ?? null;
       if (dirtyFileId && dirtyFileId !== nodeId) {
-        state.setPendingNavigation(projectId, { nodeId });
+        state.setPendingNavigation(projectId, { nodeId, preserveQuery: options?.preserveQuery });
         return;
       }
       runNavigateTo(
@@ -125,6 +126,12 @@ export function useNavigateTo(projectId: string): NavigateTo {
         projectId,
         nodeId,
       );
+      // Notify only after navigation succeeds: cancelling a dirty-file guard
+      // must not change the search, tree or collection underneath the editor.
+      if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent(FILES_NAVIGATED_EVENT, {
+        detail: { projectId, nodeId, preserveQuery: options?.preserveQuery,
+          isFolder: nodeId === null || state.byProjectId[projectId]?.nodesById[nodeId]?.type === "folder" },
+      }));
     },
     [projectId],
   );
