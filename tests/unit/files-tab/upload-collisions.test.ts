@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { getUploadCollisionMessage, selectUploadFiles } from "@/lib/files/upload-collisions";
+import { getUploadCollisionMessage, selectUploadFiles, planUploadCopyNames } from "@/lib/files/upload-collisions";
+
+test("keep-both planning reserves case-insensitive names without changing extensions", () => {
+  assert.deepEqual(planUploadCopyNames(["report.pdf", "report.pdf", ".env", "notes"], ["REPORT.pdf", "report (2).pdf", ".env", "notes"]), ["report (3).pdf", "report (4).pdf", ".env (2)", "notes (2)"]);
+});
 
 test("retries preserve committed files and deduplicate filenames without mutating input", () => {
   const files = [{ name: "saved.pdf" }, { name: "Sketch.png" }, { name: "sketch.PNG" }, { name: "new.txt" }];
