@@ -6,10 +6,11 @@ async function main() {
   const source = await readFile(path.join(root, "src/app/api/v1/webhooks/github/route.ts"), "utf8");
 
   const checks: Array<[string, boolean]> = [
-    ["webhook route deduplicates GitHub delivery IDs", source.includes("claimGithubDeliveryId")],
-    ["webhook route verifies immutable repository identity", source.includes("identity.repoId !== payloadRepoId")],
-    ["webhook route verifies installation identity", source.includes("identity.installationId !== payloadInstallationId")],
-    ["webhook-enqueued git pulls include a signed job request", source.includes("createSignedJobRequestToken")],
+    ["webhook route records durable idempotent notifications", source.includes("incomingSha: payload.after!")],
+    ["webhook route verifies immutable repository identity", source.includes("githubSyncConnections.repositoryId, repositoryId!")],
+    ["webhook route verifies installation identity", source.includes("connection.installationId !== installationId")],
+    ["webhooks cannot bypass the reviewed pull workflow", !source.includes("inngest.send") && source.includes("requiresReview: true")],
+    ["webhook raw payload authentication is retained", source.includes("timingSafeEqual") && source.includes("createHmac")],
   ];
 
   const failed = checks.filter(([, passed]) => !passed);
