@@ -17,6 +17,7 @@ type LatestVersionAttributionRow = {
   full_name: string | null;
   username: string | null;
   avatar_url: string | null;
+  external_name: string | null;
 };
 
 const BATCH_SIZE = 1_000;
@@ -37,7 +38,8 @@ export async function getFileAttributionByNodeId(
         fv.uploaded_at,
         p.full_name,
         p.username,
-        p.avatar_url
+        p.avatar_url,
+        CASE WHEN fv.attribution->>'source' = 'github' THEN fv.attribution->'contributors'->0->>'name' END AS external_name
       FROM file_versions fv
       INNER JOIN project_nodes pn
         ON pn.id = fv.node_id
@@ -74,7 +76,7 @@ export async function getFileAttributionByNodeId(
     if (latest) {
       return [[node.id, {
         updatedById: latest.uploaded_by,
-        updatedByName: latest.full_name,
+        updatedByName: latest.full_name || (latest.external_name ? `${latest.external_name} (GitHub)` : null),
         updatedByUsername: latest.username,
         updatedByAvatarUrl: latest.avatar_url,
         versionUpdatedAt: latest.uploaded_at ?? node.updatedAt,
