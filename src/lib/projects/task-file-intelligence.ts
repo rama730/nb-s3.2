@@ -42,6 +42,48 @@ const TASK_FILE_ROLE_TAGS = new Set([
   "working_file",
 ]);
 
+const APPROVED_VERSION_TAG_PREFIX = "approved_version:";
+const APPROVED_REVISION_TAG_PREFIX = "approved_revision_at:";
+
+export function isApprovedTaskFileRevision(tags: readonly string[] | null | undefined, version: number, revisedAt: Date | string | null | undefined) {
+  const stamp = revisedAt ? new Date(revisedAt).getTime() : NaN;
+  return Number.isFinite(stamp) && getApprovedTaskFileVersion(tags) === version
+    && (tags ?? []).includes(`${APPROVED_REVISION_TAG_PREFIX}${stamp}`);
+}
+
+/**
+ * The approved deliverable version is link metadata, not file metadata: the
+ * same file can be attached to several tasks and approved independently.
+ */
+export function getApprovedTaskFileVersion(
+  tags: readonly string[] | null | undefined,
+): number | null {
+  const value = (tags ?? []).find((tag) =>
+    tag.startsWith(APPROVED_VERSION_TAG_PREFIX),
+  );
+  if (!value) return null;
+  const raw = value.slice(APPROVED_VERSION_TAG_PREFIX.length);
+  if (!/^[1-9]\d*$/.test(raw)) return null;
+  const version = Number(raw);
+  return Number.isSafeInteger(version) && version > 0 ? version : null;
+}
+
+export function markTaskFileVersionApproved(
+  tags: readonly string[] | null | undefined,
+  version: number,
+  revisedAt?: Date | string,
+) {
+  if (!Number.isSafeInteger(version) || version < 1)
+    throw new Error("Invalid approved file version");
+  return [
+    ...(tags ?? []).filter(
+      (tag) => !tag.startsWith(APPROVED_VERSION_TAG_PREFIX) && !tag.startsWith(APPROVED_REVISION_TAG_PREFIX),
+    ),
+    `${APPROVED_VERSION_TAG_PREFIX}${version}`,
+    ...(revisedAt && Number.isFinite(new Date(revisedAt).getTime()) ? [`${APPROVED_REVISION_TAG_PREFIX}${new Date(revisedAt).getTime()}`] : []),
+  ];
+}
+
 export function replaceTaskFileRoleTag(
   tags: readonly string[] | null | undefined,
   role: TaskFileRole,
