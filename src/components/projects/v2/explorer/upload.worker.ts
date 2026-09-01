@@ -83,6 +83,8 @@ self.onmessage = async (e: MessageEvent) => {
             self.postMessage({
                 type: "progress",
                 jobId,
+                fileId: node.fileId,
+                fileSucceeded: uploadSuccess,
                 completed: successCount + failCount,
                 total,
                 success: successCount,
