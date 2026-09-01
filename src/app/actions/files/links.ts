@@ -18,6 +18,16 @@ import {
 } from "@/lib/projects/task-file-intelligence";
 import { getFileAttributionByNodeId } from "@/lib/files/file-attribution";
 
+// Approval tags are server-owned. User edits may change classification and
+// labels, but cannot manufacture approval or erase a concurrent approval.
+function withStoredApprovalTags(tags: readonly string[]) {
+    const editable = tags.filter(tag => !tag.startsWith("approved_version:") && !tag.startsWith("approved_revision_at:"));
+    return sql<string[]>`${JSON.stringify(editable)}::jsonb || coalesce((
+        SELECT jsonb_agg(tag) FROM jsonb_array_elements_text(coalesce(${taskNodeLinks.tags}, '[]'::jsonb)) AS tag
+        WHERE tag LIKE 'approved_version:%' OR tag LIKE 'approved_revision_at:%'
+    ), '[]'::jsonb)`;
+}
+
 export async function getTaskLinkCounts(projectId: string, nodeIds: string[]) {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
@@ -109,6 +119,8 @@ export async function linkNodeToTask(
         role?: TaskFileRole;
     },
 ) {
+    if (options?.role && !["reference", "working", "deliverable"].includes(options.role))
+        throw new Error("Invalid file role");
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) throw new Error("Unauthorized");
@@ -146,7 +158,7 @@ export async function linkNodeToTask(
         inserted = await db.update(taskNodeLinks)
             .set({
                 ...(options.annotation !== undefined && { annotation: options.annotation }),
-                ...(options.role && { tags: replaceTaskFileRoleTag(link.tags, options.role) }),
+                ...(options.role && { tags: withStoredApprovalTags(replaceTaskFileRoleTag(link.tags, options.role)) }),
             })
             .where(and(eq(taskNodeLinks.taskId, taskId), eq(taskNodeLinks.nodeId, nodeId)))
             .returning();
@@ -239,6 +251,8 @@ export async function getTaskAttachments(projectId: string, taskId: string) {
 }
 
 export async function updateTaskNodeLink(taskId: string, nodeId: string, updates: { order?: number, annotation?: string | null, tags?: string[] }) {
+    if (updates.tags !== undefined && (!Array.isArray(updates.tags) || updates.tags.length > 100 || updates.tags.some(tag => typeof tag !== "string" || tag.length > 200)))
+        throw new Error("Invalid file labels");
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) throw new Error("Unauthorized");
@@ -263,7 +277,11 @@ export async function updateTaskNodeLink(taskId: string, nodeId: string, updates
         : null;
 
     const updated = await db.update(taskNodeLinks)
-        .set(updates)
+        .set({
+            ...(updates.order !== undefined && { order: updates.order }),
+            ...(updates.annotation !== undefined && { annotation: updates.annotation }),
+            ...(updates.tags !== undefined && { tags: withStoredApprovalTags(updates.tags) }),
+        })
         .where(and(eq(taskNodeLinks.taskId, taskId), eq(taskNodeLinks.nodeId, nodeId)))
         .returning({ annotation: taskNodeLinks.annotation, tags: taskNodeLinks.tags });
 
