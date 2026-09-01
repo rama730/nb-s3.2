@@ -75,6 +75,7 @@ export type ProfileCollaborationRoleStage = {
 };
 
 export type ProfileCollaborationContribution = {
+  fileContributionCount?: number;
   id: string;
   projectId: string | null;
   externalKey?: string | null;
@@ -151,6 +152,7 @@ type ProfileProjectRow = {
 };
 
 type ProfileContributionRow = {
+  file_contribution_count?: number;
   contribution_id: string;
   project_id: string | null;
   external_key: string | null;
@@ -179,7 +181,7 @@ type ProfileContributionRow = {
   total_count: number | string;
 };
 
-const SUMMARY_VERSION = 5;
+const SUMMARY_VERSION = 6;
 const SUMMARY_TTL_MS = 10 * 60 * 1000;
 const DEFAULT_LIMIT = 12;
 const EMPTY_SUMMARY: ProfileCollaborationSummary = {
@@ -400,6 +402,7 @@ function contributionFromRow(row: ProfileContributionRow): ProfileCollaborationC
     ? buildProjectHref({ id: row.project_id, slug: row.project_slug })
     : trimOptionalDisplayText(row.project_url);
   return {
+    fileContributionCount: Number(row.file_contribution_count || 0),
     id: row.contribution_id,
     projectId: row.project_id,
     externalKey: row.external_key,
@@ -569,6 +572,11 @@ async function queryProfileContributionRows(profileId: string, options: {
       contribution.project_title AS project_title_override,
       contribution.project_url,
       contribution.repository_url,
+      (SELECT count(DISTINCT event.node_id)::int FROM project_node_events event
+       INNER JOIN project_nodes node ON node.id=event.node_id
+       WHERE event.project_id=contribution.project_id AND event.actor_id=${profileId}
+         AND event.type='file_content_contributed' AND node.task_id IS NULL
+         AND node.deleted_at IS NULL AND node.path NOT LIKE '/.system/%') AS file_contribution_count,
       project.title AS project_title,
       project.slug AS project_slug,
       project.visibility AS project_visibility,
