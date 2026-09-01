@@ -24,6 +24,9 @@ export interface ApplyFileRevisionInput {
   projectId: string;
   nodeId: string;
   actorUserId: string;
+  /** GitHub imports preserve content authorship separately from the authorized importer. */
+  contentAuthorId?: string | null;
+  attribution?: Record<string, unknown>;
   storageKey: string;
   size: number;
   mimeType: string;
@@ -32,6 +35,8 @@ export interface ApplyFileRevisionInput {
   comment?: string | null;
   baseVersion?: number | null;
   baseHash?: string | null;
+  baseStorageKey?: string;
+  basePath?: string;
   lease: FileLeaseCredentials;
   eventType?: string;
   eventMetadata?: Record<string, unknown>;
@@ -87,6 +92,10 @@ export async function applyFileRevision(
     });
     if (!current || current.deletedAt) throw new Error("File not found");
     if (current.type !== "file") throw new Error("Only file nodes support revisions");
+    if ((input.baseStorageKey !== undefined && current.s3Key !== input.baseStorageKey) ||
+        (input.basePath !== undefined && current.path !== input.basePath)) {
+      throw new Error("File changed after review. Compare again.");
+    }
 
     const currentVersionNumber = current.currentVersion ?? 1;
     if (input.baseVersion != null && input.baseVersion !== currentVersionNumber) {
@@ -129,7 +138,8 @@ export async function applyFileRevision(
           size: input.size,
           mimeType: input.mimeType,
           contentHash: input.contentHash,
-          uploadedBy: input.actorUserId,
+          uploadedBy: input.contentAuthorId === undefined ? input.actorUserId : input.contentAuthorId,
+          attribution: input.attribution ?? {},
           comment,
           uploadedAt: now,
         })
@@ -144,7 +154,8 @@ export async function applyFileRevision(
           size: input.size,
           mimeType: input.mimeType,
           contentHash: input.contentHash,
-          uploadedBy: input.actorUserId,
+          uploadedBy: input.contentAuthorId === undefined ? input.actorUserId : input.contentAuthorId,
+          attribution: input.attribution ?? {},
           uploadedAt: now,
           ...(comment !== null ? { comment } : {}),
         })
@@ -162,7 +173,8 @@ export async function applyFileRevision(
           size: input.size,
           mimeType: input.mimeType,
           contentHash: input.contentHash,
-          uploadedBy: input.actorUserId,
+          uploadedBy: input.contentAuthorId === undefined ? input.actorUserId : input.contentAuthorId,
+          attribution: input.attribution ?? {},
           comment,
           uploadedAt: now,
         })
