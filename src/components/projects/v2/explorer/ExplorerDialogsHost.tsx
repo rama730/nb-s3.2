@@ -93,6 +93,7 @@ export function FolderPicker({
         undefined,
         100,
         cursor ?? undefined,
+        { itemType: "folder" },
       );
       setPages((current) => ({
         ...current,
@@ -141,7 +142,7 @@ export function FolderPicker({
     const timer = window.setTimeout(() => {
       setSearching(true);
       setSearchError(null);
-      void getProjectNodes(projectId, null, normalized, 100)
+      void getProjectNodes(projectId, null, normalized, 100, undefined, { itemType: "folder" })
         .then((result) => {
           if (!cancelled) {
             setSearchResults(eligibleFolders(result.nodes));
@@ -196,6 +197,7 @@ export function FolderPicker({
         query.trim(),
         100,
         searchNextCursor,
+        { itemType: "folder" },
       );
       setSearchResults((current) => [
         ...current,
