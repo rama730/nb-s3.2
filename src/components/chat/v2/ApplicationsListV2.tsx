@@ -52,7 +52,6 @@ export function ApplicationsListV2({
     const isPopup = surface === 'popup';
     const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'accepted' | 'rejected'>('all');
     const [sortBy, setSortBy] = useState<'newest' | 'status' | 'unread'>('newest');
-    const [nowMinute, setNowMinute] = useState(() => Date.now());
     const [durableInvitations, setDurableInvitations] = useState<Array<{
         id: string;
         projectTitle: string;
@@ -71,10 +70,6 @@ export function ApplicationsListV2({
     const applications = pages.flatMap((page) => page.success ? page.applications : []);
     const hasMore = Boolean(pages[pages.length - 1]?.hasMore);
 
-    useEffect(() => {
-        const timer = window.setInterval(() => setNowMinute(Date.now()), 60_000);
-        return () => window.clearInterval(timer);
-    }, []);
 
     useEffect(() => {
         let cancelled = false;
@@ -270,7 +265,7 @@ export function ApplicationsListV2({
                         itemContent={(_, application) => {
                             const status = application.lifecycleStatus || application.status;
                             const createdAt = application.createdAt ? new Date(application.createdAt) : null;
-                            const createdAtLabel = nowMinute && createdAt && !Number.isNaN(createdAt.getTime())
+                            const createdAtLabel = createdAt && !Number.isNaN(createdAt.getTime())
                                 ? formatDistanceToNow(createdAt, { addSuffix: false })
                                 : '-';
 
