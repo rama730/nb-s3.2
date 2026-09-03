@@ -8,7 +8,8 @@ import type { MessageWithSender } from '@/app/actions/messaging';
 import type { TypingUser } from '@/hooks/useTypingChannel';
 import { TypingIndicator } from '@/components/chat/TypingIndicator';
 import { useAuth } from '@/hooks/useAuth';
-import { useDeliveryAcks } from '@/hooks/useDeliveryAcks';
+import { useMessageReceiptBuffer } from '@/hooks/useMessageReceiptBuffer';
+import { recordDeliveryReceipts } from '@/app/actions/messaging';
 import { useMessageWorkLinks } from '@/hooks/useMessageWorkLinks';
 import { formatMessageCalendarLabel } from '@/lib/messages/date-buckets';
 import { buildMessageThreadModel, type MessageThreadItem } from '@/lib/messages/thread-items';
@@ -138,7 +139,12 @@ export function MessageThreadV2({
     const handleResolveWorkflow = useCallback(async (workflowItemId: string, action: WorkflowResolutionAction) => {
         return resolveWorkflow.mutateAsync({ workflowItemId, action });
     }, [resolveWorkflow]);
-    const { ackDelivery } = useDeliveryAcks(viewerId, conversationId);
+    const { enqueueReceipts: ackDelivery } = useMessageReceiptBuffer({
+        viewerId,
+        conversationId,
+        flushIntervalMs: 120,
+        recordReceipts: recordDeliveryReceipts,
+    });
     const ackedMessageIdsRef = useRef<Set<string>>(new Set());
     const items = useMemo<ThreadItem[]>(() => {
         const base = buildMessageThreadModel({
@@ -150,10 +156,29 @@ export function MessageThreadV2({
 
         const result: ThreadItem[] = [...base];
         if (typingUsers.length > 0) {
-            result.push({ type: 'typing-indicator', id: 'typing-indicator', typingUsers });
+            const enrichedTypingUsers = typingUsers.map((user) => {
+                if (user.fullName || user.username) return user;
+                const knownSender = messages.find((m) => m.senderId === user.id)?.sender;
+                if (!knownSender) return user;
+                return {
+                    ...user,
+                    fullName: knownSender.fullName ?? user.fullName,
+                    username: knownSender.username ?? user.username,
+                    avatarUrl: knownSender.avatarUrl ?? user.avatarUrl,
+                };
+            });
+            result.push({ type: 'typing-indicator', id: 'typing-indicator', typingUsers: enrichedTypingUsers });
         }
         return result;
     }, [conversationId, messages, viewerId, typingUsers]);
+
+    const latestMessageItemId = useMemo(() => {
+        for (let i = items.length - 1; i >= 0; i--) {
+            const item = items[i];
+            if (item && item.type === 'message') return item.id;
+        }
+        return null;
+    }, [items]);
 
     const prevMessagesRef = useRef(messages);
     const prevConversationIdRef = useRef(conversationId);
@@ -550,7 +575,7 @@ export function MessageThreadV2({
                 </div>
             )}
 
-            {!isLoading && orderedMessages.length === 0 ? (
+            {!isLoading && !isFetchingMore && orderedMessages.length === 0 ? (
                 <EmptyConversation />
             ) : (
                 <>
@@ -649,7 +674,7 @@ export function MessageThreadV2({
                                     && nextItem.message.senderId === item.message.senderId
                                     && (new Date(nextItem.message.createdAt).getTime() - new Date(item.message.createdAt).getTime()) < 5 * 60 * 1000;
                                 const showTimestamp = !nextMessageSameSenderWithinTime;
-                                const isLatestMessage = !items.slice(dataIndex + 1).some(x => x.type === 'message');
+                                const isLatestMessage = item.id === latestMessageItemId;
 
                                 return (
                                     <div
