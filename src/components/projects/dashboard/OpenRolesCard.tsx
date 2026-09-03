@@ -1,5 +1,6 @@
 "use client";
 
+import { memo, useMemo } from "react";
 import { Briefcase, CheckCircle, Clock, Loader2, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import DashboardCard from "./DashboardCard";
@@ -23,7 +24,7 @@ interface OpenRolesCardProps {
     invitationLoading?: boolean;
 }
 
-export default function OpenRolesCard({
+export const OpenRolesCard = memo(function OpenRolesCard({
     roles,
     isCreator,
     isCollaborator,
@@ -34,10 +35,12 @@ export default function OpenRolesCard({
     onDeclineInvitation,
     invitationLoading = false,
 }: OpenRolesCardProps) {
-    const openRoles = roles.filter((role: any) => {
-        const remaining = (role?.count || 0) - (role?.filled || 0);
-        return remaining > 0;
-    });
+    const openRoles = useMemo(() => {
+        return roles.filter((role: any) => {
+            const remaining = (role?.count || 0) - (role?.filled || 0);
+            return remaining > 0;
+        });
+    }, [roles]);
 
     const isPending = applicationStatus.status === "pending";
     const isRejected = applicationStatus.status === "rejected";
@@ -328,4 +331,6 @@ export default function OpenRolesCard({
             </div>
         </DashboardCard>
     );
-}
+});
+
+export default OpenRolesCard;
