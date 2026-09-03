@@ -11,6 +11,9 @@ import {
     recordMessagesPopupFocusReturn,
     recordMessagesPopupTransition,
 } from '@/lib/messages/observability';
+import { useQueryClient } from '@tanstack/react-query';
+import { queryKeys } from '@/lib/query-keys';
+import { getConversationThreadPageV2 } from '@/app/actions/messaging/v2';
 import { InboxListSkeletonV2 } from './MessagesSurfaceSkeletons';
 
 const PopupMessagesWorkspace = dynamic(
@@ -23,13 +26,63 @@ const PopupMessagesWorkspace = dynamic(
 
 export function ChatPopupV2() {
     const pathname = usePathname();
+    const queryClient = useQueryClient();
     const { user, isLoading } = useAuth();
     const { unreadCount, hasUnreadMessages } = useMessageAttention();
     const popupState = useMessagesV2UiStore((state) => state.popupState);
     const setPopupState = useMessagesV2UiStore((state) => state.setPopupState);
+    const selectedConversationId = useMessagesV2UiStore((state) => state.selectedConversationId);
     const launcherRef = useRef<HTMLButtonElement>(null);
     const wasVisibleRef = useRef(false);
     const previousPopupStateRef = useRef(popupState);
+
+    useEffect(() => {
+        if (!user || pathname.startsWith('/messages')) return;
+        let cancelToken: number | null = null;
+        const prewarm = () => {
+            void import('./MessagesWorkspaceV2');
+            if (selectedConversationId && !selectedConversationId.startsWith('draft:')) {
+                void queryClient.prefetchInfiniteQuery({
+                    queryKey: queryKeys.messages.v2.thread(selectedConversationId),
+                    initialPageParam: undefined as string | undefined,
+                    queryFn: () => getConversationThreadPageV2(selectedConversationId, undefined, 30).then((res) => res.page),
+                    staleTime: 30_000,
+                });
+            }
+        };
+
+        if (typeof window !== 'undefined') {
+            const idleCallback = (window as unknown as { requestIdleCallback?: (cb: () => void) => number }).requestIdleCallback;
+            if (typeof idleCallback === 'function') {
+                cancelToken = idleCallback(prewarm);
+            } else {
+                cancelToken = window.setTimeout(prewarm, 1200);
+            }
+        }
+
+        return () => {
+            if (cancelToken !== null && typeof window !== 'undefined') {
+                const cancelIdle = (window as unknown as { cancelIdleCallback?: (id: number) => void }).cancelIdleCallback;
+                if (typeof cancelIdle === 'function') {
+                    cancelIdle(cancelToken);
+                } else {
+                    window.clearTimeout(cancelToken);
+                }
+            }
+        };
+    }, [pathname, queryClient, selectedConversationId, user]);
+
+    const handleLauncherPrewarm = () => {
+        void import('./MessagesWorkspaceV2');
+        if (selectedConversationId && !selectedConversationId.startsWith('draft:')) {
+            void queryClient.prefetchInfiniteQuery({
+                queryKey: queryKeys.messages.v2.thread(selectedConversationId),
+                initialPageParam: undefined as string | undefined,
+                queryFn: () => getConversationThreadPageV2(selectedConversationId, undefined, 30).then((res) => res.page),
+                staleTime: 30_000,
+            });
+        }
+    };
 
     useEffect(() => {
         recordMessagesPopupTransition(previousPopupStateRef.current, popupState);
@@ -54,6 +107,8 @@ export function ChatPopupV2() {
                 type="button"
                 ref={launcherRef}
                 onClick={() => setPopupState('open')}
+                onMouseEnter={handleLauncherPrewarm}
+                onFocus={handleLauncherPrewarm}
                 className="fixed bottom-6 right-6 z-50 flex h-14 w-14 items-center justify-center rounded-full app-accent-solid shadow-lg transition-all hover:scale-105 hover:bg-primary/90"
                 aria-label={hasUnreadMessages ? `Open messages, ${unreadCount} unread messages` : 'Open messages'}
             >
