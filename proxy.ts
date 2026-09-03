@@ -142,7 +142,7 @@ function buildCsp(nonce: string, request: NextRequest) {
   return directives.join("; ");
 }
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set(ROUTE_METRIC_HEADER, toPrivacySafeRouteMetric(request.nextUrl.pathname));
 

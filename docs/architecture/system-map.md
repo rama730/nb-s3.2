@@ -4,7 +4,7 @@ Subsystem maps: [Messaging system](./messaging-system.md), [market skill catalog
 
 ## Request Path
 
-1. Requests enter the repository root [middleware.ts](/Users/chrama/Downloads/nb-s3/middleware.ts), which owns CSP and delegates auth/session work to [Supabase middleware](/Users/chrama/Downloads/nb-s3/src/lib/supabase/middleware.ts).
+1. Requests enter the repository root [proxy.ts](/Users/chrama/Downloads/nb-s3/proxy.ts), which owns CSP and delegates auth/session work to [Supabase middleware](/Users/chrama/Downloads/nb-s3/src/lib/supabase/middleware.ts).
 2. Middleware classifies the route as `public_cached`, `user_shell`, or `active_surface`; CSP has a single owner and is not duplicated in `next.config.ts`.
 3. Protected shells resolve local JWT-backed auth snapshots instead of remote auth lookups.
 4. Page contracts in [page-contract.ts](/Users/chrama/Downloads/nb-s3/src/lib/performance/page-contract.ts) define cache strategy, bootstrap read model, overload mode, and background-channel budget.

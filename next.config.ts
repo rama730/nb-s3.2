@@ -17,6 +17,8 @@ const e2eAuthRouteImplAbsolutePath =
     : path.resolve(__dirname, "src/app/api/e2e/auth/route.dev.ts");
 
 const nextConfig: NextConfig = {
+  // Produce the minimal Node.js server bundle used by the Railway container.
+  output: "standalone",
   // Keep verification builds isolated from an actively running local dev server.
   distDir: process.env.NEXT_DIST_DIR || ".next",
   // Security headers for all routes

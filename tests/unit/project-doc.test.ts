@@ -678,7 +678,7 @@ test("Doc media resolver preserves GitHub-style image sizing and safety", () => 
 
 test("Doc external image policy is not contradicted by the static CSP", () => {
     const nextConfig = fs.readFileSync(path.join(process.cwd(), "next.config.ts"), "utf8");
-    const middleware = fs.readFileSync(path.join(process.cwd(), "middleware.ts"), "utf8");
+    const middleware = fs.readFileSync(path.join(process.cwd(), "proxy.ts"), "utf8");
 
     assert.match(middleware, /"img-src 'self' data: blob: https:"/);
     assert.doesNotMatch(nextConfig, /img-src/, "one middleware policy should own image CSP rather than competing static headers");
