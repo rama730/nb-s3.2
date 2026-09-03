@@ -43,8 +43,6 @@ export async function readMessageWorkLinksAction(
     try {
         const userId = await getViewerId();
         if (!userId) return { success: false, error: "Unauthorized", linksByMessageId: {} };
-        await assertConversationAccess(conversationId, userId);
-
         const uniqueMessageIds = Array.from(
             new Set(messageIds.filter(id => id && isLooseUuid(id)))
         ).slice(0, 120);
@@ -53,20 +51,34 @@ export async function readMessageWorkLinksAction(
             return { success: true, linksByMessageId: {} };
         }
 
-        const rows = await db
-            .select()
-            .from(messageWorkLinks)
-            .where(and(
-                eq(messageWorkLinks.sourceConversationId, conversationId),
-                inArray(messageWorkLinks.sourceMessageId, uniqueMessageIds),
-                isNull(messageWorkLinks.deletedAt),
-                or(
-                    eq(messageWorkLinks.visibility, "shared"),
-                    eq(messageWorkLinks.ownerUserId, userId),
-                    eq(messageWorkLinks.createdBy, userId),
-                ),
-            ))
-            .orderBy(messageWorkLinks.updatedAt);
+        const [participants, rows] = await Promise.all([
+            db
+                .select({ id: conversationParticipants.id })
+                .from(conversationParticipants)
+                .where(and(
+                    eq(conversationParticipants.conversationId, conversationId),
+                    eq(conversationParticipants.userId, userId),
+                ))
+                .limit(1),
+            db
+                .select()
+                .from(messageWorkLinks)
+                .where(and(
+                    eq(messageWorkLinks.sourceConversationId, conversationId),
+                    inArray(messageWorkLinks.sourceMessageId, uniqueMessageIds),
+                    isNull(messageWorkLinks.deletedAt),
+                    or(
+                        eq(messageWorkLinks.visibility, "shared"),
+                        eq(messageWorkLinks.ownerUserId, userId),
+                        eq(messageWorkLinks.createdBy, userId),
+                    ),
+                ))
+                .orderBy(messageWorkLinks.updatedAt),
+        ]);
+
+        if (participants.length === 0) {
+            return { success: false, error: "Not authorized for this conversation", linksByMessageId: {} };
+        }
 
         return {
             success: true,
