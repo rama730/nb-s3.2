@@ -546,10 +546,18 @@ async function buildConversationCapabilitiesBatch(
         .map((conversation) => conversation.participants[0]?.id)
         .filter(Boolean) as string[];
 
-    const [privacyMap, activeApplicationsByUser] = await Promise.all([
-        resolvePrivacyRelationships(viewerId, targetUserIds),
-        getLatestApplicationsByOtherUser(viewerId, targetUserIds),
-    ]);
+    const privacyMap = await resolvePrivacyRelationships(viewerId, targetUserIds);
+
+    // Only query heavy role applications for users who are NOT connected
+    const unconnectedUserIds = targetUserIds.filter((userId) => {
+        const p = privacyMap.get(userId);
+        const isBlocked = Boolean(p?.blockedByTarget || p?.blockedByViewer);
+        return p && !p.isConnected && !isBlocked;
+    });
+
+    const activeApplicationsByUser = unconnectedUserIds.length > 0
+        ? await getLatestApplicationsByOtherUser(viewerId, unconnectedUserIds)
+        : new Map<string, ActiveApplicationRowV2>();
 
     for (const conversation of directMessages) {
         const targetUserId = conversation.participants[0]?.id;
