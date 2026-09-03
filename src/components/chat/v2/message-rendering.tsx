@@ -49,6 +49,10 @@ function renderInlineTextWithMentions(text: string, isOwn: boolean, baseKey: str
 }
 
 export function renderTextWithMentions(text: string, isOwn: boolean) {
+    // Fast path: bypass regex parsing when no markdown or special tokens exist
+    if (!text.includes('`') && !text.includes('@') && !text.includes('http') && !text.includes('www.')) {
+        return text;
+    }
     const inlineParts = text.split(/(`[^`\n]+`)/g);
     return inlineParts.map((part, index) => {
         if (part.length >= 2 && part.startsWith('`') && part.endsWith('`')) {
