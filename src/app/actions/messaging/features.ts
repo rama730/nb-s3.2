@@ -5,13 +5,14 @@ import {
     messageReactions,
     messageReports,
     messageDeliveryReceipts,
+    messageReadReceipts,
     messageHiddenForUsers,
     conversationParticipants,
     messages,
     profiles,
 } from '@/lib/db/schema';
 import { getAuthUser } from '@/lib/supabase/auth-user';
-import { eq, and, inArray, sql } from 'drizzle-orm';
+import { eq, and, inArray, lt, sql } from 'drizzle-orm';
 import { consumeRateLimit } from '@/lib/security/rate-limit';
 import {
     buildReactionSummaryByMessage,
@@ -81,7 +82,9 @@ export async function toggleReaction(
             return { success: false, error: 'Invalid emoji' };
         }
 
-        return await db.transaction(async (tx) => {
+        let pendingNotification: Parameters<typeof emitMessageReactionNotification>[0] | null = null;
+
+        const txResult = await db.transaction(async (tx) => {
             await tx.execute(sql`
                 SELECT pg_advisory_xact_lock(
                     hashtextextended(${`${messageId}:${user.id}`}, 0)
@@ -177,7 +180,7 @@ export async function toggleReaction(
                         eq(conversationParticipants.userId, messageRow.senderId),
                     ));
 
-                await emitMessageReactionNotification({
+                pendingNotification = {
                     recipientUserId: messageRow.senderId,
                     recipientMuted: recipient?.muted,
                     actorUserId: user.id,
@@ -186,7 +189,7 @@ export async function toggleReaction(
                     conversationId: messageRow.conversationId,
                     sourceMessageId: messageRow.id,
                     emoji: normalizedEmoji,
-                }, tx);
+                };
             }
 
             const rows = await tx
@@ -201,6 +204,14 @@ export async function toggleReaction(
 
             return { success: true, added, reactionSummary };
         });
+
+        if (pendingNotification) {
+            void emitMessageReactionNotification(pendingNotification).catch((err) => {
+                console.error('Failed to emit reaction notification:', err);
+            });
+        }
+
+        return txResult;
     } catch (error) {
         console.error('Error toggling reaction:', error);
         return { success: false, error: 'Failed to toggle reaction' };
@@ -374,5 +385,32 @@ export async function recordDeliveryReceipts(
     } catch (error) {
         console.error('Error recording delivery receipts:', error);
         return { success: false, error: 'Failed to record delivery receipts' };
+    }
+}
+
+/**
+ * Prunes delivery and read receipts older than retentionDays (default: 60 days).
+ * Prevents unbounded row growth in receipt tables under 1M-scale messaging.
+ */
+export async function pruneOldMessageReceipts(
+    retentionDays = 60,
+): Promise<{ success: boolean; error?: string }> {
+    try {
+        const user = await getAuthUser();
+        if (!user) {
+            return { success: false, error: 'Unauthorized' };
+        }
+
+        const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
+
+        await Promise.all([
+            db.delete(messageDeliveryReceipts).where(lt(messageDeliveryReceipts.deliveredAt, cutoff)),
+            db.delete(messageReadReceipts).where(lt(messageReadReceipts.readAt, cutoff)),
+        ]);
+
+        return { success: true };
+    } catch (error) {
+        console.error('Error pruning old message receipts:', error);
+        return { success: false, error: 'Failed to prune receipts' };
     }
 }
