@@ -75,6 +75,7 @@ export async function getSyncPreviewAction(projectId: string): Promise<SyncPrevi
     const [githubAccountHealth, githubAccess] = await Promise.all([
       resolveGithubExternalAccountHealth({
         linked: githubConnection.linked,
+        githubId: githubConnection.githubId,
         username: githubConnection.username,
       }),
       resolveGithubRepoAccess({
