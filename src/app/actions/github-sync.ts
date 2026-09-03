@@ -1,12 +1,16 @@
 "use server";
 
 import { z } from "zod";
-import { and, eq, desc, inArray, sql } from "drizzle-orm";
+import { and, count, eq, desc, inArray, isNull, sql } from "drizzle-orm";
 import { createClient } from "@/lib/supabase/server";
 import { db } from "@/lib/db";
 import {
   projects,
+  profiles,
+  projectMembers,
+  tasks,
   githubSyncConnections,
+  githubSyncFiles,
   githubSyncRuns,
   githubContributorIdentities,
 } from "@/lib/db/schema";
@@ -27,7 +31,6 @@ import {
   requireSyncOwner,
   resolveSyncContext,
   syncRunView,
-  validateReviewedLocalFiles,
   readStoredSyncContent,
 } from "@/lib/github/sync-service";
 import {
@@ -35,15 +38,15 @@ import {
   syncGithub,
   readGitHubBlob,
   requireExistingOrEmptyBranch,
+  assertGithubWorkflowPermission,
   type SyncRepo,
 } from "@/lib/github/sync-api";
 import { redactSyncManifest } from "@/lib/github/sync-contract";
-import {
-  buildGithubAccountConnectionState,
-} from "@/lib/github/connection-state";
+import { buildGithubAccountConnectionState } from "@/lib/github/connection-state";
 import { assertProjectFileReadAccess } from "@/lib/files/internal-helpers";
 import { ensureDefaultGithubContributorIdentity } from "@/lib/github/contributor-identity";
 import { resolveGithubUserAccessToken } from "@/lib/github/user-access-token";
+import { GITHUB_SYNC_LIMITS } from "@/lib/github/sync-limits";
 
 const idSchema = z.string().uuid();
 const compareSchema = z.object({
@@ -59,6 +62,24 @@ const compareSchema = z.object({
     })
     .optional(),
 });
+const syncSelectionSchema = z
+  .array(
+    z.object({
+      path: z.string().min(1).max(2048),
+      resolution: z.enum(["edge", "github", "merge"]).optional(),
+      content: z
+        .string()
+        .max(1024 * 1024)
+        .optional(),
+      expectedLocalHash: z.string().nullable(),
+      expectedRemoteSha: z.string().nullable(),
+    }),
+  )
+  .min(1, "Select at least one file")
+  .max(
+    GITHUB_SYNC_LIMITS.operationFiles,
+    `Select no more than ${GITHUB_SYNC_LIMITS.operationFiles.toLocaleString()} files per operation`,
+  );
 async function session() {
   const client = await createClient();
   const {
@@ -77,6 +98,11 @@ async function result<T>(
   try {
     return { success: true, data: await work() };
   } catch (error) {
+    if (error instanceof z.ZodError)
+      return {
+        success: false,
+        error: error.issues[0]?.message || "Check the submitted information",
+      };
     return { success: false, error: sanitizeGitErrorMessage(error) };
   }
 }
@@ -102,6 +128,32 @@ export async function getGitHubSyncState(projectId: string) {
         where: eq(githubContributorIdentities.userId, user.id),
       });
     }
+
+    const [filesCountResult, membersResult] = await Promise.all([
+      db
+        .select({ count: count() })
+        .from(githubSyncFiles)
+        .where(eq(githubSyncFiles.projectId, projectId)),
+      db
+        .select({
+          userId: projectMembers.userId,
+          fullName: profiles.fullName,
+          username: profiles.username,
+          avatarUrl: profiles.avatarUrl,
+          membershipRole: projectMembers.role,
+          githubLogin: githubContributorIdentities.login,
+          githubEmail: githubContributorIdentities.email,
+        })
+        .from(projectMembers)
+        .innerJoin(profiles, eq(profiles.id, projectMembers.userId))
+        .leftJoin(
+          githubContributorIdentities,
+          eq(githubContributorIdentities.userId, projectMembers.userId),
+        )
+        .where(eq(projectMembers.projectId, projectId))
+        .limit(12),
+    ]);
+
     return {
       account: buildGithubAccountConnectionState(user),
       connection: ctx.connection
@@ -121,6 +173,15 @@ export async function getGitHubSyncState(projectId: string) {
       identity: identity
         ? { login: identity.login, email: identity.email }
         : null,
+      filesCount: filesCountResult[0]?.count ?? 0,
+      teamMembers: membersResult.map((m) => ({
+        userId: m.userId,
+        name: m.fullName || m.username || "Team Member",
+        avatarUrl: m.avatarUrl,
+        membershipRole: m.membershipRole,
+        githubLogin: m.githubLogin,
+        githubEmail: m.githubEmail,
+      })),
       runs: runs.map(syncRunView),
     };
   });
@@ -146,7 +207,9 @@ export async function getGitHubSyncContributors(projectId: string) {
       WITH evidence AS (
         SELECT event.actor_id,event.node_id,NULL::text AS github_id,NULL::text AS name,NULL::text AS login,NULL::text AS avatar
         FROM project_node_events event
-        WHERE event.project_id=${projectId} AND event.type='file_content_contributed'
+        WHERE event.project_id=${projectId} AND event.type IN ('file_content_contributed', 'create_file')
+        UNION SELECT node.created_by,node.id,NULL,NULL,NULL,NULL FROM project_nodes node
+        WHERE node.project_id=${projectId} AND node.created_by IS NOT NULL AND node.git_blob_hash IS NULL
         UNION SELECT version.uploaded_by,version.node_id,NULL,NULL,NULL,NULL FROM file_versions version
         JOIN project_nodes node ON node.id=version.node_id WHERE node.project_id=${projectId}
           AND node.git_blob_hash IS NULL AND version.attribution='{}'::jsonb
@@ -331,22 +394,7 @@ export async function prepareGitHubSync(
   return result(async () => {
     idSchema.parse(projectId);
     const parsed = compareSchema.parse(input);
-    const choices = z
-      .array(
-        z.object({
-          path: z.string().min(1).max(2048),
-          resolution: z.enum(["edge", "github", "merge"]).optional(),
-          content: z
-            .string()
-            .max(1024 * 1024)
-            .optional(),
-          expectedLocalHash: z.string().nullable(),
-          expectedRemoteSha: z.string().nullable(),
-        }),
-      )
-      .min(1)
-      .max(500)
-      .parse(selection);
+    const choices = syncSelectionSchema.parse(selection);
     const safeMessage = z.string().trim().min(1).max(2000).parse(message);
     if (
       /^(co-authored-by|signed-off-by|edge-sync-operation):/im.test(safeMessage)
@@ -388,45 +436,69 @@ export async function executeGitHubSync(projectId: string, runId: string) {
       ),
     });
     if (!run) throw new Error("Sync review not found");
-    if (["completed", "running", "queued"].includes(run.status))
-      return syncRunView(run);
-    if (!["review", "failed"].includes(run.status))
+    if (["completed", "running"].includes(run.status)) return syncRunView(run);
+    if (!["review", "failed", "queued"].includes(run.status))
       throw new Error("Prepare a new review before synchronizing");
-    if (
-      !run.result.pushed &&
-      !run.result.commitSha &&
-      Date.now() - run.createdAt.getTime() > 55 * 60_000
-    )
-      throw new Error("This review expired. Compare and review again.");
-    if (!run.result.pushed && !run.result.commitSha)
-      await validateReviewedLocalFiles(
-        projectId,
-        run.manifest,
-        run.result.applied,
+    if (run.manifest.direction === "push")
+      await assertGithubWorkflowPermission(
+        token,
+        run.manifest.files.map((file) => file.path),
       );
-    const limit = await consumeRateLimit(`github:execute:${user.id}`, 20, 3600);
-    if (!limit.allowed)
-      throw new Error("Sync rate limit reached. Try again later.");
-    const [queued] = await db
-      .update(githubSyncRuns)
-      .set({
-        status: "queued",
-        error: null,
-        ...(token
-          ? { credential: sealGithubImportToken(token, 60 * 60_000) }
-          : {}),
-        stage: "Queued for synchronization",
-        updatedAt: new Date(),
-      })
-      .where(
-        and(
-          eq(githubSyncRuns.id, runId),
-          inArray(githubSyncRuns.status, ["review", "failed"]),
-        ),
+    let queued = run;
+    if (run.status !== "queued") {
+      if (
+        !run.result.pushed &&
+        !run.result.commitSha &&
+        Date.now() - run.createdAt.getTime() > 55 * 60_000
       )
-      .returning();
-    if (!queued)
-      throw new Error("Operation state changed. Reopen the sync workspace.");
+        throw new Error("This review expired. Compare and review again.");
+      const limit = await consumeRateLimit(
+        `github:execute:${user.id}`,
+        20,
+        3600,
+      );
+      if (!limit.allowed)
+        throw new Error("Sync rate limit reached. Try again later.");
+      const rows = await db
+        .update(githubSyncRuns)
+        .set({
+          status: "queued",
+          error: null,
+          ...(token
+            ? { credential: sealGithubImportToken(token, 60 * 60_000) }
+            : {}),
+          stage: "Queued for synchronization",
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(githubSyncRuns.id, runId),
+            inArray(githubSyncRuns.status, ["review", "failed"]),
+          ),
+        )
+        .returning();
+      if (!rows[0])
+        throw new Error("Operation state changed. Reopen the sync workspace.");
+      queued = rows[0];
+    }
+    if (
+      process.env.NODE_ENV !== "production" ||
+      process.env.GITHUB_SYNC_INLINE_FALLBACK?.trim().toLowerCase() === "always"
+    ) {
+      // ponytail: local development has no separately reachable worker.
+      const { runReviewedGitHubSync } =
+        await import("@/lib/github/sync-runner");
+      await runReviewedGitHubSync(runId, user.id, projectId);
+      const finished = await db.query.githubSyncRuns.findFirst({
+        where: and(
+          eq(githubSyncRuns.id, runId),
+          eq(githubSyncRuns.projectId, projectId),
+          eq(githubSyncRuns.actorId, user.id),
+        ),
+      });
+      if (!finished) throw new Error("Synchronization result was not retained");
+      return syncRunView(finished);
+    }
     try {
       await inngest.send({
         name: queued.manifest.direction === "push" ? "git/push" : "git/pull",
@@ -515,28 +587,233 @@ export async function getGitHubSyncDiff(
     };
   });
 }
+
+export async function getHeaderGitHubSyncStatus(projectId: string) {
+  return result(async () => {
+    idSchema.parse(projectId);
+    const { user } = await session();
+    await assertProjectFileReadAccess(projectId, user.id);
+
+    const [connection, latestRun] = await Promise.all([
+      db.query.githubSyncConnections.findFirst({
+        where: eq(githubSyncConnections.projectId, projectId),
+      }),
+      db.query.githubSyncRuns.findFirst({
+        where: eq(githubSyncRuns.projectId, projectId),
+        orderBy: [desc(githubSyncRuns.createdAt)],
+        columns: {
+          id: true,
+          status: true,
+          stage: true,
+          manifest: true,
+          result: true,
+          createdAt: true,
+        },
+      }),
+    ]);
+
+    if (!connection) {
+      return {
+        connected: false,
+        repository: null as string | null,
+        branch: null as string | null,
+        hasIncoming: false,
+        activeRun: null as {
+          id: string;
+          stage: string;
+          direction: "push" | "pull";
+        } | null,
+        latestRunStatus: null as string | null,
+        latestCommitSha: null as string | null,
+        latestDirection: null as "push" | "pull" | null,
+        latestSyncAt: null as string | null,
+        syncComment: null as string | null,
+      };
+    }
+
+    const isActive =
+      latestRun &&
+      (latestRun.status === "running" || latestRun.status === "queued");
+
+    const commitSha =
+      (latestRun?.result as Record<string, unknown> | undefined)?.commitSha ||
+      connection.incomingSha ||
+      null;
+    const shortSha =
+      typeof commitSha === "string" && commitSha.length >= 7
+        ? commitSha.slice(0, 7)
+        : typeof commitSha === "string"
+        ? commitSha
+        : null;
+
+    const direction = (latestRun?.manifest?.direction || "push") as "push" | "pull";
+    const branchName = connection.branch || "main";
+    const repoName = connection.repository.replace(/^https:\/\/github\.com\//, "");
+
+    const syncComment = shortSha
+      ? `The last sync was to GitHub for ${repoName}, to the ${branchName} branch, and this is the code commit: ${shortSha}`
+      : `The last sync was to GitHub for ${repoName}, to the ${branchName} branch`;
+
+    return {
+      connected: true,
+      repository: connection.repository.replace(/^https:\/\/github\.com\//, ""),
+      branch: connection.branch,
+      hasIncoming: Boolean(connection.incomingSha),
+      activeRun: isActive
+        ? {
+            id: latestRun.id,
+            stage: latestRun.stage,
+            direction,
+          }
+        : null,
+      latestRunStatus: latestRun?.status ? String(latestRun.status) : null,
+      latestCommitSha: shortSha,
+      latestDirection: direction,
+      latestSyncAt: latestRun?.createdAt ? latestRun.createdAt.toISOString() : null,
+      syncComment,
+    };
+  });
+}
+
+export async function getCurrentGitHubCommitIdentity() {
+  return result(async () => {
+    const { user } = await session();
+    const contributor = await db.query.githubContributorIdentities.findFirst({
+      where: eq(githubContributorIdentities.userId, user.id),
+    });
+
+    if (contributor) {
+      return {
+        configured: true,
+        login: contributor.login,
+        email: contributor.email,
+        githubId: contributor.githubId,
+        avatarUrl: contributor.avatarUrl,
+        isNoreply: contributor.email.includes("noreply.github.com"),
+      };
+    }
+
+    const identitiesResult = await db.execute<{
+      id: string;
+      provider: string;
+      identity_data: Record<string, unknown> | null;
+    }>(
+      sql`SELECT id, provider, identity_data FROM auth.identities WHERE user_id = ${user.id}::uuid AND provider = 'github' ORDER BY last_sign_in_at DESC NULLS LAST, created_at DESC`,
+    ).catch(() => null);
+
+    const primaryGithub =
+      identitiesResult && Array.isArray(identitiesResult) && identitiesResult.length > 0
+        ? identitiesResult[0]
+        : null;
+
+    if (primaryGithub) {
+      const identityData = (primaryGithub.identity_data || {}) as Record<string, unknown>;
+      const githubId = Number(identityData.provider_id || identityData.sub || 0);
+      const login = String(identityData.user_name || identityData.preferred_username || "user");
+      const defaultEmail = githubId && login
+        ? `${githubId}+${login}@users.noreply.github.com`
+        : (typeof identityData.email === "string" ? identityData.email : "");
+
+      return {
+        configured: false,
+        login,
+        email: defaultEmail,
+        githubId,
+        avatarUrl: String(identityData.avatar_url || ""),
+        isNoreply: defaultEmail.includes("noreply.github.com"),
+      };
+    }
+
+    return null;
+  });
+}
+
 export async function getGitHubCommitIdentityOptions() {
   return result(async () => {
-    const { token } = await session();
-    if (!token)
-      throw new Error("Reconnect GitHub to authorize your commit identity");
-    const account = await syncGithub<{
-      id: number;
-      login: string;
-      name: string | null;
-      avatar_url: string;
-    }>(token, "/user");
-    const emails = await syncGithub<
-      Array<{ email: string; verified: boolean }>
-    >(token, "/user/emails");
+    const { user, token } = await session();
+
+    // If an active GitHub token is available, query live verified emails from GitHub API
+    if (token) {
+      try {
+        const account = await syncGithub<{
+          id: number;
+          login: string;
+          name: string | null;
+          avatar_url: string;
+        }>(token, "/user");
+        const emails = await syncGithub<
+          Array<{ email: string; verified: boolean }>
+        >(token, "/user/emails");
+        return {
+          account,
+          emails: [
+            ...new Set([
+              ...emails.filter((e) => e.verified).map((e) => e.email),
+              `${account.id}+${account.login}@users.noreply.github.com`,
+            ]),
+          ],
+        };
+      } catch {
+        // Fall through to database identities if GitHub token is expired or unavailable
+      }
+    }
+
+    // Fall back to verified identities attached to this user in the database
+    const [identitiesResult, contributor] = await Promise.all([
+      db.execute<{
+        id: string;
+        provider: string;
+        identity_data: Record<string, unknown> | null;
+      }>(
+        sql`SELECT id, provider, identity_data FROM auth.identities WHERE user_id = ${user.id}::uuid AND provider = 'github' ORDER BY last_sign_in_at DESC NULLS LAST, created_at DESC`,
+      ).catch(() => null),
+      db.query.githubContributorIdentities.findFirst({
+        where: eq(githubContributorIdentities.userId, user.id),
+      }).catch(() => null),
+    ]);
+
+    const primaryGithub =
+      identitiesResult && Array.isArray(identitiesResult) && identitiesResult.length > 0
+        ? identitiesResult[0]
+        : null;
+
+    if (!primaryGithub && !contributor) {
+      throw new Error("Connect your GitHub account first to configure commit attribution");
+    }
+
+    const identityData = (primaryGithub?.identity_data || {}) as Record<string, unknown>;
+    const githubId =
+      contributor?.githubId ??
+      Number(identityData.provider_id || identityData.sub || 0);
+    const login =
+      contributor?.login ??
+      String(identityData.user_name || identityData.preferred_username || "user");
+    const name =
+      contributor?.name ??
+      (typeof identityData.full_name === "string" ? identityData.full_name : null);
+    const avatarUrl =
+      contributor?.avatarUrl ??
+      String(identityData.avatar_url || "");
+
+    const emails = new Set<string>();
+    if (githubId && login) {
+      emails.add(`${githubId}+${login}@users.noreply.github.com`);
+    }
+    if (typeof identityData.email === "string" && identityData.email.trim()) {
+      emails.add(identityData.email.trim());
+    }
+    if (contributor?.email && contributor.email.trim()) {
+      emails.add(contributor.email.trim());
+    }
+
     return {
-      account,
-      emails: [
-        ...new Set([
-          ...emails.filter((e) => e.verified).map((e) => e.email),
-          `${account.id}+${account.login}@users.noreply.github.com`,
-        ]),
-      ],
+      account: {
+        id: githubId,
+        login,
+        name,
+        avatar_url: avatarUrl,
+      },
+      emails: [...emails],
     };
   });
 }
@@ -566,3 +843,32 @@ export async function approveGitHubCommitIdentity(email: string) {
     return { login: account.login };
   });
 }
+
+export async function getProjectSyncTasks(projectId: string) {
+  return result(async () => {
+    idSchema.parse(projectId);
+    const { user } = await session();
+    await assertProjectFileReadAccess(projectId, user.id);
+    const project = await db.query.projects.findFirst({
+      where: and(eq(projects.id, projectId), isNull(projects.deletedAt)),
+      columns: { key: true },
+    });
+    const candidateTasks = await db.query.tasks.findMany({
+      where: and(eq(tasks.projectId, projectId), isNull(tasks.deletedAt)),
+      columns: {
+        id: true,
+        title: true,
+        taskNumber: true,
+      },
+      limit: 50,
+      orderBy: [desc(tasks.updatedAt)],
+    });
+    const projectKey = project?.key || "TASK";
+    return candidateTasks.map((t) => ({
+      id: t.id,
+      title: t.title,
+      key: t.taskNumber ? `${projectKey}-${t.taskNumber}` : t.id.slice(0, 8),
+    }));
+  });
+}
+
