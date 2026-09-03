@@ -7,6 +7,7 @@ import { clearGithubImportAccessCookie, setGithubImportAccessCookie } from '@/li
 import { sealGithubImportToken } from '@/lib/github/repo-security'
 import { isCompletedOnboardingStatus } from '@/lib/onboarding/state'
 import { ensureDefaultGithubContributorIdentity } from '@/lib/github/contributor-identity'
+import { recordSecurityEvent } from '@/lib/security/audit'
 
 export async function GET(request: Request) {
     const startedAt = Date.now()
@@ -41,17 +42,42 @@ export async function GET(request: Request) {
     loginErrorUrl.searchParams.set('error', 'auth-code-error')
     loginErrorUrl.searchParams.set('redirect', nextPath)
 
+    const oauthError = searchParams.get('error')
+    const oauthErrorCode = searchParams.get('error_code') || oauthError
+    const oauthErrorDescription = searchParams.get('error_description')
+
     if (!code) {
         logger.metric('auth.callback.exchange.failure', {
             requestId,
-            reason: 'missing_code',
+            reason: oauthErrorCode ? 'oauth_error' : 'missing_code',
             nextPath,
             path: requestUrl.pathname,
             oauthRequestId,
             provider,
+            errorCode: oauthErrorCode,
             durationMs: Date.now() - startedAt,
             phase: hardeningPhase,
         })
+
+        // When an in-app linking attempt (such as from /settings?tab=integrations) encounters
+        // an OAuth error (e.g. identity_already_exists), return back to the requesting page
+        // instead of bouncing through /login with misleading success parameters.
+        if (nextPath.startsWith('/settings') || nextPath.startsWith('/projects') || nextPath.startsWith('/hub')) {
+            const inAppUrl = new URL(nextPath, baseUrl)
+            inAppUrl.searchParams.delete('githubIdentity')
+            if (oauthErrorCode === 'identity_already_exists') {
+                inAppUrl.searchParams.set('githubIdentity', 'already_linked')
+            } else if (oauthErrorCode) {
+                inAppUrl.searchParams.set('githubIdentity', 'error')
+                if (oauthErrorDescription) {
+                    inAppUrl.searchParams.set('githubErrorDesc', oauthErrorDescription)
+                }
+            }
+            const response = NextResponse.redirect(inAppUrl)
+            response.headers.set('x-request-id', requestId)
+            return response
+        }
+
         const response = NextResponse.redirect(loginErrorUrl)
         response.headers.set('x-request-id', requestId)
         return response
@@ -164,7 +190,24 @@ export async function GET(request: Request) {
             const sealed = sealGithubImportToken(providerToken)
             if (sealed) setGithubImportAccessCookie(response, sealed)
             try {
-                await ensureDefaultGithubContributorIdentity(expectedUser.id, providerToken)
+                const contributorIdentity = await ensureDefaultGithubContributorIdentity(expectedUser.id, providerToken)
+                if (successUrl.searchParams.get('githubIdentity') === 'replaced') {
+                    await recordSecurityEvent({
+                        userId: expectedUser.id,
+                        eventType: 'github_account_replaced',
+                        request,
+                        metadata: {
+                            githubId: contributorIdentity.githubId,
+                            githubLogin: contributorIdentity.login,
+                        },
+                    }).catch((auditError) => {
+                        logger.warn('github.account.replacement.audit_failed', {
+                            requestId,
+                            userId: expectedUser.id,
+                            error: auditError instanceof Error ? auditError.message : String(auditError),
+                        })
+                    })
+                }
             } catch (identityError) {
                 // Attribution enrichment must never block a successful OAuth flow.
                 logger.warn('github.contributor_identity.default_failed', {
