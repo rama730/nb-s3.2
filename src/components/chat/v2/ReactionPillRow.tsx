@@ -13,6 +13,7 @@ interface ReactionSummary {
 interface ReactionPillRowProps {
     reactions: ReactionSummary[];
     align?: 'start' | 'end';
+    className?: string;
     onToggleReaction: (emoji: string) => void;
     onShowDetail: (emoji: string) => void;
 }
@@ -20,6 +21,7 @@ interface ReactionPillRowProps {
 export const ReactionPillRow = React.memo(function ReactionPillRow({
     reactions,
     align = 'end',
+    className,
     onToggleReaction,
     onShowDetail,
 }: ReactionPillRowProps) {
@@ -32,7 +34,7 @@ export const ReactionPillRow = React.memo(function ReactionPillRow({
             align={align}
             role="group"
             aria-label="Message reactions"
-            className="gap-0.5 p-0.5"
+            className={cn("gap-0.5 p-0.5", className)}
         >
             {visibleReactions.map((reaction) => (
                 <button
