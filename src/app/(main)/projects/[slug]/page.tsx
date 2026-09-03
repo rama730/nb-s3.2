@@ -1,10 +1,11 @@
-import { notFound } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
 import type { Metadata } from 'next';
 import { cache, Suspense } from 'react';
 import ProjectDashboardClient from '@/components/projects/dashboard/ProjectDashboardClient';
 import { readProjectDetailShell, readProjectSprintDetail } from '@/app/actions/project/_all';
+import ProjectDetailLoading from './loading';
 import { isHardeningDomainEnabled } from '@/lib/features/hardening';
-import { getViewerAuthContext, getViewerIdentityContext, toClientViewer } from '@/lib/server/viewer-context';
+import { getViewerIdentityContext, toClientViewer } from '@/lib/server/viewer-context';
 import { buildRouteMetadata } from '@/lib/metadata/route-metadata';
 import { buildProjectDetailMetadataInput } from '@/lib/projects/project-detail-metadata';
 import { isProjectTabVisibleToViewer } from '@/lib/projects/settings-policies';
@@ -14,12 +15,12 @@ const readProjectSprintDetailCached = cache((slugOrId: string, actorUserId: stri
 
 // ponytail: metadata and the rendered route share one auth-qualified shell read.
 const readProjectRouteShell = cache(async (slugOrId: string) => {
-    const viewer = await getViewerAuthContext();
+    const viewerIdentity = await getViewerIdentityContext();
     const result = await readProjectDetailShell({
         slugOrId,
-        actorUserId: viewer.user?.id ?? null,
+        actorUserId: viewerIdentity.user?.id ?? null,
     });
-    return { viewer, result };
+    return { viewerIdentity, result };
 });
 
 export async function generateMetadata({
@@ -45,7 +46,7 @@ export async function generateMetadata({
         });
     }
     const { project } = result.data;
-    const metadataInput = buildProjectDetailMetadataInput(slug, project);
+    const metadataInput = buildProjectDetailMetadataInput(project.slug || slug, project);
 
     const tab = _searchParams?.tab || "dashboard";
     const tabTitleMap: Record<string, string> = {
@@ -104,11 +105,8 @@ async function ResolvedProjectDashboard({
     const [{ slug }, _searchParams] = await Promise.all([params, searchParams]);
     const selectedTab = _searchParams?.tab || "dashboard";
     const sprintId = _searchParams?.sprint ?? _searchParams?.sprintId;
-    const [{ viewer, result }, viewerIdentity] = await Promise.all([
-        readProjectRouteShell(slug),
-        getViewerIdentityContext(),
-    ]);
-    const { user } = viewer;
+    const { viewerIdentity, result } = await readProjectRouteShell(slug);
+    const { user } = viewerIdentity;
     const clientViewer = toClientViewer(viewerIdentity);
 
     if (!result.success) {
@@ -119,6 +117,15 @@ async function ResolvedProjectDashboard({
     }
 
     const { project, capabilities } = result.data;
+
+    // Ponytail: If accessed via numeric/UUID id, canonically redirect to clean human-readable slug
+    if (project.slug && slug !== project.slug) {
+        const rawParams = await searchParams;
+        const queryParams = rawParams && Object.keys(rawParams).length > 0
+            ? `?${new URLSearchParams(rawParams as Record<string, string>).toString()}`
+            : '';
+        redirect(`/projects/${encodeURIComponent(project.slug)}${queryParams}`);
+    }
     const canViewSprints = isProjectTabVisibleToViewer({
         tabId: "sprints",
         isOwnerOrMember: capabilities.isOwner || capabilities.isMember,
@@ -166,7 +173,7 @@ export default function ProjectDetailPage({
             data-scroll-root="route"
             className="h-full min-h-0 app-scroll app-scroll-y app-scroll-gutter overscroll-y-contain bg-zinc-50 dark:bg-zinc-950"
         >
-            <Suspense fallback={<div className="h-full flex items-center justify-center animate-pulse text-zinc-500">Loading project data...</div>}>
+            <Suspense fallback={<ProjectDetailLoading />}>
                 <ResolvedProjectDashboard params={params} searchParams={searchParams} />
             </Suspense>
         </div>
