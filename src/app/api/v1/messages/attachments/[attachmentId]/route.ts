@@ -89,7 +89,7 @@ export async function GET(
 ) {
   const startedAt = Date.now();
   const requestId = getRequestId(request);
-  const limitResponse = await enforceRouteLimit(request, "api:v1:messages:attachments:get", 240, 60);
+  const limitResponse = await enforceRouteLimit(request, "api:v1:messages:attachments:get", 600, 60);
   if (limitResponse) {
     logApiRoute(request, {
       requestId,
@@ -358,7 +358,7 @@ export async function GET(
     status: 307,
     headers: {
       Location: signedUrl,
-      "Cache-Control": "private, max-age=240",
+      "Cache-Control": "private, max-age=300, stale-while-revalidate=60",
     },
   });
 }
