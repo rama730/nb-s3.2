@@ -35,7 +35,7 @@ export const notificationFanout = inngest.createFunction(
         id: "notification-fanout",
         name: "Notification Fanout",
         batchEvents: {
-            maxSize: 100,
+            maxSize: 5,
             timeout: "2s",
         },
     },

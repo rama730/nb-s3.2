@@ -8,7 +8,7 @@ export const workspaceCountersRefresh = inngest.createFunction(
         id: 'workspace-counters-refresh', 
         name: 'Workspace Counters Refresh',
         batchEvents: {
-            maxSize: 100,
+            maxSize: 5,
             timeout: '5s',
         },
     },
