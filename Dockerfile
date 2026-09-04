@@ -19,9 +19,6 @@ ARG NEXT_PUBLIC_SUPABASE_ANON_KEY
 ARG NEXT_PUBLIC_REALTIME_AUTHORIZATION_ENABLED
 ARG NEXT_PUBLIC_TURNSTILE_SITE_KEY
 ARG NEXT_PUBLIC_VAPID_PUBLIC_KEY
-ARG NEXT_PUBLIC_YJS_WEBSOCKET_URL
-ARG NEXT_PUBLIC_PRESENCE_WS_URL
-ARG NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT
 
 ENV APP_URL=$APP_URL \
     NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL \
@@ -29,19 +26,27 @@ ENV APP_URL=$APP_URL \
     NEXT_PUBLIC_SUPABASE_ANON_KEY=$NEXT_PUBLIC_SUPABASE_ANON_KEY \
     NEXT_PUBLIC_REALTIME_AUTHORIZATION_ENABLED=$NEXT_PUBLIC_REALTIME_AUTHORIZATION_ENABLED \
     NEXT_PUBLIC_TURNSTILE_SITE_KEY=$NEXT_PUBLIC_TURNSTILE_SITE_KEY \
-    NEXT_PUBLIC_VAPID_PUBLIC_KEY=$NEXT_PUBLIC_VAPID_PUBLIC_KEY \
-    NEXT_PUBLIC_YJS_WEBSOCKET_URL=$NEXT_PUBLIC_YJS_WEBSOCKET_URL \
-    NEXT_PUBLIC_PRESENCE_WS_URL=$NEXT_PUBLIC_PRESENCE_WS_URL \
-    NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT=$NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT
-
-# Next.js evaluates the CSRF module while collecting route data. Use a public,
-# build-only placeholder so the real secret never enters an image layer; the
-# runner stage receives the real value from Railway at container startup.
-ENV CSRF_TOKEN_SECRET=build-only-placeholder-not-used-at-runtime-000000000000
+    NEXT_PUBLIC_VAPID_PUBLIC_KEY=$NEXT_PUBLIC_VAPID_PUBLIC_KEY
 
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY . .
-RUN npm run build
+# Next.js evaluates server modules while collecting route data. These public
+# placeholders satisfy fail-fast runtime checks without putting real production
+# credentials into the build. They do not carry into the runner stage.
+RUN DATABASE_URL=postgresql://build:build@127.0.0.1:5432/build \
+    SUPABASE_SERVICE_ROLE_KEY=build-only \
+    CSRF_TOKEN_SECRET=build-only-placeholder-not-used-at-runtime-000000000000 \
+    SECURITY_STEPUP_SECRET=build-only \
+    SECURITY_RECOVERY_CODE_SECRET=build-only \
+    AUDIT_METADATA_HASH_SECRET=build-only \
+    GITHUB_IMPORT_TOKEN_ENCRYPTION_KEY=0000000000000000000000000000000000000000000000000000000000000000 \
+    JOB_REQUEST_SECRET=build-only \
+    GITHUB_WEBHOOK_SECRET=build-only \
+    DOC_COLLABORATION_TOKEN_SECRET=build-only \
+    INNGEST_EVENT_KEY=build-only \
+    INNGEST_SIGNING_KEY=build-only \
+    INNGEST_EXECUTION_ROLE=web \
+    npm run build
 
 FROM base AS runner
 ENV NODE_ENV=production \
