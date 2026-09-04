@@ -34,6 +34,11 @@ ENV APP_URL=$APP_URL \
     NEXT_PUBLIC_PRESENCE_WS_URL=$NEXT_PUBLIC_PRESENCE_WS_URL \
     NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT=$NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT
 
+# Next.js evaluates the CSRF module while collecting route data. Use a public,
+# build-only placeholder so the real secret never enters an image layer; the
+# runner stage receives the real value from Railway at container startup.
+ENV CSRF_TOKEN_SECRET=build-only-placeholder-not-used-at-runtime-000000000000
+
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY . .
 RUN npm run build
