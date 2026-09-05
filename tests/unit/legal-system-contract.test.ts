@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import test from "node:test";
 import { CURRENT_LEGAL_ACCEPTANCE, LEGAL_VERSIONS } from "@/lib/legal/versions";
@@ -48,13 +48,13 @@ test("signup requires affirmative age, terms, EULA, and privacy acknowledgement"
 
 test("existing signed-in accounts must accept the current unexpired versions", () => {
   const layout = read("src/app/(main)/layout.tsx");
-  const middleware = read("middleware.ts");
+  const requestBoundary = read(existsSync(resolve(root, "proxy.ts")) ? "proxy.ts" : "middleware.ts");
   const acceptance = read("src/lib/legal/acceptance.ts");
   const page = read("src/app/legal/accept/page.tsx");
 
   assert.match(layout, /hasCurrentLegalAcceptance\(user\.id\)/);
   assert.match(layout, /redirect\(`\/legal\/accept\?next=/);
-  assert.match(middleware, /x-networkbase-request-target/);
+  assert.match(requestBoundary, /x-networkbase-request-target/);
   assert.match(acceptance, /gt\(legalAcceptances\.retentionExpiresAt, new Date\(\)\)/);
   assert.match(page, /"material_update"/);
 });
