@@ -4819,6 +4819,7 @@ export const accountDeletions = pgTable(
       .defaultNow()
       .notNull(),
     hardDeleteAt: timestamp("hard_delete_at", { withTimezone: true }).notNull(),
+    legalRetentionUntil: timestamp("legal_retention_until", { withTimezone: true }).notNull(),
     cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
     completedAt: timestamp("completed_at", { withTimezone: true }),
     confirmationToken: text("confirmation_token"),
@@ -4842,11 +4843,48 @@ export const accountDeletions = pgTable(
       t.hardDeleteAt,
       t.completedAt,
     ),
+    legalRetentionIdx: index("account_deletions_legal_retention_idx").on(
+      t.legalRetentionUntil,
+      t.completedAt,
+    ),
   }),
 );
 
 export type AccountDeletion = typeof accountDeletions.$inferSelect;
 export type NewAccountDeletion = typeof accountDeletions.$inferInsert;
+
+// ============================================================================
+// LEGAL ACCEPTANCES
+// Kept independently from profiles so contractual evidence can survive an
+// account deletion for the limited legal retention period.
+// ============================================================================
+export const legalAcceptances = pgTable(
+  "legal_acceptances",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id").notNull(),
+    termsVersion: text("terms_version").notNull(),
+    eulaVersion: text("eula_version").notNull(),
+    privacyNoticeVersion: text("privacy_notice_version").notNull(),
+    context: text("context").notNull(),
+    evidence: jsonb("evidence").$type<Record<string, unknown>>().default({}).notNull(),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true }).defaultNow().notNull(),
+    retentionExpiresAt: timestamp("retention_expires_at", { withTimezone: true }).notNull(),
+  },
+  (t) => ({
+    versionAcceptanceUnique: unique("legal_acceptances_user_versions_unique").on(
+      t.userId,
+      t.termsVersion,
+      t.eulaVersion,
+      t.privacyNoticeVersion,
+    ),
+    userAcceptedIdx: index("legal_acceptances_user_accepted_idx").on(t.userId, t.acceptedAt),
+    expiryIdx: index("legal_acceptances_expiry_idx").on(t.retentionExpiresAt),
+  }),
+);
+
+export type LegalAcceptance = typeof legalAcceptances.$inferSelect;
+export type NewLegalAcceptance = typeof legalAcceptances.$inferInsert;
 
 export type NewDmPair = typeof dmPairs.$inferInsert;
 export type ConversationParticipant =

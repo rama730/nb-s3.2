@@ -10,12 +10,16 @@ import { isLeakedPassword } from "@/lib/security/leaked-password";
 import { resolveSupabasePublicEnv } from "@/lib/supabase/env";
 import { resolveSupabaseServerCookieOptions } from "@/lib/supabase/cookie-options";
 import { getRequestId, jsonError, jsonSuccess, logApiRoute } from "@/app/api/v1/_shared";
+import { CURRENT_LEGAL_ACCEPTANCE } from "@/lib/legal/versions";
+import { recordCurrentLegalAcceptance } from "@/lib/legal/acceptance";
+import { logger } from "@/lib/logger";
 
 const signUpSchema = z.object({
   email: z.string().trim().email(),
   password: z.string().min(1),
   fullName: z.string().trim().max(120).optional(),
   captchaToken: z.string().trim().min(1).max(4096).optional(),
+  legalAccepted: z.literal(true),
 });
 
 const DUPLICATE_EMAIL_MESSAGE = "This email has already been used to create an account";
@@ -154,6 +158,11 @@ export async function POST(request: Request) {
         ...(parsed.data.captchaToken ? { captchaToken: parsed.data.captchaToken } : {}),
         data: {
           full_name: parsed.data.fullName || "",
+          legal_acceptance: {
+            ...CURRENT_LEGAL_ACCEPTANCE,
+            acceptedAt: new Date().toISOString(),
+            context: "email_signup",
+          },
         },
       },
     });
@@ -180,6 +189,25 @@ export async function POST(request: Request) {
         errorCode: "CONFLICT",
       });
       return jsonError(DUPLICATE_EMAIL_MESSAGE, 409, "CONFLICT");
+    }
+
+    if (result.data.user?.id) {
+      try {
+        await recordCurrentLegalAcceptance({
+          userId: result.data.user.id,
+          request,
+          context: "email_signup",
+        });
+      } catch (acceptanceError) {
+        // Supabase Auth metadata above remains a second durable copy. Do not
+        // strand a newly-created account if the application database is
+        // temporarily unavailable; surface the database failure to operators.
+        logger.warn("auth.signup.legal-acceptance-record.failed", {
+          module: "auth",
+          userId: result.data.user.id,
+          error: acceptanceError instanceof Error ? acceptanceError.message : String(acceptanceError),
+        });
+      }
     }
 
     logApiRoute(request, {

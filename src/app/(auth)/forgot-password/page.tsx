@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import TurnstileWidget, { hasTurnstileSiteKey } from "@/components/auth/TurnstileWidget";
 import { buildOAuthRedirectTo, resolveAuthBaseUrl } from "@/lib/auth/redirects";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+import { LegalLinks } from "@/components/legal/LegalLinks";
 
 export default function ForgotPasswordPage() {
     const supabase = useMemo(() => createSupabaseBrowserClient(), []);
@@ -59,7 +60,7 @@ export default function ForgotPasswordPage() {
             <div className="w-full max-w-md space-y-6">
                 <div className="text-center space-y-2">
                     <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-primary text-primary-foreground font-bold text-xl">
-                        E
+                        N
                     </div>
                     <h1 className="text-2xl font-bold tracking-tight">Reset your password</h1>
                     <p className="text-muted-foreground">We will send a secure recovery link to your email.</p>
@@ -137,6 +138,7 @@ export default function ForgotPasswordPage() {
                         </p>
                     </CardFooter>
                 </Card>
+                <LegalLinks />
             </div>
         </div>
     );

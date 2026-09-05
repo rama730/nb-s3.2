@@ -14,6 +14,7 @@ import { SettingsPageHeader } from "@/components/settings/ui/SettingsPageHeader"
 import { SettingsSectionCard } from "@/components/settings/ui/SettingsSectionCard";
 import { UserAvatar } from "@/components/ui/UserAvatar";
 import { formatCalendarDate, formatDateTime } from "@/lib/ui/date-formatting";
+import { LegalAndDataRightsSection } from "@/components/settings/LegalAndDataRightsSection";
 
 
 async function patchPrivacy(url: string, body: Record<string, unknown>) {
@@ -419,6 +420,8 @@ export default function PrivacySettings() {
                     )}
                 </div>
             </SettingsSectionCard>
+
+            <LegalAndDataRightsSection />
         </div>
     );
 }

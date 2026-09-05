@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { PasswordStrengthMeter } from "@/components/settings/PasswordStrengthMeter";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { getPasswordPolicyResult } from "@/lib/security/password-policy";
+import { LegalLinks } from "@/components/legal/LegalLinks";
 
 type RecoveryState = "loading" | "ready" | "invalid" | "success";
 
@@ -115,7 +116,7 @@ export default function ResetPasswordPage() {
             <div className="w-full max-w-md space-y-6">
                 <div className="text-center space-y-2">
                     <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-primary text-primary-foreground font-bold text-xl">
-                        E
+                        N
                     </div>
                     <h1 className="text-2xl font-bold tracking-tight">Choose a new password</h1>
                     <p className="text-muted-foreground">Finish account recovery with a strong new password of at least 12 characters.</p>
@@ -207,6 +208,7 @@ export default function ResetPasswordPage() {
                         </p>
                     </CardFooter>
                 </Card>
+                <LegalLinks />
             </div>
         </div>
     );

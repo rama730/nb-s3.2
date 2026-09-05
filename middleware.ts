@@ -7,6 +7,7 @@ import { toPrivacySafeRouteMetric } from "@/lib/routing/route-metric";
 
 const CSP_NONCE_HEADER = "x-nonce";
 const ROUTE_METRIC_HEADER = "x-route-metric";
+const REQUEST_TARGET_HEADER = "x-networkbase-request-target";
 const CSRF_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 12;
 const AUTH_PROTECTED_PREFIXES = ["/hub", "/settings", "/messages", "/profile", "/people", "/workspace", "/monitor", "/u/", "/onboarding", "/projects", "/admin", "/authorize"];
 const AUTH_PROTECTED_EXACT = new Set(["/", "/login", "/signup", "/verify-email"]);
@@ -145,6 +146,10 @@ function buildCsp(nonce: string, request: NextRequest) {
 export async function middleware(request: NextRequest) {
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set(ROUTE_METRIC_HEADER, toPrivacySafeRouteMetric(request.nextUrl.pathname));
+  requestHeaders.set(
+    REQUEST_TARGET_HEADER,
+    `${request.nextUrl.pathname}${request.nextUrl.search}`,
+  );
 
   if (request.nextUrl.pathname.startsWith("/api/")) {
     return NextResponse.next({

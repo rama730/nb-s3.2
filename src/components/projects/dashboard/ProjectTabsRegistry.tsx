@@ -80,3 +80,20 @@ export const ProjectSettingsTab = dynamic(
     () => import("@/components/projects/tabs/ProjectSettingsTab"),
     { loading: () => <SkeletonSettings />, ssr: false }
 );
+
+export const ProjectPrivacyTermsTab = dynamic(
+    () => import("@/components/projects/tabs/ProjectPrivacyTermsTab"),
+    {
+        loading: () => (
+            <div className="mx-auto w-full max-w-5xl animate-pulse space-y-5 px-4 py-8">
+                <div className="h-8 w-56 rounded bg-zinc-200 dark:bg-zinc-800" />
+                <div className="h-28 rounded-3xl bg-zinc-100 dark:bg-zinc-900" />
+                <div className="grid gap-4 md:grid-cols-2">
+                    <div className="h-52 rounded-3xl bg-zinc-100 dark:bg-zinc-900" />
+                    <div className="h-52 rounded-3xl bg-zinc-100 dark:bg-zinc-900" />
+                </div>
+            </div>
+        ),
+        ssr: false,
+    },
+);

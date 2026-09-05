@@ -179,9 +179,9 @@ export async function executeHardDelete(
       .set({
         completedAt: new Date(),
         cleanupStatus: "completed",
-        userId: deletionId,
-        email: "deleted-account@invalid",
-        username: null,
+        // Keep only registration identifiers until legalRetentionUntil. The
+        // lifecycle job then anonymizes them automatically. The profile,
+        // content, storage, and authentication identity are already deleted.
         reason: null,
         confirmationToken: null,
         tokenExpiresAt: null,
@@ -190,6 +190,7 @@ export async function executeHardDelete(
           databaseCleanupComplete: true,
           authCleanupComplete: true,
           completedAt: new Date().toISOString(),
+          minimalRegistrationRecordRetained: true,
         },
       })
       .where(eq(accountDeletions.id, deletionId));

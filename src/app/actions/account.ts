@@ -10,6 +10,7 @@ import {
     conversationParticipants,
     collections,
     accountDeletions,
+    legalAcceptances,
     profileAuditEvents,
     profileProjectContributions,
     profileContributionSkills,
@@ -30,6 +31,7 @@ import { z } from 'zod';
 
 const ACCOUNT_DELETE_CONFIRM_TEXT = 'DELETE';
 const GRACE_PERIOD_DAYS = 30;
+const LEGAL_REGISTRATION_RETENTION_DAYS = 180;
 const ACCOUNT_EXPORT_MESSAGE_LIMIT = 10_000;
 
 type AccountExportMessageRow = {
@@ -108,6 +110,7 @@ export async function scheduleAccountDeletion(
         const userEmail = user.email || '';
         const now = new Date();
         const hardDeleteAt = new Date(now.getTime() + GRACE_PERIOD_DAYS * 24 * 60 * 60 * 1000);
+        const legalRetentionUntil = new Date(now.getTime() + LEGAL_REGISTRATION_RETENTION_DAYS * 24 * 60 * 60 * 1000);
 
         // Check for existing pending deletion
         const existingDeletion = await db
@@ -179,6 +182,7 @@ export async function scheduleAccountDeletion(
                     reason: reason || null,
                     scheduledAt: now,
                     hardDeleteAt,
+                    legalRetentionUntil,
                     cleanupStatus: 'pending',
                     metadata: {
                         userAgent: '',
@@ -854,6 +858,19 @@ export async function exportAccountData(): Promise<{
             .where(eq(collections.ownerId, userId))
             .limit(10_000);
 
+        const userLegalAcceptances = await readDb
+            .select({
+                termsVersion: legalAcceptances.termsVersion,
+                eulaVersion: legalAcceptances.eulaVersion,
+                privacyNoticeVersion: legalAcceptances.privacyNoticeVersion,
+                context: legalAcceptances.context,
+                acceptedAt: legalAcceptances.acceptedAt,
+                retentionExpiresAt: legalAcceptances.retentionExpiresAt,
+            })
+            .from(legalAcceptances)
+            .where(eq(legalAcceptances.userId, userId))
+            .orderBy(desc(legalAcceptances.acceptedAt));
+
         const sanitizedMessages = sanitizeExportedMessages(userMessages, userId);
         const messageNotes: string[] = [];
         if (userMessageCount > sanitizedMessages.length) {
@@ -890,6 +907,7 @@ export async function exportAccountData(): Promise<{
                 items: sanitizedMessages,
             },
             collections: userCollections,
+            legalAcceptances: userLegalAcceptances,
         };
 
         // Write to S3 with exports/ prefix for lifecycle rules

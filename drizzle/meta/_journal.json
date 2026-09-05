@@ -1128,6 +1128,13 @@
       "when": 1788220800000,
       "tag": "0161_reviewed_github_sync",
       "breakpoints": true
+    },
+    {
+      "idx": 161,
+      "version": "7",
+      "when": 1788472800000,
+      "tag": "0162_legal_acceptances",
+      "breakpoints": true
     }
   ]
 }
