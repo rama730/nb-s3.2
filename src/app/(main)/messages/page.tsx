@@ -4,7 +4,7 @@ import { buildRouteMetadata } from '@/lib/metadata/route-metadata';
 
 export function generateMetadata() {
     return buildRouteMetadata({
-        title: 'Messages | Edge',
+        title: 'Messages | NetworkBase',
         description: 'Keep conversations, project groups, and application threads in one inbox.',
         path: '/messages',
     });

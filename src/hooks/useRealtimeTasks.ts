@@ -37,7 +37,7 @@ export function useRealtimeTasks(projectId: string, deferredTaskId: string | nul
           queryKey: queryKeys.project.detail.tasksRoot(projectId),
           refetchType: "active",
         });
-      }, 150);
+      }, 250);
     };
 
     const channel = subscribeActiveResource({

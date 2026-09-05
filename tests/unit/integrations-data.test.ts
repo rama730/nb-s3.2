@@ -26,6 +26,7 @@ describe("integrations settings builder", () => {
     assert.equal(data.githubService.status, "connected");
     assert.equal(data.githubService.usageCount, 1);
     assert.equal(data.githubService.githubUsername, "octocat");
+    assert.equal(data.githubService.recoveryAction, null);
   });
 
   it("directs an OAuth-only account to Security for email sign-in", () => {
@@ -54,6 +55,22 @@ describe("integrations settings builder", () => {
     assert.equal(data.githubService.status, "action_required");
     assert.equal(data.githubService.summary, "GitHub account unavailable.");
     assert.match(data.githubService.detail, /Imported project data remains available/);
+    assert.equal(data.githubService.recoveryAction, "replace_account");
+  });
+
+  it("requires a fallback identity before a stale GitHub identity can be replaced", () => {
+    const data = buildIntegrationsData({
+      user: user({
+        app_metadata: { provider: "github", providers: ["github"] },
+        identities: [{ provider: "github", identity_data: { provider_id: "42", login: "gone" } }] as User["identities"],
+      }),
+      githubRepoProjectCount: 2,
+      githubLastSyncAt: null,
+      passwordLastChangedAt: null,
+      githubAccountHealth: { state: "unavailable", reason: "not_found", checkedAt: "2026-06-30T04:30:00.000Z", profile: null },
+    });
+
+    assert.equal(data.githubService.recoveryAction, "add_fallback_sign_in");
   });
 
   it("does not claim repository access is connected without a linked account", () => {
@@ -65,5 +82,20 @@ describe("integrations settings builder", () => {
     });
     assert.equal(data.githubService.status, "not_connected");
     assert.equal(data.githubService.usageCount, 1);
+  });
+
+  it("does not count stale GitHub metadata as an additional sign-in method", () => {
+    const data = buildIntegrationsData({
+      user: user({
+        app_metadata: { provider: "email", providers: ["email", "github"] },
+        identities: [],
+      }),
+      githubRepoProjectCount: 0,
+      githubLastSyncAt: null,
+      passwordLastChangedAt: "2026-06-01T00:00:00.000Z",
+    });
+
+    assert.equal(data.summary, "Account created with Email. 0 additional sign-in methods are linked.");
+    assert.equal(data.authConnections.find((provider) => provider.provider === "github")?.state, "not_linked");
   });
 });

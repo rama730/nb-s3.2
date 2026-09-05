@@ -30,9 +30,16 @@ function updateThreadData(
         queryKeys.messages.v2.thread(conversationId),
         (current) => {
             if (!current) return current;
+            let hasChanges = false;
+            const updatedPages = current.pages.map((page, index) => {
+                const next = updater(page, index);
+                if (next !== page) hasChanges = true;
+                return next;
+            });
+            if (!hasChanges) return current;
             return {
                 ...current,
-                pages: current.pages.map((page, index) => updater(page, index)),
+                pages: updatedPages,
             };
         },
     );

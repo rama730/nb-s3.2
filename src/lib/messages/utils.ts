@@ -110,9 +110,39 @@ export function mergeMessageCollections(
     ...collections: ReadonlyArray<ReadonlyArray<MessageWithSender>>
 ): MessageWithSender[] {
     const normalizedCollections = collections.filter(Array.isArray) as ReadonlyArray<ReadonlyArray<MessageWithSender>>;
-    let result: MessageWithSender[] = [];
+    if (normalizedCollections.length === 0) return [];
+    if (normalizedCollections.length === 1) return [...normalizedCollections[0]!];
+
+    const byId = new Map<string, MessageWithSender>();
+    const byClientMessageId = new Map<string, string>();
+
     for (const collection of normalizedCollections) {
-        result = mergeMessages(result, collection);
+        for (const message of collection) {
+            const existingById = byId.get(message.id);
+            const clientMessageId = message.clientMessageId ?? null;
+            const existingByClientId = clientMessageId ? byClientMessageId.get(clientMessageId) : null;
+            const existing = existingById ?? (existingByClientId ? byId.get(existingByClientId) : undefined);
+
+            if (!existing) {
+                byId.set(message.id, message);
+                if (clientMessageId) byClientMessageId.set(clientMessageId, message.id);
+                continue;
+            }
+
+            const preferred = pickPreferredMessage(existing, message);
+            if (preferred.id !== existing.id) {
+                byId.delete(existing.id);
+            }
+            byId.set(preferred.id, preferred);
+            if (preferred.clientMessageId) {
+                byClientMessageId.set(preferred.clientMessageId, preferred.id);
+            }
+        }
     }
-    return result;
+
+    return Array.from(byId.values()).sort((left, right) => {
+        const createdDiff = toEpochMs(left.createdAt) - toEpochMs(right.createdAt);
+        if (createdDiff !== 0) return createdDiff;
+        return left.id.localeCompare(right.id);
+    });
 }

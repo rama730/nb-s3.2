@@ -7,7 +7,9 @@ export default async function AuthLayout({
 }) {
   return (
     <AuthRouteProviders initialUser={null} initialProfile={null}>
-      {children}
+      <div className="auth-root w-full">
+        {children}
+      </div>
     </AuthRouteProviders>
   );
 }

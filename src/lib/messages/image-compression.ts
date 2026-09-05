@@ -13,7 +13,18 @@ interface CompressionOptions {
 }
 
 export function pixelsHaveTransparency(pixels: Uint8ClampedArray): boolean {
-    for (let alpha = 3; alpha < pixels.length; alpha += 4) {
+    // Check with a stride of 16 pixels (64 bytes) for fast detection across image body
+    const step = 64;
+    for (let alpha = 3; alpha < pixels.length; alpha += step) {
+        if (pixels[alpha] !== 255) return true;
+    }
+    // Check image edges for border transparency
+    const edgeLimit = Math.min(128, pixels.length);
+    for (let alpha = 3; alpha < edgeLimit; alpha += 4) {
+        if (pixels[alpha] !== 255) return true;
+    }
+    const endStart = Math.max(3, pixels.length - 128);
+    for (let alpha = endStart; alpha < pixels.length; alpha += 4) {
         if (pixels[alpha] !== 255) return true;
     }
     return false;

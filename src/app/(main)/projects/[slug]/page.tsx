@@ -39,7 +39,7 @@ export async function generateMetadata({
     const { result } = await readProjectRouteShell(slug);
     if (!result.success) {
         return buildRouteMetadata({
-            title: "Project unavailable | Edge",
+            title: "Project unavailable | NetworkBase",
             description: "This project is private or unavailable.",
             path: `/projects/${encodeURIComponent(slug)}`,
         });
@@ -53,6 +53,7 @@ export async function generateMetadata({
         sprints: "Sprints",
         analytics: "Project Analytics",
         settings: "Settings",
+        privacy: "Privacy & terms",
         readme: "Docs",
         docs: "Docs",
     };
@@ -88,7 +89,7 @@ export async function generateMetadata({
     }
 
     if (tabTitle) {
-        metadataInput.title = `${tabTitle} | ${project.title} | Edge`;
+        metadataInput.title = `${tabTitle} | ${project.title} | NetworkBase`;
     }
 
     return buildRouteMetadata(metadataInput);

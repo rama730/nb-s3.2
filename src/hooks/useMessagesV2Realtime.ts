@@ -41,6 +41,7 @@ import {
     type RealtimeSenderIdentity,
 } from '@/lib/messages/realtime-sender';
 import { withReactionSummaryMetadata } from '@/lib/messages/reactions';
+import { buildMessageAttachmentAccessUrl } from '@/lib/messages/attachment-access';
 
 const FALLBACK_REFRESH_DEBOUNCE_MS = 220;
 const THREAD_MESSAGE_SYNC_DEBOUNCE_MS = 16;
@@ -238,11 +239,47 @@ function buildThreadMessageFromRealtimePayload(params: {
 
     const replyToMessageId = getPayloadStringField(params.payload, 'new', 'reply_to_message_id');
     const type = getPayloadStringField(params.payload, 'new', 'type');
-    if (replyToMessageId || type === 'image' || type === 'video' || type === 'file') {
+    const metadata = (params.payload.new?.metadata && typeof params.payload.new.metadata === 'object')
+        ? params.payload.new.metadata as Record<string, unknown>
+        : {};
+
+    const rawAttachments = Array.isArray(metadata.attachments)
+        ? (metadata.attachments as Array<Record<string, unknown>>)
+        : [];
+
+    const isMediaMessage = type === 'image' || type === 'video' || type === 'file';
+    // If it's a media message without embedded metadata attachments, fall back to snapshot sync
+    if (isMediaMessage && rawAttachments.length === 0) {
         return null;
     }
 
-    const metadata = params.payload.new?.metadata;
+    const replyPreview = (metadata.replyPreview && typeof metadata.replyPreview === 'object')
+        ? (metadata.replyPreview as MessageWithSender['replyTo'])
+        : null;
+
+    // If it has a reply target but no embedded replyPreview, fall back to snapshot sync
+    if (replyToMessageId && !replyPreview) {
+        return null;
+    }
+
+    const attachments: MessageWithSender['attachments'] = rawAttachments.map((att) => {
+        const id = String(att.id || '');
+        const attType = (att.type as 'image' | 'video' | 'file') || 'file';
+        return {
+            id,
+            type: attType,
+            url: buildMessageAttachmentAccessUrl(id),
+            filename: String(att.filename || 'attachment'),
+            sizeBytes: typeof att.sizeBytes === 'number' ? att.sizeBytes : null,
+            mimeType: String(att.mimeType || ''),
+            thumbnailUrl: typeof att.thumbnailUrl === 'string'
+                ? att.thumbnailUrl
+                : (attType === 'image' ? buildMessageAttachmentAccessUrl(id, { preview: true }) : null),
+            width: typeof att.width === 'number' ? att.width : null,
+            height: typeof att.height === 'number' ? att.height : null,
+        };
+    });
+
     return {
         id: messageId,
         conversationId: params.conversationId,
@@ -252,15 +289,13 @@ function buildThreadMessageFromRealtimePayload(params: {
             ? params.payload.new?.content as string | null
             : null,
         type: (type ?? 'text') as MessageWithSender['type'],
-        metadata: metadata && typeof metadata === 'object'
-            ? metadata as Record<string, unknown>
-            : {},
-        replyTo: null,
+        metadata,
+        replyTo: replyPreview,
         createdAt,
         editedAt: getPayloadDateField(params.payload, 'new', 'edited_at'),
         deletedAt: getPayloadDateField(params.payload, 'new', 'deleted_at'),
         sender: params.sender,
-        attachments: [],
+        attachments,
     };
 }
 
@@ -852,9 +887,18 @@ export function useMessagesV2Realtime(
                                     const cached = queryClient.getQueryData<{ pages?: Array<{ messages?: MessageWithSender[] }> }>(
                                         queryKeys.messages.v2.thread(activeConversationId),
                                     );
-                                    const deletedMessage = cached?.pages
-                                        ?.flatMap((page) => page.messages ?? [])
-                                        .find((message) => message.id === deletedMessageId);
+                                    let deletedMessage: MessageWithSender | undefined;
+                                    if (cached?.pages) {
+                                        for (const page of cached.pages) {
+                                            for (const message of page.messages ?? []) {
+                                                if (message.id === deletedMessageId) {
+                                                    deletedMessage = message;
+                                                    break;
+                                                }
+                                            }
+                                            if (deletedMessage) break;
+                                        }
+                                    }
                                     if (deletedMessage) {
                                         patchConversationLastMessageFromMessage(queryClient, activeConversationId, {
                                             ...deletedMessage,
@@ -1005,6 +1049,18 @@ export function useMessagesV2Realtime(
                             if (messageId) {
                                 applyReceiptPatch(activeConversationId, messageId, 'read');
                             }
+                        },
+                    },
+                    // Multiplexed: message_work_links changes for active thread (eliminates redundant channel)
+                    {
+                        event: '*',
+                        table: 'message_work_links',
+                        filter: `source_conversation_id=eq.${activeConversationId}`,
+                        handler: () => {
+                            void queryClient.invalidateQueries({
+                                queryKey: ['chat-v2', 'linked-work', activeConversationId],
+                                exact: false,
+                            });
                         },
                     },
                 ],

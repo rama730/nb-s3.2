@@ -103,6 +103,7 @@ function showFilesToast(
 
 export interface FilesTabRootProps {
   projectId: string;
+  projectSlug?: string;
   /** Display name for the project, piped through to sidebar + main. */
   projectName?: string;
   /**
@@ -149,6 +150,7 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
   const queryClient = useQueryClient();
   const {
     projectId,
+    projectSlug,
     projectName,
     currentUserId,
     isOwnerOrMember,
@@ -181,7 +183,7 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
   const [githubAccessResolved, setGithubAccessResolved] = useState(false);
   useEffect(() => {
     let cancelled = false;
-    if (!isActive || !isOwner || !currentUserId) {
+    if (!isActive || !currentUserId || (!isOwner && !isOwnerOrMember)) {
       setGithubAccess(null);
       setGithubAccessResolved(true);
       return;
@@ -204,8 +206,10 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [currentUserId, isActive, isOwner]);
-  const canOpenGitHub = isOwner && githubAccess?.linked === true;
+  }, [currentUserId, isActive, isOwner, isOwnerOrMember]);
+  const canOpenGitHub =
+    (isOwner && githubAccess?.linked === true) ||
+    Boolean(currentUserId && (isOwner || isOwnerOrMember));
   const pendingNavigation = useFilesWorkspaceStore(
     (state) => state.byProjectId[projectId]?.pendingNavigation ?? null,
   );
@@ -733,9 +737,11 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
               />
               <FilesTabMain
                 projectId={projectId}
+                projectSlug={projectSlug}
                 projectName={projectName}
                 canOpenGitHub={canOpenGitHub}
                 githubAccess={githubAccess}
+                isOwner={isOwner}
               />
               <QuickOpenDialog
                 projectId={projectId}

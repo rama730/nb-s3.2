@@ -71,7 +71,15 @@ type SignUpApiResponse = {
 interface AuthContextType extends AuthState {
     isAuthenticated: boolean;
     signIn: (email: string, password: string, captchaToken?: string) => Promise<AuthResult>;
-    signUp: (email: string, password: string, fullName?: string, captchaToken?: string, legalAccepted?: boolean) => Promise<AuthResult>;
+    signUp: (
+        email: string,
+        password: string,
+        fullName?: string,
+        captchaToken?: string,
+        legalAccepted?: boolean,
+        options?: { suggestedUsername?: string; inviteToken?: string; website_hp?: string; idempotencyKey?: string }
+    ) => Promise<AuthResult>;
+    verifyOtp: (email: string, token: string, type?: 'signup' | 'email') => Promise<AuthResult>;
     signOut: () => Promise<void>;
     signInWithGoogle: (nextPath?: string | null) => Promise<OAuthResult>;
     signInWithGitHub: (nextPath?: string | null) => Promise<OAuthResult>;
@@ -415,18 +423,32 @@ export function AuthProvider({
         }
     }, []);
 
-    const signUp = useCallback(async (email: string, password: string, fullName?: string, captchaToken?: string, legalAccepted?: boolean) => {
+    const signUp = useCallback(async (
+        email: string,
+        password: string,
+        fullName?: string,
+        captchaToken?: string,
+        legalAccepted?: boolean,
+        options?: { suggestedUsername?: string; inviteToken?: string; website_hp?: string; idempotencyKey?: string }
+    ) => {
         const supabase = createClient();
         try {
+            const headers: Record<string, string> = { 'content-type': 'application/json' };
+            if (options?.idempotencyKey) {
+                headers['idempotency-key'] = options.idempotencyKey;
+            }
             const response = await fetch('/api/v1/auth/signup', {
                 method: 'POST',
-                headers: { 'content-type': 'application/json' },
+                headers,
                 credentials: 'same-origin',
                 body: JSON.stringify({
                     email,
                     password,
                     fullName,
                     legalAccepted,
+                    ...(options?.suggestedUsername ? { suggestedUsername: options.suggestedUsername } : {}),
+                    ...(options?.inviteToken ? { inviteToken: options.inviteToken } : {}),
+                    ...(options?.website_hp ? { website_hp: options.website_hp } : {}),
                     ...(captchaToken ? { captchaToken } : {}),
                 }),
             });
@@ -474,6 +496,35 @@ export function AuthProvider({
             return {
                 data: null,
                 error: { message: isConnectivityError ? AUTH_UNREACHABLE_MESSAGE : 'Unable to create account' },
+            };
+        }
+    }, []);
+
+    const verifyOtp = useCallback(async (email: string, token: string, type: 'signup' | 'email' = 'signup') => {
+        const supabase = createClient();
+        try {
+            const result = await supabase.auth.verifyOtp({
+                email: email.trim(),
+                token: token.trim(),
+                type,
+            });
+            if (result.error) {
+                return {
+                    data: null,
+                    error: { message: result.error.message || 'Invalid or expired verification code' },
+                };
+            }
+            if (result.data.session) {
+                await syncBrowserSessionToServer(result.data.session).catch(() => null);
+            }
+            return {
+                data: result.data,
+                error: null,
+            };
+        } catch (error) {
+            return {
+                data: null,
+                error: { message: error instanceof Error ? error.message : 'Verification failed' },
             };
         }
     }, []);
@@ -607,6 +658,7 @@ export function AuthProvider({
         isAuthenticated: !!state.user,
         signIn,
         signUp,
+        verifyOtp,
         signOut,
         signInWithGoogle,
         signInWithGitHub,
@@ -615,6 +667,7 @@ export function AuthProvider({
         state,
         signIn,
         signUp,
+        verifyOtp,
         signOut,
         signInWithGoogle,
         signInWithGitHub,

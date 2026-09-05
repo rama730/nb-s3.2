@@ -27,6 +27,7 @@ interface MessagesV2UiState {
     setHighlightedConversationId: (conversationId: string | null) => void;
     openPopupConversationList: (options?: { highlightConversationId?: string | null }) => void;
     upsertMessageAttention: (conversationId: string, attention: MessageAttentionState) => void;
+    batchUpsertMessageAttention: (attentions: Record<string, MessageAttentionState>) => void;
     clearMessageAttentionSmooth: (conversationIds: string | string[]) => void;
     setDraft: (conversationId: string, value: string) => void;
     clearDraft: (conversationId: string) => void;
@@ -78,6 +79,37 @@ export const useMessagesV2UiStore = create<MessagesV2UiState>()(
                                 attention,
                             ),
                         },
+                    };
+                }),
+            batchUpsertMessageAttention: (attentions) =>
+                set((state) => {
+                    const nextAttention = { ...state.messageAttentionByConversation };
+                    const nextSuppressed = { ...state.messageAttentionSuppressedUntilByConversation };
+                    const now = Date.now();
+                    let changed = false;
+
+                    for (const [conversationId, attention] of Object.entries(attentions)) {
+                        const suppressedUntil = nextSuppressed[conversationId] ?? 0;
+                        if (attention.source === 'startup-sync' && suppressedUntil > now) {
+                            continue;
+                        }
+                        const timer = attentionClearTimers.get(conversationId);
+                        if (timer) {
+                            clearTimeout(timer);
+                            attentionClearTimers.delete(conversationId);
+                        }
+                        delete nextSuppressed[conversationId];
+                        nextAttention[conversationId] = mergeMessageAttention(
+                            nextAttention[conversationId],
+                            attention,
+                        );
+                        changed = true;
+                    }
+
+                    if (!changed) return {};
+                    return {
+                        messageAttentionSuppressedUntilByConversation: nextSuppressed,
+                        messageAttentionByConversation: nextAttention,
                     };
                 }),
             clearMessageAttentionSmooth: (conversationIds) => {

@@ -65,7 +65,7 @@ test("all collections reuse the menu; task-specific controls stay contextual", (
 test("task title and role restore cannot leak into a different navigation scope", () => {
   const workspace = read("FilesWorkspaceViews.tsx");
   assert.match(workspace, /taskHeading.id === taskId/);
-  assert.match(workspace, /nextView === "tasks" && nextTask/);
+  assert.match(workspace, /nextView === "tasks" &&\s+nextTask/);
   assert.match(workspace, /\["tasks", "deliverables"\].includes\(nextView\)/);
   assert.match(workspace, /dirtyFileId/);
 });
@@ -86,5 +86,5 @@ test("folder search navigation clears its filter and dialogs do not stack focus 
   assert.doesNotMatch(read("quick-open/QuickOpenDialog.tsx"), /fresh.type === "folder"\) onApplyQuery/);
   assert.match(read("FilesWorkspaceHeader.tsx"), /modal=\{false\}/);
   assert.match(read("FilesWorkspaceHeader.tsx"), /pendingSurface.current/);
-  assert.match(read("FilesTabRoot.tsx"), /!quickOpenOpenRef.current && target\?\.closest/);
+  assert.match(read("FilesTabRoot.tsx"), /!quickOpenOpenRef.current &&\s+target\?\.closest/);
 });

@@ -21,8 +21,20 @@ import { useFilesWorkspaceView } from "./FilesWorkspaceViews";
 import { TaskFilesCollection } from "./TaskFilesCollection";
 import { SavedFilesCollection } from "./SavedFilesCollection";
 import { TrashFilesCollection } from "./TrashFilesCollection";
-import { GitHubSyncWorkspace } from "./GitHubSyncWorkspace";
+import dynamic from "next/dynamic";
 import type { GithubImportAccessState } from "@/lib/github/import-types";
+
+const GitHubSyncWorkspace = dynamic(
+  () => import("./GitHubSyncWorkspace").then((mod) => mod.GitHubSyncWorkspace),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex flex-1 items-center justify-center p-8 text-zinc-500">
+        <Loader2 className="h-5 w-5 animate-spin text-zinc-400" />
+      </div>
+    ),
+  },
+);
 
 // ---------------------------------------------------------------------------
 // Props
@@ -30,9 +42,11 @@ import type { GithubImportAccessState } from "@/lib/github/import-types";
 
 export interface FilesTabMainProps {
   projectId: string;
+  projectSlug?: string;
   projectName?: string;
   canOpenGitHub?: boolean;
   githubAccess?: GithubImportAccessState | null;
+  isOwner?: boolean;
 }
 
 // Stable empty object used by selectors reading `nodesById` when the
@@ -47,9 +61,11 @@ const EMPTY_NODES = Object.freeze({}) as Record<string, ProjectNode>;
 
 export function FilesTabMain({
   projectId,
+  projectSlug,
   projectName,
   canOpenGitHub,
   githubAccess,
+  isOwner,
 }: FilesTabMainProps): React.JSX.Element {
   const { canEdit, canManageFiles } = useFilesTabRole();
   const location = useCurrentLocation(projectId);
@@ -94,8 +110,9 @@ export function FilesTabMain({
           workspaceView.view === "github" ? (
             <GitHubSyncWorkspace
               projectId={projectId}
+              projectSlug={projectSlug}
               projectName={projectName}
-              canManage={!!canOpenGitHub}
+              canManage={isOwner ?? !!canOpenGitHub}
               access={githubAccess ?? null}
             />
           ) : workspaceView.view === "tasks" ||

@@ -74,7 +74,7 @@ const toInitials = (label: string) =>
 
 const shortenRoleLabel = (label: string) => (label || "").trim() || "Team Member";
 
-function AvatarRow({ avatar }: { avatar: AvatarEntry }) {
+const AvatarRow = memo(function AvatarRow({ avatar }: { avatar: AvatarEntry }) {
     const content = (
         <>
             <Avatar className="size-9 shrink-0 border border-zinc-200 dark:border-zinc-800">
@@ -105,7 +105,7 @@ function AvatarRow({ avatar }: { avatar: AvatarEntry }) {
             {content}
         </Link>
     );
-}
+});
 
 const TeamCard = memo(function TeamCard({
     project,
@@ -201,7 +201,7 @@ const TeamCard = memo(function TeamCard({
             : [];
 
         return [...ownerEntry, ...guidanceEntry, ...collaborators];
-    }, [guidance, leadFocus, members, project]);
+    }, [guidance, leadFocus, members, project?.owner?.id, project?.owner?.username, project?.owner?.displayName, project?.owner?.avatarUrl]);
 
     const showMoreCount = avatars.length - 5;
 

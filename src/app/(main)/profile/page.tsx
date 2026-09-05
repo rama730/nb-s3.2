@@ -31,8 +31,8 @@ export async function generateMetadata() {
     const { user, profileData } = await readOwnerProfileRoute()
     if (!user) {
         return buildRouteMetadata({
-            title: 'Your Profile | Edge',
-            description: 'Your personal profile and presence on Edge.',
+            title: 'Your Profile | NetworkBase',
+            description: 'Your personal profile and presence on NetworkBase.',
             path: '/profile',
         })
     }

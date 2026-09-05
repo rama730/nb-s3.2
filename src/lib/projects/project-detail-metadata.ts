@@ -42,13 +42,13 @@ export function buildProjectDetailMetadataInput(
     project?.shortDescription?.trim()
     || project?.description?.trim()
     || project?.readmeExcerpt?.trim()
-    || `Explore ${resolvedTitle} on Edge.`;
+    || `Explore ${resolvedTitle} on NetworkBase.`;
   const projectImage = project?.coverImage?.trim() || null;
   const imageWidth = projectImage ? normalizeImageDimension(project?.coverImageWidth, 1200) : 1200;
   const imageHeight = projectImage ? normalizeImageDimension(project?.coverImageHeight, 630) : 630;
 
   return {
-    title: `${resolvedTitle} | Edge`,
+    title: `${resolvedTitle} | NetworkBase`,
     description,
     path: `/projects/${encodeURIComponent(canonicalSlug)}`,
     image: projectImage || `/api/og/project/${encodeURIComponent(canonicalSlug)}`,

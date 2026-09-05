@@ -1,17 +1,28 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { formatDistanceToNow } from "date-fns";
 import { Code2, Copy, Github, KeyRound, Link2, Loader2, Mail, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { SettingsPageHeader } from "@/components/settings/ui/SettingsPageHeader";
 import { SettingsSectionCard } from "@/components/settings/ui/SettingsSectionCard";
 import { useExtensionSessionsData, useIntegrationsData } from "@/hooks/useSettingsQueries";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+import { identityLinkError, startGithubIdentityLink } from "@/lib/github/oauth-client";
 import { GitHubCommitAttributionSettings } from "@/components/settings/GitHubCommitAttributionSettings";
+import SecurityStepUpDialog from "@/components/settings/SecurityStepUpDialog";
 import { revokeExtensionSession, generateExtensionToken } from "@/app/actions/extension-sessions";
 import type { AuthConnectionMethod, ExtensionSessionData, IntegrationsAuthProvider } from "@/lib/types/settingsTypes";
 
@@ -71,13 +82,13 @@ function ExtensionAppCard() {
     <div className="mb-5 flex flex-col gap-4 rounded-xl border border-zinc-200 bg-zinc-50/60 p-4 dark:border-zinc-800 dark:bg-zinc-900/40 sm:flex-row sm:items-center">
       <Image
         src="/icon-192.png"
-        alt="Edge editor extension"
+        alt="NetworkBase editor extension"
         width={48}
         height={48}
         className="h-12 w-12 shrink-0 rounded-xl"
       />
       <div className="min-w-0">
-        <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Edge editor extension</h3>
+        <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">NetworkBase editor extension</h3>
         <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
           Connect VS Code, Cursor, Windsurf, or Antigravity using revocable sessions.
         </p>
@@ -114,6 +125,8 @@ function ExtensionSessionRow({ session, revoking, onRevoke }: { session: Extensi
 }
 
 export default function IntegrationsSettings() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const { data, isLoading, error, refetch } = useIntegrationsData();
   const { data: sessionData, isLoading: sessionsLoading, refetch: refetchSessions } = useExtensionSessionsData();
   const [linking, setLinking] = useState<IntegrationsAuthProvider | null>(null);
@@ -121,6 +134,31 @@ export default function IntegrationsSettings() {
   const [showTokenGen, setShowTokenGen] = useState(false);
   const [generatingToken, setGeneratingToken] = useState(false);
   const [generatedToken, setGeneratedToken] = useState<string | null>(null);
+  const [replacementConfirmOpen, setReplacementConfirmOpen] = useState(false);
+  const [stepUpOpen, setStepUpOpen] = useState(false);
+  const [replacementMethods, setReplacementMethods] = useState<Array<"totp" | "recovery_code" | "password">>([]);
+  const [replacementFactorId, setReplacementFactorId] = useState<string | undefined>();
+  const [replacingGithub, setReplacingGithub] = useState(false);
+
+  useEffect(() => {
+    const outcome = searchParams.get("githubIdentity");
+    if (!outcome) return;
+    if (outcome === "replaced") {
+      toast.success("GitHub account replaced");
+    } else if (outcome === "linked") {
+      toast.success("GitHub account linked");
+    } else if (outcome === "already_linked") {
+      toast.info("This GitHub account is already linked.");
+    } else if (outcome === "error") {
+      const desc = searchParams.get("githubErrorDesc");
+      toast.error(desc || "Could not link GitHub account. Please try again.");
+    }
+    const next = new URLSearchParams(searchParams.toString());
+    next.delete("githubIdentity");
+    next.delete("githubErrorDesc");
+    router.replace(`/settings?${next.toString()}`, { scroll: false });
+    void refetch();
+  }, [refetch, router, searchParams]);
 
   const handleGenerateToken = async () => {
     setGeneratingToken(true);
@@ -142,11 +180,65 @@ export default function IntegrationsSettings() {
   const linkProvider = async (provider: "google" | "github") => {
     setLinking(provider);
     try {
+      if (provider === "github") {
+        await startGithubIdentityLink();
+        return;
+      }
       const { error: linkError } = await createSupabaseBrowserClient().auth.linkIdentity({ provider, options: { redirectTo: `${window.location.origin}/settings?tab=integrations` } });
-      if (linkError) throw linkError;
+      if (linkError) throw identityLinkError(linkError, "Google");
     } catch (linkError) {
       toast.error(linkError instanceof Error ? linkError.message : `Failed to link ${provider}`);
       setLinking(null);
+    }
+  };
+
+  const requestReplacementVerification = async () => {
+    try {
+      const response = await fetch("/api/v1/auth/security-step-up");
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || payload?.success === false) {
+        throw new Error(payload?.message || "Could not load verification options");
+      }
+      const methods = Array.isArray(payload?.data?.availableMethods)
+        ? payload.data.availableMethods.filter(
+            (method: unknown): method is "totp" | "recovery_code" | "password" =>
+              method === "totp" || method === "recovery_code" || method === "password",
+          )
+        : [];
+      if (!methods.length) {
+        toast.error("Add a password or authenticator in Security before replacing GitHub");
+        return;
+      }
+      setReplacementMethods(methods);
+      setReplacementFactorId(
+        typeof payload?.data?.primaryTotpFactorId === "string"
+          ? payload.data.primaryTotpFactorId
+          : undefined,
+      );
+      setReplacementConfirmOpen(false);
+      setStepUpOpen(true);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not start account replacement");
+    }
+  };
+
+  const replaceGithubAccount = async () => {
+    setReplacingGithub(true);
+    try {
+      await startGithubIdentityLink({
+        nextPath: "/settings?tab=integrations&githubIdentity=replaced",
+        beforeRedirect: async () => {
+          const response = await fetch("/api/v1/github/account/replacement", { method: "POST" });
+          const payload = await response.json().catch(() => null);
+          if (!response.ok || payload?.success === false) {
+            throw new Error(payload?.message || "The unavailable GitHub account could not be detached");
+          }
+        },
+      });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not replace GitHub account");
+      setReplacingGithub(false);
+      void refetch();
     }
   };
 
@@ -182,7 +274,21 @@ export default function IntegrationsSettings() {
       <GitHubCommitAttributionSettings />
       <div className="flex flex-col gap-4 rounded-xl border p-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex min-w-0 items-center gap-3"><Github className="h-8 w-8" /><div><p className="text-sm font-semibold">{data?.githubService.summary || "GitHub status unavailable"}</p><p className="mt-1 text-sm text-zinc-500">{data?.githubService.detail}</p>{data?.githubService.githubUsername ? <a href={`https://github.com/${data.githubService.githubUsername}`} target="_blank" rel="noreferrer" className="mt-1 inline-block text-xs text-primary hover:underline">@{data.githubService.githubUsername}</a> : null}</div></div>
-        <Button variant="outline" size="sm" asChild><Link href="/projects"><Link2 className="h-4 w-4" />Open projects</Link></Button>
+        <div className="flex shrink-0 flex-wrap gap-2">
+          {data?.githubService.recoveryAction === "replace_account" ? (
+            <Button size="sm" onClick={() => setReplacementConfirmOpen(true)} disabled={replacingGithub}>
+              {replacingGithub ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              Replace GitHub account
+            </Button>
+          ) : null}
+          {data?.githubService.recoveryAction === "add_fallback_sign_in" ? (
+            <Button size="sm" onClick={() => void linkProvider("google")} disabled={linking === "google"}>
+              {linking === "google" ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              Link Google first
+            </Button>
+          ) : null}
+          <Button variant="outline" size="sm" asChild><Link href="/projects"><Link2 className="h-4 w-4" />{data?.githubService.usageCount ? `Review ${data.githubService.usageCount} project${data.githubService.usageCount === 1 ? "" : "s"}` : "Open projects"}</Link></Button>
+        </div>
       </div>
     </SettingsSectionCard>
 
@@ -248,5 +354,35 @@ export default function IntegrationsSettings() {
         )}
       </div>
     </SettingsSectionCard>
+
+    <Dialog open={replacementConfirmOpen} onOpenChange={setReplacementConfirmOpen}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Replace the unavailable GitHub account?</DialogTitle>
+          <DialogDescription>
+            NetworkBase will detach {data?.githubService.githubUsername ? `@${data.githubService.githubUsername}` : "the unavailable account"} and then ask you to choose a new GitHub account.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-2 rounded-xl border bg-zinc-50/70 p-4 text-sm text-zinc-600 dark:bg-zinc-950/40 dark:text-zinc-300">
+          <p>Project files, repository links, sync history, and past contributor credit stay unchanged.</p>
+          <p>Repository access is reviewed per project after the new account is linked.</p>
+          <p>Only future commits switch to the new account&apos;s privacy-safe GitHub identity.</p>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setReplacementConfirmOpen(false)}>Cancel</Button>
+          <Button onClick={() => void requestReplacementVerification()}>Verify and continue</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
+    <SecurityStepUpDialog
+      open={stepUpOpen}
+      onOpenChange={setStepUpOpen}
+      title="Verify this GitHub account change"
+      description="Confirm your NetworkBase identity before the unavailable GitHub account is detached."
+      availableMethods={replacementMethods}
+      factorId={replacementFactorId}
+      onVerified={replaceGithubAccount}
+    />
   </div>;
 }

@@ -30,6 +30,11 @@ interface ProjectLayoutProps {
     onTabChange: (tabId: string) => void;
     followersCount?: number;
     viewCount?: number;
+    filesSyncBadge?: {
+        status: "idle" | "syncing" | "incoming" | "completed" | "failed";
+        count?: number;
+        tooltip?: string;
+    } | null;
 
     isFollowing?: boolean;
     onFollow?: () => void;
@@ -65,6 +70,7 @@ export default function ProjectLayout({
     publicTabVisibility,
     followersCount,
     viewCount,
+    filesSyncBadge,
 
     isFollowing, onFollow, followLoading, onShare,
     onTabHover,
@@ -145,21 +151,28 @@ export default function ProjectLayout({
     }, [isDocEditWorkspaceTab, isFilesTab, project.id]);
 
     useEffect(() => {
-        const updateProjectLayoutMetrics = () => {
-            const nextTabsHeight = Math.ceil(tabsRef.current?.getBoundingClientRect().height ?? 0);
-            setProjectTabsHeight((current) => current === nextTabsHeight ? current : nextTabsHeight);
+        const updateProjectLayoutMetrics = (entries?: ResizeObserverEntry[]) => {
+            let nextTabsHeight = 0;
+            if (entries && entries[0]?.contentRect) {
+                nextTabsHeight = Math.ceil(entries[0].contentRect.height);
+            } else if (tabsRef.current) {
+                nextTabsHeight = Math.ceil(tabsRef.current.offsetHeight);
+            }
+            setProjectTabsHeight((current) => (current === nextTabsHeight ? current : nextTabsHeight));
         };
 
         updateProjectLayoutMetrics();
-        const observer = typeof ResizeObserver !== "undefined"
-            ? new ResizeObserver(updateProjectLayoutMetrics)
-            : null;
+        const observer =
+            typeof ResizeObserver !== "undefined"
+                ? new ResizeObserver((entries) => updateProjectLayoutMetrics(entries))
+                : null;
         if (tabsRef.current) observer?.observe(tabsRef.current);
-        window.addEventListener("resize", updateProjectLayoutMetrics);
+        const handleResize = () => updateProjectLayoutMetrics();
+        window.addEventListener("resize", handleResize, { passive: true });
 
         return () => {
             observer?.disconnect();
-            window.removeEventListener("resize", updateProjectLayoutMetrics);
+            window.removeEventListener("resize", handleResize);
         };
     }, [activeTab, isContainedWorkspaceTab]);
 
@@ -208,9 +221,9 @@ export default function ProjectLayout({
     const guidanceHref = guidance?.guideUserId
         ? profileHref({ id: guidance.guideUserId, username: guidance.username })
         : null;
-    const layoutStyle = {
+    const layoutStyle = useMemo(() => ({
         "--project-tabs-height": `${projectTabsHeight}px`,
-    } as CSSProperties;
+    } as CSSProperties), [projectTabsHeight]);
 
     return (
         <div className={cn(
@@ -370,6 +383,20 @@ export default function ProjectLayout({
                                 >
                                     <tab.icon className={cn("w-4 h-4", isActive ? "text-primary" : "text-zinc-400")} />
                                     {tab.label}
+                                    {tab.id === "files" && filesSyncBadge && filesSyncBadge.status !== "idle" && filesSyncBadge.status !== "completed" && (
+                                        <span
+                                            data-testid="files-tab-sync-badge"
+                                            title={filesSyncBadge.tooltip || `GitHub Sync: ${filesSyncBadge.status}`}
+                                            className={cn(
+                                                "ml-1 inline-flex items-center justify-center text-[10px] font-bold rounded-full transition-all",
+                                                filesSyncBadge.status === "syncing" && "size-2 bg-blue-500 animate-pulse",
+                                                filesSyncBadge.status === "incoming" && "min-w-4 h-4 px-1 bg-amber-500 text-white leading-none",
+                                                filesSyncBadge.status === "failed" && "size-2 bg-red-500",
+                                            )}
+                                        >
+                                            {filesSyncBadge.status === "incoming" && filesSyncBadge.count ? filesSyncBadge.count : null}
+                                        </span>
+                                    )}
                                     {isActive ? <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary" /> : null}
                                 </button>
                             );

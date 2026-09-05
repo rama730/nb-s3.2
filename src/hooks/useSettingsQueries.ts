@@ -101,6 +101,7 @@ const DEFAULT_INTEGRATIONS_DATA: IntegrationsData = {
     summary: "No GitHub repository access is currently in use.",
     detail: "Connect GitHub from a project when repository access is needed.",
     usageCount: 0,
+    recoveryAction: null,
   },
 };
 

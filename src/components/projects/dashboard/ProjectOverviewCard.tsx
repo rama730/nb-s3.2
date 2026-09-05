@@ -1,7 +1,7 @@
 "use client";
 
 import { Lock, Zap } from "lucide-react";
-import { memo, useMemo, useState } from "react";
+import { memo, useCallback, useMemo, useState } from "react";
 import { SkillList } from "@/components/skills/SkillList";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import JourneyTimeline from "./JourneyTimeline";
@@ -15,7 +15,7 @@ interface ProjectOverviewCardProps {
     onRedoStage?: () => void;
 }
 
-function StatementBox({
+const StatementBox = memo(function StatementBox({
     title,
     content,
     tone,
@@ -50,7 +50,7 @@ function StatementBox({
             <span className="mt-auto pt-4 text-xs font-semibold text-zinc-500 dark:text-zinc-400">Click to read full text</span>
         </button>
     );
-}
+});
 
 type StatementSelection = {
     title: string;
@@ -79,6 +79,18 @@ const ProjectOverviewCard = memo(function ProjectOverviewCard({
     const [statement, setStatement] = useState<StatementSelection>(null);
     const stages = lifecycleStages.map((stage: any) => stage?.name ?? stage).filter(Boolean);
     const projectSkills = useMemo(() => normalizeProjectSkills(project), [project]);
+
+    const handleOpenProblem = useCallback(() => {
+        if (project?.problemStatement) {
+            setStatement({ title: "The Problem", content: project.problemStatement, tone: "problem" });
+        }
+    }, [project?.problemStatement]);
+
+    const handleOpenSolution = useCallback(() => {
+        if (project?.solutionStatement) {
+            setStatement({ title: "The Solution", content: project.solutionStatement, tone: "solution" });
+        }
+    }, [project?.solutionStatement]);
 
     return (
         <div className="flex h-fit flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
@@ -144,7 +156,7 @@ const ProjectOverviewCard = memo(function ProjectOverviewCard({
                                     title="The Problem"
                                     content={project.problemStatement}
                                     tone="problem"
-                                    onOpen={() => setStatement({ title: "The Problem", content: project.problemStatement, tone: "problem" })}
+                                    onOpen={handleOpenProblem}
                                 />
                             ) : null}
                             {project.solutionStatement ? (
@@ -152,7 +164,7 @@ const ProjectOverviewCard = memo(function ProjectOverviewCard({
                                     title="The Solution"
                                     content={project.solutionStatement}
                                     tone="solution"
-                                    onOpen={() => setStatement({ title: "The Solution", content: project.solutionStatement, tone: "solution" })}
+                                    onOpen={handleOpenSolution}
                                 />
                             ) : null}
                         </div>

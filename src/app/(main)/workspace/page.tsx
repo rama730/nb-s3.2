@@ -4,7 +4,7 @@ export const dynamic = 'force-dynamic';
 
 export async function generateMetadata() {
     return {
-        title: "Workspace | Edge",
+        title: "Workspace | NetworkBase",
         description: "A stable workspace shell for tasks, notes, inbox, and activity.",
     };
 }

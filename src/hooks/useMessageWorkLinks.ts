@@ -1,20 +1,15 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { REALTIME_SUBSCRIBE_STATES } from "@supabase/supabase-js";
+import { useQuery } from "@tanstack/react-query";
 import { readMessageWorkLinksAction } from "@/app/actions/messaging/linked-work";
-import { createClient } from "@/lib/supabase/client";
 import { queryKeys } from "@/lib/query-keys";
 import type { MessageLinkedWorkSummary } from "@/lib/messages/linked-work";
-import { subscribeActiveResource } from "@/lib/realtime/subscriptions";
 
 const RECENT_LINKED_WORK_MESSAGE_COUNT = 5;
 const LINKED_WORK_DEFER_MS = 1_000;
-const linkedWorkQueryPrefix = (conversationId: string) => ["chat-v2", "linked-work", conversationId] as const;
 
 export function useMessageWorkLinks(conversationId: string | null | undefined, messageIds: readonly string[]) {
-    const queryClient = useQueryClient();
     const [isDeferredQueryReady, setIsDeferredQueryReady] = useState(false);
     const normalizedMessageIds = useMemo(
         () => Array.from(new Set(messageIds.filter(Boolean))).slice(-RECENT_LINKED_WORK_MESSAGE_COUNT),
@@ -46,41 +41,6 @@ export function useMessageWorkLinks(conversationId: string | null | undefined, m
             return result.linksByMessageId;
         },
     });
-
-    useEffect(() => {
-        if (!conversationId) return;
-        const supabase = createClient();
-        const channel = subscribeActiveResource({
-            supabase,
-            resourceType: "message_work_links",
-            resourceId: conversationId,
-            bindings: [
-                {
-                    event: "*",
-                    table: "message_work_links",
-                    filter: `source_conversation_id=eq.${conversationId}`,
-                    handler: () => {
-                        void queryClient.invalidateQueries({
-                            queryKey: linkedWorkQueryPrefix(conversationId),
-                            exact: false,
-                        });
-                    },
-                },
-            ],
-            onStatus: (status) => {
-                if (status === REALTIME_SUBSCRIBE_STATES.CHANNEL_ERROR) {
-                    void queryClient.invalidateQueries({
-                        queryKey: linkedWorkQueryPrefix(conversationId),
-                        exact: false,
-                    });
-                }
-            },
-        });
-
-        return () => {
-            void supabase.removeChannel(channel);
-        };
-    }, [conversationId, queryClient]);
 
     return query;
 }

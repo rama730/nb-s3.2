@@ -77,6 +77,10 @@ import {
 } from "./FolderListRow";
 import { sortFolderListNodes } from "./sort";
 import styles from "./FolderList.module.css";
+import {
+  FilesTabUploadModal,
+  type FilesTabUploadConfirmResult,
+} from "../upload/FilesTabUploadModal";
 
 /**
  * Stable empty reference for the git `changedFiles` slice. The store
@@ -327,13 +331,140 @@ export function FolderListView({
     recordOperation,
   });
 
-  // ── Desktop file drop wiring (viewer-gated at row level) ──────────
+  // ── Drag & Drop state (matching Task Panel UX) ─────────────────────
+  const [isDragActive, setIsDragActive] = React.useState(false);
+  const [pendingUploadFiles, setPendingUploadFiles] = React.useState<File[] | null>(null);
+  const [targetDropFolderId, setTargetDropFolderId] = React.useState<string | null>(null);
+  const [isProcessingDrop, setIsProcessingDrop] = React.useState(false);
+  const dragCounterRef = React.useRef(0);
+
+  const handleDragEnter = React.useCallback(
+    (e: React.DragEvent) => {
+      if (!canEdit) return;
+      if (!e.dataTransfer.types.includes("Files")) return;
+      e.preventDefault();
+      dragCounterRef.current += 1;
+      setIsDragActive(true);
+    },
+    [canEdit],
+  );
+
+  const handleDragOver = React.useCallback(
+    (e: React.DragEvent) => {
+      if (!canEdit) return;
+      if (!e.dataTransfer.types.includes("Files")) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+    },
+    [canEdit],
+  );
+
+  const handleDragLeave = React.useCallback(
+    (e: React.DragEvent) => {
+      if (!canEdit) return;
+      e.preventDefault();
+      dragCounterRef.current = Math.max(0, dragCounterRef.current - 1);
+      if (dragCounterRef.current === 0) {
+        setIsDragActive(false);
+      }
+    },
+    [canEdit],
+  );
+
+  const handleDrop = React.useCallback(
+    (e: React.DragEvent) => {
+      if (!canEdit) return;
+      e.preventDefault();
+      e.stopPropagation();
+      dragCounterRef.current = 0;
+      setIsDragActive(false);
+
+      const droppedFiles = Array.from(e.dataTransfer.files || []);
+      if (droppedFiles.length === 0) return;
+
+      setTargetDropFolderId(folderId);
+      setPendingUploadFiles(droppedFiles);
+    },
+    [canEdit, folderId],
+  );
+
+  // ── Desktop file drop wiring (opens modal with target folder) ──────────
   const handleDesktopFileDrop = React.useCallback(
     (files: File[], targetFolderId: string) => {
       if (!canEdit || files.length === 0) return;
-      void uploadFilesDirectly(files, targetFolderId);
+      setTargetDropFolderId(targetFolderId);
+      setPendingUploadFiles(files);
     },
-    [canEdit, uploadFilesDirectly],
+    [canEdit],
+  );
+
+  const handleConfirmDropUpload = React.useCallback(
+    async (result: FilesTabUploadConfirmResult) => {
+      if (!pendingUploadFiles || pendingUploadFiles.length === 0) return;
+      setIsProcessingDrop(true);
+      try {
+        if (result.intent === "version" && result.versionNodeId) {
+          const file = pendingUploadFiles[0]!;
+          const { saveFileRevision } = await import("@/hooks/useFileVersions");
+          const { createClient } = await import("@/lib/supabase/client");
+          const supabase = createClient();
+          const saveRes = await saveFileRevision({
+            projectId,
+            nodeId: result.versionNodeId,
+            file,
+            mode: "new_revision",
+            supabase,
+          });
+          if (!saveRes.success) {
+            throw new Error(saveRes.error || "Failed to save new version");
+          }
+          toast.success(`Saved ${file.name} as a new version.`);
+          upsertNodes(projectId, [saveRes.node]);
+          await loadFolderContent(folderId, "refresh");
+          setPendingUploadFiles(null);
+        } else if (result.intent === "project") {
+          const target = result.targetFolderId ?? targetDropFolderId ?? folderId;
+          await uploadFilesDirectly(pendingUploadFiles, target);
+          setPendingUploadFiles(null);
+        } else {
+          // Task categories: reference, working, deliverable
+          const target = result.targetFolderId ?? targetDropFolderId ?? folderId;
+          const filesToUpload = [...pendingUploadFiles];
+          await uploadFilesDirectly(filesToUpload, target);
+          if (result.taskId) {
+            const { linkNodeToTask } = await import("@/app/actions/files/links");
+            await loadFolderContent(target, "refresh");
+            const currentNodes = useFilesWorkspaceStore.getState().byProjectId[projectId]?.nodesById ?? {};
+            for (const file of filesToUpload) {
+              const matchedNode = Object.values(currentNodes).find(
+                (n) => n.parentId === target && n.name.trim().toLowerCase() === file.name.trim().toLowerCase()
+              );
+              if (matchedNode) {
+                try {
+                  await linkNodeToTask(result.taskId, matchedNode.id, {
+                    role: result.role,
+                    annotation: result.label,
+                  });
+                } catch (linkErr) {
+                  console.warn("Failed to link node to task:", linkErr);
+                }
+              }
+            }
+            window.dispatchEvent(
+              new CustomEvent("project:task-files-changed", {
+                detail: { projectId, taskId: result.taskId },
+              }),
+            );
+          }
+          setPendingUploadFiles(null);
+        }
+      } catch (err) {
+        toast.error((err as Error).message || "Failed to upload files");
+      } finally {
+        setIsProcessingDrop(false);
+      }
+    },
+    [pendingUploadFiles, projectId, folderId, targetDropFolderId, uploadFilesDirectly, upsertNodes, loadFolderContent],
   );
 
   // ── Stable row callbacks ──────────────────────────────────────────
@@ -485,9 +616,13 @@ export function FolderListView({
       data-testid="files-tab-folder-list-view"
       className={cn(
         styles.container,
-        "flex h-full min-h-0 flex-col overflow-hidden bg-white dark:bg-zinc-950",
+        "flex h-full min-h-0 flex-col overflow-hidden bg-white dark:bg-zinc-950 relative",
         className,
       )}
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
     >
       <FilesWorkspaceMenu projectId={projectId} selectionMode={selectionMode}>
         {selectionMode ? <>
@@ -661,6 +796,40 @@ export function FolderListView({
           await confirmMove();
         }}
       />
+
+      {/* Drag & Drop Visual Overlay */}
+      {isDragActive && (
+        <div className="absolute inset-0 z-40 flex flex-col items-center justify-center bg-blue-600/10 backdrop-blur-xs border-2 border-dashed border-blue-500 rounded-lg pointer-events-none transition-all">
+          <div className="flex flex-col items-center gap-2 p-6 rounded-2xl bg-white/95 dark:bg-zinc-900/95 shadow-xl border border-blue-200 dark:border-blue-900/50">
+            <Upload className="size-8 text-blue-600 dark:text-blue-400 animate-bounce" />
+            <p className="font-semibold text-sm text-zinc-900 dark:text-zinc-100">
+              Drop files to upload
+            </p>
+            <p className="text-xs text-zinc-500">
+              Categorize into project files, task references, or file versions
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Upload & Categorization Modal */}
+      {pendingUploadFiles && (
+        <FilesTabUploadModal
+          projectId={projectId}
+          isOpen={true}
+          files={pendingUploadFiles}
+          currentFolderId={targetDropFolderId ?? folderId}
+          currentFolderName={selectedNode ? selectedNode.name : "Project Root"}
+          existingFiles={sortedChildren}
+          activeTaskId={workspace?.taskId ?? null}
+          isProcessing={isProcessingDrop}
+          onConfirm={handleConfirmDropUpload}
+          onCancel={() => {
+            setPendingUploadFiles(null);
+            setTargetDropFolderId(null);
+          }}
+        />
+      )}
     </div>
   );
 }

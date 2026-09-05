@@ -839,7 +839,6 @@ export const projects = pgTable(
   (t) => ({
     ownerIdx: index("idx_projects_owner").on(t.ownerId),
     conversationIdx: index("projects_conversation_idx").on(t.conversationId),
-    createdAtIdx: index("projects_created_at_idx").on(t.createdAt),
     // Multi-column indexes for filtering (critical for 1M users)
     statusVisibilityIdx: index("projects_status_visibility_idx").on(
       t.status,
@@ -955,8 +954,12 @@ export const projectMembers = pgTable(
       t.projectId,
       t.userId,
     ),
-    projectIdx: index("idx_project_members_project").on(t.projectId),
     userIdx: index("idx_project_members_user").on(t.userId),
+    projectJoinedAtIdx: index("project_members_project_joined_at_idx").on(
+      t.projectId,
+      t.joinedAt.desc(),
+      t.id.desc(),
+    ),
     fileUploadIdx: index("project_members_file_upload_idx").on(
       t.projectId,
       t.fileUploadEnabled,
@@ -1400,7 +1403,6 @@ export const projectMarkdowns = pgTable(
       t.projectId,
       t.slug,
     ),
-    projectIdx: index("project_markdowns_project_idx").on(t.projectId),
     draftUpdatedIdx: index("project_markdowns_draft_updated_idx").on(
       t.projectId,
       t.draftUpdatedAt,
@@ -1575,7 +1577,6 @@ export const projectOpenRoles = pgTable(
       .notNull(),
   },
   (t) => ({
-    projectIdx: index("project_open_roles_project_idx").on(t.projectId),
     projectUpdatedIdx: index("project_open_roles_project_updated_idx").on(
       t.projectId,
       t.updatedAt,
@@ -1755,7 +1756,6 @@ export const projectFollows = pgTable(
       .notNull(),
   },
   (t) => ({
-    projectIdx: index("idx_project_follows_project_id").on(t.projectId),
     userIdx: index("idx_project_follows_user_id").on(t.userId),
     uniqueFollow: uniqueIndex("project_follows_unique_idx").on(
       t.projectId,
@@ -1873,13 +1873,6 @@ export const projectUpdates = pgTable(
       t.createdAt.desc(),
     ),
     deletedAtIdx: index("project_updates_deleted_at_idx").on(t.deletedAt),
-    coveringFeedIdx: index("project_updates_covering_feed_idx").on(
-      t.projectId,
-      t.visibility,
-      t.isPinned,
-      t.createdAt.desc(),
-    ),
-    deletedByIdx: index("project_updates_deleted_by_idx").on(t.deletedBy),
   }),
 );
 
@@ -2043,7 +2036,6 @@ export const projectSprints = pgTable(
       .notNull(),
   },
   (t) => ({
-    projectIdx: index("project_sprints_project_idx").on(t.projectId),
     projectNumberIdx: uniqueIndex("project_sprints_project_number_idx").on(
       t.projectId,
       t.sprintNumber,
@@ -2238,7 +2230,6 @@ export const tasks = pgTable(
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
   },
   (t) => ({
-    projectIdx: index("tasks_project_idx").on(t.projectId),
     workflowColumnIdx: index("tasks_workflow_column_idx").on(
       t.workflowColumnId,
     ),
@@ -2283,9 +2274,6 @@ export const tasks = pgTable(
       t.projectId,
       t.taskNumber,
     ),
-    deletedAtPartialIdx: index("tasks_deleted_at_partial_idx")
-      .on(t.deletedAt)
-      .where(sql`${t.deletedAt} IS NULL`),
     activeProjectStatusPositionIdx: index(
       "tasks_active_project_status_position_idx",
     )
@@ -2369,7 +2357,6 @@ export const taskSubtasks = pgTable(
       .notNull(),
   },
   (t) => ({
-    taskIdx: index("idx_task_subtasks_task_id").on(t.taskId),
     taskPositionIdx: index("idx_task_subtasks_position").on(
       t.taskId,
       t.position,
@@ -2435,7 +2422,6 @@ export const taskComments = pgTable(
       .notNull(),
   },
   (t) => ({
-    taskIdx: index("idx_task_comments_task_id").on(t.taskId),
     createdAtIdx: index("idx_task_comments_created_at").on(
       t.taskId,
       t.createdAt,
@@ -2762,9 +2748,7 @@ export const projectNodes = pgTable(
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
   },
   (t) => ({
-    projectIdx: index("idx_project_nodes_project_id").on(t.projectId),
     parentIdx: index("idx_project_nodes_parent_id").on(t.parentId),
-    pathIdx: index("project_nodes_path_idx").on(t.path),
     projectPathIdx: index("project_nodes_project_path_idx").on(
       t.projectId,
       t.path,
@@ -3855,7 +3839,6 @@ export const dmPairs = pgTable(
     conversationUnique: uniqueIndex("dm_pairs_conversation_unique").on(
       t.conversationId,
     ),
-    userLowIdx: index("dm_pairs_user_low_idx").on(t.userLow),
     userHighIdx: index("dm_pairs_user_high_idx").on(t.userHigh),
     orderedUsersCheck: check(
       "dm_pairs_ordered_users_check",
@@ -3902,10 +3885,6 @@ export const conversationParticipants = pgTable(
     conversationUserUnique: uniqueIndex("conversation_participants_unique").on(
       t.conversationId,
       t.userId,
-    ),
-    userIdx: index("conversation_participants_user_idx").on(t.userId),
-    conversationIdx: index("conversation_participants_conversation_idx").on(
-      t.conversationId,
     ),
     // Optimization: O(1) sorted list for "My Conversations" and "Global Badge"
     myConversationsIdx: index(
@@ -4022,26 +4001,13 @@ export const messages = pgTable(
       "gin",
       sql`${t.content} gin_trgm_ops`,
     ),
-    structuredTitleTrgmIdx: index("messages_structured_title_trgm_idx").using(
-      "gin",
-      sql`(coalesce(${t.metadata} #>> '{structured,title}', '')) gin_trgm_ops`,
-    ),
-    structuredSummaryTrgmIdx: index(
-      "messages_structured_summary_trgm_idx",
-    ).using(
-      "gin",
-      sql`(coalesce(${t.metadata} #>> '{structured,summary}', '')) gin_trgm_ops`,
-    ),
     structuredKindIdx: index("messages_structured_kind_idx").on(
       sql`(coalesce(${t.metadata} #>> '{structured,kind}', ''))`,
     ),
-    // Optimization: Sender Index for lookups
-    senderIdx: index("messages_sender_idx").on(t.senderId),
     senderCreatedIdx: index("messages_sender_created_idx").on(
       t.senderId,
       t.createdAt,
     ),
-    replyIdx: index("messages_reply_idx").on(t.replyToMessageId),
     replyConversationIdx: index(
       "messages_reply_to_message_conversation_idx",
     ).on(t.replyToMessageId, t.conversationId),
@@ -4051,9 +4017,6 @@ export const messages = pgTable(
     idempotencyUnique: uniqueIndex(
       "messages_conversation_sender_client_unique",
     ).on(t.conversationId, t.senderId, t.clientMessageId),
-    deletedAtPartialIdx: index("messages_deleted_at_partial_idx")
-      .on(t.deletedAt)
-      .where(sql`${t.deletedAt} IS NULL`),
     idConversationUniqueConstraint: unique(
       "messages_id_conversation_unique",
     ).on(t.id, t.conversationId),

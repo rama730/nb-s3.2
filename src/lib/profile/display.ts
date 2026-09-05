@@ -47,48 +47,48 @@ export function buildProfileMetadataDescription(input: ProfileMetadataInput): st
     const subject = fullName || username || "This builder";
 
     if (headline && location) {
-        return `${subject} is a ${headline} from ${location} on Edge. View their work and connect.`;
+        return `${subject} is a ${headline} from ${location} on NetworkBase. View their work and connect.`;
     }
 
     if (headline) {
-        return `${subject} is a ${headline} on Edge. View their work and connect.`;
+        return `${subject} is a ${headline} on NetworkBase. View their work and connect.`;
     }
 
     if (location) {
-        return `${subject} is based in ${location} on Edge. View their work and connect.`;
+        return `${subject} is based in ${location} on NetworkBase. View their work and connect.`;
     }
 
-    return `${subject} is building on Edge. View their work and connect.`;
+    return `${subject} is building on NetworkBase. View their work and connect.`;
 }
 
 export function buildOwnerProfileTitle(input: ProfileMetadataInput): string {
     const fullName = trimDisplayText(input.fullName);
     const username = trimDisplayText(input.username);
     if (fullName && username) {
-        return `${fullName} (@${username}) | Edge`;
+        return `${fullName} (@${username}) | NetworkBase`;
     }
     if (fullName) {
-        return `${fullName} | Edge`;
+        return `${fullName} | NetworkBase`;
     }
     if (username) {
-        return `@${username} | Edge`;
+        return `@${username} | NetworkBase`;
     }
-    return "Your Profile | Edge";
+    return "Your Profile | NetworkBase";
 }
 
 export function buildPublicProfileTitle(input: ProfileMetadataInput): string {
     const fullName = trimDisplayText(input.fullName);
     const username = trimDisplayText(input.username);
     if (fullName && username) {
-        return `${fullName} (@${username}) | Edge`;
+        return `${fullName} (@${username}) | NetworkBase`;
     }
     if (fullName) {
-        return `${fullName} | Edge`;
+        return `${fullName} | NetworkBase`;
     }
     if (username) {
-        return `@${username} | Edge`;
+        return `@${username} | NetworkBase`;
     }
-    return "Profile | Edge";
+    return "Profile | NetworkBase";
 }
 
 export function initialsForName(...values: Array<string | null | undefined>): string {

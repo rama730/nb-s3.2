@@ -702,9 +702,10 @@ export default function ProjectSettingsTab({
     }, [initialSettings]);
 
     useEffect(() => {
+        if (activeSection !== "roles-applications") return;
         resetRolesForm(initialRoles);
         setDeletedRoleIds([]);
-    }, [initialRoles, resetRolesForm]);
+    }, [activeSection, initialRoles, resetRolesForm]);
 
     useEffect(() => {
         collaboratorDataRef.current = collaboratorData;

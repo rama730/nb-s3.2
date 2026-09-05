@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { ArrowRight, Sparkles, Users, Folder, Zap } from 'lucide-react'
+import { LegalLinks } from '@/components/legal/LegalLinks'
 
 export default function HomePage() {
   return (
@@ -10,7 +11,7 @@ export default function HomePage() {
         <div className="max-w-3xl mx-auto text-center space-y-6">
           <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-primary/10 text-primary text-sm font-medium">
             <Sparkles className="w-4 h-4" />
-            Welcome to Edge
+            Welcome to NetworkBase
           </div>
 
           <h1 className="text-4xl md:text-6xl font-bold tracking-tight">
@@ -75,13 +76,14 @@ export default function HomePage() {
         <div className="container mx-auto px-4 flex flex-col md:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 rounded-lg bg-primary text-primary-foreground flex items-center justify-center font-bold">
-              E
+              N
             </div>
-            <span className="font-semibold">Edge</span>
+            <span className="font-semibold">NetworkBase</span>
           </div>
           <p className="text-sm text-muted-foreground">
-            © 2026 Edge. All rights reserved.
+            © 2026 NetworkBase. All rights reserved.
           </p>
+          <LegalLinks className="md:justify-end" />
         </div>
       </footer>
     </div>

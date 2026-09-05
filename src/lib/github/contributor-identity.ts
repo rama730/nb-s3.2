@@ -19,8 +19,10 @@ export function githubNoreplyEmail(
 }
 
 /**
- * Best-effort automatic commit attribution. A previously approved email is
- * preserved; first-time users receive GitHub's privacy-safe noreply address.
+ * Best-effort automatic commit attribution. An approved email is preserved
+ * only while it still belongs to the same GitHub account. Replacing a deleted
+ * account resets future commits to the new account's privacy-safe identity;
+ * historical sync snapshots remain unchanged.
  */
 export async function ensureDefaultGithubContributorIdentity(
   userId: string,
@@ -30,13 +32,18 @@ export async function ensureDefaultGithubContributorIdentity(
   const current = await db.query.githubContributorIdentities.findFirst({
     where: eq(githubContributorIdentities.userId, userId),
   });
+  const sameGithubAccount = current?.githubId === account.id;
   const values = {
     githubId: account.id,
     login: account.login,
     name: account.name || account.login,
     avatarUrl: account.avatar_url,
-    email: current?.email || githubNoreplyEmail(account),
-    approvedAt: current?.approvedAt || new Date(),
+    email: sameGithubAccount && current?.email
+      ? current.email
+      : githubNoreplyEmail(account),
+    approvedAt: sameGithubAccount && current?.approvedAt
+      ? current.approvedAt
+      : new Date(),
   };
   await db
     .insert(githubContributorIdentities)

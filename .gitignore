@@ -16,6 +16,8 @@
 
 # next.js
 /.next/
+/.next-railway-check/
+/.next-verify/
 /out/
 
 # production
@@ -46,3 +48,7 @@ eslint_output.txt
 .review.txt.swp
 .e2e-last-run-id
 /reports/stability/
+/.playwright-mcp/
+/railway-source.png
+/artifacts/legal-accept-mobile.png
+/artifacts/legal-privacy-desktop.png

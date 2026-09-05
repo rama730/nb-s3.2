@@ -1,12 +1,13 @@
 import "server-only";
 
+import { cache } from "react";
 import { and, eq, isNull } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { projectNodes, tasks } from "@/lib/db/schema";
 import { isLooseUuid } from "@/lib/validations/uuid";
 
-export async function readProjectFileMetadataTitle(
+export const readProjectFileMetadataTitle = cache(async function readProjectFileMetadataTitle(
   projectId: string,
   fileId: string,
 ): Promise<string | null> {
@@ -22,7 +23,7 @@ export async function readProjectFileMetadataTitle(
     )
     .limit(1);
   return node?.name ?? null;
-}
+});
 
 export function parseTaskNumberFromDrawerId(drawerId: string): number | null {
   const dashIndex = drawerId.lastIndexOf("-");
@@ -31,7 +32,7 @@ export function parseTaskNumberFromDrawerId(drawerId: string): number | null {
   return Number.isInteger(value) && value > 0 ? value : null;
 }
 
-export async function readProjectTaskMetadataTitle(
+export const readProjectTaskMetadataTitle = cache(async function readProjectTaskMetadataTitle(
   projectId: string,
   drawerId: string,
 ): Promise<string | null> {
@@ -51,4 +52,4 @@ export async function readProjectTaskMetadataTitle(
     )
     .limit(1);
   return task?.title ?? null;
-}
+});

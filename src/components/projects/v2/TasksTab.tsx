@@ -55,6 +55,17 @@ import type { ProjectNode } from "@/lib/db/schema";
 import { queryKeys } from "@/lib/query-keys";
 import type { TaskPanelTab } from "@/hooks/useTaskPanelResource";
 
+const PAGE_NORMALIZED_TASKS_CACHE = new WeakMap<object, TaskSurfaceRecord[]>();
+
+function getNormalizedPageTasks(page: { tasks: any[] }): TaskSurfaceRecord[] {
+  let cached = PAGE_NORMALIZED_TASKS_CACHE.get(page);
+  if (!cached) {
+    cached = (page.tasks || []).map(normalizeTaskSurfaceRecord);
+    PAGE_NORMALIZED_TASKS_CACHE.set(page, cached);
+  }
+  return cached;
+}
+
 const CreateTaskModal = dynamic(
   () => import("@/components/projects/v2/tasks/CreateTaskModal"),
   { ssr: false },
@@ -199,15 +210,11 @@ export default function TasksTab({
 
   // Flatten pages for filtering and focus strips
   const fetchedTasks = useMemo(() => {
-    return (infiniteData?.pages.flatMap((page) => page.tasks) || []).map(
-      normalizeTaskSurfaceRecord,
-    );
-  }, [infiniteData]);
+    if (!infiniteData?.pages) return [];
+    return infiniteData.pages.flatMap(getNormalizedPageTasks);
+  }, [infiniteData?.pages]);
   const hasSprintReferences = useMemo(
-    () =>
-      fetchedTasks.some((task) =>
-        Boolean(normalizeTaskSurfaceRecord(task).sprintId),
-      ),
+    () => fetchedTasks.some((task) => Boolean(task.sprintId)),
     [fetchedTasks],
   );
   const shouldFetchProjectSprints =

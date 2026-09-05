@@ -18,6 +18,8 @@ export const SECURITY_ACTIVITY_EVENT_TYPES = [
   "password_set",
   "password_changed",
   "other_sessions_revoked",
+  "github_account_replacement_started",
+  "github_account_replaced",
 ] as const;
 
 export type SecurityActivityEventType = (typeof SECURITY_ACTIVITY_EVENT_TYPES)[number];

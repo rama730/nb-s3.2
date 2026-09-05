@@ -59,6 +59,7 @@ function githubService(input: {
   lastSyncAt: string | null;
   username: string | null;
   health: ExternalAccountHealth;
+  hasFallbackIdentity: boolean;
 }): GithubServiceConnection {
   const username = input.health.profile?.username ?? input.username;
   const unavailable = input.health.state === "unavailable";
@@ -73,7 +74,19 @@ function githubService(input: {
     : input.count > 0
       ? "Open a project to manage repository import and synchronization."
       : "Repository access becomes active when you connect GitHub from a project.";
-  return { status, summary, detail, usageCount: input.count, lastUsedAt: input.lastSyncAt, githubUsername: username };
+  return {
+    status,
+    summary,
+    detail,
+    usageCount: input.count,
+    lastUsedAt: input.lastSyncAt,
+    githubUsername: username,
+    recoveryAction: unavailable
+      ? input.hasFallbackIdentity
+        ? "replace_account"
+        : "add_fallback_sign_in"
+      : null,
+  };
 }
 
 export function buildIntegrationsData(input: BuildIntegrationsDataInput): IntegrationsData {
@@ -81,16 +94,25 @@ export function buildIntegrationsData(input: BuildIntegrationsDataInput): Integr
   const email = typeof input.user.email === "string" && input.user.email.trim() ? input.user.email : null;
   const emailVerified = isEmailVerified(input.user);
   const hasPassword = resolvePasswordCredentialState(input.user, input.passwordLastChangedAt);
-  const linked = getLinkedAccountProviders(input.user);
+  const linked = getLinkedAccountProviders(input.user).filter(
+    (provider) => provider !== "github" || github.linked,
+  );
   const providers = hasPassword && !linked.includes("email") ? [...linked, "email" as const] : linked;
   const primary = normalizeProvider(resolvePrimaryProvider(input.user));
   const createdWith = providers.find((provider) => provider === primary) ?? null;
   const createdWithLabel = formatAccountProviderLabel(createdWith);
   const additionalLinkedCount = Math.max(providers.length - (createdWith ? 1 : 0), 0);
   const health = input.githubAccountHealth ?? { state: github.linked ? "unknown" as const : "not_linked" as const, reason: github.linked ? "provider_error" as const : "not_linked" as const, checkedAt: null, profile: null };
+  const hasFallbackIdentity = (input.user.identities ?? []).some(
+    (identity) => identity?.provider?.trim().toLowerCase() !== "github",
+  );
 
   const authConnections = buildAccountProviderStates(input.user).map((entry): AuthConnectionMethod => {
-    const state = entry.provider === "email" && hasPassword ? (primary === "email" ? "primary" : "linked") : entry.state;
+    const state = entry.provider === "github" && !github.linked
+      ? "not_linked"
+      : entry.provider === "email" && hasPassword
+        ? (primary === "email" ? "primary" : "linked")
+        : entry.state;
     return { provider: entry.provider, label: entry.label, state, ...providerDetail({ provider: entry.provider, label: entry.label, state, hasPassword, email, emailVerified }) };
   });
 
@@ -99,6 +121,6 @@ export function buildIntegrationsData(input: BuildIntegrationsDataInput): Integr
       ? `Account created with ${createdWithLabel}. ${additionalLinkedCount} additional sign-in method${additionalLinkedCount === 1 ? " is" : "s are"} linked.`
       : `${providers.length} sign-in method${providers.length === 1 ? " is" : "s are"} linked.`,
     authConnections,
-    githubService: githubService({ linked: github.linked, count: input.githubRepoProjectCount, lastSyncAt: input.githubLastSyncAt, username: github.username, health }),
+    githubService: githubService({ linked: github.linked, count: input.githubRepoProjectCount, lastSyncAt: input.githubLastSyncAt, username: github.username, health, hasFallbackIdentity }),
   };
 }

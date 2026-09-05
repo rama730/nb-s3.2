@@ -60,3 +60,21 @@ export function getTrustedRequestIp(request: Request): string | null {
 
   return resolveForwardedIp(request.headers);
 }
+
+export function getTrustedSubnet(ip: string | null | undefined): string {
+  if (!ip || ip === "unknown") return "unknown-subnet";
+  const trimmed = ip.trim();
+  if (trimmed.includes(".")) {
+    const parts = trimmed.split(".");
+    if (parts.length === 4) {
+      return `${parts[0]}.${parts[1]}.${parts[2]}.0/24`;
+    }
+  }
+  if (trimmed.includes(":")) {
+    const parts = trimmed.split(":");
+    if (parts.length >= 4) {
+      return `${parts.slice(0, 4).join(":")}::/64`;
+    }
+  }
+  return trimmed;
+}

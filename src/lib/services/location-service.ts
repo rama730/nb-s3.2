@@ -42,7 +42,7 @@ export async function getUserLocation(): Promise<{
             {
                 headers: {
                     'Accept-Language': 'en',
-                    'User-Agent': 'EdgePlatform/1.0',
+                    'User-Agent': 'NetworkBase/1.0 (+https://networkbase.in/privacy)',
                 },
                 next: { revalidate: 3600 },
             }

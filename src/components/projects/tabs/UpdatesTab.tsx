@@ -2,6 +2,7 @@
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState, Fragment } from "react";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import {
   useInfiniteQuery,
@@ -184,7 +185,18 @@ type UpdatesTabProps = {
   initialCommentId?: string | null;
 };
 
-import { ProjectUpdateComposer } from "../updates/ProjectUpdateComposer";
+const ProjectUpdateComposer = dynamic(
+  () =>
+    import("../updates/ProjectUpdateComposer").then(
+      (mod) => mod.ProjectUpdateComposer,
+    ),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="h-32 rounded-xl bg-zinc-100 animate-pulse dark:bg-zinc-900" />
+    ),
+  },
+);
 
 const UPDATE_RELATIVE_TIME_UNITS = [
   ["year", 365 * 24 * 60 * 60 * 1000],

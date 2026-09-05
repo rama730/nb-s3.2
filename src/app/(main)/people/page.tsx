@@ -7,8 +7,8 @@ import { buildRouteMetadata } from '@/lib/metadata/route-metadata'
 
 export function generateMetadata() {
     return buildRouteMetadata({
-        title: 'Connections | Edge',
-        description: 'Discover collaborators, manage your network, and respond to incoming requests on Edge.',
+        title: 'Connections | NetworkBase',
+        description: 'Discover collaborators, manage your network, and respond to incoming requests on NetworkBase.',
         path: '/people',
     });
 }

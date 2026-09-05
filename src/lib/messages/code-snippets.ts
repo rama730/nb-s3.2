@@ -141,7 +141,8 @@ function normalizeLanguageName(language: string | null | undefined): string | nu
 }
 
 export function detectCodeLanguage(content: string): string | null {
-    const sample = normalizeSnippetContent(content).slice(0, MAX_DETECTION_LENGTH);
+    // 1500 chars covers headers, imports, and initial declarations at a fraction of CPU cost
+    const sample = normalizeSnippetContent(content).slice(0, 1500);
     if (!sample) return null;
 
     for (const hint of LANGUAGE_HINTS) {

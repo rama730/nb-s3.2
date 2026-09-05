@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useMemo } from 'react';
+import { useCallback, useMemo, useRef } from 'react';
 
 import { usePresenceTyping } from './usePresenceTyping';
 import { toPresenceTypingUser, type PresenceTypingUser } from '@/lib/realtime/presence-types';
@@ -29,8 +29,14 @@ export function useTypingChannel(
         isEligibleRoomId: isPresenceEligibleConversationId,
     });
 
+    const lastSentRef = useRef<number>(0);
     const typingUsers = useMemo(() => typingMembers.map(toPresenceTypingUser), [typingMembers]);
     const sendTyping = useCallback(async (isTyping: boolean) => {
+        const now = Date.now();
+        if (isTyping && now - lastSentRef.current < 2500) {
+            return;
+        }
+        lastSentRef.current = isTyping ? now : 0;
         await sendPresenceTyping({
             isTyping,
             context: isTyping ? { scope: 'conversation' } : null,

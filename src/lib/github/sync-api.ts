@@ -1,7 +1,11 @@
 import "server-only";
 import { parseGithubRepo } from "./repo-preview";
 import { sanitizeGitErrorMessage } from "./repo-security";
-import { contentHashes } from "./sync-contract";
+import {
+  contentHashes,
+  GITHUB_WORKFLOW_PERMISSION_ERROR,
+  includesGithubWorkflowFiles,
+} from "./sync-contract";
 
 export class SyncGithubError extends Error {
   constructor(
@@ -62,6 +66,40 @@ export async function syncGithub<T>(
       ),
     );
   return data as T;
+}
+
+export async function assertGithubWorkflowPermission(
+  token: string | null,
+  paths: Iterable<string>,
+) {
+  if (!token || !includesGithubWorkflowFiles(paths)) return;
+  const response = await fetch("https://api.github.com/user", {
+    cache: "no-store",
+    redirect: "error",
+    signal: AbortSignal.timeout(20_000),
+    headers: {
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  await response.body?.cancel();
+  if (!response.ok)
+    throw new SyncGithubError(
+      response.status,
+      `GitHub ${response.status}: Unable to verify workflow permission`,
+    );
+  const granted = response.headers.get("x-oauth-scopes");
+  // GitHub App and fine-grained tokens do not expose OAuth scopes here; their
+  // repository permissions remain the source of truth at push time.
+  if (
+    granted !== null &&
+    !granted
+      .split(",")
+      .map((scope) => scope.trim().toLowerCase())
+      .includes("workflow")
+  )
+    throw new Error(GITHUB_WORKFLOW_PERMISSION_ERROR);
 }
 export function repoApi(repository: string) {
   const parsed = parseGithubRepo(repository);

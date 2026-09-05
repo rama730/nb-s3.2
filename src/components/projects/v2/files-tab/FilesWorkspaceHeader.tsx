@@ -3,12 +3,17 @@
 import React, { useContext, useRef, useState } from "react";
 import {
   ArrowLeft,
+  Check,
+  ExternalLink,
+  Github,
   Info,
+  Loader2,
   MoreHorizontal,
   PanelLeftOpen,
   Search,
   X,
 } from "lucide-react";
+import { getHeaderGitHubSyncStatus } from "@/app/actions/github-sync";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -176,11 +181,201 @@ export function FilesWorkspaceHeader({
           ref={setStatus}
           className="flex shrink-0 items-center gap-2 text-xs"
         />
+        {canOpenGitHub && (
+          <HeaderGitHubSyncButton projectId={projectId} />
+        )}
         <div ref={setActions} className="flex shrink-0 items-center gap-1" />
         {!!transfers?.active && <button type="button" onClick={transfers.open} className="min-h-11 shrink-0 rounded px-2 text-xs" aria-label={`Show ${transfers.active} active transfers`}>↑ {transfers.active}</button>}
       </header>
       {children}
     </FilesHeaderContext.Provider>
+  );
+}
+
+type HeaderStatus = {
+  connected: boolean;
+  repository: string | null;
+  branch: string | null;
+  hasIncoming: boolean;
+  activeRun: {
+    id: string;
+    stage: string;
+    direction: "push" | "pull";
+  } | null;
+  latestRunStatus: string | null;
+  latestCommitSha?: string | null;
+  latestDirection?: "push" | "pull" | null;
+  latestSyncAt?: string | null;
+  syncComment?: string | null;
+};
+
+function HeaderGitHubSyncButton({ projectId }: { projectId: string }) {
+  const workspace = useFilesWorkspaceView();
+  const [status, setStatus] = useState<HeaderStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  React.useEffect(() => {
+    let active = true;
+    const fetchStatus = () => {
+      getHeaderGitHubSyncStatus(projectId)
+        .then((res) => {
+          if (active && res.success) {
+            setStatus(res.data);
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          if (active) setLoading(false);
+        });
+    };
+
+    fetchStatus();
+
+    const handleFilesChanged = () => fetchStatus();
+    window.addEventListener("project:task-files-changed", handleFilesChanged);
+
+    return () => {
+      active = false;
+      window.removeEventListener("project:task-files-changed", handleFilesChanged);
+    };
+  }, [projectId, workspace?.view]);
+
+  if (loading && !status) {
+    return null;
+  }
+
+  const isGitHubView = workspace?.view === "github";
+
+  if (!status?.connected) {
+    return (
+      <button
+        type="button"
+        onClick={() => workspace?.selectView("github")}
+        title="Connect GitHub Repository"
+        aria-label="Connect GitHub Repository"
+        className={`flex min-h-9 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors border ${
+          isGitHubView
+            ? "border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-500/15 dark:text-blue-300"
+            : "border-zinc-200 text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+        }`}
+      >
+        <Github className="size-3.5" aria-hidden="true" />
+        <span className="hidden sm:inline">GitHub</span>
+      </button>
+    );
+  }
+
+  const isSyncing = Boolean(status.activeRun);
+  const hasIncoming = status.hasIncoming;
+  const branchName = status.branch || "main";
+  const shortSha = status.latestCommitSha;
+  const repoName = status.repository || "workspace";
+
+  const openGitHubSync = (e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    if (workspace?.selectView) {
+      workspace.selectView("github");
+    } else {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("path");
+      url.searchParams.delete("fileId");
+      url.searchParams.delete("filesNav");
+      url.searchParams.set("tab", "files");
+      url.searchParams.set("filesView", "github");
+      window.location.href = url.toString();
+    }
+  };
+
+  return (
+    <div className="group relative shrink-0">
+      <button
+        type="button"
+        onClick={openGitHubSync}
+        aria-label={`GitHub sync status for ${repoName}: ${branchName}${shortSha ? ` (commit ${shortSha})` : ""}`}
+        className={`flex min-h-9 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors border ${
+          isGitHubView
+            ? "border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-500/15 dark:text-blue-300"
+            : hasIncoming
+            ? "border-amber-400 bg-amber-50 text-amber-800 dark:border-amber-600/40 dark:bg-amber-950/30 dark:text-amber-300"
+            : isSyncing
+            ? "border-blue-400 bg-blue-50 text-blue-700 dark:border-blue-600/40 dark:bg-blue-950/30 dark:text-blue-300"
+            : "border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-100 hover:text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
+        }`}
+      >
+        {isSyncing ? (
+          <Loader2 className="size-3.5 animate-spin text-blue-600 dark:text-blue-400" />
+        ) : (
+          <Github className="size-3.5" aria-hidden="true" />
+        )}
+        <span className="font-mono text-[11px] font-medium">
+          {branchName}
+        </span>
+        {shortSha && !isSyncing && (
+          <>
+            <span className="text-zinc-300 dark:text-zinc-600">·</span>
+            <span className="inline-flex items-center gap-1 font-mono text-[11px] text-zinc-500 dark:text-zinc-400">
+              <Check className="size-3 text-emerald-600 dark:text-emerald-400" />
+              commit {shortSha}
+            </span>
+          </>
+        )}
+        {hasIncoming && (
+          <span className="flex size-1.5 rounded-full bg-amber-500 ring-2 ring-white dark:ring-zinc-900 animate-pulse" />
+        )}
+      </button>
+
+      {/* Rich Professional Hover Popover (Zero DOM-churn, pure CSS visibility) */}
+      <div className="pointer-events-none absolute right-0 top-full z-50 mt-1.5 w-80 opacity-0 transition-all duration-150 group-hover:pointer-events-auto group-hover:opacity-100">
+        <div className="rounded-xl border border-zinc-200 bg-white/95 p-3 shadow-xl backdrop-blur-md dark:border-zinc-800 dark:bg-zinc-900/95 space-y-2.5 text-left">
+          <div className="flex items-center justify-between border-b border-zinc-100 pb-2 dark:border-zinc-800">
+            <div className="flex items-center gap-1.5 truncate">
+              <Github className="size-3.5 shrink-0 text-zinc-700 dark:text-zinc-300" />
+              <span className="truncate text-xs font-semibold text-zinc-900 dark:text-zinc-100">
+                {status.repository}
+              </span>
+            </div>
+            <span
+              className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                isSyncing
+                  ? "bg-blue-500/10 text-blue-600 dark:text-blue-400"
+                  : hasIncoming
+                  ? "bg-amber-500/10 text-amber-700 dark:text-amber-400"
+                  : "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+              }`}
+            >
+              {isSyncing ? "Syncing..." : hasIncoming ? "Incoming" : "Synced"}
+            </span>
+          </div>
+
+          <div className="flex items-center justify-between text-[11px] text-zinc-500">
+            <span className="font-mono text-[10px]">
+              Branch: <strong className="font-semibold text-zinc-800 dark:text-zinc-200">{branchName}</strong>
+            </span>
+            {shortSha && status.repository && (
+              <a
+                href={`https://github.com/${status.repository}/commit/${shortSha}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-blue-600 hover:underline dark:text-blue-400 font-medium"
+                onClick={(e) => e.stopPropagation()}
+              >
+                Commit: {shortSha}
+                <ExternalLink className="size-3" />
+              </a>
+            )}
+          </div>
+
+          <button
+            type="button"
+            onClick={openGitHubSync}
+            className="flex w-full items-center justify-between border-t border-zinc-100 pt-2 text-xs font-medium text-blue-600 hover:text-blue-700 hover:underline dark:border-zinc-800 dark:text-blue-400 dark:hover:text-blue-300 transition-colors cursor-pointer group/link"
+          >
+            <span>Open GitHub Sync workspace</span>
+            <span aria-hidden="true" className="transition-transform group-hover/link:translate-x-0.5">&rarr;</span>
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

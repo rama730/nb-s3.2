@@ -350,6 +350,9 @@ export function isProjectTabVisibleToViewer(input: {
   canManageSettings?: boolean;
   publicTabVisibility?: unknown;
 }) {
+  // The project-specific legal notice is intentionally available to every
+  // viewer, including visitors who are not project members.
+  if (input.tabId === "privacy") return true;
   if (input.tabId === "settings") return Boolean(input.canManageSettings);
   if (input.isOwnerOrMember) return true;
   if (!(input.tabId in DEFAULT_PROJECT_PUBLIC_TAB_VISIBILITY)) return false;
