@@ -16,7 +16,8 @@ export const dynamic = "force-dynamic";
 // CSRF exemption: this editor-to-browser exchange has no ambient cookie
 // authority. It is protected by a short-lived, single-use authorization code
 // plus a timing-safe state nonce bound to the requesting editor session.
-export const csrfProtection = "one-time-code-and-state" as const;
+const csrfProtection = "one-time-code-and-state" as const;
+void csrfProtection;
 
 const exchangeSchema = z.object({
   code: z.string().min(16),
