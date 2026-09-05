@@ -16,7 +16,6 @@ import { useQueryClient } from '@tanstack/react-query';
 import { formatDistanceToNow } from 'date-fns';
 import { useChatTypingState } from '@/hooks/useChatTypingState';
 import { useAuth } from '@/hooks/useAuth';
-import { useDebounce } from 'use-debounce';
 import { useMessagesV2Realtime } from '@/hooks/useMessagesV2Realtime';
 import {
     useConversationThread,
@@ -173,10 +172,12 @@ export function MessagesWorkspaceV2({
     const [globalSearch, setGlobalSearch] = useState('');
     const [activeSearchIndex, setActiveSearchIndex] = useState(0);
     const normalizedGlobalSearch = globalSearch.normalize('NFKC').replace(/\s+/g, ' ').trim();
-    const [debouncedSearch] = useDebounce(
-        normalizedGlobalSearch,
-        Array.from(normalizedGlobalSearch).length < 4 ? 450 : 250,
-    );
+    const [debouncedSearch, setDebouncedSearch] = useState(normalizedGlobalSearch);
+    useEffect(() => {
+        const delay = Array.from(normalizedGlobalSearch).length < 4 ? 400 : 250;
+        const timer = setTimeout(() => setDebouncedSearch(normalizedGlobalSearch), delay);
+        return () => clearTimeout(timer);
+    }, [normalizedGlobalSearch]);
     const [visibleConversationIds, setVisibleConversationIds] = useState<string[]>([]);
     const [inboxView, setInboxView] = useState<'active' | 'archived'>('active');
     const [newMessageOpen, setNewMessageOpen] = useState(false);

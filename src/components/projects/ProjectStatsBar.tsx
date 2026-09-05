@@ -1,6 +1,6 @@
 "use client";
 
-import { TrendingUp, Users, Bookmark } from "lucide-react";
+import { TrendingUp } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface ProjectStatsBarProps {

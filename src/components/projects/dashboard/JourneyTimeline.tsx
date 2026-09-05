@@ -55,12 +55,14 @@ export const JourneyTimeline = memo(function JourneyTimeline({
         if (!container) return;
 
         if (stages.length <= JOURNEY_VISIBLE_STAGE_COUNT) {
-            container.scrollLeft = 0;
+            if (container.scrollLeft !== 0) container.scrollLeft = 0;
             return;
         }
 
         const firstVisibleStage = container.querySelector<HTMLElement>(`[data-stage-index="${stageWindow.start}"]`);
-        if (firstVisibleStage) container.scrollLeft = firstVisibleStage.offsetLeft;
+        if (firstVisibleStage && container.scrollLeft !== firstVisibleStage.offsetLeft) {
+            container.scrollLeft = firstVisibleStage.offsetLeft;
+        }
     }, [stageWindow.start, stages.length]);
 
     return (

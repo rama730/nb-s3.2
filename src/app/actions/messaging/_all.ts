@@ -1393,10 +1393,8 @@ export async function getConversations(
             return { success: false, error: 'Invalid conversation scope' };
         }
         const safeLimit = Math.max(1, Math.min(limit, 100));
-        const dedupeKey = `messages:conversations:${user.id}:${scope}:${safeLimit}:${cursorAt?.toISOString() ?? ''}:${cursorConversationId ?? ''}`;
 
-        return await runInFlightDeduped(dedupeKey, async () => {
-            const userConversations = await db.execute<{
+        const userConversations = await db.execute<{
                 conversation_id: string;
                 type: 'dm' | 'group' | 'project_group';
                 unread_count: number;
@@ -1549,7 +1547,6 @@ export async function getConversations(
                     ? `${paginatedConvs[paginatedConvs.length - 1]!.sort_at.toISOString()}|${paginatedConvs[paginatedConvs.length - 1]!.conversation_id}`
                     : undefined
             };
-        });
     } catch (error) {
         console.error('Error fetching conversations:', error);
         return { success: false, error: 'Failed to fetch conversations' };
@@ -2448,9 +2445,6 @@ export async function searchMessages(
         const textPredicate = normalizedQuery
             ? sql`(
                 ${messages.searchDocument} @@ websearch_to_tsquery('simple', ${normalizedQuery})
-                OR ${messages.content} ILIKE ${searchPattern}
-                OR coalesce(${messages.metadata} #>> '{structured,summary}', '') ILIKE ${searchPattern}
-                OR coalesce(${messages.metadata} #>> '{structured,title}', '') ILIKE ${searchPattern}
                 OR EXISTS (
                     SELECT 1
                     FROM ${messageAttachments} search_attachment
@@ -3621,6 +3615,26 @@ export async function sendMessageWithAttachments(
                 messageType = claimedAttachments[0].type;
             }
 
+            // Assign deterministic UUIDs to attachments before message insertion so
+            // Supabase Realtime emits full attachment descriptors in the primary INSERT event!
+            const attachmentsWithIds = claimedAttachments.map((att) => ({
+                ...att,
+                id: typeof crypto !== 'undefined' && 'randomUUID' in crypto
+                    ? crypto.randomUUID()
+                    : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            }));
+
+            const metadataAttachments = attachmentsWithIds.map((att) => ({
+                id: att.id,
+                type: att.type,
+                filename: att.filename,
+                sizeBytes: att.sizeBytes,
+                mimeType: att.mimeType,
+                width: att.width,
+                height: att.height,
+                thumbnailUrl: att.thumbnailUrl ?? null,
+            }));
+
             const [msg] = await tx
                 .insert(messages)
                 .values({
@@ -3643,6 +3657,10 @@ export async function sendMessageWithAttachments(
                                 : {}),
                             ...(normalizedContent.includes('```') ? { hasCode: true } : {}),
                             ...(previewKind ? { previewKind } : {}),
+                            ...(metadataAttachments.length > 0
+                                ? { attachments: metadataAttachments }
+                                : {}),
+                            ...(replyPreview ? { replyPreview } : {}),
                         }, contextChips),
                         'sent',
                     ),
@@ -3650,11 +3668,12 @@ export async function sendMessageWithAttachments(
                 .returning();
 
             let insertedAttachments: Array<typeof messageAttachments.$inferSelect> = [];
-            if (claimedAttachments.length > 0) {
+            if (attachmentsWithIds.length > 0) {
                 insertedAttachments = await tx
                     .insert(messageAttachments)
                     .values(
-                        claimedAttachments.map(att => ({
+                        attachmentsWithIds.map(att => ({
+                            id: att.id,
                             messageId: msg!.id,
                             storagePath: att.storagePath,
                             type: att.type,
@@ -3724,16 +3743,16 @@ export async function sendMessageWithAttachments(
                 ),
             );
 
-        try {
-            await emitMessageBurstNotifications({
-                recipients,
-                actorUserId: user.id,
-                actorName: senderProfile?.fullName ?? senderProfile?.username ?? null,
-                actorAvatarUrl: senderProfile?.avatarUrl ?? null,
-                conversationId,
-                sourceMessageId: newMessage!.id,
-            });
-        } catch (error) {
+        // Notifications are asynchronous background activity and should not block
+        // the client's HTTP response latency for message dispatch.
+        void emitMessageBurstNotifications({
+            recipients,
+            actorUserId: user.id,
+            actorName: senderProfile?.fullName ?? senderProfile?.username ?? null,
+            actorAvatarUrl: senderProfile?.avatarUrl ?? null,
+            conversationId,
+            sourceMessageId: newMessage!.id,
+        }).catch((error) => {
             logger.error('messages.notification_emit_failed', {
                 module: 'messaging',
                 conversationId,
@@ -3741,7 +3760,7 @@ export async function sendMessageWithAttachments(
                 count: recipients.length,
                 error: error instanceof Error ? error.message : String(error),
             });
-        }
+        });
 
         const committedAttachmentsByPath = new Map(
             committedAttachments.map((attachment) => [attachment.storagePath, attachment] as const),

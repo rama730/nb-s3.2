@@ -428,6 +428,20 @@ export const ConversationItemV2 = React.memo(function ConversationItemV2({
         conversation.lastMessage,
         conversation.reactionPreview,
     );
+    const enrichedTypingUsers = useMemo(() => {
+        if (!typingUsers.length) return typingUsers;
+        return typingUsers.map((user) => {
+            if (user.fullName || user.username) return user;
+            const match = conversation.participants?.find((p) => p.id === user.id);
+            if (!match) return user;
+            return {
+                ...user,
+                fullName: match.fullName ?? user.fullName,
+                username: match.username ?? user.username,
+                avatarUrl: match.avatarUrl ?? user.avatarUrl,
+            };
+        });
+    }, [typingUsers, conversation.participants]);
     const activityAt = showingReactionPreview
         ? conversation.reactionPreview?.createdAt
         : conversation.lastMessage?.createdAt;
@@ -531,8 +545,8 @@ export const ConversationItemV2 = React.memo(function ConversationItemV2({
                                         <DeliveryIndicator deliveryState={getLastMessageDeliveryState(conversation.lastMessage) ?? 'sent'} />
                                     )}
                                     <span className="truncate">
-                                        {typingUsers.length > 0
-                                            ? <TypingIndicator users={typingUsers} variant="inline" />
+                                        {enrichedTypingUsers.length > 0
+                                            ? <TypingIndicator users={enrichedTypingUsers} variant="inline" />
                                             : draft.trim()
                                                 ? <span className="italic"><span className="font-semibold not-italic text-red-500">Draft: </span>{draft.replace(/\n/g, ' ').slice(0, 100)}</span>
                                                 : conversation.lastMessage

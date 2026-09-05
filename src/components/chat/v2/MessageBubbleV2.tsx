@@ -109,6 +109,43 @@ function createPendingLinkPreview(url: string): LinkPreview | null {
     }
 }
 
+const MessageLazyLinkPreview = React.memo(function MessageLazyLinkPreview({
+    url,
+    isOwn,
+    onContentLoad,
+}: {
+    url: string;
+    isOwn: boolean;
+    onContentLoad?: () => void;
+}) {
+    const linkPreviewQuery = useLinkPreview(url);
+    const linkPreview = linkPreviewQuery.data ?? null;
+    const pendingLinkPreview = useMemo(
+        () => (!linkPreview && linkPreviewQuery.isFetching ? createPendingLinkPreview(url) : null),
+        [url, linkPreview, linkPreviewQuery.isFetching],
+    );
+    const rendered = linkPreview ?? pendingLinkPreview;
+
+    useEffect(() => {
+        if (linkPreview) {
+            onContentLoad?.();
+        }
+    }, [linkPreview, onContentLoad]);
+
+    if (!rendered) return null;
+
+    return (
+        <div className="mt-2 w-full">
+            <LinkPreviewCard
+                preview={rendered}
+                isOwn={isOwn}
+                loading={!linkPreview}
+                onContentLoad={onContentLoad}
+            />
+        </div>
+    );
+});
+
 function isOnlyEmojis(text: string): boolean {
     const trimmed = text.trim();
     if (!trimmed) return false;
@@ -247,79 +284,13 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
         }
         resetSwipe();
     };
-
-    const handleMouseDown = (e: React.MouseEvent) => {
-        if (!onReply || !canReply) return;
-        if (e.button !== 0) return; // Only left click
-        const target = e.target as HTMLElement;
-        if (
-            target.closest('a') ||
-            target.closest('button') ||
-            target.closest('select') ||
-            target.closest('textarea') ||
-            target.closest('input')
-        ) {
-            return;
-        }
-        touchStartX.current = e.clientX;
-        touchStartY.current = e.clientY;
-        isSwipeActive.current = true;
-    };
-
-    const handleMouseMove = (e: React.MouseEvent) => {
-        if (!isSwipeActive.current) return;
-        const deltaX = e.clientX - touchStartX.current;
-        const deltaY = e.clientY - touchStartY.current;
-
-        if (Math.abs(deltaY) > Math.abs(deltaX)) {
-            isSwipeActive.current = false;
-            resetSwipe();
-            return;
-        }
-
-        if (Math.abs(deltaX) > 5) {
-            if (deltaX * replySwipeDirection <= 0) {
-                resetSwipe();
-                return;
-            }
-            e.preventDefault();
-            setIsSwiping(true);
-            const offset = Math.max(-80, Math.min(80, deltaX));
-            swipeOffsetRef.current = offset;
-            setSwipeOffset(offset);
-        }
-    };
-
-    const handleMouseUp = () => {
-        if (!isSwipeActive.current) return;
-        isSwipeActive.current = false;
-        setIsSwiping(false);
-
-        if (swipeOffsetRef.current * replySwipeDirection >= 50) {
-            onReply?.(message);
-        }
-        resetSwipe();
-    };
-
-    const handleMouseLeave = () => {
-        if (!isSwipeActive.current) return;
-        isSwipeActive.current = false;
-        resetSwipe();
-    };
     const reactionSummary = useMemo(
         () => normalizeMessageReactionSummary(metadata.reactionSummary),
         [metadata.reactionSummary],
     );
     const visibleLinkedWork = linkedWorkExpanded ? linkedWork : linkedWork.slice(0, 2);
 
-    const firstUrl = extractFirstUrl(message.content);
-    const linkPreviewQuery = useLinkPreview(isDeleted ? null : firstUrl);
-    const linkPreview = linkPreviewQuery.data ?? null;
-    const pendingLinkPreview = useMemo(
-        () => (!linkPreview && firstUrl && linkPreviewQuery.isFetching ? createPendingLinkPreview(firstUrl) : null),
-        [firstUrl, linkPreview, linkPreviewQuery.isFetching],
-    );
-    const renderedLinkPreview = linkPreview ?? pendingLinkPreview;
+    const firstUrl = isDeleted ? null : extractFirstUrl(message.content);
 
     const attachments = useMemo<ChatAttachmentV2[]>(
         () => (message.attachments || []) as ChatAttachmentV2[],
@@ -362,14 +333,8 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
         || isApplication
         || contextChips.length > 0
         || linkedWork.length > 0
-        || renderedLinkPreview,
+        || firstUrl,
     );
-
-    useEffect(() => {
-        if (linkPreview) {
-            onContentLoad?.();
-        }
-    }, [linkPreview, onContentLoad]);
 
     useEffect(() => {
         if (!isEditing) {
@@ -562,10 +527,6 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
                 onTouchStart={handleTouchStart}
                 onTouchMove={handleTouchMove}
                 onTouchEnd={handleTouchEnd}
-                onMouseDown={handleMouseDown}
-                onMouseMove={handleMouseMove}
-                onMouseUp={handleMouseUp}
-                onMouseLeave={handleMouseLeave}
                 style={{
                     transform: swipeOffset !== 0 ? `translateX(${swipeOffset}px)` : undefined,
                     transition: isSwiping ? 'none' : 'transform 200ms ease-out',
@@ -783,15 +744,12 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
                                                     ) : null}
                                                 </div>
                                             ) : null}
-                                            {renderedLinkPreview ? (
-                                                <div className="mt-2 w-full">
-                                                    <LinkPreviewCard
-                                                        preview={renderedLinkPreview}
-                                                        isOwn={isOwn}
-                                                        loading={!linkPreview}
-                                                        onContentLoad={onContentLoad}
-                                                    />
-                                                </div>
+                                            {firstUrl ? (
+                                                <MessageLazyLinkPreview
+                                                    url={firstUrl}
+                                                    isOwn={isOwn}
+                                                    onContentLoad={onContentLoad}
+                                                />
                                             ) : null}
                                         </>
                                     );
@@ -816,7 +774,7 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
                                                     {isLast && attachments.length === 0 && reactionSummary.length > 0 && (
                                                         <ReactionPillRow
                                                             reactions={reactionSummary}
-                                                            align={isOwn ? 'end' : 'start'}
+                                                            align={isOwn ? 'start' : 'end'}
                                                             onToggleReaction={handleReaction}
                                                             onShowDetail={() => {}}
                                                         />
@@ -905,7 +863,7 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
                                             {isLast && attachments.length === 0 && reactionSummary.length > 0 && (
                                                 <ReactionPillRow
                                                     reactions={reactionSummary}
-                                                    align={isOwn ? 'end' : 'start'}
+                                                    align={isOwn ? 'start' : 'end'}
                                                     onToggleReaction={handleReaction}
                                                     onShowDetail={() => {}}
                                                 />
@@ -917,7 +875,7 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
                         {attachments.length > 0 && (
                             <div className={cn(
                                 "relative mt-1",
-                                attachments.length === 1 ? "w-fit max-w-full" : "w-full",
+                                attachments.length === 1 ? "w-fit max-w-full" : "w-full max-w-[480px]",
                                 needsReactionSpacer && "mb-4",
                             )}>
                                 <MessageAttachmentsV2
@@ -929,7 +887,7 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
                                 {reactionSummary.length > 0 && (
                                     <ReactionPillRow
                                         reactions={reactionSummary}
-                                        align={isOwn ? 'end' : 'start'}
+                                        align={isOwn ? 'start' : 'end'}
                                         onToggleReaction={handleReaction}
                                         onShowDetail={() => {}}
                                     />
@@ -1108,6 +1066,7 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
 }, function areMessageBubblePropsEqual(prev, next) {
     if (prev.message.id !== next.message.id) return false;
     if (prev.message.editedAt !== next.message.editedAt) return false;
+    if (prev.message.deletedAt !== next.message.deletedAt) return false;
     if (prev.message.content !== next.message.content) return false;
     if (prev.isFocusedReplyTarget !== next.isFocusedReplyTarget) return false;
     if (prev.isConsecutiveFromPrev !== next.isConsecutiveFromPrev) return false;
@@ -1116,7 +1075,17 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
     if (prev.surface !== next.surface) return false;
     if (prev.isLatestMessage !== next.isLatestMessage) return false;
     if (prev.linkedWork !== next.linkedWork) return false;
-    if (prev.message.metadata !== next.message.metadata) return false;
+    if (prev.message.attachments !== next.message.attachments) return false;
+
+    // Semantic metadata comparison: avoid re-rendering entire bubble when unrelated
+    // object references in metadata change, only check visual presentation fields.
+    const prevMeta = prev.message.metadata as Record<string, unknown> | undefined;
+    const nextMeta = next.message.metadata as Record<string, unknown> | undefined;
+    if (prevMeta?.deliveryState !== nextMeta?.deliveryState) return false;
+    if (prevMeta?.reactionSummary !== nextMeta?.reactionSummary) return false;
+    if (prevMeta?.structured !== nextMeta?.structured) return false;
+    if (prevMeta?.replyPreview !== nextMeta?.replyPreview) return false;
+
     return true;
 });
 

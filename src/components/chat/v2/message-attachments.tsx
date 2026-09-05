@@ -1,10 +1,12 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import {
     File,
     Image as ImageIcon,
     Video,
+    Volume2,
+    VolumeX,
 } from 'lucide-react';
 import {
     fitMediaWithinBounds,
@@ -13,7 +15,13 @@ import {
     type MediaDimensions,
 } from '@/lib/messages/media-metadata';
 import { cn } from '@/lib/utils';
-import { MediaViewerModal } from '@/components/ui/media-viewer';
+import dynamic from 'next/dynamic';
+import type { MediaItem } from '@/components/ui/media-viewer';
+
+const MediaViewerModal = dynamic(
+    () => import('@/components/ui/media-viewer').then((m) => m.MediaViewerModal),
+    { ssr: false },
+);
 
 export interface ChatAttachmentV2 {
     id: string;
@@ -37,51 +45,56 @@ export function MessageAttachmentsV2({
     isOwn?: boolean;
     hasReactions?: boolean;
 }) {
-    const normalizedAttachments = useMemo(() => {
-        return attachments.map(att => {
-            if (att.type === 'file') {
-                const ext = att.filename.split('.').pop()?.toLowerCase();
+    const { mediaAttachments, fileAttachments, viewerAttachments } = useMemo(() => {
+        const media: ChatAttachmentV2[] = [];
+        const files: ChatAttachmentV2[] = [];
+        const viewer: MediaItem[] = [];
+
+        for (const raw of attachments) {
+            let att = raw;
+            if (raw.type === 'file') {
+                const ext = raw.filename.split('.').pop()?.toLowerCase();
                 const isVideoExt = ext === 'mp4' || ext === 'webm' || ext === 'ogg' || ext === 'mov';
                 const isImageExt = ext === 'jpg' || ext === 'jpeg' || ext === 'png' || ext === 'gif' || ext === 'webp';
-                if (att.mimeType?.startsWith('video/') || isVideoExt) {
-                    return { ...att, type: 'video' as const };
-                }
-                if (att.mimeType?.startsWith('image/') || isImageExt) {
-                    return { ...att, type: 'image' as const };
+                if (raw.mimeType?.startsWith('video/') || isVideoExt) {
+                    att = { ...raw, type: 'video' };
+                } else if (raw.mimeType?.startsWith('image/') || isImageExt) {
+                    att = { ...raw, type: 'image' };
                 }
             }
-            return att;
-        });
+
+            if (att.type === 'image' || att.type === 'video') {
+                media.push(att);
+                viewer.push({
+                    id: att.id,
+                    url: att.url,
+                    filename: att.filename,
+                    type: att.type,
+                    localUrl: att.localUrl || undefined,
+                    thumbnailUrl: att.thumbnailUrl || undefined,
+                });
+            } else {
+                files.push(att);
+                if (att.filename.toLowerCase().endsWith('.pdf')) {
+                    viewer.push({
+                        id: att.id,
+                        url: att.url,
+                        filename: att.filename,
+                        type: att.type,
+                        localUrl: att.localUrl || undefined,
+                        thumbnailUrl: att.thumbnailUrl || undefined,
+                    });
+                }
+            }
+        }
+
+        return { mediaAttachments: media, fileAttachments: files, viewerAttachments: viewer };
     }, [attachments]);
 
     const [activeAttachmentId, setActiveAttachmentId] = useState<string | null>(null);
     const [originRect, setOriginRect] = useState<DOMRect | null>(null);
     const [videoTime, setVideoTime] = useState<number>(0);
     const [returnedVideoState, setReturnedVideoState] = useState<{ id: string; time: number } | null>(null);
-    const mediaAttachments = useMemo(
-        () => normalizedAttachments.filter((attachment) => attachment.type === 'image' || attachment.type === 'video'),
-        [normalizedAttachments],
-    );
-    const fileAttachments = useMemo(
-        () => normalizedAttachments.filter((attachment) => attachment.type === 'file'),
-        [normalizedAttachments],
-    );
-    const viewableAttachments = useMemo(
-        () => normalizedAttachments.filter((attachment) => (
-            attachment.type === 'image'
-            || attachment.type === 'video'
-            || attachment.filename.toLowerCase().endsWith('.pdf')
-        )),
-        [normalizedAttachments],
-    );
-    const viewerAttachments = useMemo(
-        () => viewableAttachments.map((attachment) => ({
-            ...attachment,
-            localUrl: attachment.localUrl || undefined,
-            thumbnailUrl: attachment.thumbnailUrl || undefined,
-        })),
-        [viewableAttachments],
-    );
 
     if (attachments.length === 0) return null;
 
@@ -214,15 +227,36 @@ function MediaAttachmentTileV2({
             aspectRatio: '1 / 1',
         };
 
+    const inlineVideoRef = useRef<HTMLVideoElement | null>(null);
+    const [isMuted, setIsMuted] = useState(true);
+
+    useEffect(() => {
+        if (returnedVideoState?.id === attachment.id && inlineVideoRef.current) {
+            inlineVideoRef.current.currentTime = returnedVideoState.time;
+            void inlineVideoRef.current.play().catch(() => undefined);
+        }
+    }, [attachment.id, returnedVideoState]);
+
     const recordDimensions = useCallback((width: number, height: number) => {
         const nextDimensions = normalizeMediaDimensions(width, height);
         if (nextDimensions) setDimensions(nextDimensions);
     }, []);
 
+    const toggleMute = useCallback((event: React.MouseEvent) => {
+        event.stopPropagation();
+        event.preventDefault();
+        const video = inlineVideoRef.current;
+        if (video) {
+            const nextMuted = !video.muted;
+            video.muted = nextMuted;
+            setIsMuted(nextMuted);
+        }
+    }, []);
+
     return (
         <div
             className={cn(
-                'msg-media-frame relative max-w-full overflow-hidden rounded-2xl bg-zinc-100',
+                'msg-media-frame group/video relative max-w-full overflow-hidden rounded-2xl bg-zinc-100',
                 'dark:bg-zinc-800',
             )}
             style={frameStyle}
@@ -235,7 +269,7 @@ function MediaAttachmentTileV2({
                         const rect = e.currentTarget.getBoundingClientRect();
                         const time = returnedVideoState?.id === attachment.id
                             ? returnedVideoState.time
-                            : 0;
+                            : (inlineVideoRef.current?.currentTime ?? 0);
                         onClick(rect, time);
                     }}
                     aria-label={attachment.filename
@@ -257,28 +291,67 @@ function MediaAttachmentTileV2({
             ) : null}
 
             {attachment.type === 'video' ? (
-                displayUrl ? (
-                    // Historical video tiles deliberately render only the stored thumbnail.
-                    // The selected viewer owns the first video-body request and playback.
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                        src={displayUrl}
-                        alt={attachment.filename || ''}
-                        onLoad={() => {
+                <>
+                    {!loaded && (
+                        <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-zinc-200 dark:bg-zinc-800">
+                            <Video className="h-8 w-8 text-zinc-400/70 dark:text-zinc-500/70" aria-hidden="true" />
+                        </div>
+                    )}
+                    <video
+                        ref={inlineVideoRef}
+                        src={fallbackUrl || attachment.localUrl || attachment.url}
+                        poster={displayUrl || undefined}
+                        autoPlay
+                        muted
+                        loop
+                        playsInline
+                        preload="auto"
+                        onLoadedMetadata={(event) => {
+                            const target = event.currentTarget;
+                            if (target.videoWidth && target.videoHeight) {
+                                recordDimensions(target.videoWidth, target.videoHeight);
+                            }
+                        }}
+                        onLoadedData={() => {
                             setLoaded(true);
                             onContentLoad?.();
                         }}
-                        onError={() => {
-                            setHasError(true);
-                            setLoaded(true);
+                        onVolumeChange={() => {
+                            if (inlineVideoRef.current) {
+                                setIsMuted(inlineVideoRef.current.muted);
+                            }
                         }}
-                        className="absolute inset-0 block h-full w-full rounded-[inherit] object-cover"
+                        onError={() => {
+                            if (!fallbackUrl && displayUrl && displayUrl !== attachment.url) {
+                                setFallbackUrl(attachment.url);
+                            } else {
+                                setHasError(true);
+                                setLoaded(true);
+                            }
+                        }}
+                        className={cn(
+                            'absolute inset-0 block h-full w-full rounded-[inherit] object-cover transition-opacity duration-200',
+                            loaded && !hasError ? 'opacity-100' : 'opacity-0',
+                        )}
                     />
-                ) : (
-                    <div className="absolute inset-0 flex items-center justify-center bg-zinc-200 dark:bg-zinc-800">
-                        <Video className="h-8 w-8 text-zinc-400/70 dark:text-zinc-500/70" aria-hidden="true" />
-                    </div>
-                )
+                    {!hasError && (
+                        <button
+                            type="button"
+                            onClick={toggleMute}
+                            aria-label={isMuted ? 'Unmute video' : 'Mute video'}
+                            className={cn(
+                                'absolute bottom-2.5 right-2.5 z-20 flex h-7 w-7 items-center justify-center rounded-full bg-black/60 text-white backdrop-blur-sm transition-all duration-200 hover:bg-black/85 hover:scale-105 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/80',
+                                'opacity-0 pointer-events-none group-hover/video:opacity-100 group-hover/video:pointer-events-auto focus:opacity-100 focus:pointer-events-auto',
+                            )}
+                        >
+                            {isMuted ? (
+                                <VolumeX className="h-3.5 w-3.5" aria-hidden="true" />
+                            ) : (
+                                <Volume2 className="h-3.5 w-3.5" aria-hidden="true" />
+                            )}
+                        </button>
+                    )}
+                </>
             ) : (
                 // Native img is intentional: local object URLs and remote
                 // attachment fallbacks are not compatible with image loaders.

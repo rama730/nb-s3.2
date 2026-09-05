@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { cancelAttachmentUpload, uploadAttachment } from '@/app/actions/messaging';
+import { cancelAttachmentUpload, uploadAttachment, type UploadedAttachment } from '@/app/actions/messaging';
 import { compressImage, generateTinyThumbnail } from '@/lib/messages/image-compression';
 import { readMediaDimensions, type MediaDimensions } from '@/lib/messages/media-metadata';
 import {
@@ -78,7 +78,6 @@ export function useMessageComposerAttachments({
     const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
     const attachmentsRef = useRef<PendingAttachment[]>([]);
     const activeUploadIdsRef = useRef<Set<string>>(new Set());
-    const progressTimeoutsRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
     const pendingAttachmentReservationsRef = useRef(0);
     const conversationEpochRef = useRef(0);
     const startQueuedUploadsRef = useRef<() => void>(() => undefined);
@@ -160,23 +159,44 @@ export function useMessageComposerAttachments({
         }
 
         const epoch = conversationEpochRef.current;
-        try {
-            const processedFiles = await compressFilesWithLimit(
-                files.slice(0, reservedCount),
-                COMPRESSION_CONCURRENCY,
-            );
-            if (conversationEpochRef.current !== epoch) {
-                releaseAttachmentSlots(reservedCount);
-                return false;
-            }
-            stagePreparedAttachments(processedFiles, reservedCount, epoch);
-            return true;
-        } catch (error) {
-            releaseAttachmentSlots(reservedCount);
-            console.error('Failed to enqueue files:', error);
-            return false;
-        }
-    }, [releaseAttachmentSlots, reserveAttachmentSlots, stagePreparedAttachments]);
+        const targetFiles = files.slice(0, reservedCount);
+
+        // Frame 0: Immediately stage files with local object URLs so chips render in 0ms!
+        const initialPrepared: PreparedAttachmentFile[] = targetFiles.map((file) => ({
+            file,
+            dimensions: null,
+            tinyBase64: undefined,
+        }));
+        stagePreparedAttachments(initialPrepared, reservedCount, epoch);
+
+        // Background: concurrently run image compression & dimensions per file without blocking UI
+        void Promise.all(
+            targetFiles.map(async (file) => {
+                try {
+                    const compressed = await compressImage(file);
+                    const dimensions = await readMediaDimensions(compressed);
+                    const tinyBase64 = (await generateTinyThumbnail(compressed)) || undefined;
+                    if (conversationEpochRef.current !== epoch) return;
+                    setAttachments((prev) =>
+                        prev.map((item) =>
+                            item.file === file
+                                ? {
+                                    ...item,
+                                    file: compressed,
+                                    width: dimensions?.width ?? item.width,
+                                    height: dimensions?.height ?? item.height,
+                                    tinyBase64: tinyBase64 ?? item.tinyBase64,
+                                }
+                                : item,
+                        ),
+                    );
+                } catch (error) {
+                    console.error('Failed background file preparation:', error);
+                }
+            }),
+        );
+        return true;
+    }, [reserveAttachmentSlots, stagePreparedAttachments]);
 
     const enqueuePastedImage = useCallback(async (file: File) => {
         const reservedCount = reserveAttachmentSlots(1);
@@ -185,20 +205,34 @@ export function useMessageComposerAttachments({
         }
 
         const epoch = conversationEpochRef.current;
+        stagePreparedAttachments([{ file, dimensions: null, tinyBase64: undefined }], reservedCount, epoch);
+
         try {
             const compressedFile = await compressImage(file);
             const dimensions = await readMediaDimensions(compressedFile);
-            const tinyBase64 = await generateTinyThumbnail(compressedFile) || undefined;
+            const tinyBase64 = (await generateTinyThumbnail(compressedFile)) || undefined;
             if (conversationEpochRef.current !== epoch) {
-                releaseAttachmentSlots(reservedCount);
                 return false;
             }
-            return stagePreparedAttachments([{ file: compressedFile, dimensions, tinyBase64 }], reservedCount, epoch) > 0;
+            setAttachments((prev) =>
+                prev.map((item) =>
+                    item.file === file
+                        ? {
+                            ...item,
+                            file: compressedFile,
+                            width: dimensions?.width ?? item.width,
+                            height: dimensions?.height ?? item.height,
+                            tinyBase64: tinyBase64 ?? item.tinyBase64,
+                        }
+                        : item,
+                ),
+            );
+            return true;
         } catch (error) {
-            releaseAttachmentSlots(reservedCount);
-            throw error;
+            console.error('Failed optimizing pasted image:', error);
+            return false;
         }
-    }, [releaseAttachmentSlots, reserveAttachmentSlots, stagePreparedAttachments]);
+    }, [reserveAttachmentSlots, stagePreparedAttachments]);
 
     useEffect(() => {
         onAddFiles?.(enqueueFiles);
@@ -213,8 +247,6 @@ export function useMessageComposerAttachments({
             attachmentsRef.current.forEach((attachment) => {
                 if (attachment.preview) URL.revokeObjectURL(attachment.preview);
             });
-            progressTimeoutsRef.current.forEach((timeoutId) => clearTimeout(timeoutId));
-            progressTimeoutsRef.current.clear();
         };
     }, []);
 
@@ -226,7 +258,6 @@ export function useMessageComposerAttachments({
             .filter((attachment) => attachment.status === 'queued' && !activeUploadIdsRef.current.has(attachment.id))
             .slice(0, available)
             .forEach((attachment) => {
-                const scheduledEpoch = conversationEpochRef.current;
                 activeUploadIdsRef.current.add(attachment.id);
                 const formData = new FormData();
                 formData.append('file', attachment.file);
@@ -242,33 +273,14 @@ export function useMessageComposerAttachments({
 
                 setAttachments((prev) =>
                     prev.map((item) =>
-                        item.id === attachment.id ? { ...item, status: 'uploading', progress: 20, error: undefined } : item,
+                        item.id === attachment.id ? { ...item, status: 'uploading', progress: 50, error: undefined } : item,
                     ),
                 );
-
-                const progressTimeoutId = setTimeout(() => {
-                    progressTimeoutsRef.current.delete(attachment.id);
-                    setAttachments((prev) =>
-                        conversationEpochRef.current !== scheduledEpoch || !prev.some((item) => item.id === attachment.id)
-                            ? prev
-                            : prev.map((item) =>
-                                item.id === attachment.id && item.status === 'uploading'
-                                    ? { ...item, progress: 60 }
-                                    : item,
-                            ),
-                    );
-                }, 500);
-                progressTimeoutsRef.current.set(attachment.id, progressTimeoutId);
 
                 // ponytail: the authenticated server action already accepts FormData.
                 // Keeping binary uploads on that native path avoids a second multipart parser.
                 void uploadAttachment(formData)
                     .then((result) => {
-                        const progressTimeout = progressTimeoutsRef.current.get(attachment.id);
-                        if (progressTimeout) {
-                            clearTimeout(progressTimeout);
-                            progressTimeoutsRef.current.delete(attachment.id);
-                        }
                         setAttachments((prev) =>
                             prev.map((item) => {
                                 if (item.id !== attachment.id) return item;
@@ -295,11 +307,6 @@ export function useMessageComposerAttachments({
                         );
                     })
                     .catch(() => {
-                        const progressTimeout = progressTimeoutsRef.current.get(attachment.id);
-                        if (progressTimeout) {
-                            clearTimeout(progressTimeout);
-                            progressTimeoutsRef.current.delete(attachment.id);
-                        }
                         setAttachments((prev) =>
                             prev.map((item) =>
                                 item.id === attachment.id
@@ -309,11 +316,6 @@ export function useMessageComposerAttachments({
                         );
                     })
                     .finally(() => {
-                        const progressTimeout = progressTimeoutsRef.current.get(attachment.id);
-                        if (progressTimeout) {
-                            clearTimeout(progressTimeout);
-                            progressTimeoutsRef.current.delete(attachment.id);
-                        }
                         activeUploadIdsRef.current.delete(attachment.id);
                         startQueuedUploadsRef.current();
                     });
@@ -341,11 +343,6 @@ export function useMessageComposerAttachments({
     const removeAttachment = useCallback((attachmentId: string) => {
         const target = attachmentsRef.current.find((attachment) => attachment.id === attachmentId);
         if (target) releaseAttachmentPreview(target);
-        const progressTimeout = progressTimeoutsRef.current.get(attachmentId);
-        if (progressTimeout) {
-            clearTimeout(progressTimeout);
-            progressTimeoutsRef.current.delete(attachmentId);
-        }
         activeUploadIdsRef.current.delete(attachmentId);
         setAttachments((prev) => prev.filter((attachment) => attachment.id !== attachmentId));
         void cancelAttachmentUpload(attachmentId);
@@ -367,25 +364,35 @@ export function useMessageComposerAttachments({
         conversationEpochRef.current += 1;
         attachmentsRef.current.forEach((attachment) => {
             releaseAttachmentPreview(attachment);
-            const progressTimeout = progressTimeoutsRef.current.get(attachment.id);
-            if (progressTimeout) {
-                clearTimeout(progressTimeout);
-                progressTimeoutsRef.current.delete(attachment.id);
-            }
             if (!keepBackendUploads) {
                 void cancelAttachmentUpload(attachment.id);
             }
         });
         activeUploadIdsRef.current.clear();
-        progressTimeoutsRef.current.clear();
         pendingAttachmentReservationsRef.current = 0;
         attachmentsRef.current = [];
         setAttachments([]);
     }, []);
 
-    useEffect(() => {
-        clearAttachments();
-    }, [clearAttachments, conversationId]);
+    const waitForAllUploads = useCallback(async (): Promise<UploadedAttachment[] | null> => {
+        const check = (): Promise<UploadedAttachment[] | null> => {
+            const current = attachmentsRef.current;
+            if (current.length === 0) return Promise.resolve([]);
+            const hasPending = current.some((a) => a.status === 'queued' || a.status === 'uploading');
+            if (!hasPending) {
+                const hasFailed = current.some((a) => a.status === 'failed');
+                if (hasFailed) return Promise.resolve(null);
+                const uploaded = current
+                    .filter((a) => a.status === 'uploaded' && a.uploaded && !a.error)
+                    .map((a) => a.uploaded!);
+                return Promise.resolve(uploaded);
+            }
+            return new Promise((resolve) => {
+                setTimeout(() => resolve(check()), 80);
+            });
+        };
+        return check();
+    }, []);
 
     return {
         attachments,
@@ -396,5 +403,6 @@ export function useMessageComposerAttachments({
         clearAttachments,
         enqueueFiles,
         enqueuePastedImage,
+        waitForAllUploads,
     };
 }

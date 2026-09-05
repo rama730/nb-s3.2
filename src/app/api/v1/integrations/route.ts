@@ -6,6 +6,7 @@ import { getLatestPasswordChangeAt } from "@/lib/security/audit";
 import { resolveGithubExternalAccountHealth } from "@/lib/github/account-health";
 import { buildGithubAccountConnectionState } from "@/lib/github/connection-state";
 import { buildIntegrationsData } from "@/lib/settings/integrations";
+import { toIsoString } from "@/lib/utils/date";
 
 export async function GET(request: Request) {
     const auth = await requireAuthenticatedUser();
@@ -17,16 +18,37 @@ export async function GET(request: Request) {
     const limitResponse = await enforceRouteLimit(request, `api:integrations:${user.id}`, 60, 60);
     if (limitResponse) return limitResponse;
 
-    const githubConnection = buildGithubAccountConnectionState(user);
+    const identitiesResult = await db.execute<{
+        id: string;
+        provider: string;
+        identity_data: Record<string, unknown> | null;
+    }>(
+        sql`SELECT id, provider, identity_data FROM auth.identities WHERE user_id = ${user.id}::uuid ORDER BY last_sign_in_at DESC NULLS LAST, created_at DESC`,
+    ).catch(() => null);
+
+    const liveIdentities = identitiesResult && Array.isArray(identitiesResult)
+        ? identitiesResult.map((row) => ({
+            id: String(row.id),
+            provider: String(row.provider),
+            identity_data: (row.identity_data || {}) as Record<string, unknown>,
+        }))
+        : [];
+
+    const effectiveUser = liveIdentities.length > 0
+        ? { ...user, identities: liveIdentities as any }
+        : user;
+
+    const githubConnection = buildGithubAccountConnectionState(effectiveUser);
     const githubAccountHealthPromise = resolveGithubExternalAccountHealth({
         linked: githubConnection.linked,
+        githubId: githubConnection.githubId,
         username: githubConnection.username,
     });
 
     const [githubProjectsAggregate] = await db
         .select({
             count: sql<number>`count(*)::int`,
-            githubLastSyncAt: sql<Date | null>`max(${projects.githubLastSyncAt})`,
+            githubLastSyncAt: sql<Date | string | null>`max(${projects.githubLastSyncAt})`,
         })
         .from(projects)
         .where(
@@ -42,9 +64,10 @@ export async function GET(request: Request) {
 
     return jsonSuccess(
         buildIntegrationsData({
-            user,
+            user: effectiveUser,
             githubRepoProjectCount: githubProjectsAggregate?.count ?? 0,
-            githubLastSyncAt: githubProjectsAggregate?.githubLastSyncAt?.toISOString() ?? null,
+            // ponytail: SQL aggregates bypass timestamp column mapping, so normalize at the API boundary.
+            githubLastSyncAt: toIsoString(githubProjectsAggregate?.githubLastSyncAt),
             passwordLastChangedAt: passwordLastChangedAt ?? null,
             githubAccountHealth,
         }),

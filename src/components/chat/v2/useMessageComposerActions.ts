@@ -33,6 +33,7 @@ interface UseMessageComposerActionsParams {
     updateTypingState: (isTyping: boolean) => void;
     setSendAnimating: Dispatch<SetStateAction<boolean>>;
     onWillSend?: () => void;
+    waitForAllUploads?: () => Promise<UploadedAttachment[] | null>;
 }
 
 function createClientMessageId() {
@@ -56,6 +57,7 @@ export function useMessageComposerActions({
     updateTypingState,
     setSendAnimating,
     onWillSend,
+    waitForAllUploads,
 }: UseMessageComposerActionsParams) {
     const queryClient = useQueryClient();
     const { sendConversationMessage } = useMessagesActions();
@@ -95,7 +97,6 @@ export function useMessageComposerActions({
 
     const beginSendAnimation = useCallback(() => {
         onWillSend?.();
-        setIsSending(true);
         setSendAnimating(true);
         setTimeout(() => setSendAnimating(false), 300);
         clearTypingIdleTimer();
@@ -104,19 +105,29 @@ export function useMessageComposerActions({
 
     const handleSend = useCallback(async () => {
         const text = formatDraftWithCodeSnippet(draft);
-        const uploadedAttachments = attachments
-            .filter((attachment) => attachment.status === 'uploaded' && attachment.uploaded && !attachment.error)
-            .map((attachment) => attachment.uploaded!);
-
-        const hasStillUploading = attachments.some((attachment) => attachment.status === 'queued' || attachment.status === 'uploading');
-        if (hasStillUploading) {
-            toast.info('Please wait for attachments to finish uploading');
-            return;
-        }
-        if (!text && uploadedAttachments.length === 0) {
+        if (!text && attachments.length === 0) {
             return;
         }
         if (isSending) return;
+
+        const hasStillUploading = attachments.some((attachment) => attachment.status === 'queued' || attachment.status === 'uploading');
+        let finalUploaded: UploadedAttachment[] = [];
+        if (attachments.length > 0) {
+            if (hasStillUploading && waitForAllUploads) {
+                setIsSending(true);
+                const resolved = await waitForAllUploads();
+                if (!resolved) {
+                    setIsSending(false);
+                    toast.error('Some attachments failed to upload. Please retry.');
+                    return;
+                }
+                finalUploaded = resolved;
+            } else {
+                finalUploaded = attachments
+                    .filter((attachment) => attachment.status === 'uploaded' && attachment.uploaded && !attachment.error)
+                    .map((attachment) => attachment.uploaded!);
+            }
+        }
 
         const clientMessageId = createClientMessageId();
 
@@ -128,17 +139,18 @@ export function useMessageComposerActions({
         queueOutgoingMessage({
             clientMessageId,
             content: text,
-            uploadedAttachments,
+            uploadedAttachments: finalUploaded,
             state: 'sending',
         });
         beginSendAnimation();
+        setIsSending(false);
 
         try {
             const result = await sendConversationMessage.mutateAsync({
                 conversationId,
                 targetUserId: targetUserId ?? null,
                 content: text,
-                attachments: uploadedAttachments,
+                attachments: finalUploaded,
                 clientMessageId,
                 replyToMessageId: replyTarget?.id || null,
                 contextChips: [],
@@ -183,6 +195,7 @@ export function useMessageComposerActions({
         sendConversationMessage,
         setSelectedConversationId,
         targetUserId,
+        waitForAllUploads,
     ]);
 
     const handleConnectionAction = useCallback(async () => {

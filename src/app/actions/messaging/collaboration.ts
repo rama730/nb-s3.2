@@ -904,8 +904,7 @@ export async function sendStructuredMessageActionV2(params: {
         // below is best effort and can never turn a committed send into failure.
         const responseMessage = toStructuredMessageResponse(result.messageRow, result.sender);
 
-        try {
-            const recipients = await db
+        const recipients = await db
                 .select({
                     userId: conversationParticipants.userId,
                     muted: conversationParticipants.muted,
@@ -916,7 +915,9 @@ export async function sendStructuredMessageActionV2(params: {
                     ne(conversationParticipants.userId, user.id),
                     isNull(conversationParticipants.archivedAt),
                 ));
-            await emitMessageBurstNotifications({
+            // Notifications are asynchronous background activity and should not block
+            // the client's HTTP response latency for message dispatch.
+            void emitMessageBurstNotifications({
                 recipients,
                 actorUserId: user.id,
                 actorName: result.sender?.fullName ?? result.sender?.username ?? null,
@@ -924,15 +925,14 @@ export async function sendStructuredMessageActionV2(params: {
                 conversationId,
                 sourceMessageId: result.messageRow.id,
                 secondaryText: structured.summary,
+            }).catch((notificationError) => {
+                logger.warn("messages.structured_burst_notification_failed", {
+                    module: "messaging",
+                    conversationId,
+                    messageId: result.messageRow.id,
+                    error: notificationError instanceof Error ? notificationError.message : String(notificationError),
+                });
             });
-        } catch (notificationError) {
-            logger.warn("messages.structured_burst_notification_failed", {
-                module: "messaging",
-                conversationId,
-                messageId: result.messageRow.id,
-                error: notificationError instanceof Error ? notificationError.message : String(notificationError),
-            });
-        }
 
         if (result.workflowItemId && structured.entityRefs.profileId && !params.projectInvitationId) {
             try {

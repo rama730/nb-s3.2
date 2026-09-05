@@ -45,9 +45,11 @@ import {
   gt,
   lte,
 } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { redis, getCachedData, cacheData } from "@/lib/redis";
 import { revalidatePath, revalidateTag, unstable_cache } from "next/cache";
+import { getViewerIdentityContext } from "@/lib/server/viewer-context";
 import {
   CreateProjectInput,
   validateAndSanitizeLifecycleStages,
@@ -1314,13 +1316,17 @@ async function resolveProjectDetailTarget(
       )
     : and(isNull(projects.deletedAt), eq(projects.slug, trimmed));
 
-  const [project] = await retryProjectDetailRead(
+  const project = await retryProjectDetailRead(
     "resolve_project_detail_target",
     async () => {
+      const ownerProfiles = alias(profiles, "project_detail_owner_profiles");
       const q = db
         .select({
           id: projects.id,
           ownerId: projects.ownerId,
+          ownerUsername: ownerProfiles.username,
+          ownerFullName: ownerProfiles.fullName,
+          ownerAvatarUrl: ownerProfiles.avatarUrl,
           conversationId: projects.conversationId,
           title: projects.title,
           slug: projects.slug,
@@ -1358,7 +1364,8 @@ async function resolveProjectDetailTarget(
             ? sql<boolean>`${projectFollows.id} IS NOT NULL`
             : sql<boolean>`false`,
         })
-        .from(projects);
+        .from(projects)
+        .leftJoin(ownerProfiles, eq(projects.ownerId, ownerProfiles.id));
 
       if (actorUserId) {
         q.leftJoin(
@@ -1376,7 +1383,19 @@ async function resolveProjectDetailTarget(
         );
       }
 
-      return q.where(where).limit(1);
+      const [row] = await q.where(where).limit(1);
+      if (!row) return null;
+      return {
+        ...row,
+        owner: row.ownerId
+          ? {
+              id: row.ownerId,
+              username: row.ownerUsername ?? null,
+              fullName: row.ownerFullName ?? null,
+              avatarUrl: row.ownerAvatarUrl ?? null,
+            }
+          : null,
+      };
     },
   );
 
@@ -1432,20 +1451,31 @@ async function fetchProjectDetailShellData(
   viewerId: string | null,
   projectVisibility: string,
   canSeePrivateAttribution: boolean,
+  prefetchedOwner?: {
+    id: string;
+    username: string | null;
+    fullName: string | null;
+    avatarUrl: string | null;
+  } | null,
 ) {
   const startedAt = performance.now();
+  const ownerQuery =
+    prefetchedOwner !== undefined
+      ? Promise.resolve(prefetchedOwner ? [prefetchedOwner] : [])
+      : db
+          .select({
+            id: profiles.id,
+            username: profiles.username,
+            fullName: profiles.fullName,
+            avatarUrl: profiles.avatarUrl,
+          })
+          .from(profiles)
+          .where(eq(profiles.id, ownerId))
+          .limit(1);
+
   const [ownerRows, followersResult, membersResult, rolesResult, readmeRows, guidanceRows] =
     await Promise.all([
-      db
-        .select({
-          id: profiles.id,
-          username: profiles.username,
-          fullName: profiles.fullName,
-          avatarUrl: profiles.avatarUrl,
-        })
-        .from(profiles)
-        .where(eq(profiles.id, ownerId))
-        .limit(1),
+      ownerQuery,
       includeFollowersCount
         ? db
             .select({ count: sql<number>`count(*)::int` })
@@ -1862,8 +1892,8 @@ export async function readProjectDetailShell(input: {
   slugOrId: string;
   actorUserId?: string | null;
 }): Promise<ProjectDetailShellResult> {
-  const parsedInput = projectDetailInputSchema.safeParse(input);
-  if (!parsedInput.success) {
+  const slugOrId = input.slugOrId?.trim();
+  if (!slugOrId || slugOrId.length > 200) {
     return {
       success: false,
       errorCode: "INVALID_INPUT",
@@ -1871,8 +1901,7 @@ export async function readProjectDetailShell(input: {
     };
   }
 
-  const { slugOrId, actorUserId: requestedActorUserId = null } =
-    parsedInput.data;
+  const requestedActorUserId = input.actorUserId ?? null;
   const startedAt = performance.now();
 
   try {
@@ -1933,6 +1962,7 @@ export async function readProjectDetailShell(input: {
                 actorUserId,
                 project.visibility ?? "private",
                 isOwner || isMember,
+                project.owner,
               ),
             );
 
@@ -6523,22 +6553,15 @@ export async function toggleProjectFollowAction(
       await lockProjectUserPair(tx, projectId, user.id);
 
       if (shouldFollow) {
-        const [existing] = await tx
-          .select({ id: projectFollows.id })
-          .from(projectFollows)
-          .where(
-            and(
-              eq(projectFollows.userId, user.id),
-              eq(projectFollows.projectId, projectId),
-            ),
-          )
-          .limit(1);
+        const inserted = await tx
+          .insert(projectFollows)
+          .values({ userId: user.id, projectId })
+          .onConflictDoNothing({
+            target: [projectFollows.projectId, projectFollows.userId],
+          })
+          .returning({ id: projectFollows.id });
 
-        if (!existing) {
-          await tx
-            .insert(projectFollows)
-            .values({ userId: user.id, projectId });
-
+        if (inserted.length > 0) {
           const [updated] = await tx
             .update(projects)
             .set({ followersCount: sql`${projects.followersCount} + 1` })
@@ -6651,12 +6674,20 @@ export async function incrementProjectViewAction(
       return { success: true, viewCount: Number(updated?.viewCount ?? 1) };
     } else {
       const bufferedVal = await redis!.hincrby("project:views", projectId, 1);
-      const [dbRow] = await db
-        .select({ viewCount: projects.viewCount })
-        .from(projects)
-        .where(eq(projects.id, projectId))
-        .limit(1);
-      const dbVal = dbRow?.viewCount ?? 0;
+      const cacheKey = `project:views:base:${projectId}`;
+      let dbVal: number;
+      const cached = await redis!.get(cacheKey);
+      if (cached !== null) {
+        dbVal = parseInt(cached as string, 10) || 0;
+      } else {
+        const [dbRow] = await db
+          .select({ viewCount: projects.viewCount })
+          .from(projects)
+          .where(eq(projects.id, projectId))
+          .limit(1);
+        dbVal = dbRow?.viewCount ?? 0;
+        await redis!.set(cacheKey, dbVal, { ex: 60 });
+      }
       return { success: true, viewCount: dbVal + bufferedVal };
     }
   } catch (e) {
@@ -6943,7 +6974,6 @@ async function fetchProjectTasksForActor(
             searchPattern
               ? or(
                   ilike(t.title, searchPattern),
-                  ilike(t.description, searchPattern),
                   taskNumberSearch !== null
                     ? eq(t.taskNumber, taskNumberSearch)
                     : undefined,
@@ -7030,7 +7060,7 @@ async function fetchProjectTasksForActor(
       const hasMore = projectTasks.length > safeLimit;
       const limitedTasks = projectTasks.slice(0, safeLimit);
       const taskIds = limitedTasks.map((task) => task.id);
-      const countRows = taskIds.length === 0
+      const countRows = taskIds.length === 0 || surface === "preview"
         ? []
         : Array.from(await db.execute<{
             task_id: string;
@@ -7043,11 +7073,9 @@ async function fetchProjectTasksForActor(
             new_comment_count: number;
           }>(sql`
             WITH selected_tasks AS (
-              SELECT task.id, task.created_at, receipt.last_read_at
+              SELECT task.id, task.created_at, ${actorId ? sql`receipt.last_read_at` : sql`NULL::timestamptz`} AS last_read_at
               FROM tasks task
-              LEFT JOIN task_read_receipts receipt
-                ON receipt.task_id = task.id
-               AND receipt.user_id = ${actorId}::uuid
+              ${actorId ? sql`LEFT JOIN task_read_receipts receipt ON receipt.task_id = task.id AND receipt.user_id = ${actorId}::uuid` : sql``}
               WHERE task.id IN (${sql.join(taskIds.map((id) => sql`${id}::uuid`), sql`, `)})
             ), subtask_counts AS (
               SELECT subtask.task_id,
@@ -7502,6 +7530,11 @@ async function applySprintCreatorSnapshots(
   sprints: SprintListItem[],
 ) {
   if (sprints.length === 0) return sprints;
+  const missingSprintIds = sprints
+    .filter((s) => !s.creator?.fullName)
+    .map((s) => s.id);
+  if (missingSprintIds.length === 0) return sprints;
+
   try {
     const events = await db
       .select({
@@ -7514,6 +7547,7 @@ async function applySprintCreatorSnapshots(
         and(
           eq(projectSprintEvents.projectId, projectId),
           eq(projectSprintEvents.eventType, "created"),
+          inArray(projectSprintEvents.sprintId, missingSprintIds),
         ),
       )
       .orderBy(desc(projectSprintEvents.createdAt));
@@ -7783,27 +7817,28 @@ async function readProjectSprintListItem(projectId: string, sprintId: string) {
 
 async function readSprintSummary(sprintId: string) {
   const rows = await db.execute<SprintSummaryQueryRow>(sql`
+        WITH sprint_tasks AS (
+            SELECT DISTINCT ON (m.task_id)
+                t.id,
+                t.status,
+                t.story_points
+            FROM ${sprintTaskMemberships} m
+            JOIN ${tasks} t ON t.id = m.task_id AND t.deleted_at IS NULL
+            WHERE m.sprint_id = ${sprintId} AND m.removed_at IS NULL
+        )
         SELECT
-            (SELECT COUNT(*)::int FROM ${tasks} t WHERE EXISTS (SELECT 1 FROM ${sprintTaskMemberships} m WHERE m.task_id = t.id AND m.sprint_id = ${sprintId})) AS total_tasks,
-            (SELECT COUNT(*)::int FROM ${tasks} t WHERE t.status = 'done' AND EXISTS (SELECT 1 FROM ${sprintTaskMemberships} m WHERE m.task_id = t.id AND m.sprint_id = ${sprintId})) AS completed_tasks,
-            (SELECT COUNT(*)::int FROM ${tasks} t WHERE t.status = 'blocked' AND EXISTS (SELECT 1 FROM ${sprintTaskMemberships} m WHERE m.task_id = t.id AND m.sprint_id = ${sprintId})) AS blocked_tasks,
+            COUNT(*)::int AS total_tasks,
+            COUNT(*) FILTER (WHERE st.status = 'done')::int AS completed_tasks,
+            COUNT(*) FILTER (WHERE st.status = 'blocked')::int AS blocked_tasks,
             (
                 SELECT COUNT(*)::int
                 FROM ${taskNodeLinks} lnk
-                INNER JOIN ${tasks} t ON t.id = lnk.task_id
-                INNER JOIN ${projectNodes} node ON node.id = lnk.node_id AND node.deleted_at IS NULL
-                WHERE EXISTS (SELECT 1 FROM ${sprintTaskMemberships} m WHERE m.task_id = t.id AND m.sprint_id = ${sprintId})
+                JOIN ${projectNodes} node ON node.id = lnk.node_id AND node.deleted_at IS NULL
+                WHERE lnk.task_id IN (SELECT id FROM sprint_tasks)
             ) AS linked_file_count,
-            (
-                SELECT COALESCE(SUM(COALESCE(t.story_points, 0)), 0)::int
-                FROM ${tasks} t
-                WHERE EXISTS (SELECT 1 FROM ${sprintTaskMemberships} m WHERE m.task_id = t.id AND m.sprint_id = ${sprintId})
-            ) AS total_story_points,
-            (
-                SELECT COALESCE(SUM(COALESCE(t.story_points, 0)), 0)::int
-                FROM ${tasks} t
-                WHERE t.status = 'done' AND EXISTS (SELECT 1 FROM ${sprintTaskMemberships} m WHERE m.task_id = t.id AND m.sprint_id = ${sprintId})
-            ) AS completed_story_points
+            COALESCE(SUM(COALESCE(st.story_points, 0)), 0)::int AS total_story_points,
+            COALESCE(SUM(COALESCE(st.story_points, 0)) FILTER (WHERE st.status = 'done'), 0)::int AS completed_story_points
+        FROM sprint_tasks st
     `);
 
   const row = Array.from(rows)[0] ?? {
@@ -8529,11 +8564,9 @@ export async function getProjectTaskDetailAction(
   taskId: string,
 ) {
   try {
-    const supabase = await createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    await assertProjectReadAccess(projectId, user?.id ?? null);
+    const viewerIdentity = await getViewerIdentityContext();
+    const actorId = viewerIdentity.user?.id ?? null;
+    await assertProjectReadAccess(projectId, actorId);
 
     const isUuid = isLooseUuid(taskId);
     let taskWhere;
@@ -11289,6 +11322,7 @@ export async function retryGithubImportAction(
     const githubConnection = buildGithubAccountConnectionState(user);
     const githubAccountHealth = await resolveGithubExternalAccountHealth({
       linked: githubConnection.linked,
+      githubId: githubConnection.githubId,
       username: githubConnection.username,
     });
     const accessCheck = await ensureGithubImportAccess(normalizedRepoUrl, {
