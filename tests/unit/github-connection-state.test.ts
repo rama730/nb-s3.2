@@ -28,6 +28,7 @@ describe("github connection state", () => {
         {
           provider: "github",
           identity_data: {
+            provider_id: "730",
             user_name: "rama730",
           },
         },
@@ -36,6 +37,7 @@ describe("github connection state", () => {
 
     assert.deepEqual(buildGithubAccountConnectionState(user), {
       linked: true,
+      githubId: 730,
       username: "rama730",
       avatarUrl: null,
       fullName: null,
@@ -53,9 +55,22 @@ describe("github connection state", () => {
 
     assert.deepEqual(buildGithubAccountConnectionState(user), {
       linked: false,
+      githubId: null,
       username: null,
       avatarUrl: null,
       fullName: null,
     });
+  });
+
+  it("does not resurrect a detached identity from stale app metadata", () => {
+    const user = createUser({
+      app_metadata: {
+        provider: "google",
+        providers: ["google", "github"],
+      },
+      identities: [{ provider: "google" }] as User["identities"],
+    });
+
+    assert.equal(buildGithubAccountConnectionState(user).linked, false);
   });
 });

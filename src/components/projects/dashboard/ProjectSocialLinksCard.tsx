@@ -489,7 +489,7 @@ export const ProjectLinkEditorFields = forwardRef<ProjectLinkEditorHandle, {
                         </label>
                     </div>
                 ) : null}
-                <p className="mt-2 break-words text-xs leading-5 text-zinc-500">{projectTypeHint} Member-only hides the destination in Edge; it does not change access on the external service.</p>
+                <p className="mt-2 break-words text-xs leading-5 text-zinc-500">{projectTypeHint} Member-only hides the destination in NetworkBase; it does not change access on the external service.</p>
                 {sensitiveParameters.length ? <p role="alert" className="mt-2 flex items-start gap-1.5 text-xs leading-5 text-amber-700 dark:text-amber-300"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />This URL contains credential-like parameters ({sensitiveParameters.join(', ')}). Confirm it is safe to share before saving.</p> : null}
                 {url.trim() && candidate?.success === false ? <p role="alert" className="mt-2 text-xs text-red-600">{candidate.error}</p> : null}
                 {error ? <p role="alert" className="mt-2 text-xs text-red-600">{error}</p> : null}
@@ -658,7 +658,7 @@ export function ProjectLinkCluster({
                     </Tooltip>
                 ) : null}
             </div>
-            {canManage ? <ProjectLinksManager projectId={projectId} links={savedLinks} githubRepoUrl={githubRepoUrl} health={health} projectType={projectType} open={editorOpen} onOpenChange={setEditorOpen} onSaved={setSavedLinks} /> : null}
+            {canManage && editorOpen ? <ProjectLinksManager projectId={projectId} links={savedLinks} githubRepoUrl={githubRepoUrl} health={health} projectType={projectType} open={editorOpen} onOpenChange={setEditorOpen} onSaved={setSavedLinks} /> : null}
         </TooltipProvider>
     );
 }

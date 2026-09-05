@@ -450,14 +450,14 @@ function AuthorizationFrame({
                         <div className="flex items-center justify-between gap-3">
                             <div className="flex items-center gap-3">
                                 <div className="flex size-10 items-center justify-center rounded-lg bg-blue-600 text-lg font-semibold text-white shadow-[0_12px_30px_rgba(37,99,235,0.25)]">
-                                    E
+                                    N
                                 </div>
                                 <div>
                                     <p className="text-sm font-semibold text-zinc-950 dark:text-zinc-50">
                                         Extension Connection
                                     </p>
                                     <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                                        Connect {editorName} to Edge
+                                        Connect {editorName} to NetworkBase
                                     </p>
                                 </div>
                             </div>

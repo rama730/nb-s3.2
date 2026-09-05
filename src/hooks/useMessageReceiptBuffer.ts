@@ -19,8 +19,19 @@ function isReceiptEligibleConversationId(conversationId: string | null): convers
     return Boolean(conversationId && !conversationId.startsWith('draft:'));
 }
 
+const MAX_GLOBAL_RECEIPTS = 2_000;
 const globalFlushedReceipts = new Set<string>();
 const globalInFlightReceipts = new Set<string>();
+
+function trackFlushedReceipt(id: string) {
+    if (globalFlushedReceipts.size >= MAX_GLOBAL_RECEIPTS) {
+        const oldest = globalFlushedReceipts.keys().next().value;
+        if (typeof oldest === 'string') {
+            globalFlushedReceipts.delete(oldest);
+        }
+    }
+    globalFlushedReceipts.add(id);
+}
 
 export function useMessageReceiptBuffer({
     viewerId,
@@ -50,7 +61,7 @@ export function useMessageReceiptBuffer({
                 throw new Error(result.error || 'Receipt write failed');
             }
             for (const id of ids) {
-                flushedRef.current.add(id);
+                trackFlushedReceipt(id);
                 inFlightRef.current.delete(id);
             }
         } catch {

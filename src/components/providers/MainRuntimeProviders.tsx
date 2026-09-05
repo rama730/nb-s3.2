@@ -31,7 +31,7 @@ export function MainRuntimeProviders({
           <MessageAttentionProvider>
             {children}
             <ChatPopupV2 />
-            <LazyChatProvider presenceEnabled={isMessagesRoute || popupOpen} />
+            <LazyChatProvider presenceEnabled={true} />
           </MessageAttentionProvider>
         </PeopleNotificationsProvider>
       </RealtimeProvider>

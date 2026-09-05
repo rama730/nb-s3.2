@@ -41,7 +41,7 @@ export async function generateMetadata({ params }: { params: Promise<{ username:
     const route = await readPublicProfileRoute(username);
     if (route.status === 'not_found' || route.data.privacyStatus === 'not_found' || !route.data.profile || route.data.lockedShell) {
         return buildRouteMetadata({
-            title: 'Profile Not Found | Edge',
+            title: 'Profile Not Found | NetworkBase',
             description: 'The requested profile could not be found.',
             path: `/u/${encodeURIComponent(route.currentUsername)}`,
         });

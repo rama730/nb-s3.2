@@ -5,7 +5,8 @@ export type TypingDisplayUser = {
 };
 
 export function getTypingDisplayName(user: TypingDisplayUser) {
-  return user.fullName || user.username || "Someone";
+  const name = user.fullName?.trim() || user.username?.trim();
+  return name || "Someone";
 }
 
 export function getTypingStatusText(

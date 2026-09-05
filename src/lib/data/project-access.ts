@@ -4,7 +4,7 @@ import {
     isProjectPubliclyReadableVisibility,
     type ProjectVisibilityInput,
 } from "@/lib/projects/project-visibility";
-import { and, eq, isNull, inArray, or, type SQL } from "drizzle-orm";
+import { and, eq, isNull, inArray, or, sql, type SQL } from "drizzle-orm";
 
 // `projects.visibility` has a database default but is not declared NOT NULL,
 // so DB-selected values must remain nullable-safe and fail closed downstream.
@@ -54,7 +54,11 @@ export function computeProjectWriteAccess(isOwner: boolean, memberRole: MemberRo
 }
 
 async function getProjectAccess(where: SQL<unknown>, userId: string | null): Promise<ProjectAccess> {
-    const [project] = await db
+    const memberJoinCondition = userId
+        ? and(eq(projectMembers.projectId, projects.id), eq(projectMembers.userId, userId))
+        : sql`FALSE`;
+
+    const [row] = await db
         .select({
             id: projects.id,
             ownerId: projects.ownerId,
@@ -64,12 +68,15 @@ async function getProjectAccess(where: SQL<unknown>, userId: string | null): Pro
             publicTabVisibility: projects.publicTabVisibility,
             importSource: projects.importSource,
             syncStatus: projects.syncStatus,
+            memberRole: projectMembers.role,
+            fileUploadEnabled: projectMembers.fileUploadEnabled,
         })
         .from(projects)
+        .leftJoin(projectMembers, memberJoinCondition)
         .where(and(where, isNull(projects.deletedAt)))
         .limit(1);
 
-    if (!project) {
+    if (!row) {
         return {
             project: null,
             isOwner: false,
@@ -81,27 +88,27 @@ async function getProjectAccess(where: SQL<unknown>, userId: string | null): Pro
         };
     }
 
-    let isOwner = false;
+    const isOwner = Boolean(userId && row.ownerId === userId);
     let isMember = false;
     let memberRole: MemberRole = null;
     let member: ProjectAccess["member"] = null;
 
-    if (userId) {
-        isOwner = project.ownerId === userId;
-        if (!isOwner) {
-            const [memberRow] = await db
-                .select({ role: projectMembers.role, fileUploadEnabled: projectMembers.fileUploadEnabled })
-                .from(projectMembers)
-                .where(and(eq(projectMembers.projectId, project.id), eq(projectMembers.userId, userId)))
-                .limit(1);
-
-            if (memberRow) {
-                isMember = true;
-                memberRole = (memberRow.role as MemberRole) || "member";
-                member = { role: memberRole, fileUploadEnabled: memberRow.fileUploadEnabled };
-            }
-        }
+    if (userId && !isOwner && row.memberRole) {
+        isMember = true;
+        memberRole = (row.memberRole as MemberRole) || "member";
+        member = { role: memberRole, fileUploadEnabled: row.fileUploadEnabled };
     }
+
+    const project = {
+        id: row.id,
+        ownerId: row.ownerId,
+        visibility: row.visibility,
+        status: row.status,
+        slug: row.slug,
+        publicTabVisibility: row.publicTabVisibility,
+        importSource: row.importSource,
+        syncStatus: row.syncStatus,
+    };
 
     const canRead = computeProjectReadAccess(project.visibility, project.status, isOwner, isMember);
     const canWrite = computeProjectWriteAccess(isOwner, memberRole);

@@ -10,7 +10,6 @@ import { toast } from "sonner";
 import { SprintHeader } from "@/components/projects/tabs/sprint/SprintHeader";
 import { SprintLeftRail } from "@/components/projects/tabs/sprint/SprintLeftRail";
 import { SprintTimelineContent } from "@/components/projects/tabs/sprint/SprintTimelineContent";
-import { SprintLifecycleModals } from "@/components/projects/tabs/sprint/SprintLifecycleModals";
 import {
   archiveSprintAction,
   cancelSprintAction,
@@ -40,6 +39,14 @@ import { cn } from "@/lib/utils";
 
 const CreateSprintModal = dynamic(
   () => import("@/components/projects/v2/sprints/CreateSprintModal"),
+  { ssr: false },
+);
+
+const SprintLifecycleModals = dynamic(
+  () =>
+    import("@/components/projects/tabs/sprint/SprintLifecycleModals").then(
+      (mod) => mod.SprintLifecycleModals,
+    ),
   { ssr: false },
 );
 
@@ -454,17 +461,19 @@ export default function SprintPlanning({
         />
       ) : null}
 
-      <SprintLifecycleModals
-        selectedSprint={selectedSprint}
-        sprints={detail.sprints}
-        summary={detail.summary}
-        isMutating={isMutatingLifecycle}
-        openModal={activeModal}
-        onClose={() => setActiveModal(null)}
-        onConfirmComplete={completeSelectedSprint}
-        onConfirmArchive={archiveSelectedSprint}
-        onConfirmCancel={cancelSelectedSprint}
-      />
+      {activeModal ? (
+        <SprintLifecycleModals
+          selectedSprint={selectedSprint}
+          sprints={detail.sprints}
+          summary={detail.summary}
+          isMutating={isMutatingLifecycle}
+          openModal={activeModal}
+          onClose={() => setActiveModal(null)}
+          onConfirmComplete={completeSelectedSprint}
+          onConfirmArchive={archiveSelectedSprint}
+          onConfirmCancel={cancelSelectedSprint}
+        />
+      ) : null}
     </>
   );
 }

@@ -66,7 +66,16 @@ export function useProjectDocReferenceOptions(projectId: string, kind: ProjectDo
     });
 }
 
+const MAX_SMART_BLOCK_CACHE_SIZE = 150;
 const SMART_BLOCK_CACHE = new Map<string, ProjectDocSmartBlockPreview>();
+
+function setCachedSmartBlock(key: string, preview: ProjectDocSmartBlockPreview) {
+    if (SMART_BLOCK_CACHE.size >= MAX_SMART_BLOCK_CACHE_SIZE) {
+        const firstKey = SMART_BLOCK_CACHE.keys().next().value;
+        if (firstKey) SMART_BLOCK_CACHE.delete(firstKey);
+    }
+    SMART_BLOCK_CACHE.set(key, preview);
+}
 
 export function useProjectDocSmartBlockPreviews(projectId: string, blocks: ProjectDocSmartBlock[], enabled = true) {
     const blockSignature = useMemo(() => {
@@ -120,7 +129,7 @@ export function useProjectDocSmartBlockPreviews(projectId: string, blocks: Proje
                     if (!result.success) throw new Error(result.error);
                     for (const preview of result.previews) {
                         const cacheKey = `${projectId}:${preview.key}`;
-                        SMART_BLOCK_CACHE.set(cacheKey, preview);
+                        setCachedSmartBlock(cacheKey, preview);
                         previews.push(preview);
                     }
                 }
@@ -136,7 +145,7 @@ export function useProjectDocSmartBlockPreviews(projectId: string, blocks: Proje
 export const PROJECT_MARKDOWNS_LIST_QUERY_KEY = (projectId: string) =>
     ["project", projectId, "detail", "markdowns_list"] as const;
 
-export function useProjectMarkdowns(projectId: string) {
+export function useProjectMarkdowns(projectId: string, enabled = true) {
     return useQuery({
         queryKey: PROJECT_MARKDOWNS_LIST_QUERY_KEY(projectId),
         queryFn: async () => {
@@ -147,5 +156,6 @@ export function useProjectMarkdowns(projectId: string) {
         },
         staleTime: 1000 * 60 * 5,
         refetchOnWindowFocus: false,
+        enabled,
     });
 }

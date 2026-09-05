@@ -290,8 +290,8 @@ async function broadcastTyping(entry: PresenceRoomEntry, event: PresenceClientEv
       userId,
       typing: event.isTyping,
       typingContext: event.context,
-      userName: null,
-      profile: event.profile,
+      userName: event.profile?.fullName ?? event.profile?.username ?? null,
+      profile: event.profile ?? null,
   };
 
   try {
@@ -335,6 +335,12 @@ function setupChannel(roomType: PresenceRoomType, roomId: string, connectionId: 
       );
       if (!authenticatedMember) return;
 
+      const profile = payload.profile ?? authenticatedMember.profile ?? null;
+      if (payload.profile && !authenticatedMember.profile) {
+        authenticatedMember.profile = payload.profile;
+      }
+      const userName = payload.userName ?? profile?.fullName ?? profile?.username ?? authenticatedMember.userName ?? null;
+
       const memberEvent: PresenceServerEvent = {
         type: "presence.delta",
         action: payload.typing ? "upsert" : "leave",
@@ -350,8 +356,8 @@ function setupChannel(roomType: PresenceRoomType, roomId: string, connectionId: 
             cursorFrame: null,
             typing: payload.typing,
             typingContext: payload.typingContext ?? null,
-            userName: payload.userName ?? null,
-            profile: authenticatedMember.profile ?? null,
+            userName,
+            profile,
         }
       };
 

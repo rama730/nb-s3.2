@@ -1,13 +1,34 @@
 import type { User } from "@supabase/supabase-js";
 
-import { getLinkedAccountProviders } from "@/lib/auth/account-identity";
-
 export type GithubAccountConnectionState = {
   linked: boolean;
+  githubId: number | null;
   username: string | null;
   avatarUrl: string | null;
   fullName: string | null;
 };
+
+function readGithubIdentityId(identity: unknown): number | null {
+  if (!identity || typeof identity !== "object") return null;
+  const record = identity as Record<string, unknown>;
+  const identityData =
+    record.identity_data && typeof record.identity_data === "object"
+      ? (record.identity_data as Record<string, unknown>)
+      : null;
+
+  // GitHub's numeric account id survives login renames. Supabase's own
+  // identity UUID is deliberately excluded because it is not a GitHub id.
+  for (const candidate of [identityData?.provider_id, identityData?.sub]) {
+    const parsed =
+      typeof candidate === "number"
+        ? candidate
+        : typeof candidate === "string" && /^\d+$/.test(candidate.trim())
+          ? Number(candidate)
+          : Number.NaN;
+    if (Number.isSafeInteger(parsed) && parsed > 0) return parsed;
+  }
+  return null;
+}
 
 type ProviderSession = {
   provider_token?: unknown;
@@ -29,6 +50,25 @@ export function getLinkedGithubIdentityIds(
       }
     }
   }
+
+  // Fall back to user metadata when the identities list was not loaded (e.g. from JWT snapshot)
+  if (ids.size === 0 && user) {
+    const appProviders = Array.isArray(user.app_metadata?.providers)
+      ? user.app_metadata.providers
+      : [];
+    if (
+      appProviders.some((p) => typeof p === "string" && p.trim().toLowerCase() === "github") ||
+      user.app_metadata?.provider === "github"
+    ) {
+      const meta = (user.user_metadata || {}) as Record<string, unknown>;
+      for (const candidate of [meta.provider_id, meta.sub]) {
+        if (candidate !== null && candidate !== undefined && String(candidate)) {
+          ids.add(String(candidate));
+        }
+      }
+    }
+  }
+
   return ids;
 }
 
@@ -136,13 +176,13 @@ export function buildGithubAccountConnectionState(
   if (!user) {
     return {
       linked: false,
+      githubId: null,
       username: null,
       avatarUrl: null,
       fullName: null,
     };
   }
 
-  const linked = getLinkedAccountProviders(user).includes("github");
   const githubIdentity = Array.isArray(user.identities)
     ? user.identities.find(
         (identity) =>
@@ -151,8 +191,12 @@ export function buildGithubAccountConnectionState(
           identity.provider.trim().toLowerCase() === "github",
       )
     : null;
+  // The identity list is the authoritative link state. app_metadata can lag
+  // briefly after unlinking and must not resurrect a detached provider.
+  const linked = Boolean(githubIdentity);
 
   let username = readGithubIdentityUsername(githubIdentity);
+  const githubId = readGithubIdentityId(githubIdentity);
   let avatarUrl = readGithubIdentityAvatar(githubIdentity);
   let fullName = readGithubIdentityFullName(githubIdentity);
 
@@ -189,6 +233,7 @@ export function buildGithubAccountConnectionState(
 
   return {
     linked,
+    githubId,
     username,
     avatarUrl,
     fullName,

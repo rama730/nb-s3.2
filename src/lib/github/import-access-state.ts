@@ -12,18 +12,46 @@ import { validateGithubUserAccessToken } from '@/lib/github/user-access-token';
 export async function getGithubImportAccessState() {
   const supabase = await createClient();
   const [
-    { data: { user } },
+    { data: initialUserData },
     { data: { session } },
   ] = await Promise.all([
     supabase.auth.getUser(),
     supabase.auth.getSession(),
   ]);
 
+  let user = initialUserData.user;
+
   if (!user?.id) {
     return {
       success: false as const,
       error: 'Unauthorized. Please sign in first.',
     };
+  }
+
+  if (!Array.isArray(user.identities) || user.identities.length === 0) {
+    try {
+      const { db } = await import('@/lib/db');
+      const { sql } = await import('drizzle-orm');
+      const identitiesResult = await db.execute<{
+        id: string;
+        provider: string;
+        identity_data: Record<string, unknown> | null;
+      }>(
+        sql`SELECT id, provider, identity_data FROM auth.identities WHERE user_id = ${user.id}::uuid ORDER BY last_sign_in_at DESC NULLS LAST, created_at DESC`,
+      );
+      if (Array.isArray(identitiesResult) && identitiesResult.length > 0) {
+        user = {
+          ...user,
+          identities: identitiesResult.map((row) => ({
+            id: String(row.id),
+            provider: String(row.provider),
+            identity_data: (row.identity_data || {}) as Record<string, unknown>,
+          })) as any,
+        };
+      }
+    } catch {
+      // Ignore if db unavailable
+    }
   }
 
   const githubConnection = buildGithubAccountConnectionState(user);
@@ -47,6 +75,7 @@ export async function getGithubImportAccessState() {
   }
   const accountHealth = await resolveGithubExternalAccountHealth({
     linked: githubConnection.linked,
+    githubId: githubConnection.githubId,
     username: githubConnection.username,
   });
   const accountCanAuthorize = accountHealth.state !== 'unavailable';

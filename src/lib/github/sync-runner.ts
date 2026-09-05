@@ -6,6 +6,8 @@ import {
   projects,
   projectNodes,
   fileVersions,
+  tasks,
+  projectUpdates,
   githubSyncRuns,
   githubSyncConnections,
   githubSyncFiles,
@@ -281,7 +283,7 @@ export async function runReviewedGitHubSync(
     if (manifest.newRepository && !result.repositoryCreated) {
       await update({ stage: "Creating repository" });
       const spec = manifest.newRepository;
-      const marker = `Edge synchronization ${runId}`;
+      const marker = `NetworkBase synchronization ${runId}`;
       if (!spec.organization) {
         const account = await syncGithub<{ login: string }>(ctx.token, "/user");
         if (account.login.toLowerCase() !== spec.owner.toLowerCase())
@@ -398,7 +400,9 @@ export async function runReviewedGitHubSync(
             readContent: (key) => readStoredSyncContent(projectId, key),
             beforePush: async (commitSha, branch) => {
               await requireSyncOwner(projectId, actorId);
-              await validateReviewedLocalFiles(projectId, manifest);
+              // Content was verified while materializing the commit; only the
+              // current node identities need a final race check before push.
+              await validateReviewedLocalFiles(projectId, manifest, [], false);
               result = { ...result, commitSha, branch };
               await update({
                 result,
@@ -426,11 +430,11 @@ export async function runReviewedGitHubSync(
             "POST",
             {
               title: (
-                manifest.message.split("\n")[0] || "Update from Edge"
+                manifest.message.split("\n")[0] || "Update from NetworkBase"
               ).slice(0, 200),
               head: result.branch,
               base: manifest.branch,
-              body: `Reviewed publication from Edge.\n\nOperation: ${runId}\n\n${manifest.files.length} selected file(s).`,
+              body: `Reviewed publication from NetworkBase.\n\nOperation: ${runId}\n\n${manifest.files.length} selected file(s).`,
             },
           ));
         result = {
@@ -728,6 +732,57 @@ export async function runReviewedGitHubSync(
         { operationId: runId, ...result, fileCount: manifest.files.length },
         tx,
       );
+
+      // Automated Task Directive: Closes/Fixes #KEY transitions task to done
+      if (manifest.message) {
+        const directiveMatch = manifest.message.match(
+          /\b(?:closes?|fix(?:es)?|resolv(?:es?))\s+#?([A-Za-z0-9_-]+)/i,
+        );
+        if (directiveMatch && directiveMatch[1]) {
+          const rawKey = directiveMatch[1];
+          const numMatch = rawKey.match(/(\d+)$/);
+          if (numMatch && numMatch[1]) {
+            const taskNum = parseInt(numMatch[1], 10);
+            await tx
+              .update(tasks)
+              .set({ status: "done", updatedAt: new Date() })
+              .where(
+                and(
+                  eq(tasks.projectId, projectId),
+                  eq(tasks.taskNumber, taskNum),
+                ),
+              )
+              .catch(() => null);
+          }
+        }
+      }
+
+      // Automated Ecosystem Broadcast to Project Updates
+      if (manifest.direction === "push") {
+        const commitShort = result.commitSha ? result.commitSha.slice(0, 7) : "";
+        const updateContent = result.pullRequestUrl
+          ? `Opened Pull Request #${result.pullRequestNumber || ""} on branch \`${manifest.branch}\` with ${manifest.files.length} files.`
+          : `Synchronized ${manifest.files.length} ${manifest.files.length === 1 ? "file" : "files"} to \`${manifest.branch}\` on GitHub${commitShort ? ` (commit \`${commitShort}\`)` : ""}.`;
+
+        await tx
+          .insert(projectUpdates)
+          .values({
+            projectId,
+            authorId: actorId,
+            content: updateContent,
+            updateType: "progress",
+            visibility: "members",
+            replyPolicy: "members",
+            metadata: {
+              source: "github_sync",
+              commitSha: result.commitSha,
+              pullRequestUrl: result.pullRequestUrl,
+              branch: manifest.branch,
+              fileCount: manifest.files.length,
+            },
+          })
+          .catch(() => null);
+      }
       if (manifest.direction === "pull")
         await tx
           .update(githubSyncConnections)

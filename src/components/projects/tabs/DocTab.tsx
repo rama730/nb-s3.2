@@ -17,17 +17,19 @@ export default function DocTab({
     projectId: string;
     project: Project;
 }) {
-    const markdownsQuery = useProjectMarkdowns(projectId);
+    const searchParams = useSearchParams();
+    const paramDoc = searchParams?.get("doc");
+    const markdownsQuery = useProjectMarkdowns(projectId, !paramDoc);
     const markdowns = markdownsQuery.data || [];
     const defaultDocSlug = useMemo(() => {
+        if (paramDoc) return paramDoc;
         if (markdowns.length === 0) return "readme";
         const hasReadme = markdowns.some((m) => m.slug === "readme");
         if (hasReadme) return "readme";
         return markdowns[0]?.slug || "readme";
-    }, [markdowns]);
+    }, [markdowns, paramDoc]);
 
-    const searchParams = useSearchParams();
-    const rawDocSlug = searchParams?.get("doc") || defaultDocSlug;
+    const rawDocSlug = paramDoc || defaultDocSlug;
     const docSlug = useMemo(() => normalizeProjectDocSlug(rawDocSlug), [rawDocSlug]);
 
     const readmeQuery = useProjectDoc(projectId, docSlug);

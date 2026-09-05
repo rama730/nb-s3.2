@@ -2,6 +2,19 @@ import { createHash } from "node:crypto";
 import { GITHUB_SYNC_LIMITS } from "./sync-limits";
 
 export { GITHUB_SYNC_LIMITS as SYNC_LIMITS } from "./sync-limits";
+export const GITHUB_WORKFLOW_PERMISSION_ERROR =
+  "GitHub workflow permission is required to publish files in .github/workflows. Authorize workflow publishing, then retry this reviewed operation.";
+
+export function includesGithubWorkflowFiles(paths: Iterable<string>) {
+  for (const path of paths) {
+    if (path.startsWith(".github/workflows/")) return true;
+  }
+  return false;
+}
+
+export function isGithubWorkflowPermissionError(message?: string | null) {
+  return Boolean(message?.includes(GITHUB_WORKFLOW_PERMISSION_ERROR));
+}
 export type SyncDirection = "push" | "pull";
 export type SyncStatus =
   | "review"
@@ -237,7 +250,7 @@ export function commitIdentity(files: SyncFile[]) {
     author:
       values.length === 1
         ? { name: values[0]!.name, email: values[0]!.email! }
-        : { name: "Edge Sync", email: "sync@edge.invalid" },
+        : { name: "NetworkBase Sync", email: "sync@networkbase.invalid" },
     trailers:
       values.length > 1
         ? values.map((a) => `Co-authored-by: ${a.name} <${a.email}>`).join("\n")

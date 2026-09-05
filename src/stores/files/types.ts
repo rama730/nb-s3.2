@@ -106,6 +106,11 @@ export type GitState = {
   commitMessage: string;
   branches: string[];
   gitStatusLoaded?: boolean;
+  syncBadge?: {
+    status: "idle" | "syncing" | "incoming" | "completed" | "failed";
+    count?: number;
+    tooltip?: string;
+  } | null;
 };
 
 // ─── UI ──────────────────────────────────────────────────────────────
@@ -313,6 +318,7 @@ export type FilesWorkspaceState = {
   setGitBranch: (projectId: string, branch: string) => void;
   setGitChangedFiles: (projectId: string, files: GitState["changedFiles"]) => void;
   setGitStatusLoaded: (projectId: string, loaded: boolean) => void;
+  setGitSyncBadge: (projectId: string, badge: GitState["syncBadge"]) => void;
 
   // ui actions
   setQuickOpenOpen: (projectId: string, open: boolean) => void;
@@ -339,6 +345,7 @@ export const DEFAULT_GIT_STATE: GitState = {
   commitMessage: "",
   branches: [],
   gitStatusLoaded: false,
+  syncBadge: null,
 };
 
 export const DEFAULT_UI_STATE: UiState = {

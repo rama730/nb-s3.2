@@ -71,4 +71,24 @@ describe("account identity helpers", () => {
         assert.equal(resolvePasswordCredentialState(user, null), false);
         assert.equal(resolvePasswordCredentialState(user, "2026-03-20T04:00:00.000Z"), true);
     });
+
+    it("does not resurrect a detached provider from stale app metadata", () => {
+        const user = createUser({
+            app_metadata: {
+                provider: "github",
+                providers: ["github", "email"],
+            },
+            identities: [{ provider: "email" }] as User["identities"],
+        });
+
+        assert.deepEqual(getLinkedAccountProviders(user), ["email"]);
+        assert.deepEqual(
+            buildAccountProviderStates(user).map((provider) => [provider.provider, provider.state]),
+            [
+                ["google", "not_linked"],
+                ["github", "not_linked"],
+                ["email", "primary"],
+            ],
+        );
+    });
 });

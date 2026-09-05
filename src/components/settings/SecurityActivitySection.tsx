@@ -22,6 +22,8 @@ const EVENT_LABELS: Record<SecurityActivityEntry["eventType"], string> = {
   password_set: "Password added",
   password_changed: "Password changed",
   other_sessions_revoked: "Other devices logged out",
+  github_account_replacement_started: "GitHub account replacement started",
+  github_account_replaced: "GitHub account replaced",
 };
 
 function getEventSummary(entry: SecurityActivityEntry): string | null {

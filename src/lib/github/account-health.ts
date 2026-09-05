@@ -24,6 +24,7 @@ type GithubProfilePayload = {
 
 type ResolveGithubAccountHealthInput = {
   linked: boolean;
+  githubId?: number | null;
   username: string | null;
   fetchImpl?: typeof fetch;
   now?: () => number;
@@ -87,15 +88,18 @@ export async function resolveGithubExternalAccountHealth(
     };
   }
 
+  const githubId = Number.isSafeInteger(input.githubId) && Number(input.githubId) > 0
+    ? Number(input.githubId)
+    : null;
   const username = input.username?.trim() || "";
-  if (!username) {
+  if (!githubId && !username) {
     return unknownHealth("missing_username", null);
   }
 
   const fetchImpl = input.fetchImpl ?? fetch;
   const now = input.now ?? Date.now;
   const cacheTtlMs = input.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS;
-  const cacheKey = username.toLowerCase();
+  const cacheKey = githubId ? `id:${githubId}` : `login:${username.toLowerCase()}`;
   const useSharedCache = !input.fetchImpl && cacheTtlMs > 0;
   const cached = useSharedCache ? healthCache.get(cacheKey) : null;
   if (cached && cached.expiresAt > now()) {
@@ -112,7 +116,9 @@ export async function resolveGithubExternalAccountHealth(
   let value: ExternalAccountHealth;
   try {
     const response = await fetchImpl(
-      `${GITHUB_API_BASE}/users/${encodeURIComponent(username)}`,
+      githubId
+        ? `${GITHUB_API_BASE}/user/${githubId}`
+        : `${GITHUB_API_BASE}/users/${encodeURIComponent(username)}`,
       {
         headers: {
           Accept: "application/vnd.github+json",

@@ -74,25 +74,14 @@ export function recordMessagesPopupTransition(
     });
 }
 
-export function recordMessagesPagination(params: {
+export function recordMessagesPagination(_params: {
     scope: 'inbox' | 'thread' | 'search';
     outcome: 'requested' | 'suppressed';
-}) {
-    logger.metric('messages.pagination', {
-        module: 'messaging',
-        scope: params.scope,
-        outcome: params.outcome,
-    });
-}
+}) {}
 
 export function recordMessagesDraftLifecycle(
-    outcome: 'abandoned' | 'first_message_sent',
-) {
-    logger.metric('messages.draft.lifecycle', {
-        module: 'messaging',
-        outcome,
-    });
-}
+    _outcome: 'abandoned' | 'first_message_sent',
+) {}
 
 export function recordMessagesThreadState(params: {
     surface: 'page' | 'popup';
@@ -122,16 +111,10 @@ export function recordMessagesThreadRecovery(params: {
     });
 }
 
-export function recordMessagesReadWatermark(params: {
+export function recordMessagesReadWatermark(_params: {
     cause: 'visible_unread_row';
     outcome: 'requested' | 'queued' | 'succeeded' | 'failed';
-}) {
-    logger.metric('messages.read.watermark', {
-        module: 'messaging',
-        source: params.cause,
-        outcome: params.outcome,
-    });
-}
+}) {}
 
 export function recordMessagesPopupFocusReturn(succeeded: boolean) {
     logger.metric('messages.popup.focus_return', {

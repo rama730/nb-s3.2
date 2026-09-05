@@ -13,7 +13,7 @@ export async function GET(
 ) {
   const { slug } = await context.params;
   let title = trimCopy(slug.replace(/[-_]+/g, " "), "Project");
-  let description = "Build with Edge.";
+  let description = "Build with NetworkBase.";
   let isPublic = false;
 
   try {
@@ -21,7 +21,7 @@ export async function GET(
     if (result.success) {
       isPublic = true;
       title = trimCopy(result.data.title, "Project");
-      description = trimCopy(result.data.shortDescription || result.data.description, "Build with Edge.");
+      description = trimCopy(result.data.shortDescription || result.data.description, "Build with NetworkBase.");
     }
   } catch (error) {
     console.error("[project og route] failed to read project metadata", error);
@@ -65,7 +65,7 @@ export async function GET(
               background: "rgba(255,255,255,0.92)",
             }}
           />
-          Edge
+          NetworkBase
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 18, maxWidth: 980 }}>
           <div

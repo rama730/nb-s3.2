@@ -21,17 +21,21 @@ describe("github external account health", () => {
   });
 
   it("returns the live profile for an available account", async () => {
+    let requestedUrl = "";
     const health = await resolveGithubExternalAccountHealth({
       linked: true,
+      githubId: 42,
       username: "old-login",
       now: () => Date.parse("2026-06-30T04:30:00.000Z"),
-      fetchImpl: (async () =>
-        Response.json({
+      fetchImpl: (async (input) => {
+        requestedUrl = String(input);
+        return Response.json({
           login: "current-login",
           name: "Current Name",
           avatar_url: "https://avatars.githubusercontent.com/u/1?v=4",
           html_url: "https://github.com/current-login",
-        })) as typeof fetch,
+        });
+      }) as typeof fetch,
     });
 
     assert.equal(health.state, "available");
@@ -39,6 +43,7 @@ describe("github external account health", () => {
     assert.equal(health.checkedAt, "2026-06-30T04:30:00.000Z");
     assert.equal(health.profile?.username, "current-login");
     assert.equal(health.profile?.profileUrl, "https://github.com/current-login");
+    assert.equal(requestedUrl, "https://api.github.com/user/42");
   });
 
   it("marks a missing account unavailable without claiming it was deleted", async () => {

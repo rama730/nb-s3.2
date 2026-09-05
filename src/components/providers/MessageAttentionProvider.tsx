@@ -6,8 +6,9 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getUnreadCount } from "@/app/actions/messaging";
 import { getConversationSummariesV2 } from "@/app/actions/messaging/v2";
 import { useAuth } from "@/hooks/useAuth";
+import type { InboxConversationV2 } from "@/hooks/useMessagesV2";
 import { shouldRefreshInboxSummary, shouldRefreshUnreadSummary } from "@/lib/messages/unread-realtime";
-import { hasCachedInboxData, upsertInboxConversation } from "@/lib/messages/v2-cache";
+import { getCachedInboxConversation, hasCachedInboxData, upsertInboxConversation } from "@/lib/messages/v2-cache";
 import { queryKeys } from "@/lib/query-keys";
 import { useRealtime } from "@/components/providers/RealtimeProvider";
 
@@ -139,10 +140,40 @@ export function MessageAttentionProvider({ children }: { children: React.ReactNo
                 scheduleRefresh();
             }
             if (shouldRefreshInboxSummary(event, inboxParticipantStatesRef.current)) {
-                scheduleInboxRefresh(
-                    getParticipantConversationId(event.payload.new)
-                    ?? getParticipantConversationId(event.payload.old),
-                );
+                const conversationId = getParticipantConversationId(event.payload.new)
+                    ?? getParticipantConversationId(event.payload.old);
+
+                if (conversationId && event.kind === 'conversation_participant') {
+                    const cached = getCachedInboxConversation(queryClient, conversationId);
+                    const payloadNew = event.payload.new as Record<string, unknown> | undefined;
+                    if (cached && payloadNew && typeof payloadNew === 'object') {
+                        // ponytail: direct in-memory patch from Realtime payload.
+                        // Eliminates redundant HTTP server action request when conversation is already cached.
+                        const unreadCount = typeof payloadNew.unread_count === 'number' ? payloadNew.unread_count : cached.unreadCount;
+                        const lastMessageAt = payloadNew.last_message_at ? new Date(String(payloadNew.last_message_at)) : cached.lastMessage?.createdAt;
+                        const lastMessageId = typeof payloadNew.last_message_id === 'string' ? payloadNew.last_message_id : cached.lastMessage?.id;
+                        const lastMessagePreview = typeof payloadNew.last_message_preview === 'string' ? payloadNew.last_message_preview : cached.lastMessage?.content;
+                        const lastMessageType = typeof payloadNew.last_message_type === 'string' ? payloadNew.last_message_type : cached.lastMessage?.type;
+                        const lastMessageSenderId = typeof payloadNew.last_message_sender_id === 'string' ? payloadNew.last_message_sender_id : cached.lastMessage?.senderId;
+
+                        const patched: InboxConversationV2 = {
+                            ...cached,
+                            unreadCount,
+                            lastMessage: lastMessageId ? {
+                                id: lastMessageId,
+                                content: lastMessagePreview ?? null,
+                                createdAt: lastMessageAt ?? new Date(),
+                                type: (lastMessageType as 'text' | 'image' | 'video' | 'file' | 'system') || 'text',
+                                senderId: lastMessageSenderId ?? null,
+                                metadata: null,
+                            } : cached.lastMessage,
+                        };
+                        upsertInboxConversation(queryClient, patched);
+                        return;
+                    }
+                }
+
+                scheduleInboxRefresh(conversationId);
             }
         });
     }, [enabled, queryClient, scheduleInboxRefresh, scheduleRefresh, subscribeMessagingNotifications, unreadQueryKey]);

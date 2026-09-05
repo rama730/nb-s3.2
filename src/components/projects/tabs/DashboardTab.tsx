@@ -48,32 +48,6 @@ export function DashboardTab({
     onDeclineInvitation,
     invitationLoading,
 }: DashboardTabProps) {
-    const teamAndRoles = (
-        <>
-            <TabErrorBoundary tabName="Team">
-                <TeamCard
-                    project={project}
-                    members={members}
-                    loadingMembers={loadingMembers}
-                    isCreator={isCreator}
-                    canInvite={canManageTeam}
-                    onInvite={onManageTeam}
-                />
-            </TabErrorBoundary>
-            <OpenRolesCard
-                roles={rolesWithFilled}
-                isCreator={isCreator}
-                isCollaborator={isCollaborator}
-                applicationStatus={applicationStatus}
-                onApply={onApplyToRole}
-                onManageRoles={onEdit}
-                onAcceptInvitation={onAcceptInvitation}
-                onDeclineInvitation={onDeclineInvitation}
-                invitationLoading={invitationLoading}
-            />
-        </>
-    );
-
     return (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
             <div className="lg:col-span-7 space-y-6">
@@ -88,7 +62,27 @@ export function DashboardTab({
             </div>
 
             <div className="lg:col-span-5 space-y-6">
-                {teamAndRoles}
+                <TabErrorBoundary tabName="Team">
+                    <TeamCard
+                        project={project}
+                        members={members}
+                        loadingMembers={loadingMembers}
+                        isCreator={isCreator}
+                        canInvite={canManageTeam}
+                        onInvite={onManageTeam}
+                    />
+                </TabErrorBoundary>
+                <OpenRolesCard
+                    roles={rolesWithFilled}
+                    isCreator={isCreator}
+                    isCollaborator={isCollaborator}
+                    applicationStatus={applicationStatus}
+                    onApply={onApplyToRole}
+                    onManageRoles={onEdit}
+                    onAcceptInvitation={onAcceptInvitation}
+                    onDeclineInvitation={onDeclineInvitation}
+                    invitationLoading={invitationLoading}
+                />
             </div>
         </div>
     );

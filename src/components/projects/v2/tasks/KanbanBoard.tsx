@@ -69,7 +69,6 @@ const SortableTaskCard = React.memo(function SortableTaskCard({
   isLeader,
   currentUserId,
   isDragLocked,
-  onMeasure,
 }: {
   task: Task;
   onClick: (task: Task) => void;
@@ -77,7 +76,6 @@ const SortableTaskCard = React.memo(function SortableTaskCard({
   isLeader?: boolean;
   currentUserId?: string;
   isDragLocked?: boolean;
-  onMeasure: (taskId: string, node: HTMLDivElement) => void;
 }) {
   const canDrag =
     !isDragLocked &&
@@ -106,18 +104,11 @@ const SortableTaskCard = React.memo(function SortableTaskCard({
       ? undefined
       : (transition ?? "transform 300ms cubic-bezier(0.18, 0.67, 0.6, 1.22)"),
   };
-  const setTaskNodeRef = React.useCallback(
-    (node: HTMLDivElement | null) => {
-      setNodeRef(node);
-      if (node) onMeasure(task.id, node);
-    },
-    [onMeasure, setNodeRef, task.id],
-  );
 
   if (isDragging) {
     return (
       <div
-        ref={setTaskNodeRef}
+        ref={setNodeRef}
         style={style}
         className="relative touch-manipulation"
       >
@@ -131,7 +122,7 @@ const SortableTaskCard = React.memo(function SortableTaskCard({
 
   return (
     <div
-      ref={setTaskNodeRef}
+      ref={setNodeRef}
       style={style}
       className="will-change-transform"
       {...(canDrag ? attributes : {})}
@@ -160,7 +151,6 @@ const KanbanColumn = React.memo(
     onRemoveColumn,
     isLeader,
     currentUserId,
-    onTaskMeasure,
     isTaskDragLocked,
   }: any) {
     const canReorderColumns = isLeader;
@@ -189,6 +179,7 @@ const KanbanColumn = React.memo(
         : (transition ?? "transform 300ms cubic-bezier(0.18, 0.67, 0.6, 1.22)"),
     };
     const visibleTasks = colTasks.slice(0, visibleLimit);
+    const visibleTaskIds = useMemo(() => visibleTasks.map((t: Task) => t.id), [visibleTasks]);
     const hasMoreInColumn = colTasks.length > visibleLimit;
 
     const [isEditing, setIsEditing] = useState(false);
@@ -357,7 +348,7 @@ const KanbanColumn = React.memo(
 
         <div className="p-3 space-y-3 min-h-[150px] flex-1 flex flex-col">
           <SortableContext
-            items={visibleTasks.map((t: Task) => t.id)}
+            items={visibleTaskIds}
             strategy={verticalListSortingStrategy}
           >
             {visibleTasks.length > 0 ? (
@@ -371,7 +362,6 @@ const KanbanColumn = React.memo(
                     isLeader={isLeader}
                     currentUserId={currentUserId}
                     isDragLocked={isTaskDragLocked}
-                    onMeasure={onTaskMeasure}
                   />
                 ))}
                 {hasMoreInColumn && (
@@ -471,18 +461,6 @@ export default function KanbanBoard({
   const taskMovePendingRef = React.useRef(false);
   const [isTaskMovePending, setIsTaskMovePending] = useState(false);
 
-  const taskSizesRef = React.useRef(
-    new Map<string, { width: number; height: number }>(),
-  );
-  const measureTask = React.useCallback(
-    (taskId: string, node: HTMLDivElement) => {
-      const { width, height } = node.getBoundingClientRect();
-      if (width > 0 && height > 0)
-        taskSizesRef.current.set(taskId, { width, height });
-    },
-    [],
-  );
-
   const DEFAULT_VISIBLE = 20;
   const STEP = 20;
   const [visibleCounts, setVisibleCounts] = useState<Record<string, number>>(
@@ -535,11 +513,8 @@ export default function KanbanBoard({
     dragTasksRef.current = tasks;
     if (event.active.data.current?.type === "Task") {
       const task = event.active.data.current.task as Task;
-      const taskSize = taskSizesRef.current.get(task.id);
       setActiveTask(task);
-      setActiveTaskWidth(
-        taskSize?.width ?? event.active.rect.current.initial?.width ?? null,
-      );
+      setActiveTaskWidth(event.active.rect.current.initial?.width ?? null);
       setPreviewMove(null);
       onTaskDragStateChange?.(task.id);
     }
@@ -821,7 +796,6 @@ export default function KanbanBoard({
                   onRemoveColumn={onRemoveColumn}
                   isLeader={isLeader}
                   currentUserId={currentUserId}
-                  onTaskMeasure={measureTask}
                   isTaskDragLocked={hasNextPage || isTaskMovePending}
                 />
               );
@@ -869,7 +843,6 @@ export default function KanbanBoard({
                 onRemoveColumn={() => {}}
                 isLeader={isLeader}
                 currentUserId={currentUserId}
-                onTaskMeasure={measureTask}
               />
             </div>
           ) : null}

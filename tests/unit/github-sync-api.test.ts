@@ -10,9 +10,11 @@ const loader = Module as unknown as {
 const originalLoad = loader._load;
 loader._load = (request, ...args) =>
   request === "server-only" ? {} : originalLoad(request, ...args);
-const { requireExistingOrEmptyBranch, readGitHubBlob } = createRequire(
-  import.meta.url,
-)(
+const {
+  assertGithubWorkflowPermission,
+  requireExistingOrEmptyBranch,
+  readGitHubBlob,
+} = createRequire(import.meta.url)(
   "../../src/lib/github/sync-api",
 ) as typeof import("../../src/lib/github/sync-api");
 loader._load = originalLoad;
@@ -78,6 +80,26 @@ test("downloaded GitHub content must match the reviewed blob identity", async ()
     await assert.rejects(
       readGitHubBlob("test", "https://github.com/example/repo", "0".repeat(40)),
       /integrity/,
+    );
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+test("workflow publication fails before git when the OAuth grant lacks workflow", async () => {
+  const original = globalThis.fetch;
+  try {
+    globalThis.fetch = async () =>
+      new Response(null, { headers: { "x-oauth-scopes": "repo, user:email" } });
+    await assert.rejects(
+      assertGithubWorkflowPermission("test", [".github/workflows/ci.yml"]),
+      /workflow permission is required/i,
+    );
+    globalThis.fetch = async () =>
+      new Response(null, {
+        headers: { "x-oauth-scopes": "repo, workflow, user:email" },
+      });
+    await assert.doesNotReject(
+      assertGithubWorkflowPermission("test", [".github/workflows/ci.yml"]),
     );
   } finally {
     globalThis.fetch = original;

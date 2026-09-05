@@ -182,5 +182,6 @@ test("GitHub OAuth assigns privacy-safe attribution without blocking login", () 
   assert.match(callback, /ensureDefaultGithubContributorIdentity/);
   assert.match(callback, /Attribution enrichment must never block/);
   assert.match(identity, /@users\.noreply\.github\.com/);
-  assert.match(identity, /current\?\.email \|\| githubNoreplyEmail/);
+  assert.match(identity, /sameGithubAccount && current\?\.email/);
+  assert.match(identity, /: githubNoreplyEmail\(account\)/);
 });

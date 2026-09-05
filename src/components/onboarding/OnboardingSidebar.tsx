@@ -138,7 +138,7 @@ export function OnboardingSidebar({
       {/* Bottom: Help link */}
       <div className="mt-auto pt-6">
         <a
-          href="mailto:support@nbworkspace.com?subject=Onboarding%20help"
+          href="mailto:support@networkbase.in?subject=Onboarding%20help"
           className="text-[12px] text-muted-foreground hover:text-foreground transition-colors rounded focus-visible:outline-none   "
         >
           Need help?

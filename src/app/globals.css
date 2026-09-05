@@ -855,3 +855,19 @@ script.debug-script-view {
   max-height: none !important;
   aspect-ratio: auto !important;
 }
+
+/* Authentication Flow: Eliminate outer color, purple ring, and colored halo across all inputs */
+.auth-root input:focus,
+.auth-root input:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+  border-color: oklch(0.6 0 0) !important;
+}
+
+.auth-root button:focus,
+.auth-root button:focus-visible,
+.auth-root a:focus,
+.auth-root a:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+}

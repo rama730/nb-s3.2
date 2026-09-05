@@ -52,7 +52,9 @@ export interface SecurityActivityEntry {
     | "recovery_code_redemption_failed"
     | "password_set"
     | "password_changed"
-    | "other_sessions_revoked";
+    | "other_sessions_revoked"
+    | "github_account_replacement_started"
+    | "github_account_replaced";
   createdAt: string;
   networkFingerprint?: string;
   deviceFingerprint?: string;
@@ -174,6 +176,7 @@ export interface GithubServiceConnection {
   usageCount: number;
   lastUsedAt?: string | null;
   githubUsername?: string | null;
+  recoveryAction?: "replace_account" | "add_fallback_sign_in" | null;
 }
 
 export interface IntegrationsData {

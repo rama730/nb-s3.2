@@ -15,7 +15,10 @@ import {
 } from "@/lib/db/schema";
 import { createAdminClient } from "@/lib/supabase/server";
 import { resolveGithubRepoAccess } from "./auth-resolver";
-import { sealGithubImportToken } from "./repo-security";
+import {
+  sanitizeGitErrorMessage,
+  sealGithubImportToken,
+} from "./repo-security";
 import {
   normalizeGithubBranch,
   normalizeGithubRepoUrl,
@@ -132,8 +135,8 @@ export async function readSyncContributors(
       and(
         eq(projectNodeEvents.projectId, projectId),
         inArray(projectNodeEvents.nodeId, nodeIds),
-        eq(projectNodeEvents.type, "file_content_contributed"),
-        sql`${projectNodeEvents.metadata}->>'source' = 'edge'`,
+        inArray(projectNodeEvents.type, ["file_content_contributed", "create_file"]),
+        sql`${projectNodeEvents.metadata}->>'source' = 'edge' OR ${projectNodeEvents.type} = 'create_file'`,
         isNull(profiles.deletedAt),
       ),
     )
@@ -164,7 +167,7 @@ export async function readSyncContributors(
       });
     result.set(row.nodeId, authors);
   }
-  // Legacy local versions are evidence, imported GitHub versions are not evidence about the importer.
+  // Local file versions and direct node creators are evidence; imported GitHub versions are not evidence about the importer.
   const legacy = await db.execute<{
     node_id: string;
     user_id: string;
@@ -175,13 +178,21 @@ export async function readSyncContributors(
     login: string | null;
     email: string | null;
   }>(sql`
-    SELECT DISTINCT version.node_id,p.id AS user_id,COALESCE(p.full_name,p.username,'Contributor') AS name,
-      p.username,p.avatar_url,identity.github_id,identity.login,identity.email
-    FROM file_versions version JOIN project_nodes node ON node.id=version.node_id
-    JOIN profiles p ON p.id=version.uploaded_by AND p.deleted_at IS NULL
-    LEFT JOIN github_contributor_identities identity ON identity.user_id=p.id
-    WHERE node.project_id=${projectId} AND ${inArray(sql`node.id`, nodeIds)}
-      AND node.git_blob_hash IS NULL AND version.attribution='{}'::jsonb
+    SELECT DISTINCT node.id AS node_id, p.id AS user_id, COALESCE(p.full_name, p.username, 'Contributor') AS name,
+      p.username, p.avatar_url, identity.github_id, identity.login, identity.email
+    FROM project_nodes node
+    JOIN profiles p ON p.id = node.created_by AND p.deleted_at IS NULL
+    LEFT JOIN github_contributor_identities identity ON identity.user_id = p.id
+    WHERE node.project_id = ${projectId} AND ${inArray(sql`node.id`, nodeIds)}
+      AND node.git_blob_hash IS NULL AND node.created_by IS NOT NULL
+    UNION
+    SELECT DISTINCT version.node_id, p.id AS user_id, COALESCE(p.full_name, p.username, 'Contributor') AS name,
+      p.username, p.avatar_url, identity.github_id, identity.login, identity.email
+    FROM file_versions version JOIN project_nodes node ON node.id = version.node_id
+    JOIN profiles p ON p.id = version.uploaded_by AND p.deleted_at IS NULL
+    LEFT JOIN github_contributor_identities identity ON identity.user_id = p.id
+    WHERE node.project_id = ${projectId} AND ${inArray(sql`node.id`, nodeIds)}
+      AND node.git_blob_hash IS NULL AND version.attribution = '{}'::jsonb
     LIMIT 20001
   `);
   if (legacy.length > 20000)
@@ -324,7 +335,9 @@ export async function compareSync(
   );
   const files = await runWithConcurrency(
     paths,
-    6,
+    // ponytail: storage latency dominates; 24 keeps worst-case buffers bounded
+    // while avoiding hundreds of serial round trips for normal small files.
+    24,
     async (path): Promise<SyncFile> => {
       const row = local.get(path);
       const entry = remote.get(path);
@@ -528,12 +541,7 @@ export async function createSyncReview(
             if (choice.content === undefined || choice.content.includes("\0"))
               throw new Error("Provide resolved text content");
             content = Buffer.from(choice.content, "utf8");
-          } else if (source === "edge" && file.storageKey)
-            content = await readStoredSyncContent(
-              ctx.project.id,
-              file.storageKey,
-            );
-          else if (source === "github" && file.remoteSha)
+          } else if (source === "github" && file.remoteSha)
             content = await readGitHubBlob(
               ctx.token,
               manifest.repository,
@@ -559,13 +567,19 @@ export async function createSyncReview(
               },
             ];
           }
-          if (content) {
+          let snapshotBytes = 0;
+          if (source === "edge" && file.storageKey) {
+            // ponytail: project revisions are immutable and revalidated before
+            // publication, so duplicating every local file is wasted I/O.
+            if (!file.localHash || !file.localBlobSha)
+              throw new Error(`Cannot verify ${file.path}. Compare again.`);
+            item.snapshotKey = file.storageKey;
+            item.resultHash = file.localHash;
+            item.resultBlobSha = file.localBlobSha;
+            snapshotBytes = file.size;
+          } else if (content) {
             assertSafeSyncContent(content);
             const { hash, blobSha } = contentHashes(content);
-            if (source === "edge" && hash !== file.localHash)
-              throw new Error(
-                "File changed while preparing the review. Compare again.",
-              );
             item.snapshotKey = buildProjectFileKey(
               ctx.project.id,
               `sync-snapshots/${id}/${offset + batchIndex}`,
@@ -573,14 +587,12 @@ export async function createSyncReview(
             item.resultHash = hash;
             item.resultBlobSha = blobSha;
             item.size = content.length;
+            snapshotBytes = content.length;
           }
-          return { item, content };
+          return { item, content, snapshotBytes };
         }),
       );
-      total += prepared.reduce(
-        (sum, item) => sum + (item.content?.length || 0),
-        0,
-      );
+      total += prepared.reduce((sum, item) => sum + item.snapshotBytes, 0);
       if (total > SYNC_LIMITS.operationBytes)
         throw new Error(
           `Selected files exceed the ${Math.floor(SYNC_LIMITS.operationBytes / (1024 * 1024))} MB operation limit`,
@@ -589,11 +601,15 @@ export async function createSyncReview(
         prepared.map(async ({ item, content }) => {
           if (!content || !item.snapshotKey) return null;
           const { error } = await storage.upload(item.snapshotKey, content, {
-            contentType: item.mimeType,
+            // Internal reviewed snapshots are opaque bytes; the manifest keeps
+            // the original MIME type for the eventual project revision.
+            contentType: "application/octet-stream",
             upsert: false,
           });
           if (error)
-            throw new Error("Unable to retain the reviewed file snapshot");
+            throw new Error(
+              `Unable to retain reviewed content for ${item.path}. Please retry.`,
+            );
           return item.snapshotKey;
         }),
       );
@@ -677,7 +693,7 @@ export function syncRunView(
     id: run.id,
     status: run.status,
     stage: run.stage,
-    error: run.error,
+    error: run.error ? sanitizeGitErrorMessage(run.error) : null,
     createdAt: run.createdAt.toISOString(),
     direction: run.manifest.direction,
     manifest: redactSyncManifest(run.manifest),
@@ -689,30 +705,51 @@ export async function validateReviewedLocalFiles(
   projectId: string,
   manifest: SyncManifest,
   applied: string[] = [],
+  verifyContent = true,
 ) {
-  for (const file of manifest.files) {
-    if (applied.includes(file.path)) continue;
-    validateSyncPath(file.path);
+  const appliedPaths = new Set(applied);
+  const files = manifest.files.filter((file) => !appliedPaths.has(file.path));
+  for (const file of files) validateSyncPath(file.path);
+  const nodeIds = files.flatMap((file) => (file.nodeId ? [file.nodeId] : []));
+  const collisionPaths = files.flatMap((file) =>
+    !file.nodeId || !file.storageKey ? [`/${file.path}`] : [],
+  );
+  const [nodes, collisions] = await Promise.all([
+    nodeIds.length
+      ? db
+          .select()
+          .from(projectNodes)
+          .where(
+            and(
+              eq(projectNodes.projectId, projectId),
+              inArray(projectNodes.id, nodeIds),
+              isNull(projectNodes.deletedAt),
+            ),
+          )
+      : [],
+    collisionPaths.length
+      ? db
+          .select({ path: projectNodes.path })
+          .from(projectNodes)
+          .where(
+            and(
+              eq(projectNodes.projectId, projectId),
+              inArray(projectNodes.path, collisionPaths),
+              isNull(projectNodes.deletedAt),
+              isNull(projectNodes.taskId),
+            ),
+          )
+      : [],
+  ]);
+  const nodesById = new Map(nodes.map((node) => [node.id, node]));
+  const occupiedPaths = new Set(collisions.map((node) => node.path));
+  await runWithConcurrency(files, 24, async (file) => {
     if (!file.nodeId || !file.storageKey) {
-      const collision = await db.query.projectNodes.findFirst({
-        where: and(
-          eq(projectNodes.projectId, projectId),
-          eq(projectNodes.path, `/${file.path}`),
-          isNull(projectNodes.deletedAt),
-          isNull(projectNodes.taskId),
-        ),
-      });
-      if (collision)
+      if (occupiedPaths.has(`/${file.path}`))
         throw new Error(`File appeared after review: ${file.path}`);
-      continue;
+      return;
     }
-    const node = await db.query.projectNodes.findFirst({
-      where: and(
-        eq(projectNodes.id, file.nodeId),
-        eq(projectNodes.projectId, projectId),
-        isNull(projectNodes.deletedAt),
-      ),
-    });
+    const node = nodesById.get(file.nodeId);
     if (
       !node ||
       node.currentVersion !== file.version ||
@@ -721,9 +758,10 @@ export async function validateReviewedLocalFiles(
     )
       throw new Error(`File changed after review: ${file.path}`);
     if (
+      verifyContent &&
       contentHashes(await readStoredSyncContent(projectId, node.s3Key!))
         .hash !== file.localHash
     )
       throw new Error(`Content changed after review: ${file.path}`);
-  }
+  });
 }

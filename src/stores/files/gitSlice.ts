@@ -7,6 +7,7 @@ export interface GitSlice {
   setGitBranch: (projectId: string, branch: string) => void;
   setGitChangedFiles: (projectId: string, files: GitState["changedFiles"]) => void;
   setGitStatusLoaded: (projectId: string, loaded: boolean) => void;
+  setGitSyncBadge: (projectId: string, badge: GitState["syncBadge"]) => void;
 }
 
 export const createGitSlice: StateCreator<FilesWorkspaceState, [], [], GitSlice> = (set) => ({
@@ -60,6 +61,19 @@ export const createGitSlice: StateCreator<FilesWorkspaceState, [], [], GitSlice>
           [projectId]: {
             ...ws,
             git: { ...ws.git, gitStatusLoaded: loaded },
+          },
+        },
+      };
+    }),
+  setGitSyncBadge: (projectId, badge) =>
+    set((state) => {
+      const ws = state.byProjectId[projectId] ?? defaultWorkspace();
+      return {
+        byProjectId: {
+          ...state.byProjectId,
+          [projectId]: {
+            ...ws,
+            git: { ...ws.git, syncBadge: badge },
           },
         },
       };

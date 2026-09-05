@@ -11,6 +11,7 @@ import {
   type SyncManifest,
 } from "./sync-contract";
 import { withGitCredentialEnv } from "./git-auth";
+import { runWithConcurrency } from "@/lib/utils/concurrency";
 
 const exec = promisify(execFile);
 
@@ -36,7 +37,7 @@ export async function publishGitSnapshot(input: {
         GIT_LITERAL_PATHSPECS: "1",
         GIT_AUTHOR_NAME: identity.author.name,
         GIT_AUTHOR_EMAIL: identity.author.email,
-        GIT_COMMITTER_NAME: "Edge Sync",
+        GIT_COMMITTER_NAME: "NetworkBase Sync",
         GIT_COMMITTER_EMAIL: "sync@edge.invalid",
         GIT_AUTHOR_DATE: input.createdAt.toISOString(),
         GIT_COMMITTER_DATE: input.createdAt.toISOString(),
@@ -73,7 +74,7 @@ export async function publishGitSnapshot(input: {
         );
         await git("checkout", "--detach", "FETCH_HEAD");
       }
-      for (const file of manifest.files) {
+      await runWithConcurrency(manifest.files, 24, async (file) => {
         validateSyncPath(file.path);
         // Never follow a repository symlink when materializing a reviewed file.
         let cursor = root;
@@ -104,13 +105,15 @@ export async function publishGitSnapshot(input: {
             if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
           }
         }
-        await git("add", "--all", "--", file.path);
-      }
+      });
+      // ponytail: the checkout contains only the reviewed repository snapshot;
+      // one native staging pass replaces thousands of git subprocesses.
+      await git("add", "--all", "--", ".");
       if (!(await git("status", "--porcelain")))
         throw new Error(
           "The selected resolution does not change GitHub. Choose other files or resolutions.",
         );
-      const message = `${manifest.message}\n\nEdge-Sync-Operation: ${input.runId}${identity.trailers ? `\n${identity.trailers}` : ""}`;
+      const message = `${manifest.message}\n\nNetworkBase-Sync-Operation: ${input.runId}${identity.trailers ? `\n${identity.trailers}` : ""}`;
       await git("commit", "--no-verify", "-m", message);
       const sha = await git("rev-parse", "HEAD");
       await input.beforePush(sha, branch);

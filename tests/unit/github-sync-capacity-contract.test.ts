@@ -34,3 +34,42 @@ test("large reviewed selections are prepared in bounded failure-safe batches", (
   assert.match(source, /await Promise\.allSettled\(/);
   assert.match(source, /uploaded\.push\(upload\.value\)/);
 });
+
+test("the action and UI use the shared selection limit with readable errors", () => {
+  const action = readFileSync("src/app/actions/github-sync.ts", "utf8");
+  const workspace = readFileSync(
+    "src/components/projects/v2/files-tab/GitHubSyncWorkspace.tsx",
+    "utf8",
+  );
+
+  assert.doesNotMatch(action, /\.max\(500\)/);
+  assert.match(action, /GITHUB_SYNC_LIMITS\.operationFiles/);
+  assert.match(action, /error instanceof z\.ZodError/);
+  assert.match(action, /error\.issues\[0\]\?\.message/);
+  assert.match(workspace, /eligible\.slice\(/);
+  assert.match(workspace, /GITHUB_SYNC_LIMITS\.operationFiles/);
+});
+
+test("local reviewed files reuse immutable revisions and temporary snapshots use an allowed MIME", () => {
+  const source = readFileSync("src/lib/github/sync-service.ts", "utf8");
+
+  assert.match(source, /item\.snapshotKey = file\.storageKey/);
+  assert.match(source, /item\.resultHash = file\.localHash/);
+  assert.match(source, /contentType: "application\/octet-stream"/);
+  assert.doesNotMatch(
+    source,
+    /source === "edge" && file\.storageKey\)[\s\S]{0,100}readStoredSyncContent/,
+  );
+});
+
+test("large reviews avoid serial storage, database, and git staging work", () => {
+  const service = readFileSync("src/lib/github/sync-service.ts", "utf8");
+  const publisher = readFileSync("src/lib/github/sync-git.ts", "utf8");
+
+  assert.match(service, /runWithConcurrency\(\s*paths,[\s\S]{0,240}\s24,/);
+  assert.match(service, /const \[nodes, collisions\] = await Promise\.all/);
+  assert.match(service, /runWithConcurrency\(files, 24/);
+  assert.match(publisher, /runWithConcurrency\(manifest\.files, 24/);
+  assert.match(publisher, /git\("add", "--all", "--", "\."\)/);
+  assert.doesNotMatch(publisher, /git\("add", "--all", "--", file\.path\)/);
+});

@@ -13,10 +13,13 @@ export function useMessageAttentionState<TConversation extends MessageAttentionC
     viewerId: string | null | undefined,
 ) {
     const storedAttention = useMessagesV2UiStore((state) => state.messageAttentionByConversation);
-    const upsertMessageAttention = useMessagesV2UiStore((state) => state.upsertMessageAttention);
+    const batchUpsertMessageAttention = useMessagesV2UiStore((state) => state.batchUpsertMessageAttention);
     const clearMessageAttentionSmooth = useMessagesV2UiStore((state) => state.clearMessageAttentionSmooth);
 
     useEffect(() => {
+        const toUpsert: Record<string, MessageAttentionState> = {};
+        const toClear: string[] = [];
+
         for (const conversation of conversations) {
             const derived = deriveMessageAttention(conversation, viewerId, 'startup-sync');
             const existing = storedAttention[conversation.id];
@@ -25,17 +28,24 @@ export function useMessageAttentionState<TConversation extends MessageAttentionC
                     !existing
                     || existing.latestNewMessageId !== derived.latestNewMessageId
                 ) {
-                    upsertMessageAttention(conversation.id, derived);
+                    toUpsert[conversation.id] = derived;
                 }
             } else if (existing?.hasNewMessages && !existing.clearing) {
-                clearMessageAttentionSmooth(conversation.id);
+                toClear.push(conversation.id);
             }
         }
+
+        if (Object.keys(toUpsert).length > 0) {
+            batchUpsertMessageAttention(toUpsert);
+        }
+        if (toClear.length > 0) {
+            clearMessageAttentionSmooth(toClear);
+        }
     }, [
+        batchUpsertMessageAttention,
         clearMessageAttentionSmooth,
         conversations,
         storedAttention,
-        upsertMessageAttention,
         viewerId,
     ]);
 

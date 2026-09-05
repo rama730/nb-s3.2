@@ -2,7 +2,23 @@
 
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMemo, useEffect, useState } from 'react';
-import { get as idbGet, set as idbSet } from 'idb-keyval';
+import { get as idbGet, set as idbSet, del as idbDel } from 'idb-keyval';
+
+const MAX_CACHED_THREADS = 30;
+const cachedThreadKeys: string[] = [];
+
+function saveThreadToIdb(key: string, page: unknown) {
+    idbSet(key, page).catch(() => {});
+    const idx = cachedThreadKeys.indexOf(key);
+    if (idx !== -1) cachedThreadKeys.splice(idx, 1);
+    cachedThreadKeys.push(key);
+    if (cachedThreadKeys.length > MAX_CACHED_THREADS) {
+        const toEvict = cachedThreadKeys.shift();
+        if (toEvict) {
+            idbDel(toEvict).catch(() => {});
+        }
+    }
+}
 import {
     type InboxConversationV2,
     type MessageThreadErrorCode,
@@ -141,13 +157,10 @@ export function useInbox(
     const queryClient = useQueryClient();
     const queryKey = useMemo(() => queryKeys.messages.v2.inbox(limit, scope), [limit, scope]);
     const storageKey = useMemo(() => `${user?.id ?? 'anonymous'}:${queryKey.join('-')}:v2`, [queryKey, user?.id]);
-    const [cacheReady, setCacheReady] = useState(false);
 
     useEffect(() => {
         let active = true;
-        setCacheReady(false);
         if (!enabled || !user?.id) {
-            setCacheReady(true);
             return () => { active = false; };
         }
         idbGet(storageKey).then((cachedPage) => {
@@ -155,28 +168,24 @@ export function useInbox(
                 const currentData = queryClient.getQueryState(queryKey);
                 if (!currentData?.data) {
                     // ponytail: IndexedDB is an instant visual fallback, not an
-                    // authoritative fresh inbox. Keeping its original age stale
-                    // guarantees the first visible list reconciles immediately.
+                    // authoritative fresh inbox.
                     queryClient.setQueryData(
                         queryKey,
                         {
                             pages: [cachedPage],
                             pageParams: [undefined],
                         },
-                        { updatedAt: 0 },
                     );
                 }
             }
-        }).catch(() => {}).finally(() => {
-            if (active) setCacheReady(true);
-        });
+        }).catch(() => {});
         return () => { active = false; };
     }, [enabled, queryClient, queryKey, storageKey, user?.id]);
 
     const query = useInfiniteQuery({
         queryKey,
         initialPageParam: undefined as string | undefined,
-        enabled: enabled && cacheReady,
+        enabled,
         queryFn: async ({ pageParam }) => {
             const result = await getInboxPageV2(limit, pageParam, scope);
             if (!result.success || !result.page) {
@@ -220,13 +229,10 @@ export function useConversationThread(conversationId: string | null, limit: numb
         () => `${user?.id ?? 'anonymous'}:${queryKey.join('-')}:v2`,
         [queryKey, user?.id],
     );
-    const [cacheReady, setCacheReady] = useState(false);
 
     useEffect(() => {
         let active = true;
-        setCacheReady(false);
         if (!conversationId || conversationId.startsWith('draft:') || !user?.id) {
-            setCacheReady(true);
             return () => { active = false; };
         }
         idbGet(storageKey).then((cachedPage) => {
@@ -245,20 +251,17 @@ export function useConversationThread(conversationId: string | null, limit: numb
                             }],
                             pageParams: [undefined],
                         },
-                        { updatedAt: 0 },
                     );
                 }
             }
-        }).catch(() => {}).finally(() => {
-            if (active) setCacheReady(true);
-        });
+        }).catch(() => {});
         return () => { active = false; };
     }, [queryClient, conversationId, queryKey, storageKey, user?.id]);
 
     const query = useInfiniteQuery({
         queryKey,
         initialPageParam: undefined as string | undefined,
-        enabled: cacheReady && Boolean(conversationId) && !conversationId?.startsWith('draft:'),
+        enabled: Boolean(conversationId) && !conversationId?.startsWith('draft:'),
         queryFn: async ({ pageParam }) => {
             if (!conversationId) throw new Error('Missing conversation');
             const result = await getConversationThreadPageV2(conversationId, pageParam, limit);
@@ -269,7 +272,7 @@ export function useConversationThread(conversationId: string | null, limit: numb
                 );
             }
             if (!pageParam) {
-                idbSet(storageKey, result.page).catch(() => {});
+                saveThreadToIdb(storageKey, result.page);
             }
             return result.page;
         },

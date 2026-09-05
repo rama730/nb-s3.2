@@ -7,8 +7,8 @@ import { getViewerAuthContext } from '@/lib/server/viewer-context'
 const VALID_CREATE_PROJECT_SOURCES = new Set(['scratch', 'github', 'upload'] as const)
 
 export const metadata: Metadata = buildRouteMetadata({
-    title: 'Create Project | Edge',
-    description: 'Start a new project on Edge.',
+    title: 'Create Project | NetworkBase',
+    description: 'Start a new project on NetworkBase.',
     path: '/projects/new',
 })
 

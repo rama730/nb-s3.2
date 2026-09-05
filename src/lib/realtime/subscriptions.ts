@@ -199,25 +199,3 @@ export function subscribeProjectStage(params: {
         ],
     });
 }
-
-export async function subscribeProjectStats(params: {
-    supabase: SupabaseClient
-    projectId: string
-    onInvalidate: () => void
-}): Promise<RealtimeChannel | null> {
-    const { supabase, projectId, onInvalidate } = params;
-    if (!isPrivateRealtimeAuthorizationEnabled()) return null;
-
-    const { data, error } = await supabase.auth.getSession();
-    const accessToken = data.session?.access_token;
-    if (error || !accessToken) return null;
-    await supabase.realtime.setAuth(accessToken);
-
-    const channel = supabase.channel(`project-stats:${projectId}`, {
-        config: { private: true },
-    });
-    channel.on("broadcast", { event: "stats_invalidate" }, () => {
-        onInvalidate();
-    });
-    return channel.subscribe();
-}

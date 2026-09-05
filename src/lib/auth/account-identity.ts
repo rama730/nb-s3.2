@@ -126,22 +126,9 @@ export function getLinkedAccountProviders(user: User | null | undefined): Accoun
     if (!user) return [];
 
     const linkedProviders = new Set<AccountAuthProvider>();
-    const primaryProvider = normalizeAccountProvider(resolvePrimaryProvider(user));
-    if (primaryProvider) {
-        linkedProviders.add(primaryProvider);
-    }
-
-    const appProviders = Array.isArray(user.app_metadata?.providers)
-        ? user.app_metadata.providers
-        : [];
-    for (const provider of appProviders) {
-        const normalized = normalizeAccountProvider(typeof provider === "string" ? provider : null);
-        if (normalized) {
-            linkedProviders.add(normalized);
-        }
-    }
-
-    if (Array.isArray(user.identities)) {
+    if (Array.isArray(user.identities) && user.identities.length > 0) {
+        // Supabase can briefly retain a detached provider in app_metadata.
+        // The identity list is authoritative whenever Auth returned it.
         for (const identity of user.identities) {
             const normalized = normalizeAccountProvider(
                 identity && typeof identity.provider === "string" ? identity.provider : null
@@ -149,6 +136,16 @@ export function getLinkedAccountProviders(user: User | null | undefined): Accoun
             if (normalized) {
                 linkedProviders.add(normalized);
             }
+        }
+    } else {
+        const primaryProvider = normalizeAccountProvider(resolvePrimaryProvider(user));
+        if (primaryProvider) linkedProviders.add(primaryProvider);
+        const appProviders = Array.isArray(user.app_metadata?.providers)
+            ? user.app_metadata.providers
+            : [];
+        for (const provider of appProviders) {
+            const normalized = normalizeAccountProvider(typeof provider === "string" ? provider : null);
+            if (normalized) linkedProviders.add(normalized);
         }
     }
 
@@ -165,7 +162,10 @@ export function buildAccountProviderStates(user: User | null | undefined): Array
     state: AccountAuthProviderState;
 }> {
     const linkedProviders = new Set(getLinkedAccountProviders(user));
-    const primaryProvider = normalizeAccountProvider(resolvePrimaryProvider(user));
+    const declaredPrimary = normalizeAccountProvider(resolvePrimaryProvider(user));
+    const primaryProvider = declaredPrimary && linkedProviders.has(declaredPrimary)
+        ? declaredPrimary
+        : ACCOUNT_AUTH_PROVIDER_ORDER.find((provider) => linkedProviders.has(provider)) ?? null;
 
     return ACCOUNT_AUTH_PROVIDER_ORDER.map((provider) => ({
         provider,
