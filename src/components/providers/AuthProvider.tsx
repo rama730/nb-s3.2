@@ -71,7 +71,7 @@ type SignUpApiResponse = {
 interface AuthContextType extends AuthState {
     isAuthenticated: boolean;
     signIn: (email: string, password: string, captchaToken?: string) => Promise<AuthResult>;
-    signUp: (email: string, password: string, fullName?: string, captchaToken?: string) => Promise<AuthResult>;
+    signUp: (email: string, password: string, fullName?: string, captchaToken?: string, legalAccepted?: boolean) => Promise<AuthResult>;
     signOut: () => Promise<void>;
     signInWithGoogle: (nextPath?: string | null) => Promise<OAuthResult>;
     signInWithGitHub: (nextPath?: string | null) => Promise<OAuthResult>;
@@ -415,7 +415,7 @@ export function AuthProvider({
         }
     }, []);
 
-    const signUp = useCallback(async (email: string, password: string, fullName?: string, captchaToken?: string) => {
+    const signUp = useCallback(async (email: string, password: string, fullName?: string, captchaToken?: string, legalAccepted?: boolean) => {
         const supabase = createClient();
         try {
             const response = await fetch('/api/v1/auth/signup', {
@@ -426,6 +426,7 @@ export function AuthProvider({
                     email,
                     password,
                     fullName,
+                    legalAccepted,
                     ...(captchaToken ? { captchaToken } : {}),
                 }),
             });

@@ -35,7 +35,9 @@ const SHOULD_RENDER_VERCEL_ANALYTICS =
 
 export const metadata: Metadata = {
   metadataBase: APP_METADATA_BASE,
-  applicationName: "Edge",
+  applicationName: "NetworkBase",
+  title: "NetworkBase",
+  description: "A collaborative workspace for building and sharing projects.",
   manifest: "/manifest.webmanifest",
   appleWebApp: {
     capable: true,

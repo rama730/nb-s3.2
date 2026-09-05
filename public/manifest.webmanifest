@@ -1,6 +1,6 @@
 {
-  "name": "Edge",
-  "short_name": "Edge",
+  "name": "NetworkBase",
+  "short_name": "NetworkBase",
   "description": "Collaborative workspace for building together.",
   "start_url": "/",
   "scope": "/",

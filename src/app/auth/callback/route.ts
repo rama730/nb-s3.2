@@ -103,10 +103,25 @@ export async function GET(request: Request) {
 
         if (!complete) {
             const onboardingUrl = new URL('/onboarding', baseUrl)
-            if (nextPath !== '/hub' && nextPath !== '/onboarding') {
-                onboardingUrl.searchParams.set('next', nextPath)
+            const requestedUrl = new URL(nextPath, baseUrl)
+            const isLegalAcceptance = requestedUrl.pathname === '/legal/accept'
+            const afterAcceptance = isLegalAcceptance
+                ? normalizeAuthNextPath(requestedUrl.searchParams.get('next'))
+                : nextPath
+            if (afterAcceptance !== '/hub' && afterAcceptance !== '/onboarding') {
+                onboardingUrl.searchParams.set('next', afterAcceptance)
             }
-            destinationPath = `${onboardingUrl.pathname}${onboardingUrl.search}`
+
+            if (isLegalAcceptance) {
+                const legalUrl = new URL('/legal/accept', baseUrl)
+                if (requestedUrl.searchParams.get('context') === 'oauth_signup') {
+                    legalUrl.searchParams.set('context', 'oauth_signup')
+                }
+                legalUrl.searchParams.set('next', `${onboardingUrl.pathname}${onboardingUrl.search}`)
+                destinationPath = `${legalUrl.pathname}${legalUrl.search}`
+            } else {
+                destinationPath = `${onboardingUrl.pathname}${onboardingUrl.search}`
+            }
         } else if (nextPath === '/onboarding' || nextPath.startsWith('/onboarding?')) {
             destinationPath = '/hub'
         }

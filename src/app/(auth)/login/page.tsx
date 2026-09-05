@@ -11,6 +11,7 @@ import TurnstileWidget, { hasTurnstileSiteKey } from '@/components/auth/Turnstil
 import { Github, Mail, Loader2, Eye, EyeOff } from 'lucide-react'
 import { buildAuthPageHref, resolveAuthRedirectPath } from '@/lib/auth/redirects'
 import { resolveAuthPageErrorMessage } from '@/lib/auth/error-messages'
+import { LegalLinks } from '@/components/legal/LegalLinks'
 
 const LOGIN_REQUEST_TIMEOUT_MS = 25_000
 
@@ -124,10 +125,10 @@ function LoginPageInner() {
                 {/* Logo/Brand */}
                 <div className="text-center space-y-2">
                     <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-primary text-primary-foreground font-bold text-xl">
-                        E
+                        N
                     </div>
                     <h1 className="text-2xl font-bold tracking-tight">Welcome back</h1>
-                    <p className="text-muted-foreground">Sign in to your Edge account</p>
+                    <p className="text-muted-foreground">Sign in to your NetworkBase account</p>
                 </div>
 
                 <Card className="border-0 shadow-xl bg-card/50 backdrop-blur-sm">
@@ -308,16 +309,8 @@ function LoginPageInner() {
                     </CardFooter>
                 </Card>
 
-                <p className="text-center text-xs text-muted-foreground">
-                    By continuing, you agree to our{' '}
-                    <Link href="/terms" className="underline hover:text-foreground">
-                        Terms of Service
-                    </Link>{' '}
-                    and{' '}
-                    <Link href="/privacy" className="underline hover:text-foreground">
-                        Privacy Policy
-                    </Link>
-                </p>
+                <p className="text-center text-xs leading-5 text-muted-foreground">Signing in continues your existing account agreement. Review the current documents below.</p>
+                <LegalLinks />
             </div>
         </div>
     )

@@ -8,6 +8,7 @@ import { Mail, Loader2, RefreshCcw } from 'lucide-react'
 import { useAuth } from '@/lib/hooks/use-auth'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
+import { LegalLinks } from '@/components/legal/LegalLinks'
 
 function VerifyEmailPageInner() {
     const { user, signOut } = useAuth()
@@ -125,6 +126,7 @@ function VerifyEmailPageInner() {
                         </div>
                     </CardFooter>
                 </Card>
+                <LegalLinks className="mt-6" />
             </div>
         </div>
     )

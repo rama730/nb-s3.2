@@ -1,0 +1,18 @@
+import type { Metadata } from "next";
+import { LegalDocumentPage, LegalList } from "@/components/legal/LegalDocumentPage";
+import { getLegalIdentity } from "@/lib/legal/config";
+import { LEGAL_VERSIONS } from "@/lib/legal/versions";
+
+export const metadata: Metadata = { title: "Acceptable Use Policy | NetworkBase", description: "Safety and content rules for NetworkBase." };
+
+export default function AcceptableUsePage() {
+  const i = getLegalIdentity();
+  return <LegalDocumentPage eyebrow="Legal · Community safety" title="Acceptable Use Policy" summary="These rules protect collaborators, projects, repositories, and NetworkBase infrastructure." version={LEGAL_VERSIONS.acceptableUse} sections={[
+    { id: "respect", title: "1. Respect people", content: <LegalList><li>Do not harass, threaten, stalk, exploit, discriminate against, or expose private information about another person.</li><li>Do not impersonate another person or organisation, misrepresent affiliation, manipulate contributor attribution, or deceive recipients about a message’s origin.</li><li>Do not publish sexual exploitation material, intimate imagery without consent, content harmful to children, or instructions that facilitate serious harm.</li></LegalList> },
+    { id: "lawful-content", title: "2. Use content lawfully", content: <LegalList><li>Upload, import, and share only content you have the right to use.</li><li>Do not infringe copyright, trademark, patent, privacy, confidentiality, publicity, database, or other rights.</li><li>Do not use NetworkBase for unlawful gambling, fraud, money laundering, controlled goods, sanctions evasion, or conduct prohibited by applicable law.</li><li>Do not knowingly distribute materially deceptive information intended to cause injury or unlawful gain.</li></LegalList> },
+    { id: "security", title: "3. Protect systems and credentials", content: <LegalList><li>Do not upload live secrets, passwords, private keys, access tokens, malware, ransomware, destructive payloads, or code designed to interrupt or compromise systems.</li><li>Do not access projects, messages, accounts, repositories, APIs, or infrastructure without permission.</li><li>Do not bypass rate limits, security controls, visibility settings, review gates, or repository protections.</li><li>Security research requires written authorisation and must avoid accessing another user’s data or degrading the service.</li></LegalList> },
+    { id: "automation", title: "4. Automation and AI", content: <p>Do not use bots, scraping, generated content, or automated Git operations to spam, deceive, impersonate, manipulate engagement, evade enforcement, or violate law. Review AI-generated material and disclose synthetic generation when required. You remain responsible for what your account publishes or sends externally.</p> },
+    { id: "resources", title: "5. Fair resource use", content: <p>Do not overload NetworkBase, run unauthorised bulk extraction, resell access, create excessive accounts, or use the service as general-purpose storage, compute, delivery, or attack infrastructure. Documented APIs and approved integrations remain subject to reasonable limits.</p> },
+    { id: "enforcement", title: "6. Reports and enforcement", content: <p>Report violations to <a className="underline" href={`mailto:${i.grievanceEmail}`}>{i.grievanceEmail}</a> with the exact URL or identifier and supporting facts. We may restrict content or accounts, preserve evidence, notify affected people, or report conduct to authorities when required. We consider context, severity, history, intent, and risk and provide an appeal opportunity where appropriate.</p> },
+  ]} />;
+}

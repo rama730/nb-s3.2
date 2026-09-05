@@ -11,6 +11,8 @@ import TurnstileWidget, { hasTurnstileSiteKey } from '@/components/auth/Turnstil
 import { Github, Mail, Loader2, Eye, EyeOff, User, Check, X } from 'lucide-react'
 import { buildAuthPageHref, resolveAuthRedirectPath } from '@/lib/auth/redirects'
 import { getPasswordPolicyResult, PASSWORD_MIN_LENGTH } from '@/lib/security/password-policy'
+import { LegalLinks } from '@/components/legal/LegalLinks'
+import { CURRENT_LEGAL_ACCEPTANCE } from '@/lib/legal/versions'
 
 function SignupPageInner() {
     const router = useRouter()
@@ -27,6 +29,7 @@ function SignupPageInner() {
     const [error, setError] = useState<string | null>(null)
     const [success, setSuccess] = useState<string | null>(null)
     const [captchaToken, setCaptchaToken] = useState<string | null>(null)
+    const [legalAccepted, setLegalAccepted] = useState(false)
     const submitRequestIdRef = useRef(0)
     const requiresCaptcha = hasTurnstileSiteKey()
 
@@ -70,6 +73,11 @@ function SignupPageInner() {
             return
         }
 
+        if (!legalAccepted) {
+            setError('Please accept the Terms of Service and EULA to create an account')
+            return
+        }
+
         if (requiresCaptcha && !captchaToken) {
             setError('Please complete the Turnstile check')
             return
@@ -80,7 +88,7 @@ function SignupPageInner() {
 
         try {
             const signUpResult = await Promise.race([
-                signUp(email.trim(), password, fullName.trim(), captchaToken || undefined),
+                signUp(email.trim(), password, fullName.trim(), captchaToken || undefined, legalAccepted),
                 new Promise<never>((_, reject) => {
                     setTimeout(() => reject(new Error('Request timeout')), 15_000)
                 }),
@@ -127,7 +135,12 @@ function SignupPageInner() {
 
     const handleGoogleSignIn = async () => {
         setError(null)
-        const { error } = await signInWithGoogle(redirectPath)
+        if (!legalAccepted) {
+            setError('Please accept the Terms of Service and EULA to create an account')
+            return
+        }
+        const legalNext = `/legal/accept?context=oauth_signup&next=${encodeURIComponent(redirectPath)}`
+        const { error } = await signInWithGoogle(legalNext)
         if (error) {
             setError(error.message)
         }
@@ -135,7 +148,12 @@ function SignupPageInner() {
 
     const handleGitHubSignIn = async () => {
         setError(null)
-        const { error } = await signInWithGitHub(redirectPath)
+        if (!legalAccepted) {
+            setError('Please accept the Terms of Service and EULA to create an account')
+            return
+        }
+        const legalNext = `/legal/accept?context=oauth_signup&next=${encodeURIComponent(redirectPath)}`
+        const { error } = await signInWithGitHub(legalNext)
         if (error) {
             setError(error.message)
         }
@@ -147,10 +165,10 @@ function SignupPageInner() {
                 {/* Logo/Brand */}
                 <div className="text-center space-y-2">
                     <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-primary text-primary-foreground font-bold text-xl">
-                        E
+                        N
                     </div>
                     <h1 className="text-2xl font-bold tracking-tight">Create an account</h1>
-                    <p className="text-muted-foreground">Join Edge and start building your network</p>
+                    <p className="text-muted-foreground">Join NetworkBase and build with your network</p>
                 </div>
 
                 <Card className="border-0 shadow-xl bg-card/50 backdrop-blur-sm">
@@ -168,7 +186,7 @@ function SignupPageInner() {
                                 variant="outline"
                                 className="h-11"
                                 onClick={handleGoogleSignIn}
-                                disabled={isLoading}
+                                disabled={isLoading || !legalAccepted}
                             >
                                 <svg className="w-5 h-5 mr-2" viewBox="0 0 24 24">
                                     <path
@@ -194,7 +212,7 @@ function SignupPageInner() {
                                 variant="outline"
                                 className="h-11"
                                 onClick={handleGitHubSignIn}
-                                disabled={isLoading}
+                                disabled={isLoading || !legalAccepted}
                             >
                                 <Github className="w-5 h-5 mr-2" />
                                 GitHub
@@ -232,7 +250,7 @@ function SignupPageInner() {
                                     <Input
                                         id="fullName"
                                         type="text"
-                                        placeholder="John Doe"
+                                        placeholder="Your full name"
                                         value={fullName}
                                         onChange={(e) => setFullName(e.target.value)}
                                         className="pl-10 h-11"
@@ -340,10 +358,27 @@ function SignupPageInner() {
                                 />
                             ) : null}
 
+                            <label className="flex items-start gap-3 rounded-xl border border-border bg-muted/30 p-3 text-sm leading-5">
+                                <input
+                                    type="checkbox"
+                                    checked={legalAccepted}
+                                    onChange={(event) => {
+                                        setLegalAccepted(event.target.checked)
+                                        setError(null)
+                                    }}
+                                    className="mt-0.5 h-4 w-4 rounded border-border"
+                                    required
+                                />
+                                <span>
+                                    I am at least 18 and agree to the <Link className="font-medium underline" href="/terms" target="_blank">Terms of Service</Link> and <Link className="font-medium underline" href="/eula" target="_blank">EULA</Link>. I have read the <Link className="font-medium underline" href="/privacy" target="_blank">Privacy Policy</Link>.
+                                    <span className="mt-1 block text-xs text-muted-foreground">Versions {CURRENT_LEGAL_ACCEPTANCE.termsVersion} / {CURRENT_LEGAL_ACCEPTANCE.eulaVersion}</span>
+                                </span>
+                            </label>
+
                             <Button
                                 type="submit"
                                 className="w-full h-11"
-                                disabled={isLoading || !passwordPolicy.ok}
+                                disabled={isLoading || !passwordPolicy.ok || !legalAccepted}
                             >
                                 {isLoading ? (
                                     <>
@@ -367,16 +402,7 @@ function SignupPageInner() {
                     </CardFooter>
                 </Card>
 
-                <p className="text-center text-xs text-muted-foreground">
-                    By creating an account, you agree to our{' '}
-                    <Link href="/terms" className="underline hover:text-foreground">
-                        Terms of Service
-                    </Link>{' '}
-                    and{' '}
-                    <Link href="/privacy" className="underline hover:text-foreground">
-                        Privacy Policy
-                    </Link>
-                </p>
+                <LegalLinks />
             </div>
         </div>
     )

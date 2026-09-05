@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo, useRef, type CSSProperties, type Keyboard
 import Link from "next/link";
 import {
     LayoutDashboard, ListTodo, FolderOpen, BookOpenText,
-    Settings, Share2, ChevronLeft, UserPlus, UserCheck, IterationCcw, BarChart3, Loader2, Newspaper
+    Settings, Share2, ChevronLeft, UserPlus, UserCheck, IterationCcw, BarChart3, Loader2, Newspaper, ShieldCheck
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Project } from "@/types/hub";
@@ -47,6 +47,7 @@ const TABS = [
     { id: "files", label: "Files", icon: FolderOpen },
     { id: "analytics", label: "Analytics", icon: BarChart3 },
     { id: "settings", label: "Settings", icon: Settings, ownerOnly: true },
+    { id: "privacy", label: "Privacy & terms", icon: ShieldCheck },
 ];
 
 const FILES_WORKSPACE_SCROLL_EVENT = "project:files-workspace-scroll";
