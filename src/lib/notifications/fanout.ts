@@ -222,6 +222,9 @@ export async function deliverNotificationFanout(
             traceId: event.traceId ?? null,
             failed: failed.length,
             total: writes.length,
+            error: failed[0]?.result.reason instanceof Error
+                ? failed[0].result.reason.message
+                : String(failed[0]?.result.reason),
             errors: failed.slice(0, 5).map(({ result }) =>
                 result.reason instanceof Error
                     ? result.reason.message
