@@ -111,15 +111,42 @@ export async function getGitHubSyncState(projectId: string) {
     idSchema.parse(projectId);
     const { user, token } = await session();
     const ctx = await resolveSyncContext(projectId, user.id, token);
-    const runs = await db
-      .select()
-      .from(githubSyncRuns)
-      .where(eq(githubSyncRuns.projectId, projectId))
-      .orderBy(desc(githubSyncRuns.createdAt))
-      .limit(20);
-    let identity = await db.query.githubContributorIdentities.findFirst({
-      where: eq(githubContributorIdentities.userId, user.id),
-    });
+    // ponytail: query runs, identity, files count, and team members in parallel
+    const [runs, identityRow, filesCountResult, membersResult] =
+      await Promise.all([
+        db
+          .select()
+          .from(githubSyncRuns)
+          .where(eq(githubSyncRuns.projectId, projectId))
+          .orderBy(desc(githubSyncRuns.createdAt))
+          .limit(20),
+        db.query.githubContributorIdentities.findFirst({
+          where: eq(githubContributorIdentities.userId, user.id),
+        }),
+        db
+          .select({ count: count() })
+          .from(githubSyncFiles)
+          .where(eq(githubSyncFiles.projectId, projectId)),
+        db
+          .select({
+            userId: projectMembers.userId,
+            fullName: profiles.fullName,
+            username: profiles.username,
+            avatarUrl: profiles.avatarUrl,
+            membershipRole: projectMembers.role,
+            githubLogin: githubContributorIdentities.login,
+            githubEmail: githubContributorIdentities.email,
+          })
+          .from(projectMembers)
+          .innerJoin(profiles, eq(profiles.id, projectMembers.userId))
+          .leftJoin(
+            githubContributorIdentities,
+            eq(githubContributorIdentities.userId, projectMembers.userId),
+          )
+          .where(eq(projectMembers.projectId, projectId))
+          .limit(12),
+      ]);
+    let identity = identityRow;
     if (!identity && token) {
       await ensureDefaultGithubContributorIdentity(user.id, token).catch(
         () => null,
@@ -128,31 +155,6 @@ export async function getGitHubSyncState(projectId: string) {
         where: eq(githubContributorIdentities.userId, user.id),
       });
     }
-
-    const [filesCountResult, membersResult] = await Promise.all([
-      db
-        .select({ count: count() })
-        .from(githubSyncFiles)
-        .where(eq(githubSyncFiles.projectId, projectId)),
-      db
-        .select({
-          userId: projectMembers.userId,
-          fullName: profiles.fullName,
-          username: profiles.username,
-          avatarUrl: profiles.avatarUrl,
-          membershipRole: projectMembers.role,
-          githubLogin: githubContributorIdentities.login,
-          githubEmail: githubContributorIdentities.email,
-        })
-        .from(projectMembers)
-        .innerJoin(profiles, eq(profiles.id, projectMembers.userId))
-        .leftJoin(
-          githubContributorIdentities,
-          eq(githubContributorIdentities.userId, projectMembers.userId),
-        )
-        .where(eq(projectMembers.projectId, projectId))
-        .limit(12),
-    ]);
 
     return {
       account: buildGithubAccountConnectionState(user),
@@ -340,9 +342,21 @@ export async function disconnectGitHubSyncRepository(projectId: string) {
       await tx
         .delete(githubSyncConnections)
         .where(eq(githubSyncConnections.projectId, projectId));
+      const projectRecord = await tx.query.projects.findFirst({
+        where: eq(projects.id, projectId),
+        columns: { importSource: true },
+      });
+      const fallbackRepoUrl =
+        projectRecord?.importSource?.type === "github"
+          ? projectRecord.importSource.repoUrl || null
+          : null;
+      const fallbackBranch =
+        projectRecord?.importSource?.type === "github"
+          ? projectRecord.importSource.branch || "main"
+          : null;
       await tx
         .update(projects)
-        .set({ githubRepoUrl: null, githubDefaultBranch: null })
+        .set({ githubRepoUrl: fallbackRepoUrl, githubDefaultBranch: fallbackBranch })
         .where(eq(projects.id, projectId));
       await tx
         .update(githubSyncRuns)
@@ -397,7 +411,7 @@ export async function prepareGitHubSync(
     const choices = syncSelectionSchema.parse(selection);
     const safeMessage = z.string().trim().min(1).max(2000).parse(message);
     if (
-      /^(co-authored-by|signed-off-by|edge-sync-operation):/im.test(safeMessage)
+      /^(co-authored-by|signed-off-by|edge-sync-operation|networkbase-sync-operation):/im.test(safeMessage)
     )
       throw new Error(
         "Authorship trailers are added automatically from verified contributor identities",
