@@ -6,7 +6,6 @@ import type { ProjectNode } from "@/lib/db/schema";
 import { eq, and, inArray } from "drizzle-orm";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { runInFlightDeduped } from "@/lib/utils/inflight-dedupe";
-import { revalidatePath } from "next/cache";
 import { parseProjectFileKey } from "@/lib/storage/project-file-key";
 import {
     assertProjectFileReadAccess,
@@ -297,7 +296,7 @@ export async function updateProjectFileStats(projectId: string, nodeId: string, 
         });
     }
 
-    revalidatePath(`/projects/${projectId}`);
+    // ponytail: client handles file content save directly; skip route revalidation
     return node;
 }
 
