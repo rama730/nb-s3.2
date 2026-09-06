@@ -122,6 +122,7 @@ import {
 import { LifecycleEditor as BaseLifecycleEditor } from "@/components/projects/LifecycleEditor";
 import { ProjectRolesEditor } from "@/components/projects/settings/ProjectRolesEditor";
 import { ProjectLinksManager } from "@/components/projects/dashboard/ProjectSocialLinksCard";
+import ProjectPrivacyTermsTab from "@/components/projects/tabs/ProjectPrivacyTermsTab";
 import {
     normalizeProjectRoleFormValues,
     type ProjectRoleFormValue,
@@ -284,6 +285,7 @@ const SECTION_ICONS: Record<ProjectSettingsSectionId, React.ComponentType<{ clas
     updates: Bell,
     notifications: Bell,
     "security-audit": Shield,
+    "privacy-terms": ShieldCheck,
     danger: AlertTriangle,
 };
 
@@ -595,16 +597,24 @@ export default function ProjectSettingsTab({
                 "files-workspace",
                 "readme",
                 "notifications",
+                "privacy-terms",
             ];
             return visible.filter((section) => adminSections.includes(section.id));
         }
-        return visible.filter((section) => section.id === "collaborators");
+        return visible.filter((section) => section.id === "collaborators" || section.id === "privacy-terms");
     }, [actorProjectRole, isProjectOwner]);
-    const [activeSection, setActiveSection] = useState<ProjectSettingsSectionId>(
-        canManageSettings && searchParams.get("settings") === "links"
+    const [activeSection, setActiveSection] = useState<ProjectSettingsSectionId>(() => {
+        const querySection = searchParams.get("settings") || searchParams.get("section");
+        if (querySection === "privacy" || querySection === "privacy-terms") {
+            return "privacy-terms";
+        }
+        if (querySection && sections.some((s) => s.id === querySection)) {
+            return querySection as ProjectSettingsSectionId;
+        }
+        return canManageSettings && searchParams.get("settings") === "links"
             ? "links"
-            : isProjectOwner ? "general" : "collaborators",
-    );
+            : isProjectOwner ? "general" : "collaborators";
+    });
     const [advancedOpen, setAdvancedOpen] = useState<Partial<Record<ProjectSettingsSectionId, boolean>>>({});
     const [savingSettings, setSavingSettings] = useState(false);
     const [uploadingCoverImage, setUploadingCoverImage] = useState(false);
@@ -2458,6 +2468,8 @@ export default function ProjectSettingsTab({
                                 projectId={projectId}
                                 links={project?.externalLinks ?? project?.external_links}
                                 githubRepoUrl={project?.githubRepoUrl ?? project?.github_repo_url}
+                                importSource={project?.importSource ?? (project as any)?.import_source}
+                                githubSyncConnection={project?.githubSyncConnection ?? (project as any)?.github_sync_connection}
                                 health={project?.externalLinkMetadata ?? project?.external_link_metadata}
                                 projectType={project?.category}
                                 onSaved={() => onProjectUpdated()}
@@ -3120,6 +3132,29 @@ export default function ProjectSettingsTab({
                                 Export project snapshot
                             </Button>
                         </SettingsCard>
+                    </div>
+                )}
+
+                {activeSection === "privacy-terms" && (
+                    <div className="space-y-5">
+                        <SummaryCard
+                            title="Privacy & Terms"
+                            description="Project legal notice, visibility disclosures, member responsibilities, and applicable terms."
+                            icon={ShieldCheck}
+                            meta={[
+                                ["Current visibility", visibility === "public" ? "Public" : "Private"],
+                                ["Viewer role", isProjectOwner ? "Project owner" : actorProjectRole === "admin" ? "Project co-leader" : "Project collaborator"],
+                                ["Repository", Boolean(project?.githubRepoUrl || project?.github_repo_url || project?.repositoryUrl) ? "Connected" : "Not connected"],
+                                ["Platform terms", "Standard platform legal notice"],
+                            ]}
+                        />
+                        <ProjectPrivacyTermsTab
+                            project={project}
+                            isOwner={isProjectOwner}
+                            isOwnerOrMember={Boolean(isProjectOwner || actorProjectRole)}
+                            publicTabVisibility={publicTabVisibility}
+                            embedded={true}
+                        />
                     </div>
                 )}
 
