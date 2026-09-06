@@ -1,6 +1,6 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
-import { and, eq, isNull, inArray, desc, sql } from "drizzle-orm";
+import { and, eq, isNull, isNotNull, inArray, desc, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   projects,
@@ -51,6 +51,29 @@ import {
   parseProjectIdFromProjectFileKey,
 } from "@/lib/storage/project-file-key";
 
+interface CachedBlobMeta {
+  blobSha: string;
+  isSafe: boolean;
+  safeError?: string;
+}
+
+// ponytail: Deterministic Git blob SHA-1 and safety metadata keyed by SHA-256 content hash.
+// Both Git blob SHA and content safety are pure deterministic functions of content.
+// Zero S3 downloads on repeat comparisons, tab changes, or identical file revisions.
+const gitBlobCache = new Map<string, CachedBlobMeta>();
+
+function cacheBlobMeta(hash: string, meta: CachedBlobMeta) {
+  if (gitBlobCache.size >= 50000) {
+    const keys = gitBlobCache.keys();
+    for (let i = 0; i < 10000; i++) {
+      const next = keys.next();
+      if (next.done) break;
+      gitBlobCache.delete(next.value);
+    }
+  }
+  gitBlobCache.set(hash, meta);
+}
+
 export async function requireSyncOwner(projectId: string, userId: string) {
   const project = await db.query.projects.findFirst({
     where: and(eq(projects.id, projectId), isNull(projects.deletedAt)),
@@ -67,10 +90,13 @@ export async function resolveSyncContext(
   oauthToken?: string | null,
   repositoryOverride?: string,
 ) {
-  const project = await requireSyncOwner(projectId, userId);
-  const connection = await db.query.githubSyncConnections.findFirst({
-    where: eq(githubSyncConnections.projectId, projectId),
-  });
+  // ponytail: execute owner validation and sync connection queries in parallel
+  const [project, connection] = await Promise.all([
+    requireSyncOwner(projectId, userId),
+    db.query.githubSyncConnections.findFirst({
+      where: eq(githubSyncConnections.projectId, projectId),
+    }),
+  ]);
   const repository =
     repositoryOverride || connection?.repository || project.githubRepoUrl;
   const metadata = project.importSource?.metadata as
@@ -95,10 +121,15 @@ export async function resolveSyncContext(
 }
 export type SyncContext = Awaited<ReturnType<typeof resolveSyncContext>>;
 
-export async function readStoredSyncContent(projectId: string, key: string) {
+export async function readStoredSyncContent(
+  projectId: string,
+  key: string,
+  storageOverride?: any,
+) {
   if (parseProjectIdFromProjectFileKey(key) !== projectId)
     throw new Error("File content is outside this project");
-  const storage = (await createAdminClient()).storage.from("project-files");
+  const storage =
+    storageOverride || (await createAdminClient()).storage.from("project-files");
   const { data, error } = await storage.download(key);
   if (error || !data)
     throw new Error("Unable to read file content. Please retry.");
@@ -252,7 +283,7 @@ export async function compareSync(
   const headSha = repo
     ? await requireExistingOrEmptyBranch(ctx.token, repository, branch)
     : null;
-  const [tree, rows, baselines] = await Promise.all([
+  const [tree, rows, baselines, knownBlobs] = await Promise.all([
     readGitHubTree(ctx.token, repository, headSha),
     db
       .select({ node: projectNodes, version: fileVersions })
@@ -284,6 +315,21 @@ export async function compareSync(
             ),
           )
       : Promise.resolve([]),
+    // ponytail: query all known content hashes across this project to eliminate S3 downloads
+    db
+      .select({
+        nodeId: githubSyncFiles.nodeId,
+        path: githubSyncFiles.path,
+        localHash: githubSyncFiles.localHash,
+        localBlobSha: githubSyncFiles.localBlobSha,
+      })
+      .from(githubSyncFiles)
+      .where(
+        and(
+          eq(githubSyncFiles.projectId, ctx.project.id),
+          isNotNull(githubSyncFiles.localBlobSha),
+        ),
+      ),
   ]);
   if (
     rows.length > SYNC_LIMITS.comparisonFiles ||
@@ -292,6 +338,25 @@ export async function compareSync(
     throw new Error(
       `Repository exceeds the ${SYNC_LIMITS.comparisonFiles.toLocaleString()}-entry comparison limit`,
     );
+  const knownBlobMap = new Map<string, string>();
+  const knownByNodeId = new Map<string, { localHash: string | null; localBlobSha: string }>();
+  const knownByPath = new Map<string, { localHash: string | null; localBlobSha: string }>();
+  for (const b of knownBlobs) {
+    if (b.localBlobSha) {
+      if (b.localHash) {
+        knownBlobMap.set(b.localHash, b.localBlobSha);
+        if (!gitBlobCache.has(b.localHash)) {
+          cacheBlobMeta(b.localHash, { blobSha: b.localBlobSha, isSafe: true });
+        }
+      }
+      if (b.nodeId && !knownByNodeId.has(b.nodeId)) {
+        knownByNodeId.set(b.nodeId, { localHash: b.localHash, localBlobSha: b.localBlobSha });
+      }
+      if (b.path && !knownByPath.has(b.path)) {
+        knownByPath.set(b.path, { localHash: b.localHash, localBlobSha: b.localBlobSha });
+      }
+    }
+  }
   const nodes = new Map(rows.map((row) => [row.node.id, row.node]));
   const pathFor = (id: string): string => {
     const parts: string[] = [];
@@ -333,6 +398,13 @@ export async function compareSync(
       return id ? [id] : [];
     }),
   );
+  let sharedStorage: any = null;
+  const getSharedStorage = async () => {
+    if (!sharedStorage) {
+      sharedStorage = (await createAdminClient()).storage.from("project-files");
+    }
+    return sharedStorage;
+  };
   const files = await runWithConcurrency(
     paths,
     // ponytail: storage latency dominates; 24 keeps worst-case buffers bounded
@@ -352,26 +424,81 @@ export async function compareSync(
       let localBlobSha: string | null = null;
       if (row && !row.node.s3Key) blocked = "File content is not available";
       if (row?.node.s3Key && !blocked) {
+        // Fast path 1: baseline for this branch already has localBlobSha and node has not changed
         if (
-          localHash &&
-          previous?.localHash === localHash &&
-          previous.localBlobSha
-        )
+          previous?.localBlobSha &&
+          (previous.nodeId === row.node.id || previous.path === path) &&
+          (row.node.currentVersion === 1 || !localHash || localHash === previous.localHash)
+        ) {
           localBlobSha = previous.localBlobSha;
+          if (!localHash && previous.localHash) localHash = previous.localHash;
+          if (localHash) cacheBlobMeta(localHash, { blobSha: localBlobSha, isSafe: true });
+        }
+        // Fast path 2: node already has gitHash (git_blob_hash) on projectNodes (e.g. from GitHub import)
+        else if (
+          row.node.gitHash &&
+          /^[a-f0-9]{40}$/.test(row.node.gitHash) &&
+          row.node.currentVersion === 1
+        ) {
+          localBlobSha = row.node.gitHash;
+          if (!localHash && previous?.localHash) localHash = previous.localHash;
+          if (localHash) cacheBlobMeta(localHash, { blobSha: localBlobSha, isSafe: true });
+        }
+        // Fast path 3: known by nodeId across any branch in this project
+        else if (knownByNodeId.has(row.node.id) && row.node.currentVersion === 1) {
+          const known = knownByNodeId.get(row.node.id)!;
+          localBlobSha = known.localBlobSha;
+          if (!localHash && known.localHash) localHash = known.localHash;
+          if (localHash) cacheBlobMeta(localHash, { blobSha: localBlobSha, isSafe: true });
+        }
+        // Fast path 4: known by exact relative path from previous sync in this project
+        else if (knownByPath.has(path) && row.node.currentVersion === 1) {
+          const known = knownByPath.get(path)!;
+          localBlobSha = known.localBlobSha;
+          if (!localHash && known.localHash) localHash = known.localHash;
+          if (localHash) cacheBlobMeta(localHash, { blobSha: localBlobSha, isSafe: true });
+        }
+        // Fast path 5: in-memory Git blob SHA cache (by contentHash)
+        else if (localHash && gitBlobCache.has(localHash)) {
+          const cached = gitBlobCache.get(localHash)!;
+          localBlobSha = cached.blobSha;
+          if (input.direction === "push" && !cached.isSafe) {
+            blocked = cached.safeError || "File content is blocked";
+          }
+        }
+        // Fast path 6: project-level known blob cache (by contentHash)
+        else if (localHash && knownBlobMap.has(localHash)) {
+          localBlobSha = knownBlobMap.get(localHash)!;
+          cacheBlobMeta(localHash, { blobSha: localBlobSha, isSafe: true });
+        }
+        // Fallback slow path: cold file with no known hash/sha anywhere
         else {
+          const storage = await getSharedStorage();
           const content = await readStoredSyncContent(
             ctx.project.id,
             row.node.s3Key,
+            storage,
           );
           const hashes = contentHashes(content);
           localHash = hashes.hash;
           localBlobSha = hashes.blobSha;
+          let isSafe = true;
+          let safeError: string | undefined;
           if (input.direction === "push") {
             try {
               assertSafeSyncContent(content);
             } catch (error) {
-              blocked = (error as Error).message;
+              isSafe = false;
+              safeError = (error as Error).message;
+              blocked = safeError;
             }
+          }
+          if (localHash) {
+            cacheBlobMeta(localHash, {
+              blobSha: localBlobSha,
+              isSafe,
+              safeError,
+            });
           }
         }
       }
@@ -406,7 +533,7 @@ export async function compareSync(
   const latest = await requireSyncOwner(ctx.project.id, ctx.project.ownerId);
   if (latest.currentSequenceNumber !== ctx.project.currentSequenceNumber)
     throw new Error("Project files changed during comparison. Compare again.");
-  // Matching content is authoritative baseline evidence, including a pull request merged outside Edge.
+  // Matching content is authoritative baseline evidence, including a pull request merged outside NetworkBase.
   const matching = files.filter(
     (file) =>
       !file.blocked &&
@@ -717,8 +844,18 @@ export async function validateReviewedLocalFiles(
   const [nodes, collisions] = await Promise.all([
     nodeIds.length
       ? db
-          .select()
+          .select({
+            node: projectNodes,
+            version: fileVersions,
+          })
           .from(projectNodes)
+          .leftJoin(
+            fileVersions,
+            and(
+              eq(fileVersions.nodeId, projectNodes.id),
+              eq(fileVersions.version, projectNodes.currentVersion),
+            ),
+          )
           .where(
             and(
               eq(projectNodes.projectId, projectId),
@@ -741,15 +878,23 @@ export async function validateReviewedLocalFiles(
           )
       : [],
   ]);
-  const nodesById = new Map(nodes.map((node) => [node.id, node]));
+  const nodesById = new Map(nodes.map((row) => [row.node.id, row]));
   const occupiedPaths = new Set(collisions.map((node) => node.path));
+  let sharedStorage: any = null;
+  const getSharedStorage = async () => {
+    if (!sharedStorage) {
+      sharedStorage = (await createAdminClient()).storage.from("project-files");
+    }
+    return sharedStorage;
+  };
   await runWithConcurrency(files, 24, async (file) => {
     if (!file.nodeId || !file.storageKey) {
       if (occupiedPaths.has(`/${file.path}`))
         throw new Error(`File appeared after review: ${file.path}`);
       return;
     }
-    const node = nodesById.get(file.nodeId);
+    const row = nodesById.get(file.nodeId);
+    const node = row?.node;
     if (
       !node ||
       node.currentVersion !== file.version ||
@@ -757,11 +902,21 @@ export async function validateReviewedLocalFiles(
       node.path.replace(/^\//, "") !== (file.renamedFrom || file.path)
     )
       throw new Error(`File changed after review: ${file.path}`);
-    if (
-      verifyContent &&
-      contentHashes(await readStoredSyncContent(projectId, node.s3Key!))
-        .hash !== file.localHash
-    )
-      throw new Error(`Content changed after review: ${file.path}`);
+    if (verifyContent) {
+      // ponytail: database contentHash check is instant (0 network round trips)
+      if (row.version?.contentHash) {
+        if (row.version.contentHash !== file.localHash) {
+          throw new Error(`Content changed after review: ${file.path}`);
+        }
+      } else {
+        const storage = await getSharedStorage();
+        if (
+          contentHashes(
+            await readStoredSyncContent(projectId, node.s3Key!, storage),
+          ).hash !== file.localHash
+        )
+          throw new Error(`Content changed after review: ${file.path}`);
+      }
+    }
   });
 }
