@@ -37,7 +37,7 @@ describe('auth snapshot helpers', () => {
             iat: nowSeconds,
             exp: nowSeconds + 60,
             app_metadata: { role: 'member', roles: ['member', 'builder'], onboarding_complete: true },
-            user_metadata: { username: 'edge-user', onboarded: true },
+            user_metadata: { username: 'networkbase-user', onboarded: true },
         }, process.env.SUPABASE_JWT_SECRET as string)
 
         const claims = await mod.verifySupabaseAccessToken(token)
