@@ -57,12 +57,17 @@ test("hydration is Realtime-first with a bounded fallback", () => {
 test("logout deletes the authenticated push record before local and Auth teardown", () => {
   const push = source("src/lib/notifications/web-push-client.ts");
   const auth = source("src/components/providers/AuthProvider.tsx");
+  const sessionRoute = source("src/app/api/v1/auth/session/route.ts");
   const signOut = auth.slice(auth.indexOf("const signOut = useCallback"));
 
   assert.ok(push.indexOf("deletePushSubscriptionAction(endpoint)") < push.indexOf("sub.unsubscribe()"));
   assert.match(push, /return \{ ok: false, reason: "server_cleanup_failed" \}/);
   assert.ok(signOut.indexOf("await unsubscribeWebPush()") < signOut.indexOf("syncBrowserSessionToServer(null)"));
-  assert.ok(signOut.indexOf("await unsubscribeWebPush()") < signOut.indexOf("supabase.auth.signOut()"));
+  assert.ok(signOut.indexOf("await unsubscribeWebPush()") < signOut.indexOf("supabase.auth.signOut({ scope: 'local' })"));
+  assert.match(auth, /if \(session && token === lastSyncedSessionToken\) return/);
+  assert.match(sessionRoute, /supabase\.auth\.signOut\(\{ scope: "local" \}\)/);
+  assert.match(sessionRoute, /expireBrowserSessionCookies\(response, cookieNames\)/);
+  assert.doesNotMatch(sessionRoute, /jsonError\("Failed to clear browser session"/);
 });
 
 test("presence is chat-scoped and debounce markers follow persistence", () => {
