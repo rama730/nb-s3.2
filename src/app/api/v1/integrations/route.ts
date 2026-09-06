@@ -1,7 +1,7 @@
-import { and, isNotNull, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { jsonSuccess, requireAuthenticatedUser, enforceRouteLimit } from "@/app/api/v1/_shared";
 import { db } from "@/lib/db";
-import { projects, projectMembers } from "@/lib/db/schema";
+import { projects, projectMembers, githubSyncConnections } from "@/lib/db/schema";
 import { getLatestPasswordChangeAt } from "@/lib/security/audit";
 import { resolveGithubExternalAccountHealth } from "@/lib/github/account-health";
 import { buildGithubAccountConnectionState } from "@/lib/github/connection-state";
@@ -45,19 +45,52 @@ export async function GET(request: Request) {
         username: githubConnection.username,
     });
 
-    const [githubProjectsAggregate] = await db
+    const githubProjectRows = await db
         .select({
-            count: sql<number>`count(*)::int`,
-            githubLastSyncAt: sql<Date | string | null>`max(${projects.githubLastSyncAt})`,
+            id: projects.id,
+            slug: projects.slug,
+            title: projects.title,
+            importSource: projects.importSource,
+            githubRepoUrl: projects.githubRepoUrl,
+            githubLastSyncAt: projects.githubLastSyncAt,
+            syncRepository: githubSyncConnections.repository,
+            syncBranch: githubSyncConnections.branch,
         })
         .from(projects)
+        .leftJoin(githubSyncConnections, eq(projects.id, githubSyncConnections.projectId))
         .where(
             and(
                 sql`(${projects.ownerId} = ${user.id} OR exists (select 1 from ${projectMembers} where ${projectMembers.projectId} = ${projects.id} and ${projectMembers.userId} = ${user.id}))`,
                 isNull(projects.deletedAt),
-                isNotNull(projects.githubRepoUrl),
+                or(
+                    isNotNull(projects.githubRepoUrl),
+                    isNotNull(githubSyncConnections.projectId),
+                    sql`${projects.importSource}->>'type' = 'github'`,
+                ),
             ),
-        );
+        )
+        .orderBy(desc(projects.updatedAt))
+        .limit(25);
+
+    const githubProjects = githubProjectRows.map((row) => ({
+        id: row.id,
+        slug: row.slug || row.id,
+        title: row.title || "Untitled Project",
+        importSource: (row.importSource as { type?: string; repoUrl?: string; branch?: string } | null) ?? null,
+        githubRepoUrl: row.githubRepoUrl || null,
+        syncRepository: row.syncRepository || null,
+        syncBranch: row.syncBranch || null,
+        lastSyncAt: toIsoString(row.githubLastSyncAt),
+    }));
+
+    const githubProjectsAggregate = githubProjectRows.length > 0 ? {
+        githubLastSyncAt: githubProjectRows.reduce<Date | null>((latest, current) => {
+            if (!current.githubLastSyncAt) return latest;
+            if (!latest) return current.githubLastSyncAt;
+            return current.githubLastSyncAt > latest ? current.githubLastSyncAt : latest;
+        }, null),
+    } : null;
+    const latestSyncAt = toIsoString(githubProjectsAggregate?.githubLastSyncAt);
 
     const passwordLastChangedAt = await getLatestPasswordChangeAt(user.id);
     const githubAccountHealth = await githubAccountHealthPromise;
@@ -65,11 +98,11 @@ export async function GET(request: Request) {
     return jsonSuccess(
         buildIntegrationsData({
             user: effectiveUser,
-            githubRepoProjectCount: githubProjectsAggregate?.count ?? 0,
-            // ponytail: SQL aggregates bypass timestamp column mapping, so normalize at the API boundary.
-            githubLastSyncAt: toIsoString(githubProjectsAggregate?.githubLastSyncAt),
+            githubRepoProjectCount: githubProjects.length,
+            githubLastSyncAt: latestSyncAt,
             passwordLastChangedAt: passwordLastChangedAt ?? null,
             githubAccountHealth,
+            githubProjects,
         }),
     );
 }
