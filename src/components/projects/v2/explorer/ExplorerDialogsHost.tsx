@@ -27,6 +27,7 @@ import type { ProjectNode } from "@/lib/db/schema";
 import { getProjectNodes } from "@/app/actions/files/nodes";
 import { createFolder } from "@/app/actions/files/mutations";
 import { isInternalTaskWorkingFilesNode } from "@/lib/files/task-working-files";
+import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 
 // --- FolderPicker (standalone sub-component) ---
 
@@ -122,12 +123,28 @@ export function FolderPicker({
 
   useEffect(() => {
     setPages({});
-    setExpanded({});
+    const initialExpanded: Record<string, boolean> = {};
+    if (selectedFolderId) {
+      const nodesById =
+        useFilesWorkspaceStore.getState().byProjectId[projectId]?.nodesById ??
+        {};
+      const visited = new Set<string>();
+      let curr = nodesById[selectedFolderId];
+      while (curr?.parentId && !visited.has(curr.parentId)) {
+        visited.add(curr.parentId);
+        initialExpanded[curr.parentId] = true;
+        curr = nodesById[curr.parentId];
+      }
+    }
+    setExpanded(initialExpanded);
     setQuery("");
     void loadPage(null);
-    // loadPage is intentionally reset with the project identity.
+    Object.keys(initialExpanded).forEach((ancestorId) => {
+      void loadPage(ancestorId);
+    });
+    // loadPage is intentionally reset with the project identity and target.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId]);
+  }, [projectId, selectedFolderId]);
 
   useEffect(() => {
     const normalized = query.trim();
