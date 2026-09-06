@@ -18,7 +18,7 @@ describe("profile display helpers", () => {
       bio: "working",
     });
 
-    assert.equal(description, "Rama is a Builder from Hyderabad on Edge. View their work and connect.");
+    assert.equal(description, "Rama is a Builder from Hyderabad on NetworkBase. View their work and connect.");
   });
 
   it("uses trimmed bio when it is descriptive enough", () => {
@@ -37,12 +37,12 @@ describe("profile display helpers", () => {
       bio: "short",
     });
 
-    assert.equal(description, "Rama is based in Hyderabad on Edge. View their work and connect.");
+    assert.equal(description, "Rama is based in Hyderabad on NetworkBase. View their work and connect.");
   });
 
   it("normalizes profile titles", () => {
-    assert.equal(buildOwnerProfileTitle({ fullName: "Rama ", username: "rama" }), "Rama (@rama) | Edge");
-    assert.equal(buildPublicProfileTitle({ username: "rama" }), "@rama | Edge");
+    assert.equal(buildOwnerProfileTitle({ fullName: "Rama ", username: "rama" }), "Rama (@rama) | NetworkBase");
+    assert.equal(buildPublicProfileTitle({ username: "rama" }), "@rama | NetworkBase");
     assert.equal(normalizeProjectTitle(" Network for builders "), "Network for builders");
   });
 });
