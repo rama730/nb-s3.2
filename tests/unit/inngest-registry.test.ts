@@ -32,7 +32,7 @@ function restoreEnv(key: string, value: string | undefined) {
 }
 
 function seedWorkerRegistryEnv() {
-  env.DATABASE_URL = env.DATABASE_URL ?? "postgres://user:password@127.0.0.1:5432/edge_test";
+  env.DATABASE_URL = env.DATABASE_URL ?? "postgres://user:password@127.0.0.1:5432/networkbase_test";
   env.NEXT_PUBLIC_SUPABASE_URL = env.NEXT_PUBLIC_SUPABASE_URL ?? "https://example.supabase.co";
   env.NEXT_PUBLIC_SUPABASE_ANON_KEY = env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "anon-key";
   env.SUPABASE_SERVICE_ROLE_KEY = env.SUPABASE_SERVICE_ROLE_KEY ?? "service-role-key";
