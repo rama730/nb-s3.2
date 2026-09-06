@@ -82,6 +82,7 @@ interface AuthContextType extends AuthState {
     verifyOtp: (email: string, token: string, type?: 'signup' | 'email') => Promise<AuthResult>;
     signOut: () => Promise<void>;
     signInWithGoogle: (nextPath?: string | null) => Promise<OAuthResult>;
+    signInWithGoogleIdToken: (token: string, nonce: string) => Promise<AuthResult>;
     signInWithGitHub: (nextPath?: string | null) => Promise<OAuthResult>;
     refreshProfile: () => Promise<void>;
 }
@@ -93,7 +94,9 @@ let lastSyncedSessionToken: string | null = null;
 
 async function syncBrowserSessionToServer(session: Session | null) {
     const token = session ? `${session.access_token}:${session.refresh_token}` : null;
-    if (token === lastSyncedSessionToken) return;
+    // Logout must always reach the server, including after a hot reload where
+    // the module-level token cache has reset to null.
+    if (session && token === lastSyncedSessionToken) return;
 
     const response = await fetch('/api/v1/auth/session', {
         method: session ? 'POST' : 'DELETE',
@@ -111,7 +114,7 @@ async function syncBrowserSessionToServer(session: Session | null) {
     if (!response.ok) {
         if (response.status === 400 || response.status === 401) {
             const supabase = createClient();
-            await supabase.auth.signOut().catch(() => null);
+            await supabase.auth.signOut({ scope: 'local' }).catch(() => null);
         }
         throw new Error(`Browser session sync failed (${response.status})`);
     }
@@ -553,6 +556,35 @@ export function AuthProvider({
         return result;
     }, []);
 
+    const signInWithGoogleIdToken = useCallback(async (token: string, nonce: string) => {
+        const supabase = createClient();
+        try {
+            const result = await supabase.auth.signInWithIdToken({
+                provider: 'google',
+                token,
+                nonce,
+            });
+            if (result.error) {
+                return {
+                    data: result.data,
+                    error: { message: result.error.message || 'Unable to complete Google sign-in' },
+                };
+            }
+            if (result.data.session) {
+                await syncBrowserSessionToServer(result.data.session);
+            }
+            return { data: result.data, error: null };
+        } catch (error) {
+            logger.warn('auth.google_one_tap.failed', {
+                error: error instanceof Error ? error.message : String(error),
+            });
+            return {
+                data: null,
+                error: { message: 'Unable to complete Google sign-in' },
+            };
+        }
+    }, []);
+
     const signInWithGitHub = useCallback(async (nextPath?: string | null) => {
         const supabase = createClient();
         const normalizedNextPath = normalizeAuthNextPath(nextPath);
@@ -589,11 +621,21 @@ export function AuthProvider({
             });
         }
 
-        // 1. Await the server cookie deletion first
-        await syncBrowserSessionToServer(null).catch(() => null);
+        // 1. Await the idempotent server cookie deletion first.
+        await syncBrowserSessionToServer(null).catch((error) => {
+            logger.warn('auth.session.clear_failed', {
+                error: error instanceof Error ? error.message : String(error),
+            });
+        });
         
         // 2. Clear browser session (this also fires the SIGNED_OUT listener)
-        await supabase.auth.signOut().catch(() => null);
+        const { error: signOutError } = await supabase.auth.signOut({ scope: 'local' });
+        if (signOutError) {
+            logger.warn('auth.signout_local_failed', {
+                error: signOutError.message,
+            });
+        }
+        lastSyncedSessionToken = null;
         
         // 3. Clear all cached browser storages (IndexedDB, LocalStorage, Cache API)
         if (typeof window !== 'undefined') {
@@ -661,6 +703,7 @@ export function AuthProvider({
         verifyOtp,
         signOut,
         signInWithGoogle,
+        signInWithGoogleIdToken,
         signInWithGitHub,
         refreshProfile
     }), [
@@ -670,6 +713,7 @@ export function AuthProvider({
         verifyOtp,
         signOut,
         signInWithGoogle,
+        signInWithGoogleIdToken,
         signInWithGitHub,
         refreshProfile
     ]);
