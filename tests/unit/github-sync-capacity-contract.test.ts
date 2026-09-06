@@ -13,7 +13,6 @@ test("GitHub Sync separates comparison, reviewed-operation, and worker capacity"
     GITHUB_SYNC_LIMITS.operationBytes,
   );
 });
-
 test("comparison does not reject the entire workspace by byte size", () => {
   const source = readFileSync("src/lib/github/sync-service.ts", "utf8");
 
@@ -72,4 +71,37 @@ test("large reviews avoid serial storage, database, and git staging work", () =>
   assert.match(publisher, /runWithConcurrency\(manifest\.files, 24/);
   assert.match(publisher, /git\("add", "--all", "--", "\."\)/);
   assert.doesNotMatch(publisher, /git\("add", "--all", "--", file\.path\)/);
+});
+
+test("comparison eliminates redundant S3 downloads via gitBlobCache and knownBlobs", () => {
+  const service = readFileSync("src/lib/github/sync-service.ts", "utf8");
+
+  // Asserts gitBlobCache is declared and used
+  assert.match(service, /const gitBlobCache = new Map<string, CachedBlobMeta>\(\)/);
+  assert.match(service, /knownBlobs/);
+  assert.match(service, /knownBlobMap/);
+  assert.match(service, /gitBlobCache\.has\(localHash\)/);
+  assert.match(service, /sharedStorage/);
+});
+
+test("getGitHubSyncState executes runs, identity, files count, and members queries in parallel", () => {
+  const action = readFileSync("src/app/actions/github-sync.ts", "utf8");
+
+  assert.match(
+    action,
+    /const \[runs, identityRow, filesCountResult, membersResult\] =\s*await Promise\.all\(\[/,
+  );
+});
+
+test("explorer boot restores unloaded folders with append mode without forced refresh cascades", () => {
+  const boot = readFileSync(
+    "src/components/projects/v2/explorer/useExplorerBoot.ts",
+    "utf8",
+  );
+
+  assert.match(boot, /loadFolderContent\(id === "root" \? null : id, "append"\)/);
+  assert.doesNotMatch(
+    boot,
+    /loadFolderContent\(id === "root" \? null : id, "refresh"\)/,
+  );
 });
