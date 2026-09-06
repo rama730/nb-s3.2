@@ -128,7 +128,7 @@ test("credit uses approved actual editors and does not invent the publisher as a
   const identity = commitIdentity([
     file({ contributors: [...authors, authors[0]!] }),
   ]);
-  assert.equal(identity.author.name, "Edge Sync");
+  assert.equal(identity.author.name, "NetworkBase Sync");
   assert.equal(identity.trailers.split("\n").length, 2);
   assert.equal(
     commitIdentity([file({ contributors: [authors[0]!] })]).author.name,
@@ -164,7 +164,7 @@ test("unambiguous incoming rename preserves canonical file identity; ambiguous c
   );
 });
 test("native publisher pushes the actual remote, preserves executable mode, and cannot overwrite concurrent commits", async () => {
-  const root = await mkdtemp(join(tmpdir(), "edge-sync-test-"));
+  const root = await mkdtemp(join(tmpdir(), "networkbase-sync-test-"));
   const remote = join(root, "remote.git");
   try {
     await git("init", "--bare", remote);
@@ -224,7 +224,7 @@ test("native publisher pushes the actual remote, preserves executable mode, and 
       readContent: async () => updated,
       beforePush: async () => {},
     });
-    assert.equal(pr.branch, "edge/sync-review");
+    assert.equal(pr.branch, "networkbase/sync-review");
     assert.equal(
       await git("--git-dir", remote, "rev-parse", "main"),
       second.commitSha,
@@ -234,7 +234,7 @@ test("native publisher pushes the actual remote, preserves executable mode, and 
   }
 });
 test("native publication treats pathspec-like filenames literally", async () => {
-  const root = await mkdtemp(join(tmpdir(), "edge-sync-literal-test-"));
+  const root = await mkdtemp(join(tmpdir(), "networkbase-sync-literal-test-"));
   const remote = join(root, "remote.git");
   try {
     await git("init", "--bare", remote);
