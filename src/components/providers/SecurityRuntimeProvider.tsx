@@ -5,7 +5,7 @@ import { createContext, useContext, useEffect, useMemo } from "react";
 import { CSRF_HEADER_NAME } from "@/lib/security/csrf-constants";
 
 const SecurityRuntimeContext = createContext<{ nonce: string | null }>({ nonce: null });
-const FETCH_PATCH_SYMBOL = Symbol.for("edge.security.fetch.patch");
+const FETCH_PATCH_SYMBOL = Symbol.for("networkbase.security.fetch.patch");
 const CSRF_ENDPOINT = "/api/v1/security/csrf";
 
 // SEC-C1: the CSRF cookie is now httpOnly, so we cannot read it from
