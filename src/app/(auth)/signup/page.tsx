@@ -7,6 +7,7 @@ import { useAuth } from '@/lib/hooks/use-auth'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import TurnstileWidget, { hasTurnstileSiteKey } from '@/components/auth/TurnstileWidget'
+import { GoogleOneTap } from '@/components/auth/GoogleOneTap'
 import { AuthAmbientCanvas } from '@/components/auth/AuthAmbientCanvas'
 import { Github, Loader2, Eye, EyeOff, AlertCircle, Check, X, Sparkles, Mail, ArrowLeft, ShieldCheck } from 'lucide-react'
 import { buildAuthPageHref, resolveAuthRedirectPath } from '@/lib/auth/redirects'
@@ -48,6 +49,9 @@ function SignupPageInner() {
     const redirectPath = resolveAuthRedirectPath(searchParams.get('redirect'))
     const loginHref = buildAuthPageHref('/login', redirectPath)
     const inviteParam = searchParams.get('invite') || searchParams.get('ref') || searchParams.get('project')
+    const oneTapNextPath = inviteParam
+        ? `${redirectPath}${redirectPath.includes('?') ? '&' : '?'}invite=${encodeURIComponent(inviteParam)}`
+        : redirectPath
 
     const [fullName, setFullName] = useState('')
     const [email, setEmail] = useState('')
@@ -442,6 +446,7 @@ function SignupPageInner() {
 
     return (
         <main className="min-h-screen w-full grid grid-cols-1 lg:grid-cols-2 bg-background text-foreground">
+            <GoogleOneTap nextPath={oneTapNextPath} onError={setError} />
             {/* Left Panel: Clean Interactive Registration & Verification Form */}
             <div className="flex flex-col justify-start sm:justify-center items-center py-8 sm:py-12 pb-16 px-6 sm:px-10 lg:px-12 xl:p-16 w-full min-h-screen overflow-y-auto">
                 <div className="w-full max-w-md my-auto transition-all duration-300 ease-out">
