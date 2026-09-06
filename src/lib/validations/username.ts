@@ -3,6 +3,7 @@ const USERNAME_PATTERN = /^[a-z0-9_]+$/
 export const CORE_RESERVED_USERNAMES = [
     'admin',
     'edge',
+    'networkbase',
     'api',
     'www',
     'mail',
