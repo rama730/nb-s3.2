@@ -77,9 +77,9 @@ export async function startGithubRepositoryAuthorization({
 }
 
 /**
- * Links a GitHub identity to the currently authenticated Edge account. Unlike
+ * Links a GitHub identity to the currently authenticated NetworkBase account. Unlike
  * repository reauthorization, this must use Supabase identity linking so OAuth
- * can never sign the browser into a different Edge account.
+ * can never sign the browser into a different NetworkBase account.
  */
 export async function startGithubIdentityLink({
   nextPath = "/settings?tab=integrations&githubIdentity=linked",
