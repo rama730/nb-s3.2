@@ -1,4 +1,4 @@
-export const CSRF_COOKIE_NAME = "edge-csrf-token";
+export const CSRF_COOKIE_NAME = "networkbase-csrf-token";
 export const CSRF_HEADER_NAME = "x-csrf-token";
 
 // Shared by the edge middleware that issues the cookie AND the node runtime that
