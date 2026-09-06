@@ -1,7 +1,13 @@
+import type { Metadata } from 'next'
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { ArrowRight, Sparkles, Users, Folder, Zap } from 'lucide-react'
 import { LegalLinks } from '@/components/legal/LegalLinks'
+
+export const metadata: Metadata = {
+  title: 'NetworkBase',
+  description: 'A collaborative workspace for building and sharing projects.',
+}
 
 export default function HomePage() {
   return (
