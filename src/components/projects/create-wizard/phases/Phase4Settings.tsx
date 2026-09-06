@@ -110,6 +110,7 @@ export default function Phase4Settings() {
                     savedLinks={[]}
                     onChange={(links) => setValue('external_links', links, { shouldDirty: true, shouldValidate: true })}
                     githubRepoUrl={importSource?.type === 'github' ? importSource.repoUrl : null}
+                    importSource={importSource}
                     projectType={watch('project_type')}
                 />
             </div>
