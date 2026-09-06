@@ -38,6 +38,7 @@ function main() {
   assertIncludes(providerSource, /CSRF_HEADER_NAME/, "SecurityRuntimeProvider must attach the CSRF header", errors);
   assertIncludes(providerSource, /window\.fetch = async/, "SecurityRuntimeProvider must patch same-origin browser fetch calls", errors);
   assertIncludes(turnstileSource, /nonce=\{nonce \?\? undefined\}/, "TurnstileWidget must pass the CSP nonce to next/script", errors);
+  assertIncludes(middlewareSource, /https:\/\/accounts\.google\.com/, "middleware CSP must permit Google Identity Services", errors);
 
   if (errors.length > 0) {
     console.error("[csp-contract] failed:");
