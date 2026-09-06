@@ -319,6 +319,7 @@ export async function upsertAggregatedNotification(
 
     const now = new Date();
     const aggregateDelta = Math.max(1, input.aggregateCount ?? 1);
+    const delayUntilIso = check.delayUntil instanceof Date ? check.delayUntil.toISOString() : null;
     const [row] = await tx
         .insert(userNotifications)
         .values({
@@ -362,11 +363,17 @@ export async function upsertAggregatedNotification(
                 // A new aggregate event must never cancel an explicit future
                 // snooze already chosen for the existing inbox item. Policy
                 // delays may extend that snooze, but cannot shorten it.
-                snoozedUntil: sql`CASE
-                    WHEN ${userNotifications.snoozedUntil} > ${now}
-                        THEN GREATEST(${userNotifications.snoozedUntil}, ${check.delayUntil})
-                    ELSE ${check.delayUntil}
-                END`,
+                snoozedUntil: delayUntilIso
+                    ? sql`CASE
+                        WHEN ${userNotifications.snoozedUntil} > NOW()
+                            THEN GREATEST(${userNotifications.snoozedUntil}, ${delayUntilIso}::timestamptz)
+                        ELSE ${delayUntilIso}::timestamptz
+                    END`
+                    : sql`CASE
+                        WHEN ${userNotifications.snoozedUntil} > NOW()
+                            THEN ${userNotifications.snoozedUntil}
+                        ELSE NULL
+                    END`,
                 activityAt: now,
                 updatedAt: now,
             },
