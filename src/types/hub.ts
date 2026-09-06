@@ -60,6 +60,10 @@ export interface Project {
   importSource?: any | null;
   githubRepoUrl?: string | null;
   githubDefaultBranch?: string | null;
+  githubSyncConnection?: {
+    repository: string;
+    branch: string;
+  } | null;
   externalLinks?: SocialLinkStorage;
   externalLinkMetadata?: Record<
     string,
