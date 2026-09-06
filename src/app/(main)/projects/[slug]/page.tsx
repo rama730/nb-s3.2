@@ -54,7 +54,7 @@ export async function generateMetadata({
         sprints: "Sprints",
         analytics: "Project Analytics",
         settings: "Settings",
-        privacy: "Privacy & terms",
+        privacy: "Settings",
         readme: "Docs",
         docs: "Docs",
     };
