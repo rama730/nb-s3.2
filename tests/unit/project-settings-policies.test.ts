@@ -113,13 +113,19 @@ test("project public tab visibility defaults keep public workspace low-noise", (
         tabId: "privacy",
         isOwnerOrMember: false,
         publicTabVisibility: {},
-    }), true);
+    }), false);
     assert.equal(resolveAllowedProjectTab({
         requestedTab: "privacy",
         isOwnerOrMember: false,
         canManageSettings: false,
         publicTabVisibility: {},
-    }), "privacy");
+    }), "dashboard");
+    assert.equal(resolveAllowedProjectTab({
+        requestedTab: "privacy",
+        isOwnerOrMember: true,
+        canManageSettings: true,
+        publicTabVisibility: {},
+    }), "settings");
     assert.equal(resolveAllowedProjectTab({
         requestedTab: "analytics",
         isOwnerOrMember: false,

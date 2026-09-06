@@ -52,6 +52,10 @@ export function useExplorerBoot(options: {
   }, [expandedFolderIds]);
 
   useEffect(() => {
+    batchLoadedRef.current = false;
+  }, [projectId]);
+
+  useEffect(() => {
     isActiveRef.current = isActive;
   }, [isActive]);
 
@@ -262,20 +266,23 @@ export function useExplorerBoot(options: {
     prevSyncStatus.current = syncStatus;
   }, [isActive, isBooting, syncStatus, loadFolderContent]);
 
-  // ponytail: restore through the same paginated loader as interactive navigation.
+  // ponytail: restore only unloaded folders through paginated loader without forced refresh cascades.
   // Four requests at a time keeps restore below the global in-flight budget.
   useEffect(() => {
     if (!isActive || batchLoadedRef.current) return;
     batchLoadedRef.current = true;
-    const expanded = useFilesWorkspaceStore.getState().byProjectId[projectId]?.expandedFolderIds ?? {};
-    const ids = Object.keys(expanded).filter(id => expanded[id]);
+    const ws = useFilesWorkspaceStore.getState().byProjectId[projectId];
+    const expanded = ws?.expandedFolderIds ?? {};
+    const loaded = ws?.loadedChildren ?? {};
+    const ids = Object.keys(expanded).filter(id => expanded[id] && !loaded[filesParentKey(id === "root" ? null : id)]);
+    if (!ids.length) return;
     let cancelled = false;
     void (async () => {
       for (let offset = 0; offset < ids.length && !cancelled; offset += 4) {
-        await Promise.allSettled(ids.slice(offset, offset + 4).map(id => loadFolderContent(id === "root" ? null : id, "refresh")));
+        await Promise.allSettled(ids.slice(offset, offset + 4).map(id => loadFolderContent(id === "root" ? null : id, "append")));
       }
     })();
-    return () => { cancelled = true; batchLoadedRef.current = false; };
+    return () => { cancelled = true; };
   }, [isActive, projectId, loadFolderContent]);
 
   // 3. User Interaction Expansion (Lazy Load)

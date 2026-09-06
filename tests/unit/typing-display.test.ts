@@ -26,17 +26,17 @@ test("getTypingStatusText formats single, pair, and group typing states consiste
   const one: TypingDisplayUser[] = [{ id: "1", fullName: "Rama", username: "rama" }];
   const two: TypingDisplayUser[] = [
     { id: "1", fullName: "Rama", username: "rama" },
-    { id: "2", fullName: "Edge User", username: "edge" },
+    { id: "2", fullName: "NetworkBase User", username: "networkbase" },
   ];
   const three: TypingDisplayUser[] = [
     { id: "1", fullName: "Rama", username: "rama" },
-    { id: "2", fullName: "Edge User", username: "edge" },
+    { id: "2", fullName: "NetworkBase User", username: "networkbase" },
     { id: "3", fullName: "Peer", username: "peer" },
   ];
 
   assert.equal(getTypingStatusText([]), null);
   assert.equal(getTypingStatusText(one), "Rama is typing");
   assert.equal(getTypingStatusText(one, { ellipsis: true }), "Rama is typing...");
-  assert.equal(getTypingStatusText(two), "Rama and Edge User are typing");
+  assert.equal(getTypingStatusText(two), "Rama and NetworkBase User are typing");
   assert.equal(getTypingStatusText(three), "Rama and 2 others are typing");
 });

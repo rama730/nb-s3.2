@@ -134,6 +134,7 @@ async function remoteAuthors(
   manifest: SyncManifest,
   file: SyncFile,
   deltaCache: Map<string, Promise<Set<string>>>,
+  identityCache?: Map<number, Promise<any>>,
 ): Promise<SyncContributor[]> {
   let delta: Set<string> | null = null;
   if (file.baseCommit) {
@@ -189,11 +190,24 @@ async function remoteAuthors(
       )
     )
       continue;
-    const linked = author
-      ? await db.query.githubContributorIdentities.findFirst({
+    let linked = null;
+    if (author) {
+      if (identityCache) {
+        if (!identityCache.has(author.id)) {
+          identityCache.set(
+            author.id,
+            db.query.githubContributorIdentities.findFirst({
+              where: eq(githubContributorIdentities.githubId, author.id),
+            }),
+          );
+        }
+        linked = await identityCache.get(author.id);
+      } else {
+        linked = await db.query.githubContributorIdentities.findFirst({
           where: eq(githubContributorIdentities.githubId, author.id),
-        })
-      : null;
+        });
+      }
+    }
     result.push({
       userId: linked?.userId || null,
       name: commit.commit.author.name,
@@ -476,14 +490,22 @@ export async function runReviewedGitHubSync(
           "GitHub changed after review. Compare incoming changes again.",
         );
       const deltaCache = new Map<string, Promise<Set<string>>>();
+      const identityCache = new Map<number, Promise<any>>();
+      let lastStageUpdate = 0;
       for (const file of manifest.files) {
         if (result.applied?.includes(file.path)) continue;
-        await update({ stage: `Applying ${file.path}` });
+        const now = Date.now();
+        // ponytail: throttle stage updates to at most once per 2 seconds to avoid saturating Postgres with per-file UPDATE queries
+        if (now - lastStageUpdate > 2000) {
+          lastStageUpdate = now;
+          await update({ stage: `Applying ${file.path}` });
+        }
         const authors = await remoteAuthors(
           ctx.token,
           manifest,
           file,
           deltaCache,
+          identityCache,
         );
         const isRemote = !file.resolution || file.resolution === "github";
         const attribution = {

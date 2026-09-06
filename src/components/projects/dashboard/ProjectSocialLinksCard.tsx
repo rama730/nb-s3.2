@@ -36,6 +36,7 @@ import {
     isProjectLinkMetadataStale,
     PROJECT_LINK_PURPOSE_LABELS,
     resolveProjectSocialLinks,
+    type ProjectRepositoryContext,
     type ResolvedProjectSocialLink,
 } from '@/lib/projects/social-links';
 import {
@@ -73,7 +74,12 @@ function linkHref(projectId: string, link: ResolvedProjectSocialLink) {
 
 function ProjectLinkAnchor({ projectId, link, className }: { projectId: string; link: ResolvedProjectSocialLink; className?: string }) {
     const title = linkTitle(link);
-    const description = `${title} · ${link.accountLabel} · ${PROJECT_LINK_PURPOSE_LABELS[link.purpose]}${link.audience === 'members' ? ' · Members only' : ''}${link.managed ? ' · Connected repository' : ''}`;
+    const repoRoleLabel = link.repositoryRole === 'cloned' || link.managed === 'github-cloned-repo'
+        ? ' · Cloned repository'
+        : link.managed
+            ? ' · Connected repository'
+            : '';
+    const description = `${title} · ${link.accountLabel} · ${PROJECT_LINK_PURPOSE_LABELS[link.purpose]}${link.audience === 'members' ? ' · Members only' : ''}${repoRoleLabel}`;
     return (
         <Tooltip>
             <TooltipTrigger asChild>
@@ -130,6 +136,8 @@ export const ProjectLinkEditorFields = forwardRef<ProjectLinkEditorHandle, {
     onChange: (links: SocialLinkItem[]) => void;
     savedLinks?: unknown;
     githubRepoUrl?: string | null;
+    importSource?: { type?: string; repoUrl?: string; branch?: string } | null;
+    githubSyncConnection?: { repository?: string; branch?: string } | null;
     health?: LinkHealth;
     projectType?: string | null;
     disabled?: boolean;
@@ -139,6 +147,8 @@ export const ProjectLinkEditorFields = forwardRef<ProjectLinkEditorHandle, {
     onChange,
     savedLinks,
     githubRepoUrl,
+    importSource,
+    githubSyncConnection,
     health = {},
     projectType,
     disabled = false,
@@ -165,7 +175,23 @@ export const ProjectLinkEditorFields = forwardRef<ProjectLinkEditorHandle, {
     const previewItem = candidate?.success ? candidate.links[0] : null;
     const preview = previewItem ? resolveSocialPresence(previewItem.platform, previewItem.url) : null;
     const isCustomPreview = ['website', 'portfolio', 'other'].includes(preview?.platform || '');
-    const connectedRepository = resolveProjectSocialLinks([], githubRepoUrl)[0];
+
+    const repositoryContext = useMemo<ProjectRepositoryContext | null>(() => {
+        if (importSource || githubSyncConnection) {
+            return { importSource, githubSyncConnection };
+        }
+        return null;
+    }, [importSource, githubSyncConnection]);
+
+    const managedRepositories = useMemo(() => {
+        if (repositoryContext) {
+            return resolveProjectSocialLinks([], null, repositoryContext).filter(
+                (link) => link.managed === 'github-sync-connection' || link.managed === 'github-cloned-repo',
+            );
+        }
+        return resolveProjectSocialLinks([], githubRepoUrl).filter((link) => Boolean(link.managed));
+    }, [githubRepoUrl, repositoryContext]);
+
     const previewUrl = preview?.url || null;
     useEffect(() => {
         if (!previewUrl) {
@@ -366,19 +392,46 @@ export const ProjectLinkEditorFields = forwardRef<ProjectLinkEditorHandle, {
 
     return (
         <div className="min-w-0 max-w-full space-y-4 overflow-x-hidden">
-            {connectedRepository?.managed ? (
-                <div className="flex min-w-0 items-center gap-3 rounded-xl border border-emerald-200 bg-emerald-50/60 px-3 py-2.5 dark:border-emerald-900/60 dark:bg-emerald-950/20">
-                    <ProjectLinkIcon link={connectedRepository} className="h-4 w-4" />
-                    <span className="min-w-0 flex-1">
-                        <span className="flex items-center gap-1.5 truncate text-sm font-medium">
-                            Connected repository
-                            {health['github-integration']?.health === 'unavailable' ? <AlertTriangle aria-label="Repository was unavailable on its last open" className="h-3.5 w-3.5 shrink-0 text-amber-500" /> : null}
+            {managedRepositories.map((repo) => {
+                const isCloned = repo.repositoryRole === 'cloned' || repo.managed === 'github-cloned-repo';
+                const label = isCloned ? 'Cloned repository' : 'Connected repository';
+                const badgeText = isCloned ? 'Cloned from GitHub' : 'Managed by integration';
+                const badgeClasses = isCloned
+                    ? 'bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300'
+                    : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300';
+                const cardBorderClasses = isCloned
+                    ? 'border-zinc-200 bg-zinc-50/70 dark:border-zinc-800 dark:bg-zinc-900/40'
+                    : 'border-emerald-200 bg-emerald-50/60 dark:border-emerald-900/60 dark:bg-emerald-950/20';
+                const subtitle = repo.branch && !isCloned
+                    ? `${repo.accountLabel} · ${repo.branch}`
+                    : repo.accountLabel;
+                const isUnavailable = Boolean(repo.id && health[repo.id]?.health === 'unavailable') || health['github-integration']?.health === 'unavailable';
+
+                return (
+                    <div
+                        key={repo.id}
+                        data-testid={`project-managed-repo-${repo.id}`}
+                        className={cn('flex min-w-0 items-center gap-3 rounded-xl border px-3 py-2.5', cardBorderClasses)}
+                    >
+                        <ProjectLinkIcon link={repo} className="h-4 w-4" />
+                        <span className="min-w-0 flex-1">
+                            <span className="flex items-center gap-1.5 truncate text-sm font-medium">
+                                {label}
+                                {isUnavailable ? (
+                                    <AlertTriangle
+                                        aria-label="Repository was unavailable on its last open"
+                                        className="h-3.5 w-3.5 shrink-0 text-amber-500"
+                                    />
+                                ) : null}
+                            </span>
+                            <span className="block truncate text-xs text-zinc-500">{subtitle}</span>
                         </span>
-                        <span className="block truncate text-xs text-zinc-500">{connectedRepository.accountLabel}</span>
-                    </span>
-                    <span className="hidden shrink-0 rounded-full bg-emerald-100 px-2 py-1 text-[10px] font-semibold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300 sm:inline-flex">Managed by integration</span>
-                </div>
-            ) : null}
+                        <span className={cn('hidden shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold sm:inline-flex', badgeClasses)}>
+                            {badgeText}
+                        </span>
+                    </div>
+                );
+            })}
 
             {draft.length ? (
                 <SortableLinkList
@@ -503,6 +556,8 @@ export function ProjectLinksManager({
     projectId,
     links,
     githubRepoUrl,
+    importSource,
+    githubSyncConnection,
     health,
     projectType,
     mode = 'dialog',
@@ -513,6 +568,8 @@ export function ProjectLinksManager({
     projectId: string;
     links: unknown;
     githubRepoUrl?: string | null;
+    importSource?: { type?: string; repoUrl?: string; branch?: string } | null;
+    githubSyncConnection?: { repository?: string; branch?: string } | null;
     health?: LinkHealth;
     projectType?: string | null;
     mode?: 'dialog' | 'inline';
@@ -585,7 +642,19 @@ export function ProjectLinksManager({
                 }
             }}
         >
-            <ProjectLinkEditorFields ref={editorRef} links={draft} savedLinks={baseline} onChange={setDraft} onPendingChange={setHasComposerDraft} githubRepoUrl={githubRepoUrl} health={health} projectType={projectType} disabled={saving} />
+            <ProjectLinkEditorFields
+                ref={editorRef}
+                links={draft}
+                savedLinks={baseline}
+                onChange={setDraft}
+                onPendingChange={setHasComposerDraft}
+                githubRepoUrl={githubRepoUrl}
+                importSource={importSource}
+                githubSyncConnection={githubSyncConnection}
+                health={health}
+                projectType={projectType}
+                disabled={saving}
+            />
             {saveError ? <p role="alert" className="break-words text-sm text-red-600">{saveError}</p> : null}
         </div>
     );
@@ -616,6 +685,8 @@ export function ProjectLinkCluster({
     projectId,
     links,
     githubRepoUrl,
+    importSource,
+    githubSyncConnection,
     health,
     projectType,
     canManage = false,
@@ -623,6 +694,8 @@ export function ProjectLinkCluster({
     projectId: string;
     links: unknown;
     githubRepoUrl?: string | null;
+    importSource?: { type?: string; repoUrl?: string; branch?: string } | null;
+    githubSyncConnection?: { repository?: string; branch?: string } | null;
     health?: LinkHealth;
     projectType?: string | null;
     canManage?: boolean;
@@ -630,23 +703,33 @@ export function ProjectLinkCluster({
     const [editorOpen, setEditorOpen] = useState(false);
     const [savedLinks, setSavedLinks] = useState<SocialLinkItem[]>(() => socialLinkItemsFromStorage(links));
     useEffect(() => setSavedLinks(socialLinkItemsFromStorage(links)), [links]);
-    const resolved = resolveProjectSocialLinks(savedLinks, githubRepoUrl);
+
+    const repositoryContext = useMemo<ProjectRepositoryContext | null>(() => {
+        if (importSource || githubSyncConnection) {
+            return { importSource, githubSyncConnection };
+        }
+        return null;
+    }, [importSource, githubSyncConnection]);
+
+    const resolved = useMemo(() => {
+        return resolveProjectSocialLinks(savedLinks, githubRepoUrl, repositoryContext);
+    }, [savedLinks, githubRepoUrl, repositoryContext]);
 
     if (!resolved.length && !canManage) return null;
     return (
         <TooltipProvider>
             <div className="flex shrink-0 items-center gap-0.5" aria-label="Project links">
-                {resolved.slice(0, 4).map((link, index) => (
+                {resolved.slice(0, 5).map((link, index) => (
                     <ProjectLinkAnchor
                         key={link.id || link.canonicalKey}
                         projectId={projectId}
                         link={link}
-                        className={cn('hidden sm:inline-flex', index >= 2 && 'sm:hidden lg:inline-flex')}
+                        className={cn('hidden sm:inline-flex', index >= 3 && 'sm:hidden lg:inline-flex')}
                     />
                 ))}
                 <ProjectLinkOverflow projectId={projectId} links={resolved} labelled className="sm:hidden" />
-                <ProjectLinkOverflow projectId={projectId} links={resolved.slice(2)} className="hidden sm:block lg:hidden" />
-                <ProjectLinkOverflow projectId={projectId} links={resolved.slice(4)} className="hidden lg:block" />
+                <ProjectLinkOverflow projectId={projectId} links={resolved.slice(3)} className="hidden sm:block lg:hidden" />
+                <ProjectLinkOverflow projectId={projectId} links={resolved.slice(5)} className="hidden lg:block" />
                 {canManage ? (
                     <Tooltip>
                         <TooltipTrigger asChild>
@@ -658,7 +741,7 @@ export function ProjectLinkCluster({
                     </Tooltip>
                 ) : null}
             </div>
-            {canManage && editorOpen ? <ProjectLinksManager projectId={projectId} links={savedLinks} githubRepoUrl={githubRepoUrl} health={health} projectType={projectType} open={editorOpen} onOpenChange={setEditorOpen} onSaved={setSavedLinks} /> : null}
+            {canManage && editorOpen ? <ProjectLinksManager projectId={projectId} links={savedLinks} githubRepoUrl={githubRepoUrl} importSource={importSource} githubSyncConnection={githubSyncConnection} health={health} projectType={projectType} open={editorOpen} onOpenChange={setEditorOpen} onSaved={setSavedLinks} /> : null}
         </TooltipProvider>
     );
 }

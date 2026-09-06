@@ -31,7 +31,7 @@ import {
     type WorkspaceTaskHandoff,
 } from '@/lib/stores/ui-store';
 
-import { DashboardTab, DocTab, UpdatesTab, TasksTab, FilesTab, AnalyticsTab, SprintPlanning, ProjectSettingsTab, ProjectPrivacyTermsTab } from '@/components/projects/dashboard/ProjectTabsRegistry';
+import { DashboardTab, DocTab, UpdatesTab, TasksTab, FilesTab, AnalyticsTab, SprintPlanning, ProjectSettingsTab } from '@/components/projects/dashboard/ProjectTabsRegistry';
 import { confirmFileNavigation } from '@/lib/files/unsaved-navigation';
 import { useFilesWorkspaceStore } from '@/stores/filesWorkspaceStore';
 
@@ -706,9 +706,6 @@ export default function ProjectDashboardClient({ project, currentUserId, viewerD
                 case 'settings':
                     void import('@/components/projects/tabs/ProjectSettingsTab');
                     break;
-                case 'privacy':
-                    void import('@/components/projects/tabs/ProjectPrivacyTermsTab');
-                    break;
                 case 'files':
                     void import('@/components/projects/v2/files-tab/FilesTabRoot');
                     break;
@@ -1129,19 +1126,6 @@ export default function ProjectDashboardClient({ project, currentUserId, viewerD
                 <div className="w-full h-full min-h-0">
                     <TabErrorBoundary tabName="Settings">
                         <ProjectSettingsTab projectId={project.id} project={project} onProjectUpdated={handleProjectSettingsUpdated} isProjectOwner={isOwner} actorRole={currentProjectRole} members={allMembers} loadingMembers={loadingMembers} />
-                    </TabErrorBoundary>
-                </div>
-            )}
-
-            {activeTab === 'privacy' && (
-                <div className="w-full h-full min-h-0">
-                    <TabErrorBoundary tabName="Privacy & terms">
-                        <ProjectPrivacyTermsTab
-                            project={projectWithLiveStats}
-                            isOwner={isOwner}
-                            isOwnerOrMember={isOwnerOrMember}
-                            publicTabVisibility={publicTabVisibility}
-                        />
                     </TabErrorBoundary>
                 </div>
             )}

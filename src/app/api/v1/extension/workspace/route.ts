@@ -53,6 +53,33 @@ export async function GET(request: Request) {
       });
     }
 
+    // ponytail: fast bootstrap summary mode skips expensive window-partition task/file queries
+    const url = new URL(request.url);
+    const isSummaryMode =
+      url.searchParams.get("mode") === "summary" ||
+      request.headers.get("x-nb-workspace-mode") === "summary";
+
+    if (isSummaryMode) {
+      const projectTaskCountMap = await getProjectTaskCountMap(projectIds);
+      const summaryProjects = userProjects.map((project) => ({
+        ...project,
+        syncSequence: project.currentSequenceNumber,
+        taskCount: projectTaskCountMap.get(project.id) ?? 0,
+        associatedTaskPreview: null,
+        tasksTruncated: false,
+        tasks: [],
+        files: [],
+      }));
+
+      return jsonSuccess({
+        user: {
+          id: user.id,
+          email: user.email,
+        },
+        projects: summaryProjects,
+      });
+    }
+
     const [taskRowsResult, rootNodeIdRowsResult, taskFileCountMap, projectTaskCountMap] =
       await Promise.all([
         db.execute(sql`

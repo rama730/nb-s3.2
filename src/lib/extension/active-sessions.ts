@@ -48,6 +48,19 @@ function encodeSessionCursor(value: { lastSeenAt: Date; id: string }) {
   })).toString("base64url");
 }
 
+// ponytail: in-memory LRU cache of resolved authMethod by sessionId to avoid repeated DISTINCT ON queries on event table
+const authMethodCache = new Map<string, ExtensionSessionAuthMethod>();
+const MAX_AUTH_METHOD_CACHE_SIZE = 5_000;
+
+function inferAuthMethodFromSession(session: typeof extensionDeviceSessions.$inferSelect): ExtensionSessionAuthMethod | null {
+  if (session.clientVersion === "pending") return "manual_token";
+  if (session.callbackUri) return "web_login";
+  const name = (session.deviceName || "").toLowerCase();
+  if (name.includes("manual token") || name.includes("manual authentication")) return "manual_token";
+  if (name.includes("browser flow") || session.editorHost) return "web_login";
+  return null;
+}
+
 export async function listActiveExtensionSessionsForUser(
   userId: string,
   options: { limit?: number; cursor?: string | null } = {},
@@ -82,33 +95,55 @@ export async function listActiveExtensionSessionsForUser(
   const loginEventBySessionId = new Map<string, { authMethod: ExtensionSessionAuthMethod }>();
 
   if (sessions.length > 0) {
-    const sessionIds = sessions.map((session) => session.id);
-    const loginEvents = await db.execute<{
-      session_id: string;
-      metadata: unknown;
-    }>(sql`
-      SELECT DISTINCT ON (${extensionDeviceSessionEvents.sessionId})
-        ${extensionDeviceSessionEvents.sessionId} AS session_id,
-        ${extensionDeviceSessionEvents.metadata} AS metadata
-      FROM ${extensionDeviceSessionEvents}
-      WHERE ${extensionDeviceSessionEvents.eventType} = ${EXTENSION_DEVICE_SESSION_EVENTS.login}
-        AND ${extensionDeviceSessionEvents.sessionId} IN (
-          ${sql.join(sessionIds.map((id) => sql`${id}`), sql`, `)}
-        )
-      ORDER BY
-        ${extensionDeviceSessionEvents.sessionId},
-        ${extensionDeviceSessionEvents.createdAt} DESC
-    `);
+    // Check fast-path and cache first before hitting database
+    const missingSessionIds: string[] = [];
+    for (const session of sessions) {
+      const cached = authMethodCache.get(session.id);
+      if (cached) {
+        loginEventBySessionId.set(session.id, { authMethod: cached });
+        continue;
+      }
+      const inferred = inferAuthMethodFromSession(session);
+      if (inferred) {
+        loginEventBySessionId.set(session.id, { authMethod: inferred });
+        if (authMethodCache.size < MAX_AUTH_METHOD_CACHE_SIZE) {
+          authMethodCache.set(session.id, inferred);
+        }
+        continue;
+      }
+      missingSessionIds.push(session.id);
+    }
 
-    for (const event of Array.from(loginEvents)) {
-      const metadata = event.metadata as { method?: unknown } | null;
-      const session = sessions.find((candidate) => candidate.id === event.session_id);
-      loginEventBySessionId.set(event.session_id, {
-        authMethod: normalizeExtensionAuthMethod(
+    if (missingSessionIds.length > 0) {
+      const loginEvents = await db.execute<{
+        session_id: string;
+        metadata: unknown;
+      }>(sql`
+        SELECT DISTINCT ON (${extensionDeviceSessionEvents.sessionId})
+          ${extensionDeviceSessionEvents.sessionId} AS session_id,
+          ${extensionDeviceSessionEvents.metadata} AS metadata
+        FROM ${extensionDeviceSessionEvents}
+        WHERE ${extensionDeviceSessionEvents.eventType} = ${EXTENSION_DEVICE_SESSION_EVENTS.login}
+          AND ${extensionDeviceSessionEvents.sessionId} IN (
+            ${sql.join(missingSessionIds.map((id) => sql`${id}`), sql`, `)}
+          )
+        ORDER BY
+          ${extensionDeviceSessionEvents.sessionId},
+          ${extensionDeviceSessionEvents.createdAt} DESC
+      `);
+
+      for (const event of Array.from(loginEvents)) {
+        const metadata = event.metadata as { method?: unknown } | null;
+        const session = sessions.find((candidate) => candidate.id === event.session_id);
+        const resolved = normalizeExtensionAuthMethod(
           metadata?.method,
           session?.deviceName ?? "",
-        ),
-      });
+        );
+        loginEventBySessionId.set(event.session_id, { authMethod: resolved });
+        if (authMethodCache.size < MAX_AUTH_METHOD_CACHE_SIZE) {
+          authMethodCache.set(event.session_id, resolved);
+        }
+      }
     }
   }
 

@@ -3,7 +3,7 @@ import { and, eq, isNull } from 'drizzle-orm';
 
 import { enforceRouteLimit } from '@/app/api/v1/_shared';
 import { db } from '@/lib/db';
-import { profiles, projects } from '@/lib/db/schema';
+import { githubSyncConnections, profiles, projects } from '@/lib/db/schema';
 import { getProjectAccessById } from '@/lib/data/project-access';
 import { normalizeSocialLinks } from '@/lib/profile/normalization';
 import { resolveProjectSocialLinks } from '@/lib/projects/social-links';
@@ -68,12 +68,24 @@ export async function GET(
                 externalLinks: projects.externalLinks,
                 githubRepoUrl: projects.githubRepoUrl,
                 slug: projects.slug,
+                importSource: projects.importSource,
+                githubSyncRepository: githubSyncConnections.repository,
+                githubSyncBranch: githubSyncConnections.branch,
             })
             .from(projects)
+            .leftJoin(githubSyncConnections, eq(projects.id, githubSyncConnections.projectId))
             .where(and(eq(projects.id, ownerId), isNull(projects.deletedAt)))
             .limit(1);
-        const link = resolveProjectSocialLinks(project?.externalLinks ?? {}, project?.githubRepoUrl)
-            .find((item) => item.id === requestedLinkKey || item.canonicalKey === requestedLinkKey);
+        const link = resolveProjectSocialLinks(
+            project?.externalLinks ?? {},
+            project?.githubRepoUrl,
+            {
+                importSource: (project?.importSource as { type?: string; repoUrl?: string; branch?: string } | null) ?? null,
+                githubSyncConnection: project?.githubSyncRepository
+                    ? { repository: project.githubSyncRepository, branch: project.githubSyncBranch || 'main' }
+                    : null,
+            },
+        ).find((item) => item.id === requestedLinkKey || item.canonicalKey === requestedLinkKey);
         const canViewMemberLinks = access.isOwner || Boolean(access.memberRole);
         if (link?.audience === 'members' && !canViewMemberLinks) {
             return blocked('This link is available to project members only.', 404);

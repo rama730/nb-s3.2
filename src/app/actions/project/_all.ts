@@ -31,6 +31,7 @@ import {
   projectMarkdownVersions,
   projectGuidanceAppointments,
   taskReadReceipts,
+  githubSyncConnections,
 } from "@/lib/db/schema";
 import {
   eq,
@@ -1144,6 +1145,13 @@ const projectDetailProjectSchema = z.object({
   importSource: z.unknown().nullable(),
   githubRepoUrl: z.string().nullable().optional(),
   githubDefaultBranch: z.string().nullable().optional(),
+  githubSyncConnection: z
+    .object({
+      repository: z.string(),
+      branch: z.string(),
+    })
+    .nullable()
+    .optional(),
   syncStatus: z.enum(["pending", "cloning", "indexing", "ready", "failed"]),
   updatedAt: z.string().nullable(),
   viewCount: z.number().int().nonnegative(),
@@ -1352,6 +1360,8 @@ async function resolveProjectDetailTarget(
           importSource: projects.importSource,
           githubRepoUrl: projects.githubRepoUrl,
           githubDefaultBranch: projects.githubDefaultBranch,
+          githubSyncRepository: githubSyncConnections.repository,
+          githubSyncBranch: githubSyncConnections.branch,
           syncStatus: projects.syncStatus,
           updatedAt: projects.updatedAt,
           viewCount: projects.viewCount,
@@ -1365,7 +1375,11 @@ async function resolveProjectDetailTarget(
             : sql<boolean>`false`,
         })
         .from(projects)
-        .leftJoin(ownerProfiles, eq(projects.ownerId, ownerProfiles.id));
+        .leftJoin(ownerProfiles, eq(projects.ownerId, ownerProfiles.id))
+        .leftJoin(
+          githubSyncConnections,
+          eq(projects.id, githubSyncConnections.projectId),
+        );
 
       if (actorUserId) {
         q.leftJoin(
@@ -2042,6 +2056,12 @@ export async function readProjectDetailShell(input: {
           ),
           importSource: safeImportSource || null,
           githubRepoUrl: project.githubRepoUrl || null,
+          githubSyncConnection: project.githubSyncRepository
+            ? {
+                repository: project.githubSyncRepository,
+                branch: project.githubSyncBranch || "main",
+              }
+            : null,
           syncStatus: normalizedSyncStatus,
           updatedAt: project.updatedAt?.toISOString?.() ?? null,
           viewCount: Math.max(0, project.viewCount ?? 0),

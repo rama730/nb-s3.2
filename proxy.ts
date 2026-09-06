@@ -86,6 +86,7 @@ function buildCsp(nonce: string, request: NextRequest) {
     `'nonce-${nonce}'`,
     "'strict-dynamic'",
     "https://challenges.cloudflare.com",
+    "https://accounts.google.com",
     "https://va.vercel-scripts.com",
     ...(isProduction ? [] : ["'unsafe-eval'"]),
   ];
@@ -123,7 +124,7 @@ function buildCsp(nonce: string, request: NextRequest) {
     "img-src 'self' data: blob: https:",
     "font-src 'self' data: https://fonts.gstatic.com",
     `connect-src ${connectDirectives.join(" ")}`,
-    "frame-src 'self' https://challenges.cloudflare.com blob:",
+    "frame-src 'self' https://challenges.cloudflare.com https://accounts.google.com blob:",
     "worker-src 'self' blob:",
     "object-src 'none'",
     "base-uri 'self'",

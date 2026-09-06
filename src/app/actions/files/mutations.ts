@@ -8,7 +8,7 @@ import type { ProjectNode } from "@/lib/db/schema";
 import { eq, and, or, isNull, isNotNull, ilike, inArray, sql, gt, ne, type SQL } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import { createClient } from "@/lib/supabase/server";
-import { revalidatePath } from "next/cache";
+import { after } from "next/server";
 import { consumeRateLimit } from "@/lib/security/rate-limit";
 import { logger } from "@/lib/logger";
 import { enqueueProjectNotificationEvent } from "@/lib/notifications/project-events";
@@ -52,15 +52,24 @@ function actorNotificationSnapshot(user: { user_metadata?: Record<string, unknow
 }
 
 async function enqueueFileNotificationBestEffort(input: Parameters<typeof enqueueProjectNotificationEvent>[0]) {
+    const run = async () => {
+        try {
+            await enqueueProjectNotificationEvent(input);
+        } catch (error) {
+            logger.warn("project_files.notification_enqueue_failed", {
+                module: "files",
+                projectId: input.projectId,
+                eventKey: input.eventKey,
+                error: error instanceof Error ? error.message : String(error),
+            });
+        }
+    };
+
     try {
-        await enqueueProjectNotificationEvent(input);
-    } catch (error) {
-        logger.warn("project_files.notification_enqueue_failed", {
-            module: "files",
-            projectId: input.projectId,
-            eventKey: input.eventKey,
-            error: error instanceof Error ? error.message : String(error),
-        });
+        after(run);
+    } catch {
+        // If invoked outside a request lifecycle (e.g. scripts/background), run unawaited.
+        void run();
     }
 }
 
@@ -175,7 +184,6 @@ export async function createFolder(
     });
 
     await recordNodeEvent(projectId, user.id, node.id, 'create_folder', { parentId, name: safeName });
-    revalidatePath(`/projects/${projectId}`); // Revalidate generally
     await enqueueFileNotificationBestEffort({
         projectId,
         actorUserId: user.id,
@@ -264,7 +272,6 @@ export async function createFileNode(projectId: string, parentId: string | null,
     });
 
     await recordNodeEvent(projectId, user.id, node.id, 'create_file', { parentId, name: safeName, s3Key: canonicalS3Key });
-    revalidatePath(`/projects/${projectId}`);
     await enqueueFileNotificationBestEffort({
         projectId,
         actorUserId: user.id,
@@ -457,7 +464,7 @@ export async function renameNode(nodeId: string, newName: string, projectId: str
         sourceEventId: `${nodeId}:rename:${safeName}`,
         entityRefs: { projectId, fileId: nodeId },
     });
-    revalidatePath(`/projects/${projectId}`);
+    // ponytail: client explorer handles rename via Zustand renameNodeInCaches; skip route revalidation
     return node;
 }
 
@@ -642,7 +649,7 @@ export async function moveProjectNodes(
             sourceEventId: operationId,
             entityRefs: { projectId },
         });
-        revalidatePath(`/projects/${projectId}`);
+        // ponytail: client explorer handles move via Zustand; skip route revalidation
     }
     return result;
 }
@@ -694,7 +701,7 @@ export async function trashNode(nodeId: string, projectId: string) {
         sourceEventId: `${nodeId}:trash`,
         entityRefs: { projectId, fileId: nodeId },
     });
-    revalidatePath(`/projects/${projectId}`);
+    // ponytail: client explorer handles deletion via Zustand removeNodeFromCaches; skip route revalidation
 }
 
 export async function restoreNode(nodeId: string, projectId: string) {
@@ -752,7 +759,7 @@ export async function restoreNode(nodeId: string, projectId: string) {
         sourceEventId: `${nodeId}:restore`,
         entityRefs: { projectId, fileId: nodeId },
     });
-    revalidatePath(`/projects/${projectId}`);
+    // ponytail: client handles trash restore via query invalidation; skip route revalidation
 }
 
 export async function bulkTrashNodes(nodeIds: string[], projectId: string) {
@@ -841,7 +848,7 @@ export async function bulkTrashNodes(nodeIds: string[], projectId: string) {
         });
     }
 
-    revalidatePath(`/projects/${projectId}`);
+    // ponytail: client handles trash purge via query invalidation; skip route revalidation
     return result;
 }
 
@@ -952,7 +959,7 @@ export async function bulkRestoreNodes(nodeIds: string[], projectId: string, exp
         });
     }
 
-    revalidatePath(`/projects/${projectId}`);
+    // ponytail: client handles trash restore via query invalidation; skip route revalidation
     return result;
 }
 

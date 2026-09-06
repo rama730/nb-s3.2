@@ -54,6 +54,7 @@ import {
   Upload,
   VideoOff,
   VolumeOff,
+  X,
 } from "lucide-react";
 
 import { useRouter, usePathname } from "next/navigation";
@@ -258,6 +259,32 @@ export function FileView({
   const dragCounterRef = React.useRef(0);
   const { saveAsNewVersion } = useFileVersions(projectId, node.id);
 
+  const resetDragState = React.useCallback(() => {
+    dragCounterRef.current = 0;
+    setIsDragActive(false);
+  }, []);
+
+  // Global window listeners for drag cancellation (OS dragend, window drop, or Escape)
+  React.useEffect(() => {
+    const handleGlobalDragEnd = () => resetDragState();
+    const handleGlobalDrop = () => resetDragState();
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        resetDragState();
+      }
+    };
+
+    window.addEventListener("dragend", handleGlobalDragEnd);
+    window.addEventListener("drop", handleGlobalDrop);
+    window.addEventListener("keydown", handleGlobalKeyDown);
+
+    return () => {
+      window.removeEventListener("dragend", handleGlobalDragEnd);
+      window.removeEventListener("drop", handleGlobalDrop);
+      window.removeEventListener("keydown", handleGlobalKeyDown);
+    };
+  }, [resetDragState]);
+
   const handleDragEnter = React.useCallback(
     (event: React.DragEvent<HTMLDivElement>) => {
       // Req 24.4: Role_Viewer — no drop-zone, no drops accepted
@@ -293,8 +320,7 @@ export function FileView({
       if (!canEdit) return;
       event.preventDefault();
       event.stopPropagation();
-      dragCounterRef.current = 0;
-      setIsDragActive(false);
+      resetDragState();
 
       if (mode === "edit") {
         toast.info("Save or cancel your edits before uploading a revision.");
@@ -558,10 +584,24 @@ export function FileView({
       {isDragActive && canEdit && (
         <div
           data-testid="files-tab-file-view-drop-zone"
-          className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-lg border-2 border-dashed border-indigo-400 bg-indigo-50/80 dark:bg-indigo-500/10"
+          role="dialog"
+          aria-label="Drop to save as new version"
+          onClick={resetDragState}
+          className="absolute inset-0 z-20 flex items-center justify-center rounded-lg border-2 border-dashed border-indigo-400 bg-indigo-50/80 dark:bg-indigo-500/10 cursor-pointer"
         >
-          <div className="flex flex-col items-center gap-2 text-sm font-medium text-indigo-800 dark:text-indigo-200">
-            <Upload className="h-8 w-8" aria-hidden="true" />
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="relative flex flex-col items-center gap-2 p-6 rounded-2xl bg-white/95 dark:bg-zinc-900/95 shadow-xl border border-indigo-200 dark:border-indigo-900/50 cursor-default text-sm font-medium text-indigo-800 dark:text-indigo-200"
+          >
+            <button
+              type="button"
+              onClick={resetDragState}
+              aria-label="Dismiss drop overlay"
+              className="absolute top-2.5 right-2.5 p-1 rounded-full text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+            >
+              <X className="size-4" />
+            </button>
+            <Upload className="h-8 w-8 text-indigo-600 dark:text-indigo-400" aria-hidden="true" />
             <span>Drop to save as new version</span>
           </div>
         </div>

@@ -349,6 +349,7 @@ export function GitHubSyncWorkspace({
   const [customBranchInput, setCustomBranchInput] = useState("");
   const [showCustomBranch, setShowCustomBranch] = useState(false);
   const appliedOperations = useRef(new Set<string>());
+  const lastLoadedRepoRef = useRef<string>("");
   const config: CompareInput = {
     direction,
     branch,
@@ -486,6 +487,15 @@ export function GitHubSyncWorkspace({
     const result = await sync.getGitHubSyncState(projectId);
     if (!result.success) throw new Error(result.error);
     setState(result.data);
+    // ponytail: batch derived form state synchronously with state to eliminate secondary cascading renders
+    setOwner(result.data.account.username || "");
+    setName(
+      (projectName || "networkbase-project")
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9._-]+/g, "-")
+        .replace(/^-+|-+$/g, "") || "networkbase-project",
+    );
     setReview(
       result.data.runs.find(
         (run) => run.status === "review" || run.status === "failed",
@@ -512,7 +522,7 @@ export function GitHubSyncWorkspace({
       }
     }
     return result.data;
-  }, [projectId, canManage]);
+  }, [projectId, canManage, projectName]);
   useEffect(() => {
     const url = new URL(window.location.href);
     const authorizationError = url.searchParams.get("githubAuth");
@@ -527,25 +537,15 @@ export function GitHubSyncWorkspace({
   }, [access?.username]);
   useEffect(() => {
     let cancelled = false;
-    if (canManage)
-      void load()
-        .then((current) => {
-          if (cancelled) return;
-          if (!current) return;
-          setOwner(current.account.username || "");
-          setName(
-            (projectName || "edge-project")
-              .trim()
-              .toLowerCase()
-              .replace(/[^a-z0-9._-]+/g, "-")
-              .replace(/^-+|-+$/g, "") || "edge-project",
-          );
-        })
-        .catch((error) => setError(error.message));
+    if (canManage) {
+      void load().catch((error) => {
+        if (!cancelled) setError(error.message);
+      });
+    }
     return () => {
       cancelled = true;
     };
-  }, [canManage, load, projectName]);
+  }, [canManage, load]);
 
   const setGitSyncBadge = useFilesWorkspaceStore((s) => s.setGitSyncBadge);
   const [syncTasks, setSyncTasks] = useState<
@@ -735,7 +735,8 @@ export function GitHubSyncWorkspace({
         setManifest(result.data);
         setReview(null);
         setChoices({});
-        await load();
+        // ponytail: refresh runs/state in background without blocking instant comparison review UI
+        void load().catch((err) => console.error("Background sync state refresh failed", err));
       });
     } finally {
       setIsComparing(false);
@@ -802,8 +803,10 @@ export function GitHubSyncWorkspace({
       setCursor(result.cursor);
     });
   }
-  async function loadBranches(repoUrl: string) {
+  async function loadBranches(repoUrl: string, force = false) {
     if (!repoUrl || !repoUrl.startsWith("https://github.com/")) return;
+    if (!force && lastLoadedRepoRef.current === repoUrl && branches.length > 0) return;
+    lastLoadedRepoRef.current = repoUrl;
     setLoadingBranches(true);
     try {
       const result = await fetchGithubImportBranches({ repoUrl });

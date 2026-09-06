@@ -27,6 +27,7 @@ import {
   StarOff,
   Trash2,
   Upload,
+  X,
   MoreHorizontal, Download, Copy, Info, History, ListTodo, ArrowDownWideNarrow,
 } from "lucide-react";
 
@@ -122,6 +123,92 @@ export interface FolderListViewProps {
   className?: string;
   collection?: { menuItems?: React.ReactNode; nodes: FolderListRowNode[]; loading?: boolean; footer?: React.ReactNode; labels?: Record<string, string>; preserveOrder?: boolean; emptyMessage?: string; onUnlink?: (node: FolderListRowNode) => void };
 }
+
+interface FolderListRowItemProps {
+  projectId: string;
+  node: FolderListRowNode;
+  canEdit: boolean;
+  canMove?: boolean;
+  selected?: boolean;
+  onSelectionChange?: (nodeId: string, selected: boolean) => void;
+  showActions?: boolean;
+  subtitle?: string;
+  isFavorite: boolean;
+  gitChange?: GitChangeStatus | null;
+  gitIntegrationEnabled: boolean;
+  taskLinkCount?: number;
+  onNavigate: (nodeId: string) => void;
+  onToggleFavorite: (nodeId: string) => void;
+  onContextMenu: (node: FolderListRowNode, event: React.MouseEvent) => void;
+  onDropOnFolder?: (targetFolderId: string, draggedNodeId: string) => void;
+  onDesktopFileDrop?: (files: File[], targetFolderId: string) => void;
+  renderMenu: (node: FolderListRowNode) => React.ReactNode;
+}
+
+const FolderListRowItem = React.memo(function FolderListRowItem({
+  projectId,
+  node,
+  canEdit,
+  canMove,
+  selected,
+  onSelectionChange,
+  showActions,
+  subtitle,
+  isFavorite,
+  gitChange,
+  gitIntegrationEnabled,
+  taskLinkCount,
+  onNavigate,
+  onToggleFavorite,
+  onContextMenu,
+  onDropOnFolder,
+  onDesktopFileDrop,
+  renderMenu,
+}: FolderListRowItemProps) {
+  // ponytail: memoize actions per row to prevent breaking React.memo on unchanged rows
+  const actions = React.useMemo(
+    () => (
+      <DropdownMenu modal={false}>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            aria-label={`Actions for ${node.name}`}
+            className="flex size-10 items-center justify-center rounded hover:bg-zinc-100 focus-visible:ring-2 focus-visible:ring-blue-500 dark:hover:bg-zinc-800"
+          >
+            <MoreHorizontal aria-hidden="true" className="size-4" />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" onClick={(event) => event.stopPropagation()}>
+          {renderMenu(node)}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    ),
+    [node, renderMenu],
+  );
+
+  return (
+    <FolderListRow
+      projectId={projectId}
+      node={node}
+      canEdit={canEdit}
+      canMove={canMove}
+      selected={selected}
+      onSelectionChange={onSelectionChange}
+      showActions={showActions}
+      subtitle={subtitle}
+      actions={actions}
+      isFavorite={isFavorite}
+      gitChange={gitChange}
+      gitIntegrationEnabled={gitIntegrationEnabled}
+      taskLinkCount={taskLinkCount}
+      onNavigate={onNavigate}
+      onToggleFavorite={onToggleFavorite}
+      onContextMenu={onContextMenu}
+      onDropOnFolder={onDropOnFolder}
+      onDesktopFileDrop={onDesktopFileDrop}
+    />
+  );
+});
 
 // ─── Component ───────────────────────────────────────────────────────
 
@@ -338,6 +425,32 @@ export function FolderListView({
   const [isProcessingDrop, setIsProcessingDrop] = React.useState(false);
   const dragCounterRef = React.useRef(0);
 
+  const resetDragState = React.useCallback(() => {
+    dragCounterRef.current = 0;
+    setIsDragActive(false);
+  }, []);
+
+  // Global window listeners for drag cancellation (OS dragend, window drop, or Escape)
+  React.useEffect(() => {
+    const handleGlobalDragEnd = () => resetDragState();
+    const handleGlobalDrop = () => resetDragState();
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        resetDragState();
+      }
+    };
+
+    window.addEventListener("dragend", handleGlobalDragEnd);
+    window.addEventListener("drop", handleGlobalDrop);
+    window.addEventListener("keydown", handleGlobalKeyDown);
+
+    return () => {
+      window.removeEventListener("dragend", handleGlobalDragEnd);
+      window.removeEventListener("drop", handleGlobalDrop);
+      window.removeEventListener("keydown", handleGlobalKeyDown);
+    };
+  }, [resetDragState]);
+
   const handleDragEnter = React.useCallback(
     (e: React.DragEvent) => {
       if (!canEdit) return;
@@ -376,35 +489,38 @@ export function FolderListView({
       if (!canEdit) return;
       e.preventDefault();
       e.stopPropagation();
-      dragCounterRef.current = 0;
-      setIsDragActive(false);
+      resetDragState();
 
-      const droppedFiles = Array.from(e.dataTransfer.files || []);
+      const droppedFiles = stripOsJunkFiles(Array.from(e.dataTransfer.files || []));
       if (droppedFiles.length === 0) return;
 
       setTargetDropFolderId(folderId);
       setPendingUploadFiles(droppedFiles);
     },
-    [canEdit, folderId],
+    [canEdit, folderId, resetDragState],
   );
 
   // ── Desktop file drop wiring (opens modal with target folder) ──────────
   const handleDesktopFileDrop = React.useCallback(
     (files: File[], targetFolderId: string) => {
-      if (!canEdit || files.length === 0) return;
+      const cleanFiles = stripOsJunkFiles(files);
+      if (!canEdit || cleanFiles.length === 0) return;
+      resetDragState();
       setTargetDropFolderId(targetFolderId);
-      setPendingUploadFiles(files);
+      setPendingUploadFiles(cleanFiles);
     },
-    [canEdit],
+    [canEdit, resetDragState],
   );
 
   const handleConfirmDropUpload = React.useCallback(
     async (result: FilesTabUploadConfirmResult) => {
-      if (!pendingUploadFiles || pendingUploadFiles.length === 0) return;
-      setIsProcessingDrop(true);
-      try {
-        if (result.intent === "version" && result.versionNodeId) {
-          const file = pendingUploadFiles[0]!;
+      const filesToUpload = result.files ?? pendingUploadFiles;
+      if (!filesToUpload || filesToUpload.length === 0) return;
+
+      if (result.intent === "version" && result.versionNodeId) {
+        setIsProcessingDrop(true);
+        try {
+          const file = filesToUpload[0]!;
           const { saveFileRevision } = await import("@/hooks/useFileVersions");
           const { createClient } = await import("@/lib/supabase/client");
           const supabase = createClient();
@@ -421,33 +537,36 @@ export function FolderListView({
           toast.success(`Saved ${file.name} as a new version.`);
           upsertNodes(projectId, [saveRes.node]);
           await loadFolderContent(folderId, "refresh");
+        } catch (err) {
+          toast.error((err as Error).message || "Failed to save new version");
+        } finally {
+          setIsProcessingDrop(false);
           setPendingUploadFiles(null);
-        } else if (result.intent === "project") {
-          const target = result.targetFolderId ?? targetDropFolderId ?? folderId;
-          await uploadFilesDirectly(pendingUploadFiles, target);
-          setPendingUploadFiles(null);
-        } else {
-          // Task categories: reference, working, deliverable
-          const target = result.targetFolderId ?? targetDropFolderId ?? folderId;
-          const filesToUpload = [...pendingUploadFiles];
-          await uploadFilesDirectly(filesToUpload, target);
-          if (result.taskId) {
+          resetDragState();
+        }
+        return;
+      }
+
+      // Optimistic modal teardown: close immediately for non-version uploads
+      const target = result.targetFolderId ?? targetDropFolderId ?? folderId;
+      setPendingUploadFiles(null);
+      setTargetDropFolderId(null);
+      setIsProcessingDrop(false);
+      resetDragState();
+
+      // Background transfer & deterministic task linking without race conditions
+      uploadFilesDirectly(filesToUpload, target)
+        .then(async (createdNodes) => {
+          if (result.taskId && createdNodes.length > 0) {
             const { linkNodeToTask } = await import("@/app/actions/files/links");
-            await loadFolderContent(target, "refresh");
-            const currentNodes = useFilesWorkspaceStore.getState().byProjectId[projectId]?.nodesById ?? {};
-            for (const file of filesToUpload) {
-              const matchedNode = Object.values(currentNodes).find(
-                (n) => n.parentId === target && n.name.trim().toLowerCase() === file.name.trim().toLowerCase()
-              );
-              if (matchedNode) {
-                try {
-                  await linkNodeToTask(result.taskId, matchedNode.id, {
-                    role: result.role,
-                    annotation: result.label,
-                  });
-                } catch (linkErr) {
-                  console.warn("Failed to link node to task:", linkErr);
-                }
+            for (const node of createdNodes) {
+              try {
+                await linkNodeToTask(result.taskId, node.id, {
+                  role: result.role,
+                  annotation: result.label,
+                });
+              } catch (linkErr) {
+                console.warn("Failed to link node to task:", linkErr);
               }
             }
             window.dispatchEvent(
@@ -456,15 +575,12 @@ export function FolderListView({
               }),
             );
           }
-          setPendingUploadFiles(null);
-        }
-      } catch (err) {
-        toast.error((err as Error).message || "Failed to upload files");
-      } finally {
-        setIsProcessingDrop(false);
-      }
+        })
+        .catch((err) => {
+          toast.error((err as Error).message || "Failed to upload files");
+        });
     },
-    [pendingUploadFiles, projectId, folderId, targetDropFolderId, uploadFilesDirectly, upsertNodes, loadFolderContent],
+    [pendingUploadFiles, projectId, folderId, targetDropFolderId, uploadFilesDirectly, upsertNodes, loadFolderContent, resetDragState],
   );
 
   // ── Stable row callbacks ──────────────────────────────────────────
@@ -485,7 +601,21 @@ export function FolderListView({
 
   const handleContextMenu = React.useCallback(
     (node: FolderListRowNode, e: React.MouseEvent) => {
-      setContextMenuState({ open: true, x: e.clientX, y: e.clientY, node });
+      let x = e.clientX;
+      let y = e.clientY;
+      if (x === 0 && y === 0 && e.currentTarget) {
+        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+        x = rect.left;
+        y = rect.bottom;
+      }
+      setContextMenuState({ open: true, x, y, node });
+    },
+    [],
+  );
+
+  const noopContextMenu = React.useCallback(
+    (_node: FolderListRowNode, event: React.MouseEvent) => {
+      event.preventDefault();
     },
     [],
   );
@@ -498,19 +628,22 @@ export function FolderListView({
   );
 
 
-  async function downloadNode(node: FolderListRowNode) {
+  const downloadNode = React.useCallback(async (node: FolderListRowNode) => {
     try { const result = await getProjectFileSignedUrl(projectId, node.id, 300, true); const anchor = document.createElement("a"); anchor.href = result.url; anchor.download = node.name; anchor.rel = "noopener noreferrer"; anchor.click(); }
     catch (error) { toast.error(error instanceof Error ? error.message : "Download failed"); }
-  }
-  async function copyLink(node: FolderListRowNode) {
+  }, [projectId]);
+
+  const copyLink = React.useCallback(async (node: FolderListRowNode) => {
     const url = new URL(window.location.href); url.searchParams.set("tab", "files"); url.searchParams.set("fileId", node.id); url.searchParams.delete("path");
     try { await navigator.clipboard.writeText(url.toString()); toast.success("File link copied"); } catch { toast.error("Could not copy the link"); }
-  }
-  function openInspector(node: FolderListRowNode, panel: string) {
+  }, []);
+
+  const openInspector = React.useCallback((node: FolderListRowNode, panel: string) => {
     const url = new URL(window.location.href); url.searchParams.set("filesPanel", panel); window.history.replaceState(window.history.state, "", url);
     navigateTo(node.id);
-  }
-  const renderMenu = (menuNode: FolderListRowNode) => <>          {menuNode ? (
+  }, [navigateTo]);
+
+  const renderMenu = React.useCallback((menuNode: FolderListRowNode) => <>          {menuNode ? (
             <>
               <DropdownMenuItem
                 onClick={() => {
@@ -608,7 +741,25 @@ export function FolderListView({
                 </>
               )}
             </>
-          ) : null}</>;
+          ) : null}</>, [
+    handleOpenFromMenu,
+    toggleFavorite,
+    projectId,
+    favorites,
+    downloadNode,
+    copyLink,
+    openInspector,
+    workspace?.canReadTasks,
+    canEdit,
+    openCreateInFolder,
+    handleUploadToFolder,
+    openFolderUpload,
+    collection,
+    openRename,
+    canManageFiles,
+    handleMoveFromMenu,
+    handleDeleteFromMenu,
+  ]);
 
   // ── Render ────────────────────────────────────────────────────────
   return (
@@ -683,7 +834,7 @@ export function FolderListView({
                   ? gitChangeByNodeId[node.id] ?? null
                   : null;
               return (
-                <FolderListRow
+                <FolderListRowItem
                   key={node.id}
                   projectId={projectId}
                   node={node}
@@ -693,20 +844,16 @@ export function FolderListView({
                   onSelectionChange={selectionMode ? selectItem : undefined}
                   showActions={true}
                   subtitle={collection?.labels?.[node.id] ?? (search ? (node.path.startsWith("/.system/") ? "Task files" : node.path) : undefined)}
-                  actions={<DropdownMenu modal={false}><DropdownMenuTrigger asChild><button type="button" aria-label={`Actions for ${node.name}`} className="flex size-10 items-center justify-center rounded hover:bg-zinc-100 focus-visible:ring-2 focus-visible:ring-blue-500 dark:hover:bg-zinc-800"><MoreHorizontal aria-hidden="true" className="size-4" /></button></DropdownMenuTrigger><DropdownMenuContent align="end" onClick={event => event.stopPropagation()}>{renderMenu(node)}</DropdownMenuContent></DropdownMenu>}
                   isFavorite={!!favorites[node.id]}
                   gitChange={gitChange}
                   gitIntegrationEnabled={gitIntegrationEnabled}
                   taskLinkCount={taskLinkCounts[node.id] ?? 0}
                   onNavigate={navigateTo}
                   onToggleFavorite={handleToggleFavorite}
-                  onContextMenu={
-                    isSystemManaged
-                      ? (_node, event) => event.preventDefault()
-                      : handleContextMenu
-                  }
+                  onContextMenu={isSystemManaged ? noopContextMenu : handleContextMenu}
                   onDropOnFolder={!isSystemManaged && canManageFiles ? handleDropOnFolder : undefined}
                   onDesktopFileDrop={!isSystemManaged && canEdit ? handleDesktopFileDrop : undefined}
+                  renderMenu={renderMenu}
                 />
               );
             })}
@@ -798,9 +945,25 @@ export function FolderListView({
       />
 
       {/* Drag & Drop Visual Overlay */}
-      {isDragActive && (
-        <div className="absolute inset-0 z-40 flex flex-col items-center justify-center bg-blue-600/10 backdrop-blur-xs border-2 border-dashed border-blue-500 rounded-lg pointer-events-none transition-all">
-          <div className="flex flex-col items-center gap-2 p-6 rounded-2xl bg-white/95 dark:bg-zinc-900/95 shadow-xl border border-blue-200 dark:border-blue-900/50">
+      {isDragActive && !pendingUploadFiles && (
+        <div
+          role="dialog"
+          aria-label="Drop files to upload"
+          onClick={resetDragState}
+          className="absolute inset-0 z-40 flex flex-col items-center justify-center bg-blue-600/10 backdrop-blur-xs border-2 border-dashed border-blue-500 rounded-lg cursor-pointer transition-all animate-in fade-in-50 duration-150"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="relative flex flex-col items-center gap-2 p-6 rounded-2xl bg-white/95 dark:bg-zinc-900/95 shadow-xl border border-blue-200 dark:border-blue-900/50 cursor-default"
+          >
+            <button
+              type="button"
+              onClick={resetDragState}
+              aria-label="Dismiss drop overlay"
+              className="absolute top-2.5 right-2.5 p-1 rounded-full text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+            >
+              <X className="size-4" />
+            </button>
             <Upload className="size-8 text-blue-600 dark:text-blue-400 animate-bounce" />
             <p className="font-semibold text-sm text-zinc-900 dark:text-zinc-100">
               Drop files to upload
@@ -819,7 +982,11 @@ export function FolderListView({
           isOpen={true}
           files={pendingUploadFiles}
           currentFolderId={targetDropFolderId ?? folderId}
-          currentFolderName={selectedNode ? selectedNode.name : "Project Root"}
+          currentFolderName={
+            targetDropFolderId && targetDropFolderId !== folderId
+              ? (nodesById[targetDropFolderId]?.name ?? selectedNode?.name ?? "Project Root")
+              : (selectedNode ? selectedNode.name : "Project Root")
+          }
           existingFiles={sortedChildren}
           activeTaskId={workspace?.taskId ?? null}
           isProcessing={isProcessingDrop}
@@ -827,6 +994,7 @@ export function FolderListView({
           onCancel={() => {
             setPendingUploadFiles(null);
             setTargetDropFolderId(null);
+            resetDragState();
           }}
         />
       )}
@@ -837,3 +1005,15 @@ export function FolderListView({
 export default FolderListView;
 
 // ─── Internal helpers ────────────────────────────────────────────────
+
+const OS_JUNK_NAMES = new Set([".ds_store", "thumbs.db", "desktop.ini"]);
+
+function stripOsJunkFiles(files: File[]): File[] {
+  return files.filter((f) => {
+    const lower = f.name.toLowerCase();
+    if (OS_JUNK_NAMES.has(lower)) return false;
+    if (lower.startsWith("._")) return false;
+    if (lower === "__macosx") return false;
+    return true;
+  });
+}

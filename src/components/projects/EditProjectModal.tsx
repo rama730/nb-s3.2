@@ -365,6 +365,8 @@ export default function EditProjectModal({ project, isOpen, onClose, onSaved }: 
                                                     savedLinks={project.externalLinks ?? project.external_links}
                                                     onChange={(links) => setValue("externalLinks", links, { shouldDirty: true, shouldValidate: true })}
                                                     githubRepoUrl={project.githubRepoUrl ?? project.github_repo_url}
+                                                    importSource={project.importSource ?? (project as any).import_source}
+                                                    githubSyncConnection={project.githubSyncConnection ?? (project as any).github_sync_connection}
                                                     health={project.externalLinkMetadata ?? project.external_link_metadata}
                                                     projectType={project.category}
                                                 />

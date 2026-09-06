@@ -7,6 +7,7 @@ import { useAuth } from '@/lib/hooks/use-auth'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import TurnstileWidget, { hasTurnstileSiteKey } from '@/components/auth/TurnstileWidget'
+import { GoogleOneTap } from '@/components/auth/GoogleOneTap'
 import { AuthAmbientCanvas } from '@/components/auth/AuthAmbientCanvas'
 import { Github, Loader2, Eye, EyeOff, AlertCircle, Check, X, ShieldCheck } from 'lucide-react'
 import { buildAuthPageHref, resolveAuthRedirectPath } from '@/lib/auth/redirects'
@@ -311,7 +312,8 @@ function LoginPageInner() {
         clearSignInError()
         setOauthProviderLoading('google')
         try {
-            const { error: oauthErr } = await signInWithGoogle(redirectPath)
+            const legalNext = `/legal/accept?context=oauth_signup&next=${encodeURIComponent(redirectPath)}`
+            const { error: oauthErr } = await signInWithGoogle(legalNext)
             if (oauthErr) {
                 setSignInError(oauthErr.message)
                 setOauthProviderLoading(null)
@@ -326,7 +328,8 @@ function LoginPageInner() {
         clearSignInError()
         setOauthProviderLoading('github')
         try {
-            const { error: oauthErr } = await signInWithGitHub(redirectPath)
+            const legalNext = `/legal/accept?context=oauth_signup&next=${encodeURIComponent(redirectPath)}`
+            const { error: oauthErr } = await signInWithGitHub(legalNext)
             if (oauthErr) {
                 setSignInError(oauthErr.message)
                 setOauthProviderLoading(null)
@@ -339,10 +342,6 @@ function LoginPageInner() {
 
     const handleSignUpGoogle = async () => {
         setSignUpError(null)
-        if (!signUpLegalAccepted) {
-            setSignUpError('Please accept the Terms of Service and EULA to create an account')
-            return
-        }
         const legalNext = `/legal/accept?context=oauth_signup&next=${encodeURIComponent(redirectPath)}`
         const { error: oauthErr } = await signInWithGoogle(legalNext)
         if (oauthErr) {
@@ -352,10 +351,6 @@ function LoginPageInner() {
 
     const handleSignUpGitHub = async () => {
         setSignUpError(null)
-        if (!signUpLegalAccepted) {
-            setSignUpError('Please accept the Terms of Service and EULA to create an account')
-            return
-        }
         const legalNext = `/legal/accept?context=oauth_signup&next=${encodeURIComponent(redirectPath)}`
         const { error: oauthErr } = await signInWithGitHub(legalNext)
         if (oauthErr) {
@@ -365,6 +360,7 @@ function LoginPageInner() {
 
     return (
         <main className="min-h-screen w-full grid grid-cols-1 lg:grid-cols-2 bg-background text-foreground">
+            <GoogleOneTap nextPath={redirectPath} onError={setSignInError} />
             {/* Left Panel: Clean Interactive Authentication View */}
             <div className="flex flex-col justify-center items-center py-8 sm:py-12 px-6 sm:px-10 lg:px-12 xl:p-16 w-full min-h-screen">
                 <div className="w-full max-w-md my-auto sm:mt-2 transition-all duration-300 ease-out">

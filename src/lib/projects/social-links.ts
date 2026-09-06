@@ -72,10 +72,17 @@ export function validateProjectSocialLinks(value: unknown) {
 }
 
 export type ResolvedProjectSocialLink = NormalizedSocialLink & {
-    managed?: 'github-integration';
+    managed?: 'github-integration' | 'github-sync-connection' | 'github-cloned-repo';
+    repositoryRole?: 'connected' | 'cloned';
+    branch?: string;
     purpose: ProjectLinkPurpose;
     audience: ProjectLinkAudience;
     metadata?: ProjectLinkMetadata;
+};
+
+export type ProjectRepositoryContext = {
+    importSource?: { type?: string; repoUrl?: string; branch?: string } | null;
+    githubSyncConnection?: { repository?: string; branch?: string } | null;
 };
 
 export const PROJECT_LINK_PURPOSE_LABELS: Record<ProjectLinkPurpose, string> = {
@@ -161,21 +168,25 @@ export function filterProjectLinksForAudience(value: unknown, canViewMemberLinks
 }
 
 function isConnectedRepositoryRoot(link: ResolvedProjectSocialLink, repositoryUrl: string) {
-    if (link.platform !== 'github') return false;
     try {
-        const url = new URL(link.url);
-        const pathParts = url.pathname.split('/').filter(Boolean);
-        return pathParts.length === 2 && !url.search && !url.hash && normalizeGithubRepoUrl(url.toString()) === repositoryUrl;
+        const repo = new URL(repositoryUrl);
+        const candidate = new URL(link.url);
+        return candidate.hostname.toLowerCase() === repo.hostname.toLowerCase()
+            && candidate.pathname.replace(/\/+$/, '').toLowerCase() === repo.pathname.replace(/\/+$/, '').toLowerCase();
     } catch {
         return false;
     }
 }
 
 /**
- * One project-link read model. The connected repository stays operational
- * data, but appears alongside user-managed links without a duplicate row.
+ * One project-link read model. Supports both active Files Tab sync connections
+ * and cloned repository origins, resolving them cleanly without collision.
  */
-export function resolveProjectSocialLinks(value: unknown, githubRepoUrl?: string | null): ResolvedProjectSocialLink[] {
+export function resolveProjectSocialLinks(
+    value: unknown,
+    githubRepoUrl?: string | null,
+    context?: ProjectRepositoryContext | null,
+): ResolvedProjectSocialLink[] {
     const storedById = new Map(socialLinkItemsFromStorage(value).map((item) => [item.id, item]));
     const links: ResolvedProjectSocialLink[] = normalizeSocialLinks({ socialLinks: value }).map((link) => {
         const stored = link.id ? storedById.get(link.id) : undefined;
@@ -186,11 +197,58 @@ export function resolveProjectSocialLinks(value: unknown, githubRepoUrl?: string
             ...(stored?.metadata ? { metadata: stored.metadata } : {}),
         };
     });
+
+    if (context) {
+        const result: ResolvedProjectSocialLink[] = [];
+        const addedUrls = new Set<string>();
+
+        // 1. Truly connected repository in Files Tab
+        if (context.githubSyncConnection?.repository) {
+            const rawRepo = context.githubSyncConnection.repository.trim();
+            const connectedUrl = rawRepo.startsWith('http') ? rawRepo : `https://github.com/${rawRepo.replace(/^\/+/, '')}`;
+            const repository = resolveSocialPresence('github', normalizeGithubRepoUrl(connectedUrl) || undefined);
+            if (repository) {
+                result.push({
+                    ...repository,
+                    id: 'github-sync-connection',
+                    managed: 'github-sync-connection',
+                    repositoryRole: 'connected',
+                    branch: context.githubSyncConnection.branch || 'main',
+                    purpose: 'source-code',
+                    audience: 'public',
+                });
+                addedUrls.add(repository.url.toLowerCase());
+            }
+        }
+
+        // 2. Cloned repository origin (from importSource)
+        if (context.importSource?.type === 'github' && context.importSource.repoUrl) {
+            const repository = resolveSocialPresence('github', normalizeGithubRepoUrl(context.importSource.repoUrl) || undefined);
+            if (repository && !addedUrls.has(repository.url.toLowerCase())) {
+                result.push({
+                    ...repository,
+                    id: 'github-cloned-repo',
+                    managed: 'github-cloned-repo',
+                    repositoryRole: 'cloned',
+                    branch: context.importSource.branch || 'main',
+                    purpose: 'source-code',
+                    audience: 'public',
+                });
+                addedUrls.add(repository.url.toLowerCase());
+            }
+        }
+
+        if (result.length > 0) {
+            const filteredLinks = links.filter((link) => !Array.from(addedUrls).some((url) => isConnectedRepositoryRoot(link, url)));
+            return [...result, ...filteredLinks];
+        }
+    }
+
     const repository = resolveSocialPresence('github', normalizeGithubRepoUrl(githubRepoUrl || '') || undefined);
     if (!repository) return links;
 
     return [
-        { ...repository, id: 'github-integration', managed: 'github-integration', purpose: 'source-code', audience: 'public' },
+        { ...repository, id: 'github-integration', managed: 'github-integration', repositoryRole: 'connected', purpose: 'source-code', audience: 'public' },
         ...links.filter((link) => !isConnectedRepositoryRoot(link, repository.url)),
     ];
 }

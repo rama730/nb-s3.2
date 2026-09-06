@@ -243,9 +243,37 @@ export function useExplorerMutations({
     upsertNodes,
   ]);
 
+const FALLBACK_EXT_MIME: Record<string, string> = {
+  ts: "text/typescript",
+  tsx: "text/typescript",
+  js: "text/javascript",
+  jsx: "text/javascript",
+  md: "text/markdown",
+  markdown: "text/markdown",
+  json: "application/json",
+  csv: "text/csv",
+  sql: "text/x-sql",
+  svg: "image/svg+xml",
+  pdf: "application/pdf",
+  zip: "application/zip",
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  webp: "image/webp",
+  gif: "image/gif",
+  html: "text/html",
+  css: "text/css",
+};
+
+function resolveFileMimeType(file: File): string {
+  if (file.type && file.type.length > 0) return file.type;
+  const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+  return FALLBACK_EXT_MIME[ext] || "application/octet-stream";
+}
+
   // Picker and flat drag/drop uploads share collision, finalization, and retry behavior.
-  const uploadFiles = useCallback(async (files: File[], parentId: string | null) => {
-    if (!canEdit || !files.length) return;
+  const uploadFiles = useCallback(async (files: File[], parentId: string | null): Promise<ProjectNode[]> => {
+    if (!canEdit || !files.length) return [];
     const failed: File[] = [];
     const createdNodes: ProjectNode[] = [];
     const mutationKey = `upload:${projectId}:${parentId ?? "root"}:${files.map(file => file.name).sort().join(",")}`;
@@ -279,7 +307,7 @@ export function useExplorerMutations({
         for (let offset = 0; offset < eligible.length; offset += 100) {
           const plans = eligible.slice(offset, offset + 100).map(file => ({
             file, key: buildProjectFileKey(projectId, crypto.randomUUID()),
-            contentType: file.type || "application/octet-stream", sizeBytes: file.size,
+            contentType: resolveFileMimeType(file), sizeBytes: file.size,
           }));
           const batch = await getBatchUploadUrls(plans.map(({ key, contentType, sizeBytes }) => ({ key, contentType, sizeBytes })));
           if ("error" in batch) {
@@ -311,13 +339,13 @@ export function useExplorerMutations({
         }
         return skipped;
       });
-      if (outcome === null) return;
+      if (outcome === null) return [];
       if (createdNodes.length) {
         upsertNodes(projectId, createdNodes);
         const current = useFilesWorkspaceStore.getState().byProjectId[projectId]?.childrenByParentId[filesParentKey(parentId)] ?? [];
         setChildren(projectId, parentId, [...new Set([...current, ...createdNodes.map(node => node.id)])]);
         if (parentId) toggleExpanded(projectId, parentId, true);
-        await loadFolderContent(parentId, "refresh").catch(() => showToast("Files uploaded. Folder refresh failed; the list will retry automatically.", "warning"));
+        void loadFolderContent(parentId, "refresh").catch(() => showToast("Files uploaded. Folder refresh failed; the list will retry automatically.", "warning"));
         window.dispatchEvent(new CustomEvent("project:task-files-changed", { detail: { projectId } }));
       }
       if (progress !== undefined) toast.dismiss(progress);
@@ -343,6 +371,7 @@ export function useExplorerMutations({
     } finally {
       if (progress !== undefined) toast.dismiss(progress);
     }
+    return createdNodes;
   }, [canEdit, projectId, runUniqueMutation, upsertNodes, setChildren, toggleExpanded, loadFolderContent, showToast, recordOperation, onOpenFile, chooseUploadCollision]);
 
   const openUpload = useCallback((parentId: string | null) => {
@@ -730,9 +759,9 @@ export function useExplorerMutations({
 
   // Direct file upload (for desktop drag-and-drop — no picker dialog)
   const uploadFilesDirectly = useCallback(
-    async (files: File[], parentId: string | null) => {
-      if (!canEdit || files.length === 0) return;
-      if (!files.some(file => file.webkitRelativePath?.includes("/"))) return uploadFiles(files, parentId);
+    async (files: File[], parentId: string | null): Promise<ProjectNode[]> => {
+      if (!canEdit || files.length === 0) return [];
+      if (!files.some(file => file.webkitRelativePath?.includes("/"))) return (await uploadFiles(files, parentId)) || [];
 
       const mutationKey = `upload-direct:${projectId}:${parentId ?? "root"}:${files
         .map((f) => f.name)
@@ -748,7 +777,7 @@ export function useExplorerMutations({
               path: f.webkitRelativePath || f.name,
               name: f.name,
               size: f.size,
-              mimeType: f.type || "application/octet-stream"
+              mimeType: resolveFileMimeType(f),
             }))
             .filter((node) => {
               if (node.name === ".DS_Store" || node.path.includes("__MACOSX") || node.path.includes("/.git/")) return false;
@@ -809,7 +838,7 @@ export function useExplorerMutations({
             const batch = await getBatchUploadUrls(
               chunk.map((entry) => ({
                 key: entry.s3Key,
-                contentType: entry.file.type || "application/octet-stream",
+                contentType: resolveFileMimeType(entry.file),
                 sizeBytes: entry.file.size,
               }))
             );
@@ -923,6 +952,7 @@ export function useExplorerMutations({
         showToast(`Upload failed: ${getErrorMessage(e, "Unknown error")}`, "error");
         recordOperation({ label: "Upload failed", status: "error" });
       }
+      return [];
     },
     [
       canEdit,

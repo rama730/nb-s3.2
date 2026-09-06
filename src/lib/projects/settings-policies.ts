@@ -18,6 +18,7 @@ export type ProjectSettingsSectionId =
   | "updates"
   | "notifications"
   | "security-audit"
+  | "privacy-terms"
   | "danger";
 
 type ProjectSettingsSectionDefinition = {
@@ -350,9 +351,6 @@ export function isProjectTabVisibleToViewer(input: {
   canManageSettings?: boolean;
   publicTabVisibility?: unknown;
 }) {
-  // The project-specific legal notice is intentionally available to every
-  // viewer, including visitors who are not project members.
-  if (input.tabId === "privacy") return true;
   if (input.tabId === "settings") return Boolean(input.canManageSettings);
   if (input.isOwnerOrMember) return true;
   if (!(input.tabId in DEFAULT_PROJECT_PUBLIC_TAB_VISIBILITY)) return false;
@@ -368,6 +366,9 @@ export function resolveAllowedProjectTab(input: {
   publicTabVisibility?: unknown;
 }) {
   const requestedTab = input.requestedTab?.trim() || "dashboard";
+  if (requestedTab === "privacy") {
+    return input.canManageSettings ? "settings" : "dashboard";
+  }
   if (isProjectTabVisibleToViewer({ ...input, tabId: requestedTab }))
     return requestedTab;
   if (isProjectTabVisibleToViewer({ ...input, tabId: "dashboard" }))
@@ -575,6 +576,12 @@ export const PROJECT_SETTINGS_SECTIONS: ProjectSettingsSectionDefinition[] = [
     label: "Security & Data",
     description:
       "Recent settings audit, protected actions, and project data export.",
+  },
+  {
+    id: "privacy-terms",
+    label: "Privacy & Terms",
+    description:
+      "Project legal notice, visibility disclosures, member responsibilities, and applicable terms.",
   },
   {
     id: "danger",

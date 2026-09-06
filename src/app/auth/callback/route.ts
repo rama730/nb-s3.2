@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server'
+import { NextResponse, after } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { logger } from '@/lib/logger'
 import { normalizeAuthNextPath, resolveAuthBaseUrl } from '@/lib/auth/redirects'
@@ -8,6 +8,7 @@ import { sealGithubImportToken } from '@/lib/github/repo-security'
 import { isCompletedOnboardingStatus } from '@/lib/onboarding/state'
 import { ensureDefaultGithubContributorIdentity } from '@/lib/github/contributor-identity'
 import { recordSecurityEvent } from '@/lib/security/audit'
+import { getLegalAcceptanceState } from '@/lib/legal/acceptance'
 
 export async function GET(request: Request) {
     const startedAt = Date.now()
@@ -118,6 +119,15 @@ export async function GET(request: Request) {
 
     let destinationPath = nextPath
     try {
+        const requestedUrl = new URL(nextPath, baseUrl)
+        const isLegalAcceptance = requestedUrl.pathname === '/legal/accept'
+        const afterAcceptance = isLegalAcceptance
+            ? normalizeAuthNextPath(requestedUrl.searchParams.get('next'))
+            : nextPath
+        const acceptanceState = isLegalAcceptance
+            ? await getLegalAcceptanceState(data.user.id)
+            : null
+        const hasCurrentAcceptance = acceptanceState?.current === true
         const { data: profile } = await supabase
             .from('profiles')
             .select('username, onboarding_status')
@@ -129,18 +139,13 @@ export async function GET(request: Request) {
 
         if (!complete) {
             const onboardingUrl = new URL('/onboarding', baseUrl)
-            const requestedUrl = new URL(nextPath, baseUrl)
-            const isLegalAcceptance = requestedUrl.pathname === '/legal/accept'
-            const afterAcceptance = isLegalAcceptance
-                ? normalizeAuthNextPath(requestedUrl.searchParams.get('next'))
-                : nextPath
             if (afterAcceptance !== '/hub' && afterAcceptance !== '/onboarding') {
                 onboardingUrl.searchParams.set('next', afterAcceptance)
             }
 
-            if (isLegalAcceptance) {
+            if (isLegalAcceptance && !hasCurrentAcceptance) {
                 const legalUrl = new URL('/legal/accept', baseUrl)
-                if (requestedUrl.searchParams.get('context') === 'oauth_signup') {
+                if (requestedUrl.searchParams.get('context') === 'oauth_signup' && !acceptanceState?.latest) {
                     legalUrl.searchParams.set('context', 'oauth_signup')
                 }
                 legalUrl.searchParams.set('next', `${onboardingUrl.pathname}${onboardingUrl.search}`)
@@ -148,6 +153,8 @@ export async function GET(request: Request) {
             } else {
                 destinationPath = `${onboardingUrl.pathname}${onboardingUrl.search}`
             }
+        } else if (isLegalAcceptance && hasCurrentAcceptance) {
+            destinationPath = afterAcceptance === '/onboarding' ? '/hub' : afterAcceptance
         } else if (nextPath === '/onboarding' || nextPath.startsWith('/onboarding?')) {
             destinationPath = '/hub'
         }
@@ -204,33 +211,38 @@ export async function GET(request: Request) {
         } else {
             const sealed = sealGithubImportToken(providerToken)
             if (sealed) setGithubImportAccessCookie(response, sealed)
-            try {
-                const contributorIdentity = await ensureDefaultGithubContributorIdentity(expectedUser.id, providerToken)
-                if (successUrl.searchParams.get('githubIdentity') === 'replaced') {
-                    await recordSecurityEvent({
-                        userId: expectedUser.id,
-                        eventType: 'github_account_replaced',
-                        request,
-                        metadata: {
-                            githubId: contributorIdentity.githubId,
-                            githubLogin: contributorIdentity.login,
-                        },
-                    }).catch((auditError) => {
-                        logger.warn('github.account.replacement.audit_failed', {
-                            requestId,
+            // ponytail: Next.js after() ensures contributor identity enrichment and audit logging
+            // do not block the OAuth HTTP redirect back to the user's browser.
+            const isReplaced = successUrl.searchParams.get('githubIdentity') === 'replaced'
+            after(async () => {
+                try {
+                    const contributorIdentity = await ensureDefaultGithubContributorIdentity(expectedUser.id, providerToken)
+                    if (isReplaced) {
+                        await recordSecurityEvent({
                             userId: expectedUser.id,
-                            error: auditError instanceof Error ? auditError.message : String(auditError),
+                            eventType: 'github_account_replaced',
+                            request,
+                            metadata: {
+                                githubId: contributorIdentity.githubId,
+                                githubLogin: contributorIdentity.login,
+                            },
+                        }).catch((auditError) => {
+                            logger.warn('github.account.replacement.audit_failed', {
+                                requestId,
+                                userId: expectedUser.id,
+                                error: auditError instanceof Error ? auditError.message : String(auditError),
+                            })
                         })
+                    }
+                } catch (identityError) {
+                    // Attribution enrichment must never block a successful OAuth flow.
+                    logger.warn('github.contributor_identity.default_failed', {
+                        requestId,
+                        userId: expectedUser.id,
+                        error: identityError instanceof Error ? identityError.message : String(identityError),
                     })
                 }
-            } catch (identityError) {
-                // Attribution enrichment must never block a successful OAuth flow.
-                logger.warn('github.contributor_identity.default_failed', {
-                    requestId,
-                    userId: expectedUser.id,
-                    error: identityError instanceof Error ? identityError.message : String(identityError),
-                })
-            }
+            })
         }
     }
     response.headers.set('x-request-id', requestId)

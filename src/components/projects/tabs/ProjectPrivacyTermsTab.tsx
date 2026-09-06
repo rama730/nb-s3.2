@@ -15,6 +15,7 @@ type Props = {
   isOwner: boolean;
   isOwnerOrMember: boolean;
   publicTabVisibility?: ProjectPublicTabVisibility | null;
+  embedded?: boolean;
 };
 
 const legalLinks = [
@@ -39,7 +40,7 @@ function Card({ icon: Icon, title, children }: { icon: typeof Eye; title: string
   );
 }
 
-export default function ProjectPrivacyTermsTab({ project, isOwner, isOwnerOrMember, publicTabVisibility }: Props) {
+export default function ProjectPrivacyTermsTab({ project, isOwner, isOwnerOrMember, publicTabVisibility, embedded = false }: Props) {
   const publicTabs = normalizeProjectPublicTabVisibility(publicTabVisibility ?? project.publicTabVisibility);
   const visiblePublicTabs = (Object.keys(publicTabs) as ProjectPublicTabId[])
     .filter((tab) => publicTabs[tab])
@@ -50,7 +51,7 @@ export default function ProjectPrivacyTermsTab({ project, isOwner, isOwnerOrMemb
     || (project as Project & { repositoryUrl?: string | null }).repositoryUrl);
 
   return (
-    <div className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6 lg:py-10">
+    <div className={embedded ? "w-full space-y-5" : "mx-auto w-full max-w-5xl px-4 py-8 sm:px-6 lg:py-10"}>
       <header className="rounded-[2rem] border border-zinc-200 bg-gradient-to-br from-white to-indigo-50/60 p-6 dark:border-zinc-800 dark:from-zinc-900 dark:to-indigo-950/20 sm:p-8">
         <div className="flex items-center gap-2 text-sm font-semibold text-indigo-600 dark:text-indigo-300">
           <ShieldCheck className="h-5 w-5" aria-hidden="true" /> Project notice

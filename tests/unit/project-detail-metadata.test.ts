@@ -21,7 +21,7 @@ test("buildProjectDetailMetadataInput trims project title and descriptions", () 
       description: "Longer description",
     }),
     {
-      title: "Network for builders | Edge",
+      title: "Network for builders | NetworkBase",
       description: "Learn and build together.",
       path: "/projects/network-for-builders",
       image: "/api/og/project/network-for-builders",
@@ -43,8 +43,8 @@ test("buildProjectDetailMetadataInput uses large-card dimensions for uploaded pr
       coverImageHeight: 500,
     }),
     {
-      title: "Network for builders | Edge",
-      description: "Explore Network for builders on Edge.",
+      title: "Network for builders | NetworkBase",
+      description: "Explore Network for builders on NetworkBase.",
       path: "/projects/network-for-builders",
       image: "https://cdn.example.test/project.png",
       imageAlt: "Network for builders project image",
