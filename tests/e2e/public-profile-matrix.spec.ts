@@ -25,6 +25,7 @@ test.describe("Public profile matrix @critical", () => {
     await expect(page.getByText(new RegExp(`@${username}`, "i")).first()).toBeVisible();
     await expect(page.getByText(/Overview|Portfolio/i).first()).toBeVisible();
     await expect(page).not.toHaveTitle(/Profile \| Edge/i);
+    await expect(page).toHaveTitle(/NetworkBase/i);
 
     await page.getByRole("tab", { name: /Portfolio/i }).click();
     await expect(page).toHaveURL(new RegExp(`/u/${username}\\?tab=portfolio$`));
