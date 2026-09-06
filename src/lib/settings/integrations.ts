@@ -9,7 +9,7 @@ import {
 } from "@/lib/auth/account-identity";
 import { isEmailVerified } from "@/lib/auth/email-verification";
 import { buildGithubAccountConnectionState } from "@/lib/github/connection-state";
-import type { AuthConnectionMethod, ExternalAccountHealth, GithubServiceConnection, IntegrationsData } from "@/lib/types/settingsTypes";
+import type { AuthConnectionMethod, ExternalAccountHealth, GithubLinkedProject, GithubServiceConnection, IntegrationsData } from "@/lib/types/settingsTypes";
 
 type BuildIntegrationsDataInput = {
   user: User;
@@ -17,6 +17,7 @@ type BuildIntegrationsDataInput = {
   githubLastSyncAt: string | null;
   passwordLastChangedAt: string | null;
   githubAccountHealth?: ExternalAccountHealth;
+  githubProjects?: GithubLinkedProject[];
 };
 
 function normalizeProvider(value: string | null): AccountAuthProvider | null {
@@ -60,25 +61,27 @@ function githubService(input: {
   username: string | null;
   health: ExternalAccountHealth;
   hasFallbackIdentity: boolean;
+  projects?: GithubLinkedProject[];
 }): GithubServiceConnection {
   const username = input.health.profile?.username ?? input.username;
   const unavailable = input.health.state === "unavailable";
-  const status = unavailable ? "action_required" : input.count > 0 && input.linked ? "connected" : input.linked ? "available" : "not_connected";
+  const count = input.projects ? input.projects.length : input.count;
+  const status = unavailable ? "action_required" : count > 0 && input.linked ? "connected" : input.linked ? "available" : "not_connected";
   const summary = unavailable
     ? "GitHub account unavailable."
-    : input.count > 0
-      ? `Used by ${input.count} project${input.count === 1 ? "" : "s"}.`
+    : count > 0
+      ? `Used by ${count} project${count === 1 ? "" : "s"}.`
       : input.linked ? "GitHub is linked; no project uses repository access yet." : "GitHub is not linked.";
   const detail = unavailable
     ? `GitHub could not find${username ? ` @${username}` : " the linked account"}. Imported project data remains available.`
-    : input.count > 0
+    : count > 0
       ? "Open a project to manage repository import and synchronization."
       : "Repository access becomes active when you connect GitHub from a project.";
   return {
     status,
     summary,
     detail,
-    usageCount: input.count,
+    usageCount: count,
     lastUsedAt: input.lastSyncAt,
     githubUsername: username,
     recoveryAction: unavailable
@@ -86,6 +89,7 @@ function githubService(input: {
         ? "replace_account"
         : "add_fallback_sign_in"
       : null,
+    projects: input.projects || [],
   };
 }
 
@@ -121,6 +125,14 @@ export function buildIntegrationsData(input: BuildIntegrationsDataInput): Integr
       ? `Account created with ${createdWithLabel}. ${additionalLinkedCount} additional sign-in method${additionalLinkedCount === 1 ? " is" : "s are"} linked.`
       : `${providers.length} sign-in method${providers.length === 1 ? " is" : "s are"} linked.`,
     authConnections,
-    githubService: githubService({ linked: github.linked, count: input.githubRepoProjectCount, lastSyncAt: input.githubLastSyncAt, username: github.username, health, hasFallbackIdentity }),
+    githubService: githubService({
+      linked: github.linked,
+      count: input.githubRepoProjectCount,
+      lastSyncAt: input.githubLastSyncAt,
+      username: github.username,
+      health,
+      hasFallbackIdentity,
+      projects: input.githubProjects,
+    }),
   };
 }
