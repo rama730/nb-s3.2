@@ -20,6 +20,20 @@ function getBearerToken(request: Request) {
   return token.startsWith("nb_dev_") ? token : null;
 }
 
+// ponytail: in-memory short TTL cache to avoid hammering DB with 1M heartbeats
+const SESSION_CACHE_TTL_MS = 30_000;
+type CachedSession = { sessionId: string; active: boolean; cachedAt: number };
+const sessionStatusCache = new Map<string, CachedSession>();
+const MAX_SESSION_CACHE_SIZE = 10_000;
+
+export function invalidateExtensionSessionCache(tokenHash?: string) {
+  if (tokenHash) {
+    sessionStatusCache.delete(tokenHash);
+  } else {
+    sessionStatusCache.clear();
+  }
+}
+
 export async function GET(request: Request) {
   const limitResponse = await enforceRouteLimit(request, "api:v1:extension:session:status", 60, 60);
   if (limitResponse) return limitResponse;
@@ -30,6 +44,20 @@ export async function GET(request: Request) {
   }
 
   const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+  const now = Date.now();
+  const cached = sessionStatusCache.get(tokenHash);
+  if (cached && now - cached.cachedAt < SESSION_CACHE_TTL_MS) {
+    // ponytail: revoked tokens may read only their own liveness so the IDE can erase them after web-side disconnect.
+    return jsonSuccess(
+      {
+        sessionId: cached.sessionId,
+        active: cached.active,
+      },
+      undefined,
+      { headers: { "Cache-Control": "no-store" } },
+    );
+  }
+
   const session = await db.query.extensionDeviceSessions.findFirst({
     where: eq(extensionDeviceSessions.tokenHash, tokenHash),
     columns: {
@@ -42,11 +70,18 @@ export async function GET(request: Request) {
     return jsonError("Not authenticated", 401, "UNAUTHORIZED");
   }
 
+  const active = !session.revokedAt && session.expiresAt.getTime() > now;
+  if (sessionStatusCache.size >= MAX_SESSION_CACHE_SIZE) {
+    const oldestKey = sessionStatusCache.keys().next().value;
+    if (oldestKey) sessionStatusCache.delete(oldestKey);
+  }
+  sessionStatusCache.set(tokenHash, { sessionId: session.id, active, cachedAt: now });
+
   // ponytail: revoked tokens may read only their own liveness so the IDE can erase them after web-side disconnect.
   return jsonSuccess(
     {
       sessionId: session.id,
-      active: !session.revokedAt && session.expiresAt.getTime() > Date.now(),
+      active,
     },
     undefined,
     { headers: { "Cache-Control": "no-store" } },
@@ -105,6 +140,8 @@ export async function POST(request: Request) {
         createdAt: now,
       });
     });
+
+    sessionStatusCache.delete(tokenHash);
 
     return jsonSuccess({ revoked: true });
   } catch (error) {
