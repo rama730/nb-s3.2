@@ -169,6 +169,17 @@ export interface AuthConnectionMethod {
   secondaryDetail?: string | null;
 }
 
+export interface GithubLinkedProject {
+  id: string;
+  slug: string;
+  title: string;
+  importSource?: { type?: string; repoUrl?: string; branch?: string } | null;
+  githubRepoUrl?: string | null;
+  syncRepository?: string | null;
+  syncBranch?: string | null;
+  lastSyncAt?: string | null;
+}
+
 export interface GithubServiceConnection {
   status: ExternalServiceStatus;
   summary: string;
@@ -177,6 +188,7 @@ export interface GithubServiceConnection {
   lastUsedAt?: string | null;
   githubUsername?: string | null;
   recoveryAction?: "replace_account" | "add_fallback_sign_in" | null;
+  projects?: GithubLinkedProject[];
 }
 
 export interface IntegrationsData {
