@@ -6,7 +6,7 @@ import { QueryProvider } from "@/components/providers/query-provider";
 import { SecurityRuntimeProvider } from "@/components/providers/SecurityRuntimeProvider";
 import { ThemeProvider } from "@/components/providers/theme-provider";
 import { Toaster } from "@/components/ui/sonner";
-import { Analytics } from "@vercel/analytics/react";
+import { CookieConsentRuntime } from "@/components/privacy/CookieConsentRuntime";
 import { NextIntlClientProvider } from "next-intl";
 import { getMessages } from "next-intl/server";
 import "@/lib/env";
@@ -36,8 +36,6 @@ const SHOULD_RENDER_VERCEL_ANALYTICS =
 export const metadata: Metadata = {
   metadataBase: APP_METADATA_BASE,
   applicationName: "NetworkBase",
-  title: "NetworkBase",
-  description: "A collaborative workspace for building and sharing projects.",
   manifest: "/manifest.webmanifest",
   appleWebApp: {
     capable: true,
@@ -78,7 +76,7 @@ async function I18nAndThemeProviders({
             <RoutePerformanceObserver />
             {children}
             <Toaster position="top-right" />
-            {SHOULD_RENDER_VERCEL_ANALYTICS ? <Analytics /> : null}
+            <CookieConsentRuntime analyticsAvailable={SHOULD_RENDER_VERCEL_ANALYTICS} />
           </TooltipProvider>
         </QueryProvider>
       </ThemeProvider>
