@@ -99,7 +99,7 @@ export async function GET(
           }}
         >
           <div>Professional social network for builders</div>
-          <div>edge</div>
+          <div>NetworkBase</div>
         </div>
       </div>
     ),
