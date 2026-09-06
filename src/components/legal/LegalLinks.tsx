@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { CookieSettingsButton } from "@/components/privacy/CookieSettingsButton";
 import { cn } from "@/lib/utils";
 
 export function LegalLinks({ className }: { className?: string }) {
@@ -9,6 +10,7 @@ export function LegalLinks({ className }: { className?: string }) {
       <Link className="underline-offset-4 hover:text-foreground hover:underline" href="/eula">EULA</Link>
       <Link className="underline-offset-4 hover:text-foreground hover:underline" href="/acceptable-use">Acceptable use</Link>
       <Link className="underline-offset-4 hover:text-foreground hover:underline" href="/cookies">Cookies</Link>
+      <CookieSettingsButton />
       <Link className="underline-offset-4 hover:text-foreground hover:underline" href="/subprocessors">Providers</Link>
       <Link className="underline-offset-4 hover:text-foreground hover:underline" href="/copyright">Copyright</Link>
       <Link className="underline-offset-4 hover:text-foreground hover:underline" href="/grievances">Grievances</Link>
