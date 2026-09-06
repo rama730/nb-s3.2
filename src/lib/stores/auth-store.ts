@@ -40,7 +40,7 @@ export const useAuthStore = create<AuthState>()(
             reset: () => set(initialState),
         }),
         {
-            name: 'edge-auth-store',
+            name: 'networkbase-auth-store',
             // SEC-M7: only persist the minimum needed to hydrate the UI
             // before Supabase's cookie-based auth rehydrates. In particular:
             //   - `session` is NEVER persisted (access/refresh tokens).
