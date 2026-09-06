@@ -4,7 +4,7 @@ import { db } from "@/lib/db";
 import { fileVersions, profiles, projectNodes, type FileVersion } from "@/lib/db/schema";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
-import { revalidatePath } from "next/cache";
+import { after } from "next/server";
 import { consumeRateLimit } from "@/lib/security/rate-limit";
 import { logger } from "@/lib/logger";
 import {
@@ -263,35 +263,50 @@ export async function applyUploadedFileRevision(input: {
   });
 
   if (input.mode === "new_revision") {
-    try {
-      await notifyForFileVersionCreated({
-        actorUserId: user.id,
-        projectId: input.projectId,
-        nodeId: input.nodeId,
-        version: result.version.version,
-      });
-    } catch (error) {
-      logger.warn("files.version.notification_failed", {
-        module: "files",
-        projectId: input.projectId,
-        nodeId: input.nodeId,
-        version: result.version.version,
-        actorUserId: user.id,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-    await enqueueProjectFileVersionNotification({
-      projectId: input.projectId,
-      actorUserId: user.id,
-      ...actorNotificationSnapshot(user),
-      eventKey: "files.version_added",
-      title: `New file version added`,
-      body: `Version ${result.version.version} was added to a project file.`,
-      sourceEventId: `${input.nodeId}:version:${result.version.version}`,
-      entityRefs: {
-        projectId: input.projectId,
-        fileId: input.nodeId,
-      },
+    // ponytail: decouple version notifications via after() to keep upload response under 50ms
+    const actorSnapshot = actorNotificationSnapshot(user);
+    after(async () => {
+      try {
+        await notifyForFileVersionCreated({
+          actorUserId: user.id,
+          projectId: input.projectId,
+          nodeId: input.nodeId,
+          version: result.version.version,
+        });
+      } catch (error) {
+        logger.warn("files.version.notification_failed", {
+          module: "files",
+          projectId: input.projectId,
+          nodeId: input.nodeId,
+          version: result.version.version,
+          actorUserId: user.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      try {
+        await enqueueProjectFileVersionNotification({
+          projectId: input.projectId,
+          actorUserId: user.id,
+          ...actorSnapshot,
+          eventKey: "files.version_added",
+          title: `New file version added`,
+          body: `Version ${result.version.version} was added to a project file.`,
+          sourceEventId: `${input.nodeId}:version:${result.version.version}`,
+          entityRefs: {
+            projectId: input.projectId,
+            fileId: input.nodeId,
+          },
+        });
+      } catch (error) {
+        logger.warn("files.version.notification_enqueue_failed", {
+          module: "files",
+          projectId: input.projectId,
+          nodeId: input.nodeId,
+          version: result.version.version,
+          actorUserId: user.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     });
   }
 
@@ -309,7 +324,7 @@ export async function applyUploadedFileRevision(input: {
     });
   }
 
-  revalidatePath(`/projects/${input.projectId}`);
+  // ponytail: client handles revision updates via Zustand upsertNodes; skip route revalidation
   return { node: result.node, version: result.version };
 }
 
@@ -380,7 +395,7 @@ export async function restoreFileVersion(
     });
   }
 
-  revalidatePath(`/projects/${projectId}`);
+  // ponytail: client handles version restore via query invalidation; skip route revalidation
   return result;
 }
 
@@ -494,6 +509,6 @@ export async function deleteFileVersionAction(
     newActiveVersion: mutation.nextActiveVersion,
   });
 
-  revalidatePath(`/projects/${projectId}`);
+  // ponytail: client handles version deletion via query invalidation; skip route revalidation
   return { success: true, nextActiveVersion: mutation.nextActiveVersion, node: mutation.updatedNode };
 }
