@@ -22,8 +22,8 @@ test.describe("Create project wizard", () => {
     await expect(page.getByTestId("create-project-source-view-github")).toBeVisible();
     await expect(page.getByTestId("create-project-github-manual-url")).toBeVisible();
     await expect(page.getByTestId("create-project-connect-github")).toBeVisible();
-    await page.getByTestId("create-project-github-manual-url").fill("edge/tools");
-    await expect(page.getByTestId("create-project-github-manual-url")).toHaveValue("https://github.com/edge/tools");
+    await page.getByTestId("create-project-github-manual-url").fill("networkbase/tools");
+    await expect(page.getByTestId("create-project-github-manual-url")).toHaveValue("https://github.com/networkbase/tools");
     await page.waitForTimeout(1000);
     await expect(page.getByRole("dialog")).toBeVisible();
     await expect(page.getByTestId("create-project-source-view-github")).toBeVisible();
